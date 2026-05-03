@@ -356,6 +356,9 @@ trait BCodeSkelBuilder(using ctx: Context) extends BCodeHelpers {
         case _ => ()
       }
 
+      if ctx.settings.Ynestmates.value then
+        setNestAttributes(claszSymbol.asClass, cnode)
+
       val ssa = None // TODO: inlined form `getAnnotPickle(thisName, claszSymbol)`. Should something be done on Dotty?
       cnode.visitAttribute(if (ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(cnode, claszSymbol.annotations ++ ssa)

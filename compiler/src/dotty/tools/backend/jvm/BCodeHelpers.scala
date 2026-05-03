@@ -717,6 +717,78 @@ trait BCodeHelpers(val backendUtils: BackendUtils)(using ctx: Context) extends B
     report.error(msg)
     throw new RuntimeException(msg)
   }
+
+  // -----------------------------------------------------------------------------------------
+  // JEP 181 NestHost / NestMembers attributes (-Ynestmates)
+  // -----------------------------------------------------------------------------------------
+
+  /** Compute the JVM internal name of the nest host for `classSym`.
+   *
+   *  Rules (applied after lambdalift/flatten, using originalOwner for pre-flatten nesting):
+   *   - A top-level class that is NOT a module class → it is its own host.
+   *   - A top-level module class (companion object) → the companion class is the host if it
+   *     exists; otherwise the module class itself is the host.
+   *   - A nested class → recurse into the original lexically-enclosing class.
+   */
+  final def nestHostInternalName(classSym: ClassSymbol)(using Context): String =
+    val originalEnclosing = classSym.originalOwner.originalLexicallyEnclosingClass
+    if originalEnclosing.is(PackageClass) then
+      // classSym is top-level
+      if classSym.is(ModuleClass) then
+        val companion = classSym.companionClass
+        if companion.exists then ts.classBTypeFromSymbol(companion).internalName
+        else ts.classBTypeFromSymbol(classSym).internalName
+      else
+        ts.classBTypeFromSymbol(classSym).internalName
+    else
+      nestHostInternalName(originalEnclosing.asClass)
+
+  /** Collect all classes that belong to the nest whose host is `hostSym`.
+   *
+   *  This includes all transitively nested classes inside `hostSym`, plus the companion
+   *  module class (and its nested classes) when `hostSym` is a top-level non-module class.
+   */
+  final def collectNestMembers(hostSym: ClassSymbol)(using Context): List[ClassBType] =
+    def collect(sym: ClassSymbol): List[ClassBType] =
+      val direct: List[ClassSymbol] =
+        atPhase(flattenPhase) {
+          toDenot(sym).info.decls.filter(s => s.isClass && !s.isEffectivelyErased).toList
+            .map(_.asClass)
+        }
+      direct.map(ts.classBTypeFromSymbol) ++ direct.flatMap(collect)
+
+    val ownMembers = collect(hostSym)
+
+    // For top-level non-module classes, also include the companion module class and its members.
+    val additionalMembers: List[ClassBType] =
+      if !hostSym.is(ModuleClass)
+         && hostSym.originalOwner.originalLexicallyEnclosingClass.is(PackageClass)
+      then
+        val modCls = hostSym.companionModule.moduleClass
+        if modCls.exists && modCls.isClass then
+          ts.classBTypeFromSymbol(modCls.asClass) :: collect(modCls.asClass)
+        else Nil
+      else Nil
+
+    ownMembers ++ additionalMembers
+
+  /** Set the `NestHost` or `NestMembers` attribute on `cnode` for `classSym`.
+   *
+   *  Called from `initJClass` when `-Ynestmates` is enabled.
+   */
+  final def setNestAttributes(classSym: ClassSymbol, cnode: asm.tree.ClassNode)(using Context): Unit =
+    val hostName = nestHostInternalName(classSym)
+    if hostName != cnode.name then
+      // This class is a nest member — emit NestHost pointing to the host.
+      cnode.nestHostClass = hostName
+    else
+      // This class is (or may be) a nest host — compute and emit NestMembers.
+      val members = collectNestMembers(classSym)
+      if members.nonEmpty then
+        val list = new java.util.ArrayList[String]()
+        members.foreach(m => list.add(m.internalName))
+        cnode.nestMembers = list
+
 }
 
 object BCodeHelpers {
