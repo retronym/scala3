@@ -7,6 +7,7 @@ import Contexts.*
 import Symbols.*
 import Flags.*
 import SymDenotations.*
+import Phases.*
 
 import Decorators.*
 import MegaPhase.*
@@ -16,6 +17,10 @@ import ValueClasses.*
 
 /** Make private term members that are accessed from another class
  *  non-private by resetting the Private flag and expanding their name.
+ *
+ *  On the JVM, accesses from a class in the same nest (see `ExpandPrivate.nestHost`)
+ *  are left alone: the backend emits `NestHost`/`NestMembers` attributes, which
+ *  let the JVM grant such accesses to private members directly (JEP 181).
  *
  *  Make private accessor in value class not-private. This is necessary to unbox
  *  the value class when accessing it from separate compilation units
@@ -70,7 +75,8 @@ class ExpandPrivate extends MiniPhase with IdentityDenotTransformer { thisPhase 
     val d = tree.symbol.denot
     if (isVCPrivateParamAccessor(d))
       d.ensureNotPrivate.installAfter(thisPhase)
-    else if (d.is(PrivateTerm) && !d.owner.is(Package) && d.owner != ctx.owner.lexicallyEnclosingClass) {
+    else if (d.is(PrivateTerm) && !d.owner.is(Package) && d.owner != ctx.owner.lexicallyEnclosingClass
+             && !(ExpandPrivate.useNestMates && ExpandPrivate.isNestMate(d.owner, ctx.owner.lexicallyEnclosingClass))) {
       // Paths `p1` and `p2` are similar if they have a common suffix that follows
       // possibly different directory paths. That is, their common suffix extends
       // in both cases either to the start of the path or to a file separator character.
@@ -129,3 +135,25 @@ class ExpandPrivate extends MiniPhase with IdentityDenotTransformer { thisPhase 
 object ExpandPrivate:
   val name: String = "expandPrivate"
   val description: String = "widen private definitions accessed from nested classes"
+
+  /** Should private accesses within a nest rely on JVM nestmate access control (JEP 181)? */
+  def useNestMates(using Context): Boolean =
+    !ctx.settings.YnoNestmates.value && !ctx.settings.scalajs.value
+
+  /** The host of the JVM nest of class `cls`: the top-level class lexically enclosing `cls`,
+   *  where a top-level module class counts as nested in its companion class, if any.
+   *  The nest thus groups a class, its companion object, and all their nested and local classes.
+   *  All of these are defined in the same source file, so are emitted together.
+   *
+   *  Only meaningful after Flatten; it inspects the owner chain as it was before Flatten.
+   */
+  def nestHost(cls: Symbol)(using Context): Symbol = atPhase(flattenPhase) {
+    def loop(c: Symbol): Symbol =
+      if c.owner.is(PackageClass) then
+        if c.is(ModuleClass) && c.companionClass.exists then c.companionClass else c
+      else loop(c.owner.enclosingClass)
+    loop(cls)
+  }
+
+  def isNestMate(cls1: Symbol, cls2: Symbol)(using Context): Boolean =
+    cls1.isClass && cls2.isClass && !cls2.is(PackageClass) && nestHost(cls1) == nestHost(cls2)
