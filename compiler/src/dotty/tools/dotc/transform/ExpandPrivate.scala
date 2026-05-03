@@ -61,6 +61,26 @@ class ExpandPrivate extends MiniPhase with IdentityDenotTransformer { thisPhase 
   private def isVCPrivateParamAccessor(d: SymDenotation)(using Context) =
     d.isTerm && d.isAllOf(PrivateParamAccessor) && isDerivedValueClass(d.owner)
 
+  /** Under -Ynestmates: walk the owner chain to find the JVM nest host for a class.
+   *  Top-level non-module class → itself.  Top-level module class with a companion class → that
+   *  companion (the host of the companion/module pair).  Everything else → recurse through
+   *  the lexically enclosing class.
+   */
+  private def nestHostSym(cls: ClassSymbol)(using Context): ClassSymbol =
+    atPhase(ctx.base.flattenPhase) {
+      def host(c: ClassSymbol): ClassSymbol =
+        if c.owner.is(PackageClass) then
+          if c.is(ModuleClass) then
+            val companion = c.companionClass
+            if companion.exists then companion.asClass else c
+          else c
+        else host(c.owner.enclosingClass.asClass)
+      host(cls)
+    }
+
+  private def areSameNest(c1: ClassSymbol, c2: ClassSymbol)(using Context): Boolean =
+    nestHostSym(c1) == nestHostSym(c2)
+
   /** Make private terms accessed from different classes non-private.
    *  Note: this happens also for accesses between class and linked module class.
    *  If we change the scheme at one point to make static module class computations
@@ -70,30 +90,37 @@ class ExpandPrivate extends MiniPhase with IdentityDenotTransformer { thisPhase 
     if (isVCPrivateParamAccessor(d))
       d.ensureNotPrivate.installAfter(thisPhase)
     else if (d.is(PrivateTerm) && !d.owner.is(Package) && d.owner != ctx.owner.lexicallyEnclosingClass) {
-      // Paths `p1` and `p2` are similar if they have a common suffix that follows
-      // possibly different directory paths. That is, their common suffix extends
-      // in both cases either to the start of the path or to a file separator character.
-      // TODO: should we test absolute paths instead?
-      def isSimilar(p1: String, p2: String): Boolean = {
-        var i = p1.length - 1
-        var j = p2.length - 1
-        while (i >= 0 && j >= 0 && p1(i) == p2(j) && p1(i) != separatorChar) {
-          i -= 1
-          j -= 1
+      if ctx.settings.Ynestmates.value
+         && d.owner.isClass
+         && ctx.owner.lexicallyEnclosingClass.isClass
+         && areSameNest(d.owner.asClass, ctx.owner.lexicallyEnclosingClass.asClass)
+      then () // nestmate access: private visibility is enforced at the JVM level via NestHost/NestMembers
+      else {
+        // Paths `p1` and `p2` are similar if they have a common suffix that follows
+        // possibly different directory paths. That is, their common suffix extends
+        // in both cases either to the start of the path or to a file separator character.
+        // TODO: should we test absolute paths instead?
+        def isSimilar(p1: String, p2: String): Boolean = {
+          var i = p1.length - 1
+          var j = p2.length - 1
+          while (i >= 0 && j >= 0 && p1(i) == p2(j) && p1(i) != separatorChar) {
+            i -= 1
+            j -= 1
+          }
+          (i < 0 || p1(i) == separatorChar) &&
+          (j < 0 || p2(j) == separatorChar)
         }
-        (i < 0 || p1(i) == separatorChar) &&
-        (j < 0 || p2(j) == separatorChar)
-      }
 
-      // Skip assertion for @publicInBinary members - they are designed to be accessed
-      // across compilation units (e.g., when inlined). See SIP-52.
-      val isPublicInBinary = d.hasPublicInBinary
-      assert(isPublicInBinary ||
-             d.symbol.source.exists &&
-             ctx.owner.source.exists &&
-             isSimilar(d.symbol.source.path, ctx.owner.source.path),
-          s"private ${d.symbol.showLocated} in ${d.symbol.source} accessed from ${ctx.owner.showLocated} in ${ctx.owner.source}")
-      d.ensureNotPrivate.installAfter(thisPhase)
+        // Skip assertion for @publicInBinary members - they are designed to be accessed
+        // across compilation units (e.g., when inlined). See SIP-52.
+        val isPublicInBinary = d.hasPublicInBinary
+        assert(isPublicInBinary ||
+               d.symbol.source.exists &&
+               ctx.owner.source.exists &&
+               isSimilar(d.symbol.source.path, ctx.owner.source.path),
+            s"private ${d.symbol.showLocated} in ${d.symbol.source} accessed from ${ctx.owner.showLocated} in ${ctx.owner.source}")
+        d.ensureNotPrivate.installAfter(thisPhase)
+      }
     }
 
   override def transformIdent(tree: Ident)(using Context): Ident = {
