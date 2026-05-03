@@ -859,6 +859,9 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
             case None =>
               val invokeStyle =
                 if (sym.isStaticMember) InvokeStyle.Static
+                // invokespecial requires the receiver to be the current class; a private method of a nestmate
+                // is invoked with invokevirtual or invokeinterface instead (JVMS 6.5, since Java 11)
+                else if (sym.is(Private) && !sym.isClassConstructor && sym.owner != claszSymbol) InvokeStyle.Virtual
                 else if (sym.is(Private) || sym.isClassConstructor) InvokeStyle.Special
                 else if (app.hasAttachment(BCodeHelpers.UseInvokeSpecial)) InvokeStyle.Special
                 else InvokeStyle.Virtual
@@ -1771,7 +1774,7 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
       val isInterface = isEmittedInterface(lambdaTarget.owner)
       val invokeStyle =
         if (lambdaTarget.isStaticMember) asm.Opcodes.H_INVOKESTATIC
-        else if (lambdaTarget.is(Private) || lambdaTarget.isClassConstructor) asm.Opcodes.H_INVOKESPECIAL
+        else if (lambdaTarget.isClassConstructor || lambdaTarget.is(Private) && lambdaTarget.owner == claszSymbol) asm.Opcodes.H_INVOKESPECIAL
         else if (isInterface) asm.Opcodes.H_INVOKEINTERFACE
         else asm.Opcodes.H_INVOKEVIRTUAL
 

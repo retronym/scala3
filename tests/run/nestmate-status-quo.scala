@@ -1,8 +1,7 @@
 // scalajs: --skip
-// Tests that document the status-quo (pre-NestMate JEP 181) name-mangling applied by
-// ExpandPrivate when private members are accessed across JVM class boundaries.
-// Method names visible in stack traces use the expanded form "Owner$$member".
-// After NestMate support is added, these names should revert to their original forms.
+//> using options -Yno-nestmates
+// Under -Yno-nestmates, ExpandPrivate makes private members accessed across JVM class
+// boundaries public, with expanded names of the form "Owner$$member".
 
 // --- 1. Inner class accesses private method of outer class ---
 class OuterA:
