@@ -450,7 +450,7 @@ object Names {
    *  `ConcurrentHashMap.get` only ever calls `probe.equals(storedKey)`, never the reverse,
    *  so the asymmetry is harmless. One instance per thread; it never escapes `lookup`.
    */
-  private final class Probe:
+  final class Probe private[core] ():
     private var arr: Array[Char] | Null = null
     private var seq: CharSequence | Null = null
     private var off = 0
@@ -485,6 +485,7 @@ object Names {
         }
       case _ => false
 
+  /** Probe for callers without access to a `ContextBase` */
   private val probes = new ThreadLocal[Probe]:
     override def initialValue = new Probe
 
@@ -524,9 +525,14 @@ object Names {
   def termName(cs: Array[Char], offset: Int, len: Int): SimpleName =
     lookup(probes.get.nn.set(cs, null, offset, len))
 
-  /** Create a term name from the contents of `sb`, without allocating if the name exists. */
+  /** Create a term name from the contents of `sb`, without allocating if the name exists.
+   *  Pass the `ContextBase`'s `namesProbe` to avoid the `ThreadLocal` lookup.
+   */
   def termName(sb: java.lang.StringBuilder): SimpleName =
-    lookup(probes.get.nn.set(null, sb, 0, sb.length))
+    termName(sb, probes.get.nn)
+
+  def termName(sb: java.lang.StringBuilder, probe: Probe): SimpleName =
+    lookup(probe.set(null, sb, 0, sb.length))
 
   /** Create a type name from a sequence of characters */
   def typeName(s: String): TypeName =
