@@ -545,7 +545,7 @@ class ReplDriver(settings: Array[String],
 
       val vals =
         info.fields
-          .filterNot(_.symbol.isOneOf(ParamAccessor | Private | Synthetic | Artifact | Module))
+          .filterNot(_.symbol.isOneOf((ParamAccessor | Private | Synthetic | Artifact | Module).toTermFlags))
           .filter(_.symbol.name.is(SimpleNameKind))
 
       val typeAliases =
