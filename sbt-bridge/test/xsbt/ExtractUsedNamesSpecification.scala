@@ -44,6 +44,35 @@ class ExtractUsedNamesSpecification {
     assertEquals(Set("a.b._"), usedNames("d.D4").filter(_.endsWith("._")))
   }
 
+  // An outer package clause puts its package's members in scope of the
+  // classes inside the nested clause, and is recorded like a wildcard import
+  // of that package. A single clause records nothing: the class's own package
+  // is known from its name.
+  @Test
+  def extractChainedPackageClause = {
+    val chained = """|package a
+                     |package b
+                     |class Chained""".stripMargin
+    val deep = """|package a.b
+                  |package c
+                  |package d
+                  |class Deep""".stripMargin
+    val single = """|package a.c
+                    |class Single""".stripMargin
+    val braces = """|package a {
+                    |  package e { class InBraces }
+                    |  class Outer
+                    |}""".stripMargin
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val usedNames = compilerForTesting.extractUsedNamesFromSrc(chained, deep, single, braces)
+    def scopes(cls: String) = usedNames(cls).filter(_.endsWith("._"))
+    assertEquals(Set("a._"), scopes("a.b.Chained"))
+    assertEquals(Set("a.b._", "a.b.c._"), scopes("a.b.c.d.Deep"))
+    assertEquals(Set(), scopes("a.c.Single"))
+    // charged to one class of the unit, like a top-level import
+    assertEquals(Set("a._"), scopes("a.e.InBraces") ++ scopes("a.Outer"))
+  }
+
   // test covers https://github.com/gkossakowski/sbt/issues/6
   @Test
   def extractNameInTypeTree = {
