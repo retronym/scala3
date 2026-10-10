@@ -367,7 +367,8 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
       for s <- bc.classInfo.decls.toList if !(s.is(Private) || declSet.contains(s)) do
         if internal then
           if discoveryReads(s) && !bc.is(Scala2x) then inherited += s
-        else if bc.is(Scala2x) || (isPlatform(bc) && !discoveryReads(s)) then stubbed += s
+        else if bc.is(Scala2x) || ((isPlatform(bc) || !materialiseLibraryMembers(bc)) && !discoveryReads(s)) then
+          stubbed += s
         else inherited += s
     // Inherited members need to be computed lazily because a class might contain
     // itself as an inherited member, like in `class A { class B extends A }`,
@@ -380,12 +381,24 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
   /** Is `owner` defined in this subproject, or in another one that Zinc has analysed? Zinc
    *  composes the name hashes of members inherited from such classes from their own decls, so
    *  they are not materialised here, except those that test and main-class discovery read.
-   *  Members of library classes still are.
+   *  Members of library classes still are, unless Zinc asks for stubs (`materialiseLibraryMembers`).
    */
   private def isInternal(owner: Symbol): Boolean =
     internalCache.getOrElseUpdate(owner, owner.isDefinedInCurrentRun || isSubprojectClass(owner) || isInOutput(owner))
 
   private val internalCache = new mutable.HashMap[Symbol, Boolean]
+
+  /** Whether Zinc wants the members of this library class in full. Otherwise they are stubs, and
+   *  Zinc invalidates the class's descendants by the stamp of its jar when it changes.
+   */
+  private def materialiseLibraryMembers(owner: Symbol): Boolean =
+    materialiseCache.getOrElseUpdate(owner, {
+      var result = true
+      ctx.withIncCallback(cb => result = cb.materialiseLibraryMembers(owner.binaryClassName))
+      result
+    })
+
+  private val materialiseCache = new mutable.HashMap[Symbol, Boolean]
 
   private def isSubprojectClass(owner: Symbol): Boolean =
     var result = false
