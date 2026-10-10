@@ -30,6 +30,15 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private val forwardSymRefs = Symbols.MutableSymbolMap[List[Addr]]()
   private val pickledTypes = util.EqHashMap[Type, Addr]()
 
+  /** Addresses of pickled types, keyed by their encoding (see `encodingKey`).
+   *  Distinct `Type` objects can pickle to the same bytes, e.g. `TypeRef(pre, name)`
+   *  (as read by the unpickler) and `TypeRef(pre, sym)` (as created by typer) for
+   *  an external `sym`, or the `ThisType` and `TermRef` of a package. Sharing on
+   *  the encoding rather than on identity makes the pickle independent of whether
+   *  referenced definitions came from source or from TASTy.
+   */
+  private val pickledTypeEncodings = util.HashMap[AnyRef, Addr]()
+
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
    */
@@ -95,10 +104,12 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   def pickleName(name: Name): Unit = writeNat(nameIndex(name).index)
 
+  private def nameAndSig(name: Name, sig: Signature, target: Name): Name =
+    if (sig eq Signature.NotAMethod) name
+    else SignedName(name.toTermName, sig, target.asTermName)
+
   private def pickleNameAndSig(name: Name, sig: Signature, target: Name): Unit =
-    pickleName(
-      if (sig eq Signature.NotAMethod) name
-      else SignedName(name.toTermName, sig, target.asTermName))
+    pickleName(nameAndSig(name, sig, target))
 
   private def pickleSymRef(sym: Symbol)(using Context) =
     val label: Addr | Null = symRefs.lookup(sym)
@@ -171,15 +182,16 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
     try {
-      val prev: Addr | Null = pickledTypes.lookup(tpe)
-      if (prev == null) {
-        pickledTypes(tpe) = currentAddr
+      val prev = pickledAddr(tpe)
+      if prev == null then
+        val addr = currentAddr
+        pickledTypes(tpe) = addr
         pickleNewType(tpe, richTypes)
-      }
-      else {
+        val key = encodingKey(tpe) // components are pickled now
+        if key != null then pickledTypeEncodings(key) = addr
+      else
         writeByte(SHAREDtype)
-        writeRef(prev.uncheckedNN)
-      }
+        writeRef(prev)
     }
     catch {
       case ex: AssertionError =>
@@ -187,6 +199,89 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         throw ex
     }
   }
+
+  /** The address of an already pickled type with the same encoding as `tpe`, or null */
+  private def pickledAddr(tpe: Type)(using Context): Addr | Null =
+    val addr = pickledTypes.lookup(tpe)
+    if addr != null then addr
+    else
+      val key = encodingKey(tpe)
+      if key == null then null
+      else
+        val addr = pickledTypeEncodings.lookup(key)
+        if addr != null then pickledTypes(tpe) = addr
+        addr
+
+  /** A key that determines the encoding of `tpe` produced by `pickleNewType`,
+   *  consisting of the tag, the name, symbol or constant that follows it, and
+   *  the addresses of the component types. Names are compared as term names,
+   *  as in the name table. Null if `tpe` is shared only by
+   *  identity or if a component type has not been pickled yet.
+   *
+   *  Types that bind parameters (lambdas, `RecType`) and those that contain
+   *  trees (annotations) are only shared by identity.
+   */
+  private def encodingKey(tpe: Type)(using Context): AnyRef | Null =
+    def key(tag: Int, payload: Any, components: List[Type]): AnyRef | Null =
+      var addrs: List[Addr] = Nil
+      var cs = components
+      while cs.nonEmpty do
+        val addr = pickledAddr(cs.head.stripTypeVar)
+        if addr == null then return null
+        addrs = addr :: addrs
+        cs = cs.tail
+      (tag, payload, addrs)
+    tpe match
+      case tpe: FlexibleType =>
+        key(FLEXIBLEtype, (), tpe.underlying :: Nil)
+      case AppliedType(tycon, args) =>
+        if tycon.typeSymbol == defn.MatchCaseClass then key(MATCHCASEtype, (), args)
+        else key(APPLIEDtype, (), tycon :: args)
+      case ConstantType(value) =>
+        if value.tag == ClazzTag then null else (value.tag, value)
+      case tpe: NamedType =>
+        val sym = tpe.symbol
+        if sym.is(Flags.Package) then
+          (if tpe.isType then TYPEREFpkg else TERMREFpkg, sym.fullName.toTermName)
+        else if tpe.prefix == NoPrefix then
+          (if tpe.isType then TYPEREFdirect else TERMREFdirect, sym)
+        else tpe.designator match
+          case name: Name =>
+            key(if tpe.isType then TYPEREF else TERMREF, name.toTermName, tpe.prefix :: Nil)
+          case sym: Symbol =>
+            if isLocallyDefined(sym) then
+              key(if tpe.isType then TYPEREFsymbol else TERMREFsymbol, sym, tpe.prefix :: Nil)
+            else if isExternalRefIn(tpe, sym) then
+              key(if tpe.isType then TYPEREFin else TERMREFin, sym, tpe.prefix :: Nil)
+            else if isJavaPickle && sym == defn.FromJavaObjectSymbol then
+              null
+            else
+              key(if tpe.isType then TYPEREF else TERMREF,
+                  nameAndSig(sym.name, tpe.signature, sym.targetName).toTermName, tpe.prefix :: Nil)
+      case tpe: ThisType =>
+        if tpe.cls.is(Flags.Package) && !tpe.cls.isEffectiveRoot then (TERMREFpkg, tpe.cls.fullName.toTermName)
+        else key(THIS, (), tpe.tref :: Nil)
+      case tpe: RefinedType =>
+        key(REFINEDtype, tpe.refinedName.toTermName, tpe.parent :: tpe.refinedInfo :: Nil)
+      case tpe: TypeBounds =>
+        // The variances of a type lambda in `hi` are determined by the
+        // address of `hi` (or of `lo` if aliasing), since lambdas are only
+        // shared by identity.
+        if tpe.isInstanceOf[AliasingBounds] then key(TYPEBOUNDS, true, tpe.lo :: Nil)
+        else key(TYPEBOUNDS, false, tpe.lo :: tpe.hi :: Nil)
+      case tpe: AndType =>
+        key(ANDtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
+      case tpe: OrType =>
+        key(ORtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
+      case tpe: ExprType =>
+        key(BYNAMEtype, (), tpe.underlying :: Nil)
+      case _ =>
+        null
+
+  /** Is a reference to external `sym` pickled as TYPEREFin or TERMREFin? */
+  private def isExternalRefIn(tpe: NamedType, sym: Symbol)(using Context): Boolean =
+    def isShadowedRef = sym.isClass && tpe.prefix.member(sym.name).symbol != sym
+    sym.is(Flags.Private) || isShadowedRef
 
   private def pickleNewType(tpe: Type, richTypes: Boolean)(using Context): Unit = tpe match {
     case AppliedType(tycon, args) =>
@@ -201,9 +296,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     case tpe: NamedType =>
       val sym = tpe.symbol
       def pickleExternalRef(sym: Symbol) = {
-        val isShadowedRef =
-          sym.isClass && tpe.prefix.member(sym.name).symbol != sym
-        if sym.is(Flags.Private) || isShadowedRef then
+        if isExternalRefIn(tpe, sym) then
           writeByte(if (tpe.isType) TYPEREFin else TERMREFin)
           withLength {
             pickleNameAndSig(sym.name, sym.signature, sym.targetName)
