@@ -174,14 +174,18 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     case UnitTag | BooleanTag | NullTag =>
   }
 
-  def pickleVariances(tp: Type)(using Context): Unit = tp match
-    case tp: HKTypeLambda if tp.isDeclaredVarianceLambda =>
-      for v <- tp.declaredVariances do
-        writeByte(
-          if v.is(Covariant) then COVARIANT
-          else if v.is(Contravariant) then CONTRAVARIANT
-          else STABLE)
+  /** The variance tags pickled after type bounds with upper bound `hi`.
+   *  A `LazyRef` to a lambda is not dereferenced, so its variances are not
+   *  pickled; changing this would change existing output.
+   */
+  private def varianceTags(hi: Type)(using Context): List[Int] = hi match
+    case hi: HKTypeLambda if hi.isDeclaredVarianceLambda =>
+      hi.declaredVariances.map: v =>
+        if v.is(Covariant) then COVARIANT
+        else if v.is(Contravariant) then CONTRAVARIANT
+        else STABLE
     case _ =>
+      Nil
 
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
@@ -280,8 +284,11 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     case tpe: RefinedType =>
       TypeShape(REFINEDtype, tpe.refinedName.toTermName, tpe.parent :: tpe.refinedInfo :: Nil)
     case tpe: TypeBounds =>
-      if tpe.isInstanceOf[AliasingBounds] then TypeShape(TYPEBOUNDS, (), tpe.lo :: Nil)
-      else TypeShape(TYPEBOUNDS, (), tpe.lo :: tpe.hi :: Nil)
+      // The variances depend on `hi` itself, not only on its address: a
+      // `LazyRef` shares the address of the type it refers to.
+      val variances = varianceTags(tpe.hi)
+      if tpe.isInstanceOf[AliasingBounds] then TypeShape(TYPEBOUNDS, variances, tpe.lo :: Nil)
+      else TypeShape(TYPEBOUNDS, variances, tpe.lo :: tpe.hi :: Nil)
     case tpe: AndType =>
       TypeShape(ANDtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
     case tpe: OrType =>
@@ -352,7 +359,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       case TYPEBOUNDS =>
         withLength {
           components.foreach(pickleType(_, richTypes))
-          pickleVariances(components.last)
+          shape.payload.asInstanceOf[List[Int]].foreach(writeByte)
         }
       case _ =>
         pickleConstantValue(shape.payload.asInstanceOf[Constant])
