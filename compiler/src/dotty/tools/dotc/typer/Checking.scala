@@ -594,7 +594,7 @@ object Checking {
   end checkScala2Implicit
 
   def checkErasedOK(sym: Symbol)(using Context): Unit =
-    if sym.is(Method, butNot = Macro | Accessor)
+    if sym.is(Method, butNot = (Macro | Accessor).toTermFlags)
         || sym.isOneOf(Lazy)
         || sym.isType
     then report.error(IllegalErasedDef(sym), sym.srcPos)
@@ -604,7 +604,7 @@ object Checking {
     def fail(msg: Message) = report.error(msg, sym.srcPos)
     def warn(msg: Message) = report.warning(msg, sym.srcPos)
 
-    def checkWithDeferred(flag: FlagSet) =
+    def checkWithDeferred(flag: UniformFlagSet) =
       if (sym.isOneOf(flag))
         fail(AbstractMemberMayNotHaveModifier(sym, flag))
     def checkNoConflict(flag1: FlagSet, flag2: FlagSet, msg: Message) =

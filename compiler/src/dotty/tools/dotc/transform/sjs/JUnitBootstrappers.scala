@@ -129,7 +129,7 @@ class JUnitBootstrappers extends MiniPhase {
 
     def isTestClass(sym: Symbol): Boolean = {
       sym.isClass &&
-      !sym.isOneOf(ModuleClass | Abstract | Trait) &&
+      !sym.isOneOf((ModuleClass | Abstract | Trait).toTypeFlags) &&
       hasTests(sym.asClass)
     }
 

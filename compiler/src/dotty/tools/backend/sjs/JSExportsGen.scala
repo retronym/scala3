@@ -65,7 +65,7 @@ final class JSExportsGen(jsCodeGen: JSCodeGen)(using Context) {
 
   private def topLevelExportsOf(sym: Symbol): List[TopLevelExportInfo] = {
     def isScalaClass(sym: Symbol): Boolean =
-      sym.isClass && !sym.isOneOf(Module | Trait) && !sym.isJSType
+      sym.isClass && !sym.isOneOf((Module | Trait).toTypeFlags) && !sym.isJSType
 
     if (isScalaClass(sym)) {
       // Scala classes are never exported; their constructors are

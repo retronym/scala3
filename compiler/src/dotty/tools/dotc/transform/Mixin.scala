@@ -203,10 +203,10 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
       sym
   end transformSym
 
-  private def wasOneOf(sym: Symbol, flags: FlagSet)(using Context): Boolean =
+  private def wasOneOf(sym: Symbol, flags: UniformFlagSet)(using Context): Boolean =
     atPhase(thisPhase) { sym.isOneOf(flags) }
 
-  private def was(sym: Symbol, flag: Flag, butNot: FlagSet)(using Context): Boolean =
+  private def was(sym: Symbol, flag: Flag, butNot: UniformFlagSet)(using Context): Boolean =
     atPhase(thisPhase) { sym.is(flag, butNot) }
 
   private def needsTraitSetter(sym: Symbol)(using Context): Boolean =
