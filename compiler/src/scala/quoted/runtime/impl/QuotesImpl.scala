@@ -3033,7 +3033,7 @@ class QuotesImpl private (using val ctx: Context) extends Quotes, QuoteUnpickler
           self.isTerm && !self.is(dotc.core.Flags.Method) && !self.is(dotc.core.Flags.Case/*, FIXME add this check and fix sourcecode butNot = Enum | Module*/)
         def isDefDef: Boolean = self.is(dotc.core.Flags.Method)
         def isBind: Boolean =
-          self.is(dotc.core.Flags.Case, butNot = dotc.core.Flags.Enum | dotc.core.Flags.Module) && !self.isClass
+          self.is(dotc.core.Flags.Case) && !self.isAnyOf(dotc.core.Flags.Enum, dotc.core.Flags.Module) && !self.isClass
         def isNoSymbol: Boolean = self == Symbol.noSymbol
         def exists: Boolean = self != Symbol.noSymbol
 

@@ -1292,7 +1292,7 @@ class CheckCaptures extends Recheck, SymTransformer:
      */
     override def recheckValDef(tree: ValDef, sym: Symbol)(using Context): Type = {
       val savedEnv = curEnv
-      val runInConstructor = !sym.isOneOf(Param | ParamAccessor | Lazy | NonMember)
+      val runInConstructor = !sym.isOneOf((Param | ParamAccessor | Lazy | NonMember).toTermFlags)
       try
         if sym.is(Mutable) then
           if !sym.hasAnnotation(defn.UncheckedCapturesAnnot) then

@@ -359,7 +359,7 @@ object ExplicitOuter {
     test(false, tree)
   end referencesOuter
 
-  private final val HoistableFlags = Method | Lazy | Module
+  private final val HoistableFlags = Method | Lazy | ModuleVal
 
   /** The outer prefix implied by type `tpe` */
   private def outerPrefix(tpe: Type)(using Context): Type = tpe match

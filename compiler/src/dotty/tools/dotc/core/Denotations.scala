@@ -1083,7 +1083,7 @@ object Denotations {
         case symd: SymDenotation => symd
         case _ => symbol.denot
       if !required.isEmpty && !symd.isAllOf(required)
-         || symd.isOneOf(realExcluded) then NoDenotation
+         || symd.isOneOf(realExcluded.assumeUniform) then NoDenotation
       else this
     def aggregate[T](f: SingleDenotation => T, g: (T, T) => T): T = f(this)
 

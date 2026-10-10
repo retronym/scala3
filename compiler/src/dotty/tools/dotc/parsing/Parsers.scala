@@ -3705,7 +3705,7 @@ object Parsers {
       else
         val mod = atSpan(in.skipToken()):
           modOfToken(tok, name.nn)
-        if mods.isOneOf(mod.flags) then
+        if mods.isOneOf(mod.flags.assumeUniform) then
           syntaxError(RepeatedModifier(mod.flags.flagsString, source, mod.span), mod.span)
         addMod(mods, mod)
     }
@@ -3989,7 +3989,7 @@ object Parsers {
               val mod = atSpan(in.skipToken()) { Mod.Var() }
               addMod(mods, mod)
             else
-              if (!(mods.flags &~ (ParamAccessor | Inline | Erased | impliedMods.flags)).isEmpty)
+              if (!(mods.flags &~ (ParamAccessor | Inline | Erased | impliedMods.flags).toTermFlags).isEmpty)
                 syntaxError(em"`val` or `var` expected")
               if firstClause && paramOwner == ParamOwner.CaseClass then mods
               else mods | PrivateLocal
@@ -4609,7 +4609,7 @@ object Parsers {
 
     // We allow `infix` and `into` on `enum` definitions.
     // Syntax rules disallow these soft infix modifiers on `case`s.
-    @tu private lazy val allowedForEnum = AccessFlags | Enum | Infix | Into
+    @tu private lazy val allowedForEnum = (AccessFlags | Enum | Infix | Into).toTypeFlags
 
     private def checkEnumModifiers(mods: Modifiers, caseStr: String): Modifiers =
       val flags = mods.flags
@@ -4617,7 +4617,7 @@ object Parsers {
       for mod <- mods.mods do
         if !mod.flags.isOneOf(allowedForEnum) then
           syntaxError(em"This modifier is not allowed on an enum$caseStr", mod.span)
-          flags1 = flags1 &~ mod.flags
+          flags1 = flags1 &~ mod.flags.assumeUniform
       if flags1 != flags then mods.withFlags(flags1) else mods
 
     /**  EnumDef ::=  id ClassConstr InheritClauses EnumBody
@@ -4775,7 +4775,7 @@ object Parsers {
         paramss.nestedMap: param =>
           if !param.mods.isAllOf(PrivateLocal) then
             syntaxError(em"method parameter ${param.name} may not be a `val`", param.span)
-          param.withMods(param.mods &~ (AccessFlags | ParamAccessor | Mutable) | Param)
+          param.withMods(param.mods &~ (AccessFlags | ParamAccessor | Mutable).toTermFlags | Param)
         .asInstanceOf[List[ParamClause]]
 
       val gdef =

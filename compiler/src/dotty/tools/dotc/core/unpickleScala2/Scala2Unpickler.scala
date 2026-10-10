@@ -482,7 +482,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
        * We bridge the gap right now.
        */
       name = name.asTermName.unmangle(SuperAccessorName).expandedName(owner)
-      flags = flags &~ (Scala2SuperAccessor | Private)
+      flags = flags &~ (Scala2SuperAccessor | Private).toTermFlags
     }
     name = name.mapLast(_.decode)
 
@@ -642,7 +642,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
             NamerOps.addConstructorProxies(denot.classSymbol)
           case denot =>
             val tp1 = translateTempPoly(tp) match
-              case ExprType(resultType) if !denot.isOneOf(Param | Method) =>
+              case ExprType(resultType) if !denot.isOneOf((Param | Method).toTermFlags) =>
                 // Adapt the flags of getters so they become like vals/vars instead.
                 // This is the `def` of an accessor that needs to be transformed into
                 // a `val`/`var`. Note that the `Method | Accessor` flags were already

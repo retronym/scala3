@@ -1719,7 +1719,7 @@ trait Implicits:
             else candSucceedsGiven(owner)
 
           ctx.isTyper
-          && !candSym.isOneOf(TermParamOrAccessor | Synthetic)
+          && !candSym.isOneOf((TermParamOrAccessor | Synthetic).toTermFlags)
           && candSym.span.exists
           && candSucceedsGiven(ctx.owner)
         end comesTooLate

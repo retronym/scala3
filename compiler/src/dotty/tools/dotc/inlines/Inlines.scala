@@ -491,7 +491,7 @@ object Inlines:
 
     val retainer = meth.copy(
       name = BodyRetainerName(meth.name),
-      flags = (meth.flags &~ (Inline | Macro | Override | AbsOverride)) | Private,
+      flags = (meth.flags &~ (Inline | Macro | Override | AbsOverride).toTermFlags) | Private,
       coord = mdef.rhs.span.startPos).asTerm.entered
     retainer.deriveTargetNameAnnotation(meth, name => BodyRetainerName(name.asTermName))
     DefDef(retainer, prefss =>
@@ -1004,11 +1004,11 @@ object Inlines:
       case stat: TypeDef =>
         inlinedTypeDef(stat, inlinedSym)
 
-    private def inlinedSym(sym: Symbol, overriddenDecls: Set[Symbol], withoutFlags: FlagSet = EmptyFlags)(using Context): Symbol =
+    private def inlinedSym(sym: Symbol, overriddenDecls: Set[Symbol], withoutFlags: UniformFlagSet = EmptyFlags)(using Context): Symbol =
       assert(!sym.isClass)
       inlinedMemberSym(sym, overriddenDecls, withoutFlags)
 
-    private def inlinedMemberSym(sym: Symbol, overriddenDecls: Set[Symbol], withoutFlags: FlagSet = EmptyFlags)(using Context): Symbol =
+    private def inlinedMemberSym(sym: Symbol, overriddenDecls: Set[Symbol], withoutFlags: UniformFlagSet = EmptyFlags)(using Context): Symbol =
       var name = sym.name
       var flags = sym.flags | Synthetic
       if sym.isTermParamAccessor then flags &~= ParamAccessor

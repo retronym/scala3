@@ -579,7 +579,7 @@ class Synthesizer(typer: Typer)(using @constructorOnly c: Context):
 
       def solve(childPre: Type, child: Symbol): Type = child match
         case childClass: ClassSymbol =>
-          assert(childClass.isOneOf(Case | Sealed))
+          assert(childClass.isOneOf((Case | Sealed).toTypeFlags))
           if childClass.is(Module) then
             val module = childClass.sourceModule
             refineAtPrefix(childPre, module, module.termRef)

@@ -45,7 +45,7 @@ class TreeChecker extends Phase with SymTransformer {
   private val seenClasses = collection.mutable.HashMap[String, Symbol]()
   private val seenModuleVals = collection.mutable.HashMap[String, Symbol]()
 
-  val NoSuperClassFlags: FlagSet = Trait | Package
+  val NoSuperClassFlags = (Trait | Package).toTypeFlags
 
   def testDuplicate(sym: Symbol, registry: mutable.Map[String, Symbol], typ: String)(using Context): Unit = {
     val name = sym.javaClassName

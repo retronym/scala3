@@ -561,7 +561,7 @@ object Semantic:
       //
       // See tests/init/neg/unsound1.scala
       val changed = !obj.hasField(field) || obj.field(field) != value
-      def isParamUpdate = field.isOneOf(Flags.ParamAccessor | Flags.Param) && obj.field(field) == value
+      def isParamUpdate = field.isOneOf((Flags.ParamAccessor | Flags.Param).toTermFlags) && obj.field(field) == value
       assert(!obj.hasField(field) || isParamUpdate, field.show + " already init, new = " + value + ", old = " + obj.field(field) + ", ref = " + ref)
       val obj2 = obj.copy(fields = obj.fields.updated(field, value))
       if changed then cache.updateObject(ref, obj2)
@@ -973,7 +973,7 @@ object Semantic:
       ref.klass.baseClasses.forall { klass =>
         !klass.hasSource || {
           val nonInits = klass.info.decls.filter { member =>
-            !member.isOneOf(Flags.Method | Flags.Lazy | Flags.Deferred)
+            !member.isOneOf((Flags.Method | Flags.Lazy | Flags.Deferred).toTermFlags)
             && !member.isType
             && !obj.hasField(member)
           }
@@ -988,7 +988,7 @@ object Semantic:
       ref.klass.baseClasses.flatMap { klass =>
         if klass.hasSource then
           klass.info.decls.filter { member =>
-            !member.isOneOf(Flags.Method | Flags.Lazy | Flags.Deferred)
+            !member.isOneOf((Flags.Method | Flags.Lazy | Flags.Deferred).toTermFlags)
             && !member.isType
             && !obj.hasField(member)
           }
