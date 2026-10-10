@@ -275,7 +275,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       if tycon.typeSymbol == defn.MatchCaseClass then TypeShape(MATCHCASEtype, (), args)
       else TypeShape(APPLIEDtype, (), tycon :: args)
     case ConstantType(value) =>
-      if value.tag == ClazzTag then null
+      if value.tag == ClazzTag then TypeShape(CLASSconst, (), value.typeValue :: Nil)
       else TypeShape(constantTag(value), value, Nil)
     case tpe: NamedType =>
       val sym = tpe.symbol
@@ -330,8 +330,14 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    *  are found by identity or, recursively, by encoding. Null if a component
    *  type has not been pickled yet.
    *
-   *  Types that bind parameters (lambdas, `RecType`) and those that contain
-   *  trees (annotations) have no shape and are only shared by identity.
+   *  Types without a shape are only shared by identity. Known gaps, which can
+   *  still make the pickle depend on whether definitions came from source or
+   *  from TASTy:
+   *   - lambdas and `RecType`, which bind parameters; keying them would need
+   *     alpha-equivalence of the parameter references.
+   *   - `MatchType`, whose cases usually bind type variables.
+   *   - `AnnotatedType`, which contains trees. Compact annotations, which are
+   *     pickled as types, could be keyed later.
    */
   private def encodingKey(shape: TypeShape)(using Context): AnyRef | Null =
     var addrs: List[Addr] = Nil
@@ -372,7 +378,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
           pickleType(parent)
           pickleType(refinedInfo, richTypes = true)
         }
-      case THIS | BYNAMEtype =>
+      case THIS | BYNAMEtype | CLASSconst =>
         pickleType(components.head)
       case APPLIEDtype | MATCHCASEtype =>
         withLength { components.foreach(pickleType(_)) }
@@ -388,8 +394,6 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   /** Pickle a type that has no shape */
   private def pickleNewType(tpe: Type, richTypes: Boolean)(using Context): Unit = tpe match {
-    case ConstantType(value) =>
-      pickleConstant(value)
     case tpe: NamedType =>
       // `FromJavaObject` in a Java pickle; it is replaced back when unpickling Java TASTy
       pickleType(defn.ObjectType)
