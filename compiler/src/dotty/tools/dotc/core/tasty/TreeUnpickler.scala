@@ -816,6 +816,32 @@ class TreeUnpickler(reader: TastyReader,
               case _ => this.symbol == sym
       )
 
+    /** The largest subset of {NoInits, PureInterface} that a class defining
+     *  `sym` can have as flags. This must agree with `untpd.bodyKind` applied
+     *  to the source definition of `sym`, so that a class gets the same flags,
+     *  and its subclasses the same calls to its `$init$`, whether it is
+     *  compiled from source or read from TASTy. The source rule looks at
+     *  untyped trees, so here we recover their shape from the flags that each
+     *  form leaves on its symbols:
+     *   - extension methods and objects (other than synthetic companions,
+     *     whose module val is marked `Synthetic`) come from statements the
+     *     source rule does not recognize as definitions, as are exports;
+     *   - a value is a `ValDef` with a right-hand side, unless it is abstract
+     *     (a deferred given has `= deferred` as right-hand side).
+     */
+    private def sourceInitsKind(sym: Symbol)(using Context): FlagSet =
+      val flags = sym.flagsUNSAFE // all modifiers are set; `is` would force the completer
+      if flags.is(ExtensionMethod) then
+        EmptyFlags
+      else if flags.is(Module) then
+        if sym.isTerm && !flags.is(Synthetic) then EmptyFlags else NoInits
+      else if sym.isTerm && !flags.is(Method) then
+        if flags.is(Deferred, butNot = HasDefault) then NoInitsInterface else EmptyFlags
+      else if sym.isClass || flags.is(Method, butNot = Deferred) && !sym.isConstructor then
+        NoInits
+      else
+        NoInitsInterface
+
     /** Create symbols for the definitions in the statement sequence between
      *  current address and `end`.
      *  @return  the largest subset of {NoInits, PureInterface} that a
@@ -828,13 +854,12 @@ class TreeUnpickler(reader: TastyReader,
           case VALDEF | DEFDEF | TYPEDEF | TYPEPARAM | PARAM =>
             val sym = symbolAtCurrent()
             skipTree()
-            if (sym.isTerm && !sym.isOneOf(DeferredOrLazyOrMethod))
-              initsFlags = EmptyFlags
-            else if (sym.isClass ||
-              sym.isOneOf(Lazy | Method, butNot = Deferred) && !sym.isConstructor)
-              initsFlags &= NoInits // i.e. initsFlags &~= PureInterface
-          case IMPORT | EXPORT =>
+            initsFlags &= sourceInitsKind(sym)
+          case IMPORT =>
             skipTree()
+          case EXPORT =>
+            skipTree()
+            initsFlags = EmptyFlags
           case PACKAGE =>
             processPackage { (pid, end) => indexStats(end) }
           case _ =>
