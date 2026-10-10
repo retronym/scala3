@@ -113,20 +113,28 @@ object SymDenotations {
       (if (isCurrent(flag)) myFlags else flags).is(flag)
 
     /** Has this denotation one of the flags in `fs` set? */
-    final def isOneOf(fs: FlagSet)(using Context): Boolean =
+    final def isOneOf(fs: UniformFlagSet)(using Context): Boolean =
       (if (isCurrent(fs)) myFlags else flags).isOneOf(fs)
 
     /** Has this denotation the given flag set, whereas none of the flags
      *  in `butNot` are set?
      */
-    final def is(flag: Flag, butNot: FlagSet)(using Context): Boolean =
+    final def is(flag: Flag, butNot: UniformFlagSet)(using Context): Boolean =
       (if (isCurrent(flag) && isCurrent(butNot)) myFlags else flags).is(flag, butNot)
 
     /** Has this denotation one of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
-    final def isOneOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+    final def isOneOf(fs: UniformFlagSet, butNot: UniformFlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isOneOf(fs, butNot)
+
+    /** Has this denotation any of the given flags? Each argument is tested on its own,
+     *  see `Flags.isAnyOf`.
+     */
+    inline final def isAnyOf(inline f1: UniformFlagSet, inline f2: UniformFlagSet)(using Context): Boolean =
+      isOneOf(f1) || isOneOf(f2)
+    inline final def isAnyOf(inline f1: UniformFlagSet, inline f2: UniformFlagSet, inline f3: UniformFlagSet)(using Context): Boolean =
+      isOneOf(f1) || isOneOf(f2) || isOneOf(f3)
 
     /** Has this denotation all of the flags in `fs` set? */
     final def isAllOf(fs: FlagSet)(using Context): Boolean =
@@ -135,7 +143,7 @@ object SymDenotations {
     /** Has this denotation all of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
-    final def isAllOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+    final def isAllOf(fs: FlagSet, butNot: UniformFlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isAllOf(fs, butNot)
 
     /** The type info, or, if symbol is not yet completed, the completer */

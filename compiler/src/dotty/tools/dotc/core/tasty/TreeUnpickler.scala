@@ -828,7 +828,7 @@ class TreeUnpickler(reader: TastyReader,
      *           trait owning the indexed statements can have as flags.
      */
     def indexStats(end: Addr)(using Context): FlagSet = {
-      var initsFlags = NoInitsInterface
+      var initsFlags: FlagSet = NoInitsInterface
       while (currentAddr.index < end.index)
         nextByte match {
           case VALDEF | DEFDEF | TYPEDEF | TYPEPARAM | PARAM =>

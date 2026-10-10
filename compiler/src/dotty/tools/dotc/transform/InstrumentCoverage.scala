@@ -629,7 +629,7 @@ class InstrumentCoverage extends MacroTransform with IdentityDenotTransformer:
             tree.rhs
           else if sym.isClassConstructor then
             instrumentSecondaryCtor(tree)
-          else if !sym.isOneOf(Accessor | Artifact | Synthetic)
+          else if !sym.isOneOf((Accessor | Artifact | Synthetic).toTermFlags)
                && !LiftCoverage.isUnsafeAssumeSeparate(tree.rhs)
           then
             // If the body can be instrumented, do it (i.e. insert a "coverage call" at the beginning)
@@ -908,7 +908,7 @@ class InstrumentCoverage extends MacroTransform with IdentityDenotTransformer:
 object InstrumentCoverage:
   val name: String = "instrumentCoverage"
   val description: String = "instrument code for coverage checking"
-  val ExcludeMethodFlags: FlagSet = Artifact | Erased
+  val ExcludeMethodFlags = Artifact | Erased
 
   /** Maximum number of tree nodes in a method body for coverage instrumentation.
     * Beyond this threshold, the instrumented bytecode risks exceeding the JVM's 64KB

@@ -107,7 +107,7 @@ class MixinOps(cls: ClassSymbol, thisPhase: DenotTransformer)(using Context) {
   end needsMixinForwarder
 
   private val PrivateOrAccessor: FlagSet = Private | Accessor
-  private val PrivateOrAccessorOrDeferred: FlagSet = Private | Accessor | Deferred
+  private val PrivateOrAccessorOrDeferred = (Private | Accessor | Deferred).toTermFlags
 
   def forwarderRhsFn(target: Symbol): List[List[Tree]] => Tree =
     prefss =>

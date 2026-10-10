@@ -212,7 +212,7 @@ class Namer { typer: Typer =>
          isBackquoted(tree)
       || alreadyBackquotedInSource
       || tree.span.isSynthetic
-      || flags.isOneOf(Synthetic | Accessor | CaseAccessor) // check the case param not the accessor
+      || flags.isOneOf((Synthetic | Accessor | CaseAccessor).toTermFlags) // check the case param not the accessor
       || flags.is(Param) && ctx.owner.is(Synthetic)
       || isDollars
     // no point in warning about $ in Java, there are no backticks to insert nor other ways to suppress such a warning

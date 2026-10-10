@@ -104,7 +104,7 @@ class CheckLoopingImplicits extends MiniPhase:
         checkNotLooping(t.rhs)
       case _ =>
 
-    if sym.isOneOf(GivenOrImplicit | Lazy | ExtensionMethod)
+    if sym.isOneOf((GivenOrImplicit | Lazy | ExtensionMethod).toTermFlags)
       || sym.name == nme.apply && sym.owner.is(Module) && sym.owner.sourceModule.isOneOf(GivenOrImplicit)
     then
       checkNotLooping(InstrumentCoverage.stripLeadingCoverage(mdef.rhs))

@@ -259,9 +259,9 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
     mods: List[Mod] = Nil) {
 
     def is(flag: Flag): Boolean = flags.is(flag)
-    def is(flag: Flag, butNot: FlagSet): Boolean = flags.is(flag, butNot = butNot)
-    def isOneOf(fs: FlagSet): Boolean = flags.isOneOf(fs)
-    def isOneOf(fs: FlagSet, butNot: FlagSet): Boolean = flags.isOneOf(fs, butNot = butNot)
+    def is(flag: Flag, butNot: UniformFlagSet): Boolean = flags.is(flag, butNot = butNot)
+    def isOneOf(fs: UniformFlagSet): Boolean = flags.isOneOf(fs)
+    def isOneOf(fs: UniformFlagSet, butNot: UniformFlagSet): Boolean = flags.isOneOf(fs, butNot = butNot)
     def isAllOf(fc: FlagSet): Boolean = flags.isAllOf(fc)
 
     def | (fs: FlagSet): Modifiers = withFlags(flags | fs)
@@ -275,7 +275,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
       if (this.flags == flags) this
       else copy(flags = flags)
 
-    def withoutFlags(flags: FlagSet): Modifiers =
+    def withoutFlags(flags: UniformFlagSet): Modifiers =
       if (this.isOneOf(flags))
         Modifiers(this.flags &~ flags, this.privateWithin, this.annotations, this.mods.filterNot(_.flags.isOneOf(flags)))
       else this

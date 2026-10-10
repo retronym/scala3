@@ -557,7 +557,7 @@ trait UntypedTreeInfo extends TreeInfo[Untyped] { self: Trees.Instance[Untyped] 
    *   trait or class with this body can have as flags.
    */
   def bodyKind(body: List[Tree])(using Context): FlagSet =
-    body.foldLeft(NoInitsInterface)((fs, stat) => fs & defKind(stat))
+    body.foldLeft(NoInitsInterface: FlagSet)((fs, stat) => fs & defKind(stat))
 
   /** Is `tree` a DerivedTypeTree, possibly followed by type arguments? */
   def hasDerivedTree(tree: Tree)(using Context): Boolean = tree match
