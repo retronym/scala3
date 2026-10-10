@@ -47,6 +47,12 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    */
   private var sharedByEncoding: mutable.ArrayBuffer[(Type, Addr)] | Null = null
 
+  /** The shapes of types that were looked up by encoding but are not pickled
+   *  yet, so that the shape of a type, which can involve a member lookup (see
+   *  `isExternalRefIn`), is computed only once.
+   */
+  private val pendingShapes = util.EqHashMap[Type, TypeShape]()
+
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
    */
@@ -193,7 +199,8 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       val prev: Addr | Null = pickledTypes.lookup(tpe)
       if prev != null then pickleSharedType(prev)
       else
-        val shape = typeShape(tpe)
+        val pending = pendingShapes.remove(tpe)
+        val shape = if pending != null then pending else typeShape(tpe)
         if shape == null then
           pickledTypes(tpe) = currentAddr
           pickleNewType(tpe, richTypes)
@@ -218,8 +225,14 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     val addr = pickledTypes.lookup(tpe)
     if addr != null then addr
     else
-      val shape = typeShape(tpe)
-      if shape == null then null else encodedAddr(tpe, shape)
+      var shape = pendingShapes.lookup(tpe)
+      if shape == null then
+        shape = typeShape(tpe)
+        if shape == null then return null
+        pendingShapes(tpe) = shape
+      val addr = encodedAddr(tpe, shape)
+      if addr != null then pendingShapes.remove(tpe)
+      addr
 
   /** The address of an already pickled type with the same encoding as `tpe`, which
    *  has shape `shape`, or null if there is none.
@@ -237,9 +250,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   /** What is written for a type that is shared by encoding: its tag, the name,
    *  symbol, constant or other data that follows the tag, and its component
    *  types, in the order they are written. Names are term names, as in the name
-   *  table. Both `pickleShape`, which writes it,
-   *  and `encodingKey`, which keys it, are derived from the shape, so the bytes
-   *  written for a type are determined by its key.
+   *  table. Both `pickleShape`, which writes it, and `encodingKey`, which keys
+   *  it, are derived from the shape, so the bytes written for a type are
+   *  determined by its key.
    */
   private class TypeShape(val tag: Int, val payload: Any, val components: List[Type])
 
