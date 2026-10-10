@@ -55,6 +55,11 @@ class TreeBuffer extends TastyBuffer(50000) {
     addr
   }
 
+  /** Discard everything written at or after `addr` */
+  def truncate(addr: Addr): Unit =
+    while numOffsets > 0 && offsets(numOffsets - 1) >= addr.index do numOffsets -= 1
+    length = addr.index
+
   /** Write reference right adjusted into freshly reserved field. */
   def writeRef(target: Addr): Unit = {
     keepOffset(relative = false)

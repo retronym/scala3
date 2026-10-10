@@ -543,6 +543,7 @@ private sealed trait YSettings:
   val YprintTasty: Setting[Boolean] = BooleanSetting(ForkSetting, "Yprint-tasty", "Prints the generated TASTY to stdout.")
   val YtestPickler: Setting[Boolean] = BooleanSetting(ForkSetting, "Ytest-pickler", "Self-test for pickling functionality; should be used with -Ystop-after:pickler.")
   val YtestPicklerCheck: Setting[Boolean] = BooleanSetting(ForkSetting, "Ytest-pickler-check", "Self-test for pickling -print-tasty output; should be used with -Ytest-pickler.")
+  val YtestPicklerSharing: Setting[Boolean] = BooleanSetting(ForkSetting, "Ytest-pickler-sharing", "Self-test that types shared by encoding in TASTy are pickled to the same bytes as the types they share.")
   val YcheckReentrant: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-reentrant", "Check that compiled program does not contain vars that can be accessed from a global root.")
   val YforceSbtPhases: Setting[Boolean] = BooleanSetting(ForkSetting, "Yforce-sbt-phases", "Run the phases used by sbt for incremental compilation (ExtractDependencies and ExtractAPI) even if the compiler is ran outside of sbt, for debugging.")
   val YdumpSbtInc: Setting[Boolean] = BooleanSetting(ForkSetting, "Ydump-sbt-inc", "For every compiled foo.scala, output the API representation and dependencies used for sbt incremental compilation in foo.inc, implies -Yforce-sbt-phases.")
