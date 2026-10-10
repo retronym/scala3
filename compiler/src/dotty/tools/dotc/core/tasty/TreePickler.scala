@@ -238,11 +238,12 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    *  has shape `shape`, or null if there is none.
    */
   private def encodedAddr(tpe: Type, shape: TypeShape)(using Context): Addr | Null =
-    val key = encodingKey(shape)
-    if key == null then null
+    if shape.missedAt == pickledTypeEncodings.size then null
     else
-      val addr = pickledTypeEncodings.lookup(key)
-      if addr != null then
+      val key = encodingKey(shape)
+      val addr = if key == null then null else pickledTypeEncodings.lookup(key)
+      if addr == null then shape.missedAt = pickledTypeEncodings.size
+      else
         pickledTypes(tpe) = addr
         if sharedByEncoding != null then sharedByEncoding.nn += ((tpe, addr))
       addr
@@ -254,7 +255,15 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    *  it, are derived from the shape, so the bytes written for a type are
    *  determined by its key.
    */
-  private class TypeShape(val tag: Int, val payload: Any, val components: List[Type])
+  private class TypeShape(val tag: Int, val payload: Any, val components: List[Type]):
+    /** The size of `pickledTypeEncodings` when this shape was last looked up
+     *  without success, or -1. The lookup is bound to fail again while the size
+     *  is unchanged: a hit needs an entry whose key contains the address of a
+     *  component that was not pickled at the time, or an entry for an
+     *  identical key, and either would have been added since. This makes the
+     *  lookups of the components of a type that was just missed O(1).
+     */
+    var missedAt: Int = -1
 
   /** The shape of `tpe`, or null if `tpe` is shared by identity only and is
    *  pickled by `pickleNewType`.
