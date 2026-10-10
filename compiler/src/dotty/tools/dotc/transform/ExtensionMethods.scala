@@ -132,7 +132,7 @@ class ExtensionMethods extends MiniPhase with DenotTransformer with FullParamete
 
   private def createExtensionMethod(imeth: Symbol, staticClass: Symbol)(using Context): TermSymbol = {
     val extensionMeth = newSymbol(staticClass, extensionName(imeth),
-      (imeth.flags | Final) &~ (Override | Protected | AbsOverride),
+      (imeth.flags | Final) &~ (Override | Protected | AbsOverride).toTermFlags,
       fullyParameterizedType(imeth.info, imeth.owner.asClass),
       privateWithin = imeth.privateWithin, coord = imeth.coord)
     atPhase(thisPhase)(extensionMeth.addAnnotations(imeth.annotations))
