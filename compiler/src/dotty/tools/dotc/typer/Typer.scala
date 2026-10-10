@@ -3490,7 +3490,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
             depRecorder._responsibleForImports = null
 
           val impl = dcl.copy(cls,
-            flags = dcl.flags &~ (HasDefault | Deferred) | Final | Override,
+            flags = dcl.flags &~ (HasDefault | Deferred).toTermFlags | Final | Override,
             info = target,
             coord = rhs.span).entered.asTerm
 
