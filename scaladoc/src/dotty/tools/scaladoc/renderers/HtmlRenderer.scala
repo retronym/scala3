@@ -131,7 +131,7 @@ class HtmlRenderer(rootPackage: Member, members: Map[DRI, Member])(using ctx: Do
         case None => ""
     )
 
-  private def visibleChildren(nav: Page): List[Page] = nav.children.filterNot(_.hidden)
+  private def visibleChildren(nav: Page): Seq[Page] = nav.children.filterNot(_.hidden)
 
   /** For each DRI, the navigation entries on the path from a root down to an entry for that DRI (inclusive). */
   private lazy val navPaths: Map[DRI, java.util.Set[Page]] =
