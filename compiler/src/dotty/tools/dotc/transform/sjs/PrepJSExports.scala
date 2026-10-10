@@ -52,7 +52,7 @@ object PrepJSExports {
    */
   def genExport(sym: Symbol)(using Context): List[Tree] = {
     // Scala classes are never exported: Their constructors are.
-    val isScalaClass = sym.isClass && !sym.isOneOf(Trait | Module) && !isJSAny(sym)
+    val isScalaClass = sym.isClass && !sym.isOneOf((Trait | Module).toTypeFlags) && !isJSAny(sym)
 
     // Filter constructors of module classes: The module classes themselves will be exported.
     val isModuleClassCtor = sym.isConstructor && sym.owner.is(ModuleClass)
