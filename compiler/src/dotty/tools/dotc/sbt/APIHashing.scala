@@ -88,7 +88,7 @@ object APIHashing:
     case _ => false
 
   @annotation.tailrec
-  private def simpleName(t: Type): Option[String] = t match
+  def simpleName(t: Type): Option[String] = t match
     case a: Annotated => simpleName(a.baseType)
     case _: Singleton => None
     case p: Projection =>
