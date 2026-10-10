@@ -3299,7 +3299,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    *  (3) Set the `defTree` of `sym` to be `mdef`.
    */
   private def postProcessInfo(mdef: MemberDef, sym: Symbol)(using Context): MemberDef =
-    if (!sym.isOneOf(Synthetic | InlineProxy | Param) && sym.info.finalResultType.isRepeatedParam)
+    if (!sym.isOneOf((Synthetic | InlineProxy | Param).toTermFlags) && sym.info.finalResultType.isRepeatedParam)
       report.error(em"Cannot return repeated parameter type ${sym.info.finalResultType}", sym.srcPos)
     mdef.ensureHasSym(sym)
     if (!ctx.isAfterInlining) mdef.setDefTree

@@ -3705,7 +3705,7 @@ object Parsers {
       else
         val mod = atSpan(in.skipToken()):
           modOfToken(tok, name.nn)
-        if mods.isOneOf(mod.flags) then
+        if mods.isOneOf(mod.flags.assumeUniform) then
           syntaxError(RepeatedModifier(mod.flags.flagsString, source, mod.span), mod.span)
         addMod(mods, mod)
     }
@@ -4609,7 +4609,7 @@ object Parsers {
 
     // We allow `infix` and `into` on `enum` definitions.
     // Syntax rules disallow these soft infix modifiers on `case`s.
-    @tu private lazy val allowedForEnum = AccessFlags | Enum | Infix | Into
+    @tu private lazy val allowedForEnum = (AccessFlags | Enum | Infix | Into).toTypeFlags
 
     private def checkEnumModifiers(mods: Modifiers, caseStr: String): Modifiers =
       val flags = mods.flags
