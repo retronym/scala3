@@ -6,6 +6,7 @@ package tasty
 import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 import dotty.tools.tasty.TastyBuffer.*
+import dotty.tools.tasty.TastyReader
 
 import ast.Trees.*
 import ast.{untpd, tpd}
@@ -40,6 +41,11 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    */
   private val pickledTypeEncodings = util.HashMap[AnyRef, Addr]()
 
+  /** Under -Ytest-pickler-sharing, the types that were found by encoding rather
+   *  than by identity, with the address of the type they share. Checked by
+   *  `checkSharedByEncoding`.
+   */
+  private var sharedByEncoding: mutable.ArrayBuffer[(Type, Addr)] | Null = null
 
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
@@ -219,7 +225,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     if key == null then null
     else
       val addr = pickledTypeEncodings.lookup(key)
-      if addr != null then pickledTypes(tpe) = addr
+      if addr != null then
+        pickledTypes(tpe) = addr
+        if sharedByEncoding != null then sharedByEncoding.nn += ((tpe, addr))
       addr
 
   /** What is written for a type that is shared by encoding: its tag, the name,
@@ -1024,6 +1032,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   def pickle(trees: List[Tree])(using Context): Unit = {
     profile = Profile.current
+    if ctx.settings.YtestPicklerSharing.value then sharedByEncoding = mutable.ArrayBuffer()
     for tree <- trees do
       if !tree.isEmpty then pickleTree(tree)
 
@@ -1031,7 +1040,74 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       .map(sym => i"${sym.showLocated} (line ${sym.srcPos.line}) #${sym.id}")
       .toList
     assert(forwardSymRefs.isEmpty, i"unresolved symbols: $missing%, % when pickling ${ctx.source}")
+    if sharedByEncoding != null then checkSharedByEncoding()
   }
+
+  /** Check that each type in `sharedByEncoding` pickles to the same bytes as the
+   *  type it shares. Each is pickled afresh at the end of the buffer, which is
+   *  truncated again afterwards. This runs once all forward symbol references
+   *  are patched, so that symbol references can be compared.
+   */
+  private def checkSharedByEncoding()(using Context): Unit =
+    val toCheck = sharedByEncoding.nn.toList
+    sharedByEncoding = null
+    val start = currentAddr
+    for (tpe, addr) <- toCheck do
+      val fresh = currentAddr
+      pickleShape(typeShape(tpe).nn, richTypes = false)
+      assert(sameEncoding(addr, fresh),
+        i"$tpe is pickled differently from the type at $addr that it shares, when pickling ${ctx.source}")
+    buf.truncate(start)
+
+  /** Are the type trees at `a` and `b` the same, after following SHAREDtype references? */
+  private def sameEncoding(a: Addr, b: Addr): Boolean =
+    def reader(addr: Addr) =
+      val r = TastyReader(bytes, 0, length)
+      r.goto(addr)
+      r
+    def deref(addr: Addr): Addr =
+      val r = reader(addr)
+      if r.readByte() == SHAREDtype then deref(r.readAddr()) else addr
+    def skipTree(r: TastyReader): Unit =
+      val tag = r.readByte()
+      if tag >= firstLengthTreeTag then r.goto(r.readEnd())
+      else if tag >= firstNatASTTreeTag then { r.readLongNat(); skipTree(r) }
+      else if tag >= firstASTTreeTag then skipTree(r)
+      else if tag >= firstNatTreeTag then r.readLongNat()
+    def subtrees(r: TastyReader, end: Addr): List[Addr] =
+      val addrs = mutable.ListBuffer[Addr]()
+      while r.currentAddr != end do
+        addrs += r.currentAddr
+        skipTree(r)
+      addrs.toList
+    def same(a0: Addr, b0: Addr): Boolean =
+      val a = deref(a0)
+      val b = deref(b0)
+      a == b || {
+        val ra = reader(a)
+        val rb = reader(b)
+        def sameNat = ra.readLongNat() == rb.readLongNat()
+        def sameSubtree = same(ra.currentAddr, rb.currentAddr)
+        val tag = ra.readByte()
+        tag == rb.readByte() && {
+          if tag < firstNatTreeTag then true
+          else if tag < firstASTTreeTag then sameNat
+          else if tag < firstNatASTTreeTag then sameSubtree
+          else if tag < firstLengthTreeTag then sameNat && sameSubtree
+          else
+            val endA = ra.readEnd()
+            val endB = rb.readEnd()
+            tag match
+              case TYPEREFin | TERMREFin | REFINEDtype | APPLIEDtype | MATCHCASEtype
+                 | FLEXIBLEtype | ANDtype | ORtype | TYPEBOUNDS =>
+                val hasName = tag == TYPEREFin || tag == TERMREFin || tag == REFINEDtype
+                (!hasName || sameNat)
+                && subtrees(ra, endA).corresponds(subtrees(rb, endB))(same)
+              case _ => // not shared by encoding, compare bytes
+                java.util.Arrays.equals(bytes, a.index, endA.index, bytes, b.index, endB.index)
+        }
+      }
+    same(a, b)
 
   def compactify(scratch: ScratchData = new ScratchData): Unit = {
     buf.compactify(scratch)
