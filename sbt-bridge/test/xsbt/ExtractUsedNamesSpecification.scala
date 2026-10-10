@@ -21,6 +21,29 @@ class ExtractUsedNamesSpecification {
     assertEquals(expectedNames, usedNames("a.A"))
   }
 
+  // A wildcard import of a package is recorded as the reserved name `<pkg>._`, so
+  // that Zinc can find the classes that see a definition added to the package
+  // through such an import. Wildcard imports of objects need no such name.
+  @Test
+  def extractPackageWildcardImport = {
+    val srcA = """|package a.b { class X; given Int = 1 }
+                  |package a.c { object O { class Z } }""".stripMargin
+    val srcB = """|package d
+                  |class D1 { import a.b.*; val x = new X }
+                  |class D2 { import a.b.given; val i = summon[Int] }
+                  |class D3 { import a.b.X; import a.c.O.*; val x = new X; val z = new Z }
+                  |class D4 { import a.b.{given, *}; import _root_.*; val x = new X }""".stripMargin
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val usedNames = compilerForTesting.extractUsedNamesFromSrc(srcA, srcB)
+    assertTrue(usedNames("d.D1").contains("a.b._"))
+    assertTrue(usedNames("d.D2").contains("a.b._"))
+    assertTrue(usedNames("d.D4").contains("a.b._"))
+    assertFalse(usedNames("d.D3").contains("a.b._"))
+    assertFalse(usedNames("d.D3").contains("a.c._"))
+    assertFalse(usedNames("d.D3").contains("a.c.O._"))
+    assertEquals(Set("a.b._"), usedNames("d.D4").filter(_.endsWith("._")))
+  }
+
   // test covers https://github.com/gkossakowski/sbt/issues/6
   @Test
   def extractNameInTypeTree = {
