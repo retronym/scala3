@@ -6,6 +6,7 @@ package tasty
 import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 import dotty.tools.tasty.TastyBuffer.*
+import dotty.tools.tasty.TastyReader
 
 import ast.Trees.*
 import ast.{untpd, tpd}
@@ -38,6 +39,18 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
    *  referenced definitions came from source or from TASTy.
    */
   private val pickledTypeEncodings = util.HashMap[AnyRef, Addr]()
+
+  /** Under -Ytest-pickler-sharing, the types that were found by encoding rather
+   *  than by identity, with the address of the type they share. Checked by
+   *  `checkSharedByEncoding`.
+   */
+  private var sharedByEncoding: mutable.ArrayBuffer[(Type, Addr)] | Null = null
+
+  /** The shapes of types that were looked up by encoding but are not pickled
+   *  yet, so that the shape of a type, which can involve a member lookup (see
+   *  `isExternalRefIn`), is computed only once.
+   */
+  private val pendingShapes = util.EqHashMap[Type, TypeShape]()
 
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
@@ -134,64 +147,73 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private def isLocallyDefined(sym: Symbol)(using Context) =
     sym.topLevelClass.isLinkedWith(pickler.rootCls)
 
-  def pickleConstant(c: Constant)(using Context): Unit = c.tag match {
-    case UnitTag =>
-      writeByte(UNITconst)
-    case BooleanTag =>
-      writeByte(if (c.booleanValue) TRUEconst else FALSEconst)
-    case ByteTag =>
-      writeByte(BYTEconst)
-      writeInt(c.byteValue)
-    case ShortTag =>
-      writeByte(SHORTconst)
-      writeInt(c.shortValue)
-    case CharTag =>
-      writeByte(CHARconst)
-      writeNat(c.charValue)
-    case IntTag =>
-      writeByte(INTconst)
-      writeInt(c.intValue)
-    case LongTag =>
-      writeByte(LONGconst)
-      writeLongInt(c.longValue)
-    case FloatTag =>
-      writeByte(FLOATconst)
-      writeInt(java.lang.Float.floatToRawIntBits(c.floatValue))
-    case DoubleTag =>
-      writeByte(DOUBLEconst)
-      writeLongInt(java.lang.Double.doubleToRawLongBits(c.doubleValue))
-    case StringTag =>
-      writeByte(STRINGconst)
-      pickleName(c.stringValue.toTermName)
-    case NullTag =>
-      writeByte(NULLconst)
-    case ClazzTag =>
-      writeByte(CLASSconst)
-      pickleType(c.typeValue)
+  /** The tag with which constant `c` is pickled */
+  private def constantTag(c: Constant): Int = c.tag match {
+    case UnitTag => UNITconst
+    case BooleanTag => if (c.booleanValue) TRUEconst else FALSEconst
+    case ByteTag => BYTEconst
+    case ShortTag => SHORTconst
+    case CharTag => CHARconst
+    case IntTag => INTconst
+    case LongTag => LONGconst
+    case FloatTag => FLOATconst
+    case DoubleTag => DOUBLEconst
+    case StringTag => STRINGconst
+    case NullTag => NULLconst
+    case ClazzTag => CLASSconst
   }
 
-  def pickleVariances(tp: Type)(using Context): Unit = tp match
-    case tp: HKTypeLambda if tp.isDeclaredVarianceLambda =>
-      for v <- tp.declaredVariances do
-        writeByte(
-          if v.is(Covariant) then COVARIANT
-          else if v.is(Contravariant) then CONTRAVARIANT
-          else STABLE)
+  def pickleConstant(c: Constant)(using Context): Unit =
+    writeByte(constantTag(c))
+    pickleConstantValue(c)
+
+  /** Pickle what follows the tag of constant `c` */
+  private def pickleConstantValue(c: Constant)(using Context): Unit = c.tag match {
+    case ByteTag => writeInt(c.byteValue)
+    case ShortTag => writeInt(c.shortValue)
+    case CharTag => writeNat(c.charValue)
+    case IntTag => writeInt(c.intValue)
+    case LongTag => writeLongInt(c.longValue)
+    case FloatTag => writeInt(java.lang.Float.floatToRawIntBits(c.floatValue))
+    case DoubleTag => writeLongInt(java.lang.Double.doubleToRawLongBits(c.doubleValue))
+    case StringTag => pickleName(c.stringValue.toTermName)
+    case ClazzTag => pickleType(c.typeValue)
+    case UnitTag | BooleanTag | NullTag =>
+  }
+
+  /** The variance tags pickled after type bounds with upper bound `hi`.
+   *  A `LazyRef` to a lambda is not dereferenced, so its variances are not
+   *  pickled; changing this would change existing output.
+   */
+  private def varianceTags(hi: Type)(using Context): List[Int] = hi match
+    case hi: HKTypeLambda if hi.isDeclaredVarianceLambda =>
+      hi.declaredVariances.map: v =>
+        if v.is(Covariant) then COVARIANT
+        else if v.is(Contravariant) then CONTRAVARIANT
+        else STABLE
     case _ =>
+      Nil
 
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
     try {
-      val prev = pickledAddr(tpe)
-      if prev == null then
-        val addr = currentAddr
-        pickledTypes(tpe) = addr
-        pickleNewType(tpe, richTypes)
-        val key = encodingKey(tpe) // components are pickled now
-        if key != null then pickledTypeEncodings(key) = addr
+      val prev: Addr | Null = pickledTypes.lookup(tpe)
+      if prev != null then pickleSharedType(prev)
       else
-        writeByte(SHAREDtype)
-        writeRef(prev)
+        val pending = pendingShapes.remove(tpe)
+        val shape = if pending != null then pending else typeShape(tpe)
+        if shape == null then
+          pickledTypes(tpe) = currentAddr
+          pickleNewType(tpe, richTypes)
+        else
+          val prev = encodedAddr(tpe, shape)
+          if prev != null then pickleSharedType(prev)
+          else
+            val addr = currentAddr
+            pickledTypes(tpe) = addr
+            pickleShape(shape, richTypes)
+            val key = encodingKey(shape) // components are pickled now
+            if key != null then pickledTypeEncodings(key) = addr
     }
     catch {
       case ex: AssertionError =>
@@ -200,146 +222,187 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     }
   }
 
+  private def pickleSharedType(addr: Addr): Unit =
+    writeByte(SHAREDtype)
+    writeRef(addr)
+
   /** The address of an already pickled type with the same encoding as `tpe`, or null */
   private def pickledAddr(tpe: Type)(using Context): Addr | Null =
     val addr = pickledTypes.lookup(tpe)
     if addr != null then addr
     else
-      val key = encodingKey(tpe)
-      if key == null then null
-      else
-        val addr = pickledTypeEncodings.lookup(key)
-        if addr != null then pickledTypes(tpe) = addr
-        addr
+      var shape = pendingShapes.lookup(tpe)
+      if shape == null then
+        shape = typeShape(tpe)
+        if shape == null then return null
+        pendingShapes(tpe) = shape
+      val addr = encodedAddr(tpe, shape)
+      if addr != null then pendingShapes.remove(tpe)
+      addr
 
-  /** A key that determines the encoding of `tpe` produced by `pickleNewType`,
-   *  consisting of the tag, the name, symbol or constant that follows it, and
-   *  the addresses of the component types. Names are compared as term names,
-   *  as in the name table. Null if `tpe` is shared only by
-   *  identity or if a component type has not been pickled yet.
-   *
-   *  Types that bind parameters (lambdas, `RecType`) and those that contain
-   *  trees (annotations) are only shared by identity.
+  /** The address of an already pickled type with the same encoding as `tpe`, which
+   *  has shape `shape`, or null if there is none.
    */
-  private def encodingKey(tpe: Type)(using Context): AnyRef | Null =
-    def key(tag: Int, payload: Any, components: List[Type]): AnyRef | Null =
-      var addrs: List[Addr] = Nil
-      var cs = components
-      while cs.nonEmpty do
-        val addr = pickledAddr(cs.head.stripTypeVar)
-        if addr == null then return null
-        addrs = addr :: addrs
-        cs = cs.tail
-      (tag, payload, addrs)
-    tpe match
-      case tpe: FlexibleType =>
-        key(FLEXIBLEtype, (), tpe.underlying :: Nil)
-      case AppliedType(tycon, args) =>
-        if tycon.typeSymbol == defn.MatchCaseClass then key(MATCHCASEtype, (), args)
-        else key(APPLIEDtype, (), tycon :: args)
-      case ConstantType(value) =>
-        if value.tag == ClazzTag then null else (value.tag, value)
-      case tpe: NamedType =>
-        val sym = tpe.symbol
-        if sym.is(Flags.Package) then
-          (if tpe.isType then TYPEREFpkg else TERMREFpkg, sym.fullName.toTermName)
-        else if tpe.prefix == NoPrefix then
-          (if tpe.isType then TYPEREFdirect else TERMREFdirect, sym)
-        else tpe.designator match
-          case name: Name =>
-            key(if tpe.isType then TYPEREF else TERMREF, name.toTermName, tpe.prefix :: Nil)
-          case sym: Symbol =>
-            if isLocallyDefined(sym) then
-              key(if tpe.isType then TYPEREFsymbol else TERMREFsymbol, sym, tpe.prefix :: Nil)
-            else if isExternalRefIn(tpe, sym) then
-              key(if tpe.isType then TYPEREFin else TERMREFin, sym, tpe.prefix :: Nil)
-            else if isJavaPickle && sym == defn.FromJavaObjectSymbol then
-              null
-            else
-              key(if tpe.isType then TYPEREF else TERMREF,
-                  nameAndSig(sym.name, tpe.signature, sym.targetName).toTermName, tpe.prefix :: Nil)
-      case tpe: ThisType =>
-        if tpe.cls.is(Flags.Package) && !tpe.cls.isEffectiveRoot then (TERMREFpkg, tpe.cls.fullName.toTermName)
-        else key(THIS, (), tpe.tref :: Nil)
-      case tpe: RefinedType =>
-        key(REFINEDtype, tpe.refinedName.toTermName, tpe.parent :: tpe.refinedInfo :: Nil)
-      case tpe: TypeBounds =>
-        // The variances of a type lambda in `hi` are determined by the
-        // address of `hi` (or of `lo` if aliasing), since lambdas are only
-        // shared by identity.
-        if tpe.isInstanceOf[AliasingBounds] then key(TYPEBOUNDS, true, tpe.lo :: Nil)
-        else key(TYPEBOUNDS, false, tpe.lo :: tpe.hi :: Nil)
-      case tpe: AndType =>
-        key(ANDtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
-      case tpe: OrType =>
-        key(ORtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
-      case tpe: ExprType =>
-        key(BYNAMEtype, (), tpe.underlying :: Nil)
-      case _ =>
-        null
+  private def encodedAddr(tpe: Type, shape: TypeShape)(using Context): Addr | Null =
+    if shape.missedAt == pickledTypeEncodings.size then null
+    else
+      val key = encodingKey(shape)
+      val addr = if key == null then null else pickledTypeEncodings.lookup(key)
+      if addr == null then shape.missedAt = pickledTypeEncodings.size
+      else
+        pickledTypes(tpe) = addr
+        if sharedByEncoding != null then sharedByEncoding.nn += ((tpe, addr))
+      addr
+
+  /** What is written for a type that is shared by encoding: its tag, the name,
+   *  symbol, constant or other data that follows the tag, and its component
+   *  types, in the order they are written. Names are term names, as in the name
+   *  table. Both `pickleShape`, which writes it, and `encodingKey`, which keys
+   *  it, are derived from the shape, so the bytes written for a type are
+   *  determined by its key.
+   */
+  private class TypeShape(val tag: Int, val payload: Any, val components: List[Type]):
+    /** The size of `pickledTypeEncodings` when this shape was last looked up
+     *  without success, or -1. The lookup is bound to fail again while the size
+     *  is unchanged: a hit needs an entry whose key contains the address of a
+     *  component that was not pickled at the time, or an entry for an
+     *  identical key, and either would have been added since. This makes the
+     *  lookups of the components of a type that was just missed O(1).
+     */
+    var missedAt: Int = -1
+
+  /** The shape of `tpe`, or null if `tpe` is shared by identity only and is
+   *  pickled by `pickleNewType`.
+   */
+  private def typeShape(tpe: Type)(using Context): TypeShape | Null = tpe match
+    case tpe: FlexibleType =>
+      TypeShape(FLEXIBLEtype, (), tpe.underlying :: Nil)
+    case AppliedType(tycon, args) =>
+      if tycon.typeSymbol == defn.MatchCaseClass then TypeShape(MATCHCASEtype, (), args)
+      else TypeShape(APPLIEDtype, (), tycon :: args)
+    case ConstantType(value) =>
+      if value.tag == ClazzTag then TypeShape(CLASSconst, (), value.typeValue :: Nil)
+      else TypeShape(constantTag(value), value, Nil)
+    case tpe: NamedType =>
+      val sym = tpe.symbol
+      if sym.is(Flags.Package) then
+        TypeShape(if tpe.isType then TYPEREFpkg else TERMREFpkg, sym.fullName.toTermName, Nil)
+      else if tpe.prefix == NoPrefix then
+        TypeShape(if tpe.isType then TYPEREFdirect else TERMREFdirect, sym, Nil)
+      else tpe.designator match
+        case name: Name =>
+          TypeShape(if tpe.isType then TYPEREF else TERMREF, name.toTermName, tpe.prefix :: Nil)
+        case sym: Symbol =>
+          if isLocallyDefined(sym) then
+            TypeShape(if tpe.isType then TYPEREFsymbol else TERMREFsymbol, sym, tpe.prefix :: Nil)
+          else if isExternalRefIn(tpe, sym) then
+            TypeShape(if tpe.isType then TYPEREFin else TERMREFin,
+              nameAndSig(sym.name, sym.signature, sym.targetName).toTermName,
+              tpe.prefix :: sym.owner.typeRef :: Nil)
+          else if isJavaPickle && sym == defn.FromJavaObjectSymbol then
+            null
+          else
+            TypeShape(if tpe.isType then TYPEREF else TERMREF,
+              nameAndSig(sym.name, tpe.signature, sym.targetName).toTermName,
+              tpe.prefix :: Nil)
+    case tpe: ThisType =>
+      if tpe.cls.is(Flags.Package) && !tpe.cls.isEffectiveRoot then
+        TypeShape(TERMREFpkg, tpe.cls.fullName.toTermName, Nil)
+      else TypeShape(THIS, (), tpe.tref :: Nil)
+    case tpe: RefinedType =>
+      TypeShape(REFINEDtype, tpe.refinedName.toTermName, tpe.parent :: tpe.refinedInfo :: Nil)
+    case tpe: TypeBounds =>
+      // The variances depend on `hi` itself, not only on its address: a
+      // `LazyRef` shares the address of the type it refers to.
+      val variances = varianceTags(tpe.hi)
+      if tpe.isInstanceOf[AliasingBounds] then TypeShape(TYPEBOUNDS, variances, tpe.lo :: Nil)
+      else TypeShape(TYPEBOUNDS, variances, tpe.lo :: tpe.hi :: Nil)
+    case tpe: AndType =>
+      TypeShape(ANDtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
+    case tpe: OrType =>
+      TypeShape(ORtype, (), tpe.tp1 :: tpe.tp2 :: Nil)
+    case tpe: ExprType =>
+      TypeShape(BYNAMEtype, (), tpe.underlying :: Nil)
+    case _ =>
+      null
 
   /** Is a reference to external `sym` pickled as TYPEREFin or TERMREFin? */
   private def isExternalRefIn(tpe: NamedType, sym: Symbol)(using Context): Boolean =
     def isShadowedRef = sym.isClass && tpe.prefix.member(sym.name).symbol != sym
     sym.is(Flags.Private) || isShadowedRef
 
-  private def pickleNewType(tpe: Type, richTypes: Boolean)(using Context): Unit = tpe match {
-    case AppliedType(tycon, args) =>
-      if tycon.typeSymbol == defn.MatchCaseClass then
-        writeByte(MATCHCASEtype)
-        withLength { args.foreach(pickleType(_)) }
-      else
-        writeByte(APPLIEDtype)
-        withLength { pickleType(tycon); args.foreach(pickleType(_)) }
-    case ConstantType(value) =>
-      pickleConstant(value)
-    case tpe: NamedType =>
-      val sym = tpe.symbol
-      def pickleExternalRef(sym: Symbol) = {
-        if isExternalRefIn(tpe, sym) then
-          writeByte(if (tpe.isType) TYPEREFin else TERMREFin)
-          withLength {
-            pickleNameAndSig(sym.name, sym.signature, sym.targetName)
-            pickleType(tpe.prefix)
-            pickleType(sym.owner.typeRef)
-          }
-        else if isJavaPickle && sym == defn.FromJavaObjectSymbol then
-          pickleType(defn.ObjectType) // when unpickling Java TASTy, replace by <FromJavaObject>
-        else
-          writeByte(if (tpe.isType) TYPEREF else TERMREF)
-          pickleNameAndSig(sym.name, tpe.signature, sym.targetName)
-          pickleType(tpe.prefix)
-      }
-      if (sym.is(Flags.Package)) {
-        writeByte(if (tpe.isType) TYPEREFpkg else TERMREFpkg)
-        pickleName(sym.fullName)
-      }
-      else if (tpe.prefix == NoPrefix) {
-        writeByte(if (tpe.isType) TYPEREFdirect else TERMREFdirect)
+  /** A key that determines the encoding of a type with shape `shape`: its tag,
+   *  payload and the addresses of its component types. Component addresses
+   *  are found by identity or, recursively, by encoding. Null if a component
+   *  type has not been pickled yet.
+   *
+   *  Types without a shape are only shared by identity. Known gaps, which can
+   *  still make the pickle depend on whether definitions came from source or
+   *  from TASTy:
+   *   - lambdas and `RecType`, which bind parameters; keying them would need
+   *     alpha-equivalence of the parameter references.
+   *   - `MatchType`, whose cases usually bind type variables.
+   *   - `AnnotatedType`, which contains trees. Compact annotations, which are
+   *     pickled as types, could be keyed later.
+   */
+  private def encodingKey(shape: TypeShape)(using Context): AnyRef | Null =
+    var addrs: List[Addr] = Nil
+    var cs = shape.components
+    while cs.nonEmpty do
+      val addr = pickledAddr(cs.head.stripTypeVar)
+      if addr == null then return null
+      addrs = addr :: addrs
+      cs = cs.tail
+    (shape.tag, shape.payload, addrs)
+
+  private def pickleShape(shape: TypeShape, richTypes: Boolean)(using Context): Unit =
+    val components = shape.components
+    writeByte(shape.tag)
+    shape.tag match
+      case TYPEREFpkg | TERMREFpkg =>
+        pickleName(shape.payload.asInstanceOf[Name])
+      case TYPEREFdirect | TERMREFdirect =>
+        val sym = shape.payload.asInstanceOf[Symbol]
         if Config.checkLevelsOnConstraints && !symRefs.contains(sym) && !sym.isPatternBound && !sym.hasAnnotation(defn.QuotedRuntimePatterns_patternTypeAnnot) then
-          report.error(em"pickling reference to as yet undefined $tpe with symbol ${sym}", sym.srcPos)
+          report.error(em"pickling reference to as yet undefined $sym", sym.srcPos)
         pickleSymRef(sym)
-      }
-      else tpe.designator match {
-        case name: Name =>
-          writeByte(if (tpe.isType) TYPEREF else TERMREF)
-          pickleName(name); pickleType(tpe.prefix)
-        case sym: Symbol =>
-          if (isLocallyDefined(sym)) {
-            writeByte(if (tpe.isType) TYPEREFsymbol else TERMREFsymbol)
-            pickleSymRef(sym); pickleType(tpe.prefix)
-          }
-          else pickleExternalRef(sym)
-      }
-    case tpe: ThisType =>
-      if (tpe.cls.is(Flags.Package) && !tpe.cls.isEffectiveRoot) {
-        writeByte(TERMREFpkg)
-        pickleName(tpe.cls.fullName)
-      }
-      else {
-        writeByte(THIS)
-        pickleType(tpe.tref)
-      }
+      case TYPEREF | TERMREF =>
+        pickleName(shape.payload.asInstanceOf[Name])
+        pickleType(components.head)
+      case TYPEREFsymbol | TERMREFsymbol =>
+        pickleSymRef(shape.payload.asInstanceOf[Symbol])
+        pickleType(components.head)
+      case TYPEREFin | TERMREFin =>
+        withLength {
+          pickleName(shape.payload.asInstanceOf[Name])
+          components.foreach(pickleType(_))
+        }
+      case REFINEDtype =>
+        val parent :: refinedInfo :: Nil = components: @unchecked
+        withLength {
+          pickleName(shape.payload.asInstanceOf[Name])
+          pickleType(parent)
+          pickleType(refinedInfo, richTypes = true)
+        }
+      case THIS | BYNAMEtype | CLASSconst =>
+        pickleType(components.head)
+      case APPLIEDtype | MATCHCASEtype =>
+        withLength { components.foreach(pickleType(_)) }
+      case FLEXIBLEtype | ANDtype | ORtype =>
+        withLength { components.foreach(pickleType(_, richTypes)) }
+      case TYPEBOUNDS =>
+        withLength {
+          components.foreach(pickleType(_, richTypes))
+          shape.payload.asInstanceOf[List[Int]].foreach(writeByte)
+        }
+      case _ =>
+        pickleConstantValue(shape.payload.asInstanceOf[Constant])
+
+  /** Pickle a type that has no shape */
+  private def pickleNewType(tpe: Type, richTypes: Boolean)(using Context): Unit = tpe match {
+    case tpe: NamedType =>
+      // `FromJavaObject` in a Java pickle; it is replaced back when unpickling Java TASTy
+      pickleType(defn.ObjectType)
     case tpe: SuperType =>
       writeByte(SUPERtype)
       withLength { pickleType(tpe.thistpe); pickleType(tpe.supertpe) }
@@ -350,24 +413,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       writeRef(binderAddr.uncheckedNN)
     case tpe: SkolemType =>
       pickleType(tpe.info)
-    case tpe: RefinedType =>
-      writeByte(REFINEDtype)
-      withLength {
-        pickleName(tpe.refinedName)
-        pickleType(tpe.parent)
-        pickleType(tpe.refinedInfo, richTypes = true)
-      }
     case tpe: RecType =>
       writeByte(RECtype)
       pickleType(tpe.parent)
-    case tpe: TypeBounds =>
-      writeByte(TYPEBOUNDS)
-      withLength {
-        pickleType(tpe.lo, richTypes)
-        if !tpe.isInstanceOf[AliasingBounds] then
-          pickleType(tpe.hi, richTypes)
-        pickleVariances(tpe.hi)
-      }
     case tpe: AnnotatedType =>
       writeByte(ANNOTATEDtype)
       withLength:
@@ -383,18 +431,6 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
           case ann =>
             pickleTree(ann.tree)
             annotatedTypeTrees += ann.tree
-    case tpe: AndType =>
-      writeByte(ANDtype)
-      withLength { pickleType(tpe.tp1, richTypes); pickleType(tpe.tp2, richTypes) }
-    case tpe: OrType =>
-      writeByte(ORtype)
-      withLength { pickleType(tpe.tp1, richTypes); pickleType(tpe.tp2, richTypes) }
-    case tpe: FlexibleType =>
-      writeByte(FLEXIBLEtype)
-      withLength { pickleType(tpe.underlying, richTypes)  }
-    case tpe: ExprType =>
-      writeByte(BYNAMEtype)
-      pickleType(tpe.underlying)
     case tpe: HKTypeLambda =>
       pickleMethodic(TYPELAMBDAtype, tpe, EmptyFlags)
     case tpe: MatchType =>
@@ -1037,6 +1073,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   def pickle(trees: List[Tree])(using Context): Unit = {
     profile = Profile.current
+    if ctx.settings.YtestPicklerSharing.value then sharedByEncoding = mutable.ArrayBuffer()
     for tree <- trees do
       if !tree.isEmpty then pickleTree(tree)
 
@@ -1044,7 +1081,74 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       .map(sym => i"${sym.showLocated} (line ${sym.srcPos.line}) #${sym.id}")
       .toList
     assert(forwardSymRefs.isEmpty, i"unresolved symbols: $missing%, % when pickling ${ctx.source}")
+    if sharedByEncoding != null then checkSharedByEncoding()
   }
+
+  /** Check that each type in `sharedByEncoding` pickles to the same bytes as the
+   *  type it shares. Each is pickled afresh at the end of the buffer, which is
+   *  truncated again afterwards. This runs once all forward symbol references
+   *  are patched, so that symbol references can be compared.
+   */
+  private def checkSharedByEncoding()(using Context): Unit =
+    val toCheck = sharedByEncoding.nn.toList
+    sharedByEncoding = null
+    val start = currentAddr
+    for (tpe, addr) <- toCheck do
+      val fresh = currentAddr
+      pickleShape(typeShape(tpe).nn, richTypes = false)
+      assert(sameEncoding(addr, fresh),
+        i"$tpe is pickled differently from the type at $addr that it shares, when pickling ${ctx.source}")
+    buf.truncate(start)
+
+  /** Are the type trees at `a` and `b` the same, after following SHAREDtype references? */
+  private def sameEncoding(a: Addr, b: Addr): Boolean =
+    def reader(addr: Addr) =
+      val r = TastyReader(bytes, 0, length)
+      r.goto(addr)
+      r
+    def deref(addr: Addr): Addr =
+      val r = reader(addr)
+      if r.readByte() == SHAREDtype then deref(r.readAddr()) else addr
+    def skipTree(r: TastyReader): Unit =
+      val tag = r.readByte()
+      if tag >= firstLengthTreeTag then r.goto(r.readEnd())
+      else if tag >= firstNatASTTreeTag then { r.readLongNat(); skipTree(r) }
+      else if tag >= firstASTTreeTag then skipTree(r)
+      else if tag >= firstNatTreeTag then r.readLongNat()
+    def subtrees(r: TastyReader, end: Addr): List[Addr] =
+      val addrs = mutable.ListBuffer[Addr]()
+      while r.currentAddr != end do
+        addrs += r.currentAddr
+        skipTree(r)
+      addrs.toList
+    def same(a0: Addr, b0: Addr): Boolean =
+      val a = deref(a0)
+      val b = deref(b0)
+      a == b || {
+        val ra = reader(a)
+        val rb = reader(b)
+        def sameNat = ra.readLongNat() == rb.readLongNat()
+        def sameSubtree = same(ra.currentAddr, rb.currentAddr)
+        val tag = ra.readByte()
+        tag == rb.readByte() && {
+          if tag < firstNatTreeTag then true
+          else if tag < firstASTTreeTag then sameNat
+          else if tag < firstNatASTTreeTag then sameSubtree
+          else if tag < firstLengthTreeTag then sameNat && sameSubtree
+          else
+            val endA = ra.readEnd()
+            val endB = rb.readEnd()
+            tag match
+              case TYPEREFin | TERMREFin | REFINEDtype | APPLIEDtype | MATCHCASEtype
+                 | FLEXIBLEtype | ANDtype | ORtype | TYPEBOUNDS =>
+                val hasName = tag == TYPEREFin || tag == TERMREFin || tag == REFINEDtype
+                (!hasName || sameNat)
+                && subtrees(ra, endA).corresponds(subtrees(rb, endB))(same)
+              case _ => // not shared by encoding, compare bytes
+                java.util.Arrays.equals(bytes, a.index, endA.index, bytes, b.index, endB.index)
+        }
+      }
+    same(a, b)
 
   def compactify(scratch: ScratchData = new ScratchData): Unit = {
     buf.compactify(scratch)
