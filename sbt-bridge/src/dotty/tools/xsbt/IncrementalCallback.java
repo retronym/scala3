@@ -67,4 +67,30 @@ public final class IncrementalCallback implements dotty.tools.dotc.sbt.interface
   public void dependencyPhaseCompleted() {
     delegate.dependencyPhaseCompleted();
   }
+
+  private java.lang.reflect.Method isSubprojectClassMethod;
+  private boolean isSubprojectClassLookedUp = false;
+
+  private java.lang.reflect.Method findIsSubprojectClass() {
+    if (delegate == null) return null;
+    try {
+      return delegate.getClass().getMethod("isSubprojectClass", String.class);
+    } catch (NoSuchMethodException e) {
+      return null;
+    }
+  }
+
+  @Override
+  public boolean isSubprojectClass(String binaryClassName) {
+    if (!isSubprojectClassLookedUp) {
+      isSubprojectClassMethod = findIsSubprojectClass();
+      isSubprojectClassLookedUp = true;
+    }
+    if (isSubprojectClassMethod == null) return false;
+    try {
+      return (Boolean) isSubprojectClassMethod.invoke(delegate, binaryClassName);
+    } catch (ReflectiveOperationException e) {
+      return false;
+    }
+  }
 }
