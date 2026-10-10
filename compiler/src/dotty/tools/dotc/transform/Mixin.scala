@@ -165,7 +165,7 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
     if (sym.is(Accessor, butNot = Deferred) && ownerIsTrait) {
       val sym1 =
         if (sym.is(Lazy) || sym.symbol.isConstExprFinalVal) sym
-        else sym.copySymDenotation(initFlags = sym.flags &~ (ParamAccessor | Inline) | Deferred)
+        else sym.copySymDenotation(initFlags = sym.flags &~ (ParamAccessor | Inline).toTermFlags | Deferred)
       sym1.ensureNotPrivate
     }
     else if sym.isAllOf(ModuleClass | Private) && ownerIsTrait then

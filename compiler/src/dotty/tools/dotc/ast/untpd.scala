@@ -266,7 +266,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
 
     def | (fs: FlagSet): Modifiers = withFlags(flags | fs)
     def & (fs: FlagSet): Modifiers = withFlags(flags & fs)
-    def &~(fs: FlagSet): Modifiers = withFlags(flags &~ fs)
+    def &~(fs: UniformFlagSet): Modifiers = withFlags(flags &~ fs)
 
     def toTypeFlags: Modifiers = withFlags(flags.toTypeFlags)
     def toTermFlags: Modifiers = withFlags(flags.toTermFlags)

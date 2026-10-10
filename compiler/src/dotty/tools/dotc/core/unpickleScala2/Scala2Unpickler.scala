@@ -482,7 +482,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
        * We bridge the gap right now.
        */
       name = name.asTermName.unmangle(SuperAccessorName).expandedName(owner)
-      flags = flags &~ (Scala2SuperAccessor | Private)
+      flags = flags &~ (Scala2SuperAccessor | Private).toTermFlags
     }
     name = name.mapLast(_.decode)
 

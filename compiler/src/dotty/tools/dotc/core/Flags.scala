@@ -91,7 +91,7 @@ object Flags {
     def & (y: FlagSet): FlagSet = FlagSet(x.bits & y.bits)
 
     /** The intersection of a flag set with the complement of another flag set */
-    def &~ (y: FlagSet): FlagSet = {
+    def &~ (y: UniformFlagSet): FlagSet = {
       val tbits = x.bits & KINDFLAGS
       if ((tbits & y.bits) == 0) x
       else FlagSet(tbits | ((x.bits & ~y.bits) & ~KINDFLAGS))
