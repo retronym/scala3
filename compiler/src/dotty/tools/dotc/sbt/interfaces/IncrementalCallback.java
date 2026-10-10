@@ -43,4 +43,9 @@ public interface IncrementalCallback {
 
   default void dependencyPhaseCompleted() {
   }
+
+  /** Whether the class with this binary name is defined by another subproject that Zinc has analysed. */
+  default boolean isSubprojectClass(String binaryClassName) {
+    return false;
+  }
 }
