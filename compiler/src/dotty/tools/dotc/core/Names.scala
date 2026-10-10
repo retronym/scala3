@@ -445,21 +445,64 @@ object Names {
   /** The term name represented by the empty string */
   val EmptyTermName: SimpleName = new SimpleName("")
 
-  /** Hashtable for finding term names quickly. */
-  @sharable // because it's only mutated in enterIfNew which is synchronized
-  private val nameTable: mutable.HashMap[String, SimpleName] = new mutable.HashMap[String, SimpleName](initialCapacity = 0x10000, loadFactor = 2.0)
-  nameTable("") = EmptyTermName
+  /** A reusable, mutable lookup key for `nameTable`. It hashes like `String` and compares
+   *  equal to a String with the same characters, so a hit needs no String allocation.
+   *  `ConcurrentHashMap.get` only ever calls `probe.equals(storedKey)`, never the reverse,
+   *  so the asymmetry is harmless. One instance per thread; it never escapes `lookup`.
+   */
+  final class Probe private[core] ():
+    private var arr: Array[Char] | Null = null
+    private var seq: CharSequence | Null = null
+    private var off = 0
+    private var len = 0
+    private var hash = 0
 
-  private def enterIfNew(str: String): SimpleName = synchronized {
+    private def charAt(i: Int): Char =
+      val a = arr
+      if a != null then a(off + i) else seq.nn.charAt(off + i)
+
+    def set(arr: Array[Char] | Null, seq: CharSequence | Null, off: Int, len: Int): this.type =
+      this.arr = arr; this.seq = seq; this.off = off; this.len = len
+      var h = 0
+      var i = 0
+      while i < len do { h = 31 * h + charAt(i); i += 1 }
+      hash = h // same as String.hashCode
+      this
+
+    def materialize(): String =
+      val chars = new Array[Char](len)
+      var i = 0
+      while i < len do { chars(i) = charAt(i); i += 1 }
+      new String(chars)
+
+    override def hashCode: Int = hash
+    override def equals(that: Any): Boolean = that match
+      case s: String =>
+        s.length == len && {
+          var i = 0
+          while i < len && s.charAt(i) == charAt(i) do i += 1
+          i == len
+        }
+      case _ => false
+
+  /** Probe for callers without access to a `ContextBase` */
+  private val probes = new ThreadLocal[Probe]:
+    override def initialValue = new Probe
+
+  /** All simple names, keyed by their characters. */
+  private val nameTable = new java.util.concurrent.ConcurrentHashMap[AnyRef, SimpleName](0x10000)
+  nameTable.put("", EmptyTermName)
+
+  private def lookup(probe: Probe): SimpleName =
     Stats.record("NameTable.get")
-    nameTable.get(str) match
-      case Some(n) => n
-      case None =>
-        Stats.record("NameTable.add")
-        val res = SimpleName(str)
-        nameTable(str) = res
-        res
-  }
+    val found = nameTable.get(probe)
+    if found != null then found.nn
+    else
+      Stats.record("NameTable.add")
+      val str = probe.materialize()
+      val fresh = SimpleName(str)
+      val prev = nameTable.putIfAbsent(str, fresh)
+      if prev != null then prev.nn else fresh
 
   /** Create a term name from the UTF8 encoded bytes in bs[offset..offset+len-1].
    */
@@ -476,7 +519,20 @@ object Names {
   /** Create a term name from a sequence of characters.
    */
   def termName(s: String): SimpleName =
-    enterIfNew(s)
+    lookup(probes.get.nn.set(null, s, 0, s.length))
+
+  /** Create a term name from `cs[offset..offset+len-1]`, without allocating if the name exists. */
+  def termName(cs: Array[Char], offset: Int, len: Int): SimpleName =
+    lookup(probes.get.nn.set(cs, null, offset, len))
+
+  /** Create a term name from the contents of `sb`, without allocating if the name exists.
+   *  Pass the `ContextBase`'s `namesProbe` to avoid the `ThreadLocal` lookup.
+   */
+  def termName(sb: java.lang.StringBuilder): SimpleName =
+    termName(sb, probes.get.nn)
+
+  def termName(sb: java.lang.StringBuilder, probe: Probe): SimpleName =
+    lookup(probe.set(null, sb, 0, sb.length))
 
   /** Create a type name from a sequence of characters */
   def typeName(s: String): TypeName =
