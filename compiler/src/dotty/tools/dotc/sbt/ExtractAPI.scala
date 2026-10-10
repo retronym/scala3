@@ -360,18 +360,83 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
     val apiDecls = apiDefinitions(decls)
 
     val declSet = decls.toSet
-    // TODO: We shouldn't have to compute inherited members. Instead, `Structure`
-    // should have a lazy `parentStructures` field.
-    val inherited = cinfo.baseClasses
-      .filter(bc => !bc.is(Scala2x))
-      .flatMap(_.classInfo.decls.filter(s => !(s.is(Private) || declSet.contains(s))))
+    val inherited = new mutable.ListBuffer[Symbol]
+    val stubbed = new mutable.ListBuffer[Symbol]
+    for bc <- cinfo.baseClasses if bc ne csym do
+      val internal = isInternal(bc)
+      for s <- bc.classInfo.decls.toList if !(s.is(Private) || declSet.contains(s)) do
+        if internal then
+          if discoveryReads(s) && !bc.is(Scala2x) then inherited += s
+        else if bc.is(Scala2x) || (isPlatform(bc) && !discoveryReads(s)) then stubbed += s
+        else inherited += s
     // Inherited members need to be computed lazily because a class might contain
     // itself as an inherited member, like in `class A { class B extends A }`,
     // this works because of `classLikeCache`
-    val apiInherited = lzy(apiDefinitions(inherited).toArray)
+    val apiInherited = lzy((apiDefinitions(inherited.toList) ++ stubbed.toList.flatMap(stub)).toArray)
 
     api.Structure.of(api.SafeLazy.strict(apiBases.toArray), api.SafeLazy.strict(apiDecls.toArray), apiInherited)
   }
+
+  /** Is `owner` defined in this subproject, or in another one that Zinc has analysed? Zinc
+   *  composes the name hashes of members inherited from such classes from their own decls, so
+   *  they are not materialised here, except those that test and main-class discovery read.
+   *  Members of library classes still are.
+   */
+  private def isInternal(owner: Symbol): Boolean =
+    internalCache.getOrElseUpdate(owner, owner.isDefinedInCurrentRun || isSubprojectClass(owner) || isInOutput(owner))
+
+  private val internalCache = new mutable.HashMap[Symbol, Boolean]
+
+  private def isSubprojectClass(owner: Symbol): Boolean =
+    var result = false
+    ctx.withIncCallback(cb => result = cb.isSubprojectClass(owner.binaryClassName))
+    result
+
+  private def isInOutput(owner: Symbol): Boolean =
+    val out = ctx.settings.outputDir.value
+    val f = owner.associatedFile
+    f != null && {
+      val fp = Option(f.underlyingSource).flatten.getOrElse(f).jpath
+      val op = out.jpath
+      fp != null && op != null && fp.toAbsolutePath.startsWith(op.toAbsolutePath)
+    }
+
+  /** Is `owner` part of the platform: `Any`, `AnyRef`/`Object`, or a class of the Scala standard
+   *  library? Those change only with the Scala version, which recompiles everything, or (for
+   *  `Object`) not at all, so their members are recorded as stubs without types (`==`,
+   *  `hashCode`, `Product`'s members in each case class). Other JDK classes are not included: a
+   *  JDK upgrade need not recompile, and it can add inherited members.
+   */
+  private def isPlatform(owner: Symbol): Boolean =
+    platformCache.getOrElseUpdate(owner,
+      owner == defn.AnyClass || owner == defn.AnyRefAlias || owner == defn.ObjectClass ||
+        owner == defn.MatchableClass || {
+          val f = owner.associatedFile
+          f != null && Option(f.underlyingSource).flatten.exists { jar =>
+            val n = jar.name
+            n.startsWith("scala-library") || n.startsWith("scala3-library")
+          }
+        })
+
+  private val platformCache = new mutable.HashMap[Symbol, Boolean]
+
+  /** Test and main-class discovery read inherited annotations and `main` signatures. */
+  private def discoveryReads(s: Symbol): Boolean =
+    s.name == StdNames.nme.main || s.annotations.exists { a =>
+      val as = a.symbol
+      as.exists && as != defn.BodyAnnot && !as.showFullName.startsWith("scala.annotation.internal.")
+    }
+
+  /** A library member as a name with its access and modifiers, but no types: descendant
+   *  invalidation still sees which names a class inherits, and which are abstract, without
+   *  paying for their signatures. Type members and classes count too, except the platform's.
+   */
+  private def stub(s: Symbol): Option[api.ClassDefinition] =
+    if (s.isClass || s.isType) && isPlatform(s.owner) then None
+    else if s.isTerm && s.name.isSetterName then None
+    else
+      val name = if s.isTerm && s.is(Method) then s.zincMangledName.toString else s.name.toString
+      Some(api.Def.of(name, apiAccess(s), apiModifiers(s), Array(), Array(), Array(), Constants.emptyType))
 
   def linearizedAncestorTypes(info: ClassInfo): List[Type] = {
     val ref = info.appliedRef
