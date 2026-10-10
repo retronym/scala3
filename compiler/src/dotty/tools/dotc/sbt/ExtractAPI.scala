@@ -146,7 +146,15 @@ class ExtractAPI extends Phase {
 
     ctx.withIncCallback: cb =>
       if !ctx.compilationUnit.suspendedAtInliningPhase then // already registered before this unit was suspended
-        classes.foreach(cb.api(sourceFile, _))
+        cb.apiMode match
+          case interfaces.ApiMode.TREE =>
+            classes.foreach(cb.api(sourceFile, _))
+          case interfaces.ApiMode.HASHES =>
+            val optimizedSealed = cb.useOptimizedSealed
+            classes.foreach(c => cb.api(sourceFile, APIHashing.thin(c), APIHashing.hashes(c, optimizedSealed)))
+          case interfaces.ApiMode.CHECK =>
+            val optimizedSealed = cb.useOptimizedSealed
+            classes.foreach(c => cb.apiCheck(sourceFile, c, APIHashing.thin(c), APIHashing.hashes(c, optimizedSealed)))
         mainClasses.foreach(cb.mainClass(sourceFile, _))
   }
 }

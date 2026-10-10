@@ -135,11 +135,11 @@ class ScalaCompilerForUnitTesting {
    * The sequence of temporary files corresponding to passed snippets and analysis
    * callback is returned as a result.
    */
-  def compileSrcs(groupedSrcs: List[List[String]], sourcePath: List[String] = Nil, compileToJar: Boolean = false, incEnabled: Boolean = true): CompileOutput = {
-      val temp = IO.createTemporaryDirectory
+  def compileSrcs(groupedSrcs: List[List[String]], sourcePath: List[String] = Nil, compileToJar: Boolean = false, incEnabled: Boolean = true, callback: Option[TestCallback] = None, tempDir: Option[File] = None): CompileOutput = {
+      val temp = tempDir.getOrElse(IO.createTemporaryDirectory)
       val (forceSbtArgs, analysisCallback) =
         if (incEnabled)
-          (Seq("-Yforce-sbt-phases"), new TestCallback)
+          (Seq("-Yforce-sbt-phases"), callback.getOrElse(new TestCallback))
         else
           (Seq.empty, new TestCallbackNoInc)
       val testProgress = new TestCompileProgress
