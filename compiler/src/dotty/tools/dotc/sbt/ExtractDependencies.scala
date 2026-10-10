@@ -104,10 +104,11 @@ object ExtractDependencies {
     if isJava(sym) then javaClassNameAsString(sym)
     else classNameAsString0(sym)
 
-  /** The reserved used name that records a wildcard import of package `pkg`:
-   *  its full name followed by `._`, e.g. `a.b._` for `import a.b.*`. No
+  /** The reserved used name that records that the members of package `pkg`
+   *  are in scope: its full name followed by `._`, e.g. `a.b._` for
+   *  `import a.b.*` or for `package a.b` followed by `package c`. No
    *  definition can have this name, so it cannot collide with a member name.
-   *  The Scala 2 bridge records the same name for the same import.
+   *  The Scala 2 bridge records the same name in the same cases.
    */
   def packageWildcardName(pkg: Symbol)(using Context): Name =
     termName(pkg.fullName.toString + "._")
@@ -180,19 +181,22 @@ trait AbstractExtractDependenciesCollector(rec: DependencyRecorder) extends tpd.
       }
     }
 
-  /** Record a wildcard import of a package (`import a.b.*`, `import a.b.given`)
-   *  as a use of the reserved name `a.b._` by the enclosing class.
+  /** Record that the members of package `pkg` are in scope in the enclosing
+   *  class, as a use of the reserved name `<pkg>._` (e.g. `a.b._`). This is
+   *  the case for a wildcard import of the package (`import a.b.*`,
+   *  `import a.b.given`) and for an outer package clause (`package a.b`
+   *  followed by `package c`, where `a.b`'s members are in scope in `c`).
    *
-   *  The definitions such an import brings into scope are recorded as they are
-   *  used, but a definition added to the package later (a top-level class, a
+   *  The definitions these bring into scope are recorded as they are used,
+   *  but a definition added to the package later (a top-level class, a
    *  package object member, a given) is not, and a package has no API and no
-   *  class dependency, so Zinc could not tell which classes see it through a
-   *  wildcard import. The reserved name lets it find them. A wildcard import of
-   *  a class or object needs nothing here: the prefix is a member reference,
-   *  and its class is where new members would show up.
+   *  class dependency, so Zinc could not tell which classes see it. The
+   *  reserved name lets it find them; being in the package itself is known
+   *  from the class name, so the innermost clause records nothing. A wildcard
+   *  import of a class or object needs nothing here: the prefix is a member
+   *  reference, and its class is where new members would show up.
    */
-  private def addPackageWildcardImport(expr: Tree)(using Context): Unit =
-    val pkg = expr.tpe.termSymbol
+  private def addPackageMembersInScope(pkg: Symbol)(using Context): Unit =
     if pkg.is(Package) && !pkg.isEffectiveRoot then
       rec.addUsedRawName(ExtractDependencies.packageWildcardName(pkg))
 
@@ -265,7 +269,7 @@ trait AbstractExtractDependenciesCollector(rec: DependencyRecorder) extends tpd.
         }
         for sel <- selectors do
           if sel.isWildcard then
-            addPackageWildcardImport(expr)
+            addPackageMembersInScope(expr.tpe.termSymbol)
           else
             addImported(sel.name)
             if sel.rename != sel.name then
@@ -283,6 +287,8 @@ trait AbstractExtractDependenciesCollector(rec: DependencyRecorder) extends tpd.
           // to ensure all new members of `dep` are forwarded to.
           val depContext = depContextOf(ctx.owner.lexicallyEnclosingClass)
           rec.addClassDependency(dep, depContext)
+      case PackageDef(pid, stats) if stats.exists(_.isInstanceOf[PackageDef]) =>
+        addPackageMembersInScope(pid.symbol)
       case t: TypeTree =>
         addTypeDependency(t.tpe)
       case ref: RefTree =>
