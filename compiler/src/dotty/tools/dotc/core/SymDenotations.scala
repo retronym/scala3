@@ -84,7 +84,7 @@ object SymDenotations {
     final def setFlag(flags: FlagSet): Unit = { myFlags |= flags }
 
     /** Unset given flags(s) of this denotation */
-    final def resetFlag(flags: FlagSet): Unit = { myFlags &~= flags }
+    final def resetFlag(flags: UniformFlagSet): Unit = { myFlags &~= flags }
 
     /** Set applicable flags in {NoInits, PureInterface}
      *  @param  parentFlags  The flags that match the class or trait's parents
