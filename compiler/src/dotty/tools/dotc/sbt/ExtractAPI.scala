@@ -444,11 +444,18 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
     ctx.withIncCallback(cb => result = cb.isSubprojectClass(owner.binaryClassName))
     result
 
+  /** The archive a classfile was read from, if it was read from one. */
+  private def archiveOf(f: dotty.tools.io.AbstractFile): Option[dotty.tools.io.AbstractFile] =
+    f.enclosing.map {
+      case jar: dotty.tools.io.JarArchive => jar.underlyingSource
+      case archive => archive
+    }
+
   private def isInOutput(owner: Symbol): Boolean =
     val out = ctx.settings.outputDir.value
     val f = owner.associatedFile
     f != null && {
-      val fp = Option(f.underlyingSource).flatten.getOrElse(f).jpath
+      val fp = archiveOf(f).getOrElse(f).jpath
       val op = out.jpath
       fp != null && op != null && fp.toAbsolutePath.startsWith(op.toAbsolutePath)
     }
@@ -464,7 +471,7 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
       owner == defn.AnyClass || owner == defn.AnyRefAlias || owner == defn.ObjectClass ||
         owner == defn.MatchableClass || {
           val f = owner.associatedFile
-          f != null && Option(f.underlyingSource).flatten.exists { jar =>
+          f != null && archiveOf(f).exists { jar =>
             val n = jar.name
             n.startsWith("scala-library") || n.startsWith("scala3-library")
           }
@@ -1113,6 +1120,7 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
         val prefix = if sym.maybeOwner.is(Package) then sym.owner.thisType else tp.prefix
         val p = typeH(prefix)
         leafH(Hasher(HTag.Projection).string(sym.name.toString).int(p.h).done).withRefs(p.refs)
+      case FlexibleType(hi) => typeH(hi)
       case AppliedType(tycon, args) =>
         val parts = typeH(tycon) :: args.map {
           case TypeBounds(lo, hi) if lo.isDirectRef(defn.NothingClass) && hi.isDirectRef(defn.AnyClass) =>
@@ -1151,7 +1159,6 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
         else structH(typeH(recType) :: Nil, None)
       case tp: AndType => structH(typeH(tp.tp1) :: typeH(tp.tp2) :: Nil, None)
       case tp: OrType => annotatedH(structH(typeH(tp.tp1) :: typeH(tp.tp2) :: Nil, None), markerH("Or") :: Nil)
-      case tp: FlexibleType => typeH(tp.underlying)
       case ExprType(resultType) => annotatedH(typeH(resultType), markerH("ByName") :: Nil)
       case MatchType(bound, scrut, cases) =>
         annotatedH(structH((bound :: scrut :: cases).map(typeH), None), markerH("Match") :: Nil)
