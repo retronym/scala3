@@ -67,11 +67,18 @@ class TreeBuffer extends TastyBuffer(50000) {
     fillAddr(at, addr)
   }
 
+  /** The index of the last offset before the given address, or -1 if there is none.
+   *  @param hint  an index at or near the result, see `bestFit`
+   */
+  private def offsetIndexBefore(at: Addr, hint: Int = -1): Int =
+    bestFit(offsets, numOffsets, at.index - 1, hint)
+
+  private def deltaOf(idx: Int, scratch: ScratchData): Int =
+    if idx < 0 then 0 else scratch.delta(idx)
+
   /** The amount by which the bytes at the given address are shifted under compression */
-  def deltaAt(at: Addr, scratch: ScratchData): Int = {
-    val idx = bestFit(offsets, numOffsets, at.index - 1)
-    if (idx < 0) 0 else scratch.delta(idx)
-  }
+  def deltaAt(at: Addr, scratch: ScratchData): Int =
+    deltaOf(offsetIndexBefore(at), scratch)
 
   /** The address to which `x` is translated under compression */
   def adjusted(x: Addr, scratch: ScratchData): Addr = x - deltaAt(x, scratch)
@@ -113,8 +120,10 @@ class TreeBuffer extends TastyBuffer(50000) {
       val original = getAddr(at)
       if (isRelative(i)) {
         val start = skipNat(at)
-        // `start` lies between offsets(i) and offsets(i + 1), so `deltaAt(start) == delta(i)`
-        original + scratch.delta(i) - deltaAt(original + start.index, scratch)
+        // `start` lies between offsets(i) and offsets(i + 1), so `deltaAt(start) == delta(i)`.
+        // The end of the referenced tree follows `start`, and is usually close to it.
+        val end = original + start.index
+        original + scratch.delta(i) - deltaOf(offsetIndexBefore(end, hint = i), scratch)
       }
       else adjusted(original, scratch)
     }
@@ -173,9 +182,14 @@ class TreeBuffer extends TastyBuffer(50000) {
     }
 
     def adjustTreeAddrs(): Unit =
+      // Tree addresses are registered at `currentAddr` and so ascend with `i`;
+      // search for each one starting from the result for the previous one.
+      var idx = -1
       var i = 0
       while i < treeAddrs.size do
-        treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
+        val addr = Addr(treeAddrs.value(i))
+        idx = offsetIndexBefore(addr, hint = idx)
+        treeAddrs.setValue(i, (addr - deltaOf(idx, scratch)).index)
         i += 1
 
     val origLength = length
