@@ -36,6 +36,8 @@ Needs a [lampepfl/scala3-benchmarks](https://github.com/lampepfl/scala3-benchmar
 sbt "scala3-bench-lab/Jmh/run -p corpus=dottyUtil CompileBenchmark"
 ```
 
+Every run has two profilers on by default (`-noDefaultProf` turns them off): `gc`, for allocation per op (`gc.alloc.rate.norm`, the benchmark thread only) and GC count and time; and `JitProfiler`, for JIT stability: compilations, compile time and deoptimizations while measuring and in the last warmup iteration (`jit.*`), with per-iteration counts and the methods still being compiled or deoptimized in the fork's output. A steady state has next to none; if `jit.compilations` is large, warm up longer.
+
 Counters on Apple Silicon (needs Xcode's `xctrace`): `benchLabXctrace <template> <jmh args>` runs JMH under `XctraceProfiler` and keeps the traces and `result.json` in `out/bench-lab/<template>`. The template is `cpu-counters` (Instruments' stock CPU Counters: Apple's top-down breakdown per thread group) or an event-sampling template from `templates/` (`ipc`, `frontend`, `mem-l1d`: event counts per op and per-method attribution); `templates/make_template.py` makes one for other events. It is a command rather than a `-prof` argument because sbt splits a typed command line at the `;` between profiler options.
 
 ```bash
