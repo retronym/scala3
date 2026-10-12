@@ -32,6 +32,8 @@ import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport._
 import org.scalajs.linker.interface.ESVersion
 
 import sbtbuildinfo.BuildInfoPlugin
+import pl.project13.scala.sbt.JmhPlugin
+import pl.project13.scala.sbt.JmhPlugin.autoImport.Jmh
 import sbtbuildinfo.BuildInfoPlugin.autoImport._
 
 import scala.xml.{Node => XmlNode, NodeSeq => XmlNodeSeq, _}
@@ -122,6 +124,7 @@ object Build {
 
   // Settings shared globally (scoped in Global). Used in build.sbt
   lazy val globalSettings = Def.settings(
+    commands += BenchLab.xctraceCommand,
     onLoad := (Global / onLoad).value andThen { state =>
       def exists(submodule: String) = {
         val path = Paths.get(submodule)
@@ -2397,6 +2400,20 @@ object Build {
   /*lazy val `scala3-bench-micro` = project.in(file("bench-micro"))
     .asDottyBench(Bootstrapped)
     .settings(Jmh / run / mainClass := Some("org.openjdk.jmh.Main"))*/
+
+  /** JMH benchmarks and hardware counters for the working tree's bootstrapped compiler; see bench-lab/README.md. */
+  lazy val `scala3-bench-lab` = project.in(file("bench-lab"))
+    .dependsOn(`scala3-compiler-bootstrapped`)
+    .enablePlugins(JmhPlugin)
+    .settings(commonBootstrappedSettings)
+    .settings(
+      publish / skip := true,
+      // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
+      Jmh / run / javaOptions ++= Seq(
+        s"-Dbenchlab.scalaLibrary=${(`scala-library-bootstrapped` / Compile / packageBin).value}",
+        s"-Dbenchlab.corpora=${sys.env.getOrElse("SCALA3_BENCHMARKS", ((ThisBuild / baseDirectory).value / ".." / "scala3-benchmarks").getCanonicalPath)}/bench-sources",
+      ),
+    )
 
   val testcasesOutputDir = taskKey[Seq[String]]("Root directory where tests classes are generated")
   val testcasesSourceRoot = taskKey[String]("Root directory where tests sources are generated")
