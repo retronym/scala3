@@ -5,9 +5,9 @@ object Util {
   /** The index `i` in `candidates.indices` such that `candidates(i) <= x` and
    *  `candidates(i)` is closest to `x`, determined by binary search, or -1
    *  if `x < candidates(0)`.
-   *  @param  hint   If between 0 and `length`, first probe `hint` and
-   *                 `hint + 1`, so that a result at or just after `hint`
-   *                 is found in constant time.
+   *  @param  hint   If between 0 and `length`, gallop outwards from `hint`
+   *                 before searching, so that a result `d` positions away
+   *                 from `hint` is found with O(log d) probes.
    *  @pre   candidates is sorted
    */
   def bestFit(candidates: Array[Int], length: Int, x: Int, hint: Int = -1): Int =
@@ -17,12 +17,28 @@ object Util {
       var lo = 0
       var hi = length
       if 0 <= hint && hint < length then
-        if x < candidates(hint) then hi = hint
+        var step = 1
+        var galloping = true
+        if x < candidates(hint) then
+          hi = hint
+          while galloping do
+            if hi <= step then galloping = false
+            else if candidates(hi - step) <= x then
+              lo = hi - step
+              galloping = false
+            else
+              hi -= step
+              step <<= 1
         else
           lo = hint
-          if hint + 1 < length then
-            if x < candidates(hint + 1) then hi = hint + 1
-            else lo = hint + 1
+          while galloping do
+            if length - lo <= step then galloping = false
+            else if x < candidates(lo + step) then
+              hi = lo + step
+              galloping = false
+            else
+              lo += step
+              step <<= 1
       while hi - lo > 1 do
         val mid = (lo + hi) >>> 1
         if x < candidates(mid) then hi = mid

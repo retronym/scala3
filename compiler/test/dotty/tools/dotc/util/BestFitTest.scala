@@ -14,10 +14,12 @@ class BestFitTest:
   @Test def matchesLinearScan(): Unit =
     val rnd = new scala.util.Random(42)
     for _ <- 0 until 100000 do
-      val arr = Array.fill(rnd.nextInt(40))(rnd.nextInt(100)).sorted.distinct
+      // mostly small arrays, some large enough for long gallops from the hint
+      val size = rnd.nextInt(if rnd.nextInt(4) == 0 then 400 else 40)
+      val arr = Array.fill(size)(rnd.nextInt(10 * size + 1)).sorted.distinct
       // also exercise `length` < `candidates.length`
       val length = if arr.isEmpty then 0 else rnd.nextInt(arr.length + 1)
-      val x = rnd.nextInt(110) - 5
+      val x = rnd.nextInt(10 * size + 11) - 5
       // includes out-of-range hints, which must be ignored
       val hint = rnd.nextInt(length + 4) - 2
       assertEquals(
