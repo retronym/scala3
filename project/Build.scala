@@ -2408,6 +2408,8 @@ object Build {
     .settings(commonBootstrappedSettings)
     .settings(
       publish / skip := true,
+      // JMH with bench-lab's default profilers (allocation, JIT activity)
+      Jmh / run / mainClass := Some("dotty.tools.benchlab.Main"),
       // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
       Jmh / run / javaOptions ++= Seq(
         s"-Dbenchlab.scalaLibrary=${(`scala-library-bootstrapped` / Compile / packageBin).value}",
