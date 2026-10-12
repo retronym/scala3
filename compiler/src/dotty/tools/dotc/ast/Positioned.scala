@@ -47,7 +47,12 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
   def span_=(span: Span): Unit =
     mySpan = span
 
-  span = envelope(src)
+  span =
+    val primed = src.primedSpan
+    if primed.exists then
+      src.primedSpan = NoSpan
+      primed
+    else envelope(src)
 
   def source: SourceFile = mySource
 
