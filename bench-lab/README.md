@@ -42,7 +42,13 @@ Counters on Apple Silicon (needs Xcode's `xctrace`): `benchLabXctrace <template>
 sbt "benchLabXctrace cpu-counters -p corpus=dottyUtil CompileBenchmark"
 ```
 
-`-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
+async-profiler: `benchLabAsync <events> <jmh args>` records JFR over the measurement iterations and converts it with `jfrconv` into flame graphs in `out/bench-lab/async-<events>`: the benchmark threads only (stacks through the JMH stub), the same reversed, and all threads split by thread. `<events>` is a comma-separated list of `cpu`, `wall`, `alloc`, `lock` or any async-profiler event (hardware events such as `cycles` or `cache-misses` on Linux). The library is `$ASYNC_PROFILER_LIB`, else the Homebrew or `/usr/local` install.
+
+```bash
+sbt "benchLabAsync cpu,alloc -p corpus=dottyUtil CompileBenchmark"
+```
+
+Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
 
 ### No file I/O in the measured window
 
@@ -52,8 +58,10 @@ Checked on `dottyUtil` (File Activity trace attached to a warm `CompileLoop`, an
 
 - DONE 0. Scratch project: `XctraceProfiler` attaching only for the measurement iterations, per-thread counters, calibrated on kernels with known bottlenecks.
 - DONE 1. Skeleton: one macro benchmark on scala3-benchmarks corpora, in-memory I/O, runs under `XctraceProfiler` (`benchLabXctrace`). I/O claim checked (above).
+- DONE 1b. async-profiler (`benchLabAsync`); phase benchmarks for parsing (`ParserBenchmark`) and TASTy pickling (`PicklerBenchmark`, compiled up to the pickler in setup, re-pickling the same trees per op).
 - TODO 2. Phase attribution of the counters.
 - TODO 3. Operation-level micro benchmarks with recorded inputs and cache control.
+- TODO 3b. Optimizer benchmark: compile with `-opt` in setup, capture the class nodes before global optimization, and per op run `GlobalOptimizer` and `LocalOptimizer` on copies with fresh optimizer state (the call graph is keyed on node identity). Needs compiler refactoring: the optimizer wiring moved out of `GenBCode.getCodeGen` into a factory, and a hook to capture the pending class nodes at the start of `CodeGen.finish` (e.g. a `GenBCode` subclass installed via `Compiler.phases`). Re-reading unoptimized class files instead would lack the inline info attribute and differ from the in-compiler input.
 - TODO 4. Variant driver (JVM flags, compiler settings, builds), interleaved, with deltas and noise.
 - TODO 5. Linux parity.
 - TODO 6. First experiment: JIT inlining limits on the compiler, with the stalls before and after and where they moved.

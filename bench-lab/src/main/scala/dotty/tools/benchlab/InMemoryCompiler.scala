@@ -1,6 +1,6 @@
 package dotty.tools.benchlab
 
-import dotty.tools.dotc.{Compiler, Driver}
+import dotty.tools.dotc.{Compiler, Driver, Run}
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.reporting.StoreReporter
 import dotty.tools.io.{AbstractFile, VirtualDirectory}
@@ -30,6 +30,17 @@ final class InMemoryCompiler(val corpus: Corpus, extraOptions: List[String] = Ni
     val reporter = doCompile(compiler, corpus.files)(using rootCtx.fresh.setReporter(StoreReporter(null)))
     if reporter.hasErrors then
       throw new IllegalStateException(s"${corpus.name} failed to compile:\n${reporter.allErrors.take(10).mkString("\n")}")
+
+  /** Compiles the corpus in a new run and returns it, to keep its units and context: the starting point for benchmarks
+   *  of one phase, with the compiler stopped after the phase before (`-Ystop-after`).
+   */
+  def compileRun(): Run =
+    given Context = rootCtx.fresh.setReporter(StoreReporter(null))
+    val run = compiler.newRun
+    run.compile(corpus.files)
+    if ctx.reporter.hasErrors then
+      throw new IllegalStateException(s"${corpus.name} failed to compile:\n${ctx.reporter.allErrors.take(10).mkString("\n")}")
+    run
 
   /** Number of files in the output, to check the backend ran. */
   def outputCount: Int =
