@@ -66,6 +66,8 @@ object Build {
 
   val fetchScalaJSSource = taskKey[File]("Fetch the sources of Scala.js")
 
+  val optimize = settingKey[Boolean]("Enable the Scala 2 optimizer (-opt) when compiling the stdlib and compiler. Disable for faster local development with `set Global / optimize := false` or `SCALA3_BUILD_OPTIMIZE=false`.")
+
   lazy val SourceDeps = config("sourcedeps")
 
   // Settings shared by the build (scoped in ThisBuild). Used in build.sbt
@@ -135,6 +137,8 @@ object Build {
 
       state
     },
+
+    optimize := sys.env.get("SCALA3_BUILD_OPTIMIZE").forall(_.toBoolean),
 
     // I find supershell more distracting than helpful
     useSuperShell := false,
@@ -248,6 +252,11 @@ object Build {
       LibraryProperties.content(version.value, currentYear)
     }
     generatePropertiesFile(fileName, contents)
+  }
+
+  /** `opts` if `Global / optimize` is enabled, otherwise nothing */
+  def optimizeOptions(opts: String*): Def.Initialize[Seq[String]] = Def.setting {
+    if ((Global / optimize).value) opts else Nil
   }
 
   val enableBspAllProjects = sys.env.get("ENABLE_BSP_ALL_PROJECTS").map(_.toBoolean).getOrElse{
@@ -976,8 +985,8 @@ object Build {
       scalacOptions ++= Seq(
         "-release:17",
         s"-sourcepath:${(Compile / sourceDirectory).value}",
-        "-opt:local", // Important: local optimization are fine, inlining is prohibited!
       ),
+      scalacOptions ++= optimizeOptions("-opt:local").value, // Important: local optimization are fine, inlining is prohibited!
       target := target.value / "scala2-library",
       Compile / sourceDirectory := (Compile / Keys.target).value / "sources" / scalaVersion.value,
       Compile / sources := (Compile / sources).dependsOn(
@@ -1009,8 +1018,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-non-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:**,!java.**").value,
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1099,8 +1108,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:**,!java.**").value,
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1627,7 +1636,7 @@ object Build {
       bootstrappedScalaInstanceSettings,
       // Optimize the compiler, but only inline its own code,
       // since it may be used with a different standard library than it was compiled with.
-      Compile / compile / scalacOptions ++= Seq("-opt", "-opt-inline:dotty.**"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:dotty.**").value,
       /* Add the sources of scalajs-ir.
        * To guarantee that dotty can bootstrap without depending on a version
        * of scalajs-ir built with a different Scala compiler, we add its
