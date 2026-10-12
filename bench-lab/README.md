@@ -24,7 +24,7 @@ That question needs a different instrument:
 
 4. **Counters are the primary output, not a profiler bolted on.** On Apple Silicon, `XctraceProfiler`: per-op event counts for the benchmark thread only, Apple's top-down breakdown, and per-method attribution through the JIT's perf map. On Linux, JMH's `perfnorm` and `perfasm`, plus top-down. The same metric names on both where possible.
 
-5. **Experiments are first-class.** A variant is a set of JVM flags (`-XX:MaxInlineLevel`, `-XX:-Inline`, `-XX:+UseCompactObjectHeaders`, GC choice), a compiler setting, or a different compiler build (another worktree). A driver runs variants interleaved (A/B/A/B) and reports differences in time and in each counter with their noise.
+5. **Experiments are first-class.** A variant is a set of JVM flags (`-XX:MaxInlineLevel`, `-XX:-Inline`, `-XX:+UseCompactObjectHeaders`, GC choice), a compiler setting, or a different compiler build (another worktree), or the same tree built differently: `SCALA3_BUILD_OPTIMIZE=false` builds the bootstrapped compiler without `-opt -opt-inline:dotty.**`, so it compares the compiler with and without its own inlining. Benchmark the default (optimized) build unless that is the experiment. A driver runs variants interleaved (A/B/A/B) and reports differences in time and in each counter with their noise.
 
 6. **Corpora come from a scala3-benchmarks checkout**, not copied here: `small`, `dottyUtil`, `re2s` and `scalaz` need no dependencies. Micro benchmarks may use sources inline in the benchmark (`Corpus.inline`).
 
