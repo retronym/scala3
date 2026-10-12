@@ -124,7 +124,7 @@ object Build {
 
   // Settings shared globally (scoped in Global). Used in build.sbt
   lazy val globalSettings = Def.settings(
-    commands += BenchLab.xctraceCommand,
+    commands ++= BenchLab.commands,
     onLoad := (Global / onLoad).value andThen { state =>
       def exists(submodule: String) = {
         val path = Paths.get(submodule)
