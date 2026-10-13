@@ -189,14 +189,20 @@ object Uniques:
     private val uncachedCache: Array[AppliedType | Null] | Null =
       if uncachedAppliedCacheSize > 0 then new Array[AppliedType | Null](uncachedAppliedCacheSize) else null
 
+    private def partKey(tp: Type): Int =
+      val h = tp.hash
+      if h != NotCached then h else System.identityHashCode(tp)
+
     private def enterUncached(tycon: Type, args: List[Type]): AppliedType =
       val cache = uncachedCache
       if cache == null then new CachedAppliedType(tycon, args, NotCached)
       else
-        var k = System.identityHashCode(tycon)
+        // Keyed by the parts' identities: their hash when they are hash-consed (already computed), otherwise their
+        // identity hash, which for a fresh object is a VM call (and, on macOS, a W^X toggle)
+        var k = partKey(tycon)
         var xs = args
         while !xs.isEmpty do
-          k = k * 31 + System.identityHashCode(xs.head)
+          k = k * 31 + partKey(xs.head)
           xs = xs.tail
         val i = (k ^ (k >>> 16)) & (cache.length - 1)
         val e = cache(i)
