@@ -82,6 +82,7 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
    * remove entries associated with elements that have been gc'ed
    */
   protected def removeStaleEntries(): Unit = {
+    if WeakHashSet.noQueue then return
     def poll(): Entry[A] | Null = queue.poll().asInstanceOf
 
     @tailrec
@@ -105,6 +106,31 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
     queueLoop()
   }
 
+  /** Without a reference queue (`WeakHashSet.noQueue`), cleared entries stay in the table until a sweep: sweep when
+   *  the table is full, and double it only if the live entries still fill most of it (as `ThreadLocal.ThreadLocalMap`).
+   */
+  private def grow(): Unit =
+    if WeakHashSet.noQueue then
+      expungeCleared()
+      if count > threshold - threshold / 4 then resize()
+    else resize()
+
+  /** Unlinks every entry whose element has been collected */
+  private def expungeCleared(): Unit =
+    Stats.record(statsItem("expunge"))
+    var bucket = 0
+    while bucket < table.length do
+      var prev: Entry[A] | Null = null
+      var e = table(bucket)
+      while e != null do
+        val next = e.tail
+        if e.get == null then
+          if prev == null then table(bucket) = next else prev.tail = next
+          count -= 1
+        else prev = e
+        e = next
+      bucket += 1
+
   /**
    * Double the size of the internal table
    */
@@ -120,10 +146,12 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
       def linkedListLoop(entry: Entry[A] | Null): Unit = entry match {
         case null => ()
         case _ =>
-          val bucket = index(entry.hash)
           val oldNext = entry.tail
-          entry.tail = table(bucket)
-          table(bucket) = entry
+          if WeakHashSet.noQueue && entry.get == null then count -= 1 // collected: drop it
+          else
+            val bucket = index(entry.hash)
+            entry.tail = table(bucket)
+            table(bucket) = entry
           linkedListLoop(oldNext)
       }
       linkedListLoop(oldTable(oldBucket))
@@ -154,9 +182,9 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
 
   protected def addEntryAt(bucket: Int, elem: A, elemHash: Int, oldHead: Entry[A] | Null): A = {
     Stats.record(statsItem("addEntryAt"))
-    table(bucket) = new Entry(elem, elemHash, oldHead, queue)
+    table(bucket) = new Entry(elem, elemHash, oldHead, if WeakHashSet.noQueue then null else queue)
     count += 1
-    if (count > threshold) resize()
+    if (count > threshold) grow()
     elem
   }
 
@@ -339,10 +367,14 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
  * Companion object for WeakHashSet
  */
 object WeakHashSet {
+  // DO NOT MERGE: experiment switch, see `grow`
+  @scala.annotation.internal.sharable val noQueue: Boolean = sys.props.contains("dotty.weakNoQueue")
+
   /**
    * A single entry in a WeakHashSet. It's a WeakReference plus a cached hash code and
    * a link to the next Entry in the same bucket
    */
-  class Entry[A](@constructorOnly element: A, val hash:Int, var tail: Entry[A] | Null, @constructorOnly queue: ReferenceQueue[A]) extends WeakReference[A](element, queue)
+
+  class Entry[A](@constructorOnly element: A, val hash:Int, var tail: Entry[A] | Null, @constructorOnly queue: ReferenceQueue[A] | Null) extends WeakReference[A](element, queue)
 
 }
