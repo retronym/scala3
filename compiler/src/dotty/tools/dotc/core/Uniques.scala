@@ -56,11 +56,15 @@ object Uniques:
 
         @tailrec
         def linkedListLoop(entry: Entry[NamedType] | Null): NamedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
+          case null                    =>
+            Stats.record(statsItem("miss"))
+            addEntryAt(bucket, newType, h, oldHead)
           case _                       =>
             if entry.hash == h then
               val e = entry.get
-              if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then e
+              if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then
+                Stats.record(statsItem("hit"))
+                e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
 
@@ -93,11 +97,15 @@ object Uniques:
 
         @tailrec
         def linkedListLoop(entry: Entry[AppliedType] | Null): AppliedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
+          case null                    =>
+            Stats.record(statsItem("miss"))
+            addEntryAt(bucket, newType, h, oldHead)
           case _                       =>
             if entry.hash == h then
               val e = entry.get
-              if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then e
+              if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then
+                Stats.record(statsItem("hit"))
+                e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
 
