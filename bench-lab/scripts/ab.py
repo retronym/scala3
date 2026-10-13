@@ -127,6 +127,19 @@ def check(spec, prof, started, flags):
     return None
 
 
+def check_samples(spec, prof, dest):
+    """A kperf recording can come back nearly empty (samples lost in the helper): the benchmark threads must show at
+    least 0.5 GHz worth of cycles per op."""
+    sys.path.insert(0, SCRIPTS)
+    import profdiff, regraph
+    r = profdiff.load(prof, "cycles", spec.profile.get("jfrconv", regraph.DEFAULT_JFRCONV), dest, "check")
+    os.unlink(r["collapsed"])
+    cycles = r["total"] / r["ops"]
+    if cycles < 0.5e6 * r["score"]:
+        return f"only {cycles / 1e9:.2f}G cycles/op sampled on the benchmark threads at {r['score']:.0f} ms/op: lost samples?"
+    return None
+
+
 def run(spec, dry):
     cells = list(spec.cells())
     todo = [c for c in cells if not os.path.exists(os.path.join(spec.cell_dir(c[1], c[3], c[0]), "result.json"))]
@@ -149,6 +162,8 @@ def run(spec, dry):
             # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
             rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
         problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags)
+        if not problem and "async" in spec.profile and spec.profile["async"].startswith("cycles"):
+            problem = check_samples(spec, prof, dest)
         if problem:
             sys.exit(f"{dest}: {problem}")
         # keep the small files with the cell; async profiles (JFR, flame graphs) stay where bench-lab's indexes expect them

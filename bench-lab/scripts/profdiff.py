@@ -74,4 +74,5 @@ def main():
         os.unlink(f)
 
 
-main()
+if __name__ == "__main__":
+    main()
