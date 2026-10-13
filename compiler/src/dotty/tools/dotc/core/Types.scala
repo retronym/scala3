@@ -3933,6 +3933,17 @@ object Types extends TypeUtils {
   /** The superclass of MethodType and PolyType. */
   sealed abstract class MethodOrPoly extends UncachedGroundType with LambdaType with MethodicType {
 
+    // Applied types over this lambda's params (see `Uniques.localBinderOf`): only operations on this instance can
+    // share them, so they are hash-consed here rather than in the global weak table.
+    private var myLocalApplied: Uniques.LocalAppliedUniques | Null = null
+    private[core] def localApplied: Uniques.LocalAppliedUniques =
+      val t = myLocalApplied
+      if t != null then t
+      else
+        val t1 = Uniques.LocalAppliedUniques()
+        myLocalApplied = t1
+        t1
+
     // Invariants:
     // (1) mySignatureRunId != NoRunId      =>  mySignature != null
     // (2) myJavaSignatureRunId != NoRunId  =>  myJavaSignature != null
@@ -4795,6 +4806,10 @@ object Types extends TypeUtils {
 
   final class CachedAppliedType(tycon: Type, args: List[Type], hc: Int) extends AppliedType(tycon, args) {
     myHash = hc
+
+    /** The method or poly type whose own table holds this type (see `Uniques.localBinderOf`), or null */
+    private[core] val localBinder: MethodOrPoly | Null =
+      if Uniques.localMethodParamUniques then Uniques.localBinderOf(tycon, args) else null
   }
 
   object AppliedType {

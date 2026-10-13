@@ -54,13 +54,13 @@ object ProbeMain:
    */
   object Lambdas:
     val enabled = sys.props.contains("probe.lambdas")
-    private val tables = Vector("applied", "named", "uniques")
+    private val tables = Vector("applied", "named", "uniques", "applied-local")
     private val pending = java.util.IdentityHashMap[LambdaType, Array[Long]]()
     private val finalized = java.util.IdentityHashMap[LambdaType, java.lang.Boolean]()
     // (lambda class, lambda hit?) -> (#lambdas, inner misses per table)
     val stats = mutable.HashMap[(String, Boolean), Array[Long]]()
-    val afterConstruction = new Array[Long](3)
-    val noBinder = new Array[Long](3)
+    val afterConstruction = new Array[Long](4)
+    val noBinder = new Array[Long](4)
 
     // identity set: a binder under construction must not be hashed
     def binders(tp: Type): Iterable[LambdaType] =
@@ -99,11 +99,11 @@ object ProbeMain:
       // attribute to the innermost lambda still under construction, if any
       val open = bs.filterNot(finalized.containsKey)
       if open.isEmpty then { if bs.nonEmpty then afterConstruction(i) += 1 }
-      else for b <- open do pending.computeIfAbsent(b, _ => new Array[Long](3))(i) += 1
+      else for b <- open do pending.computeIfAbsent(b, _ => new Array[Long](4))(i) += 1
 
     def unique(candidate: Type, result: Type): Unit = candidate match
       case l: LambdaType =>
-        val inner = Option(pending.remove(l)).getOrElse(new Array[Long](3))
+        val inner = Option(pending.remove(l)).getOrElse(new Array[Long](4))
         val hit = result ne candidate
         val s = stats.getOrElseUpdate((l.getClass.getSimpleName, hit), new Array[Long](4))
         s(0) += 1; for i <- 0 until 3 do s(i + 1) += inner(i)
