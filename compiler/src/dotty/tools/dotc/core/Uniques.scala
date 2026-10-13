@@ -41,6 +41,8 @@ object Uniques:
 
   // DO NOT MERGE: experiment switch, slots (a power of two) of AppliedUniques' cache of uncached applied types
   @sharable val uncachedAppliedCacheSize: Int = sys.props.get("dotty.uncachedAppliedCache").fold(0)(_.toInt)
+  // DO NOT MERGE: key that cache on identity hashes only (the first version), not the parts' hashes
+  @sharable val uncachedAppliedCacheIdentityKeys: Boolean = sys.props.contains("dotty.uncachedAppliedCacheIdentityKeys")
 
   // DO NOT MERGE: experiment switch, see `localBinderOf`
   @sharable var localMethodParamUniques: Boolean = sys.props.contains("dotty.localMethodParamUniques")
@@ -190,8 +192,10 @@ object Uniques:
       if uncachedAppliedCacheSize > 0 then new Array[AppliedType | Null](uncachedAppliedCacheSize) else null
 
     private def partKey(tp: Type): Int =
-      val h = tp.hash
-      if h != NotCached then h else System.identityHashCode(tp)
+      if uncachedAppliedCacheIdentityKeys then System.identityHashCode(tp)
+      else
+        val h = tp.hash
+        if h != NotCached then h else System.identityHashCode(tp)
 
     private def enterUncached(tycon: Type, args: List[Type]): AppliedType =
       val cache = uncachedCache
