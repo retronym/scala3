@@ -1127,6 +1127,12 @@ object Contexts {
 
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
 
+    /** The non-null elements of `denotTransformers`, and for each phase id the index of its transformer there
+     *  (-1 if none): the shape `SingleDenotation.goForwardLoop` dispatches on (DO NOT MERGE: GoForwardSite)
+     */
+    private[core] var denseDenotTransformers: Array[DenotTransformer] = uninitialized
+    private[core] var denotTransformerIndex: Array[Int] = uninitialized
+
     /** Flag to suppress inlining, set after overflow */
     private[dotc] var stopInlining: Boolean = false
 

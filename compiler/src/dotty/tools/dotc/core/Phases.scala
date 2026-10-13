@@ -207,6 +207,15 @@ object Phases {
         nextDenotTransformerId(i) = lastTransformerId
       }
 
+      denotTransformerIndex = Array.fill(phases.length)(-1)
+      val dense = collection.mutable.ArrayBuffer[DenotTransformer]()
+      for i <- 0 until phases.length if denotTransformers(i) != null do
+        denotTransformerIndex(i) = dense.length
+        dense += denotTransformers(i)
+      denseDenotTransformers = dense.toArray
+      if GoForwardSite.MODE == "pe" then
+        GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
+
       if (fuse)
         this.fusedPhases = (NoPhase :: phasess).toArray
       else

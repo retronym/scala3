@@ -583,6 +583,13 @@ object Denotations {
   end infoMeet
 
   /** A non-overloaded denotation */
+  object SingleDenotation:
+    /** DO NOT MERGE: a denotation transformer may not transform a package (see `goForwardLoop`) */
+    def assertNotPackage(d: SingleDenotation, transformer: DenotTransformer, ctx: Context): Unit = d match
+      case d: ClassDenotation =>
+        assert(!d.is(Package)(using ctx), s"illegal transformation of package denotation by transformer $transformer")
+      case _ =>
+
   abstract class SingleDenotation(symbol: Symbol, initInfo: Type, isType: Boolean) extends Denotation(symbol, initInfo, isType) {
     protected def newLikeThis(symbol: Symbol, info: Type, pre: Type, isRefinedMethod: Boolean)(using Context): SingleDenotation
 
@@ -858,7 +865,7 @@ object Denotations {
               assertNotPackage(next, transformer)
               next.insertAfter(cur)
               cur = next
-            cur.validFor = Period(currentPeriod.runId, startPid, transformer.lastPhaseId)
+            cur.validFor = Period(currentPeriod.runId, startPid, transformer.lastPhaseId(using ctx))
             //printPeriods(cur)
             //println(s"new denot: $cur, valid for ${cur.validFor}")
           cur.current // multiple transformations could be required
@@ -890,10 +897,70 @@ object Denotations {
       else if valid.runId != currentPeriod.runId then
         toNewRun
       else if currentPeriod > valid then
-        goForward
+        GoForwardSite.MODE match
+          case "off" => goForward
+          case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, ctx)
+          case _ => GoForwardSite.invoke(this, ctx).asInstanceOf[SingleDenotation]
       else
         goBack
     end current
+
+    /** DO NOT MERGE: `current` when `ctx.period` is after `validFor` (`goForward`), with the `cur.current` recursion
+     *  turned into a loop, written for the jvm-loop-unroller partial evaluator (see `GoForwardSite`): the arrays are
+     *  the phase plan's, constant per run, and the transformer is chosen by `Specialize.split`, so that each arm calls
+     *  `transform` on a constant receiver of a known class. No closures: the residual is a hidden class.
+     *
+     *  @param transformers     the denotation transformers, in phase order
+     *  @param transformerIndex for a phase id, the index in `transformers` of the phase's transformer
+     *  @param nextIds          `ctx.base.nextDenotTransformerId`
+     */
+    final def goForwardLoop(transformers0: Array[DenotTransformer], transformerIndex0: Array[Int], nextIds0: Array[Int],
+                            ctx: Context): SingleDenotation =
+      val transformers = unroller.pe.Specialize.constant(transformers0)
+      val transformerIndex = unroller.pe.Specialize.constant(transformerIndex0)
+      val nextIds = unroller.pe.Specialize.constant(nextIds0)
+      val currentPeriod = ctx.period
+      var self: SingleDenotation = this
+      while true do
+        val valid = self.validFor
+        if valid == Nowhere || valid.runId != currentPeriod.runId || !(currentPeriod > valid) then
+          return self.current(using ctx)
+        var cur = self
+        // search for containing period as long as nextInRun increases.
+        var next = cur.nextInRun
+        while next.validFor > valid && !next.validFor.contains(currentPeriod) do
+          cur = next
+          next = next.nextInRun
+        if next.validFor > valid then
+          return next // next.validFor contains currentPeriod
+        // not found, cur points to highest existing variant
+        val nextTransformerId = nextIds(cur.validFor.lastPhaseId)
+        if currentPeriod.lastPhaseId <= nextTransformerId then
+          cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nextTransformerId)
+        else
+          var startPid = nextTransformerId + 1
+          // `transformer` is a constant in each `split` arm. Its last use is inside the `try`, so that past it the
+          // arms' states agree again and they share one tail (the residual must stay under HugeMethodLimit).
+          val transformer = transformers(unroller.pe.Specialize.split(transformerIndex(nextTransformerId), transformers.length))
+          val lastPid = transformer.lastPhaseId(using ctx)
+          val savedPeriod = ctx.period
+          val mutCtx = ctx.asInstanceOf[FreshContext]
+          try
+            mutCtx.setPhase(transformer)
+            next = transformer.transform(cur)(using ctx)
+            if next ne cur then SingleDenotation.assertNotPackage(next, transformer, ctx)
+          finally
+            mutCtx.setPeriod(savedPeriod)
+          if next eq cur then
+            startPid = cur.validFor.firstPhaseId
+          else
+            next.insertAfter(cur)
+            cur = next
+          cur.validFor = Period(currentPeriod.runId, startPid, lastPid)
+        self = cur // multiple transformations could be required
+      end while
+      throw AssertionError("unreachable")
+    end goForwardLoop
 
     private def demandOutsideDefinedMsg(using Context): String =
       s"demanding denotation of $this at phase ${ctx.phase}(${ctx.phaseId}) outside defined interval: defined periods are${definedPeriodsString}"
@@ -945,7 +1012,7 @@ object Denotations {
     }
 
     /** Insert this denotation so that it follows `prev`. */
-    private def insertAfter(prev: SingleDenotation) = {
+    private[core] def insertAfter(prev: SingleDenotation) = { // not private: called from goForwardLoop's residual class
       this.nextInRun = prev.nextInRun
       prev.nextInRun = this
     }
