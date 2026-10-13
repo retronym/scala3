@@ -200,41 +200,33 @@ EVENT_GRAPHS = ["bench", "reverse", "bench-classify", "reverse-classify", "threa
 
 
 def graphs(spec):
-    """For async runs: forward and reverse graphs of the benchmark threads with --classify (bench-lab makes the others),
-    and out/ab/<name>/index.html linking every graph of every cell."""
+    """For async runs: every flame graph of every cell (re)rendered by regraph.py, with the jfrconv of the spec's
+    profile ("jfrconv", else regraph's default), and out/ab/<name>/index.html linking them."""
+    sys.path.insert(0, SCRIPTS)  # python3 -I does not put the script's directory on the path
+    import regraph
     p = spec.profile
-    jfrconv = os.path.join(os.path.dirname(os.path.dirname(p["lib"])), "bin", "jfrconv") if "lib" in p else "jfrconv"
-    events = [e.split("@")[0] for e in p["async"].split("+")] if "+" in p["async"] else [p["async"]]
-    hw = "+" in p["async"]
-    rows = []
+    events = [label for label, _ in regraph.events_of(f"async-{p['async']}")]
+    cells = []
     for corpus in spec.corpora:
         for variant, flags in spec.variants.items():
             for r in range(1, spec.rounds + 1):
                 cell = spec.cell_dir(corpus, variant, r)
-                if not os.path.exists(os.path.join(cell, "profile-dir")):
-                    continue
-                prof = open(os.path.join(cell, "profile-dir")).read().strip()
-                jfr = (glob.glob(os.path.join(prof, "**", "*.jfr"), recursive=True) or [None])[0]
-                if jfr is None:
-                    continue
-                stem = jfr[:-4]
-                cells = []
-                for ev in events:
-                    label = f"hw-{ev}" if hw else ev
-                    kind = ["--hw", ev] if hw else [f"--{ev}"]
-                    for extra, args in (("bench-classify", []), ("reverse-classify", ["--reverse"])):
-                        out = f"{stem}-{label}-{extra}.html"
-                        if not os.path.exists(out):
-                            subprocess.run([jfrconv, *kind, "--minwidth", "0.2", "--title", f"{corpus} {variant} #{r}: {ev}, {extra}",
-                                            "-I", ".*jmh-worker.*", "--classify", *args, jfr, out], capture_output=True)
-                    links = []
-                    for g in EVENT_GRAPHS:
-                        f = f"{stem}-{label}{'' if g == 'bench' else '-' + g}.html"
-                        if os.path.exists(f):
-                            links.append(f'<a href="{os.path.relpath(f, spec.out)}">{g}</a>')
-                    cells.append("<td>" + " · ".join(links) + "</td>")
-                s = summary(json.load(open(os.path.join(cell, "result.json")))[0])
-                rows.append(f"<tr><th>{corpus}</th><th title=\"{flags}\">{variant} #{r}</th><td>{s['ms']:.0f} ± {s['err']:.0f}</td>{''.join(cells)}</tr>")
+                if os.path.exists(os.path.join(cell, "profile-dir")):
+                    cells.append((corpus, variant, flags, r, cell, open(os.path.join(cell, "profile-dir")).read().strip()))
+    regraph.regraph([c[5] for c in cells], p.get("jfrconv"))
+    rows = []
+    for corpus, variant, flags, r, cell, prof in cells:
+        jfr = (glob.glob(os.path.join(prof, "**", "*.jfr"), recursive=True) or [None])[0]
+        if jfr is None:
+            continue
+        tds = []
+        for label in events:
+            links = [f'<a href="{os.path.relpath(regraph.graph_path(jfr, label, k), spec.out)}">{k}</a>'
+                     for k in regraph.KINDS if os.path.exists(regraph.graph_path(jfr, label, k))]
+            tds.append("<td>" + " · ".join(links) + "</td>")
+        s = summary(json.load(open(os.path.join(cell, "result.json")))[0])
+        rows.append(f"<tr><th>{corpus}</th><th title=\"{flags}\">{variant} #{r}</th><td>{s['ms']:.0f} ± {s['err']:.0f}</td>{''.join(tds)}</tr>")
+    events = [e.removeprefix("hw-") for e in events]
     page = f"""<!doctype html><meta charset="utf-8"><title>{spec.name} flame graphs</title>
 <style>:root{{--bg:#f6f7f9;--fg:#1d232b;--muted:#5d6875;--line:#dde2e8;--link:#2f6fb2}}
 @media (prefers-color-scheme: dark){{:root{{--bg:#14181d;--fg:#e3e8ee;--muted:#94a0ad;--line:#2c333c;--link:#6ea8e6;color-scheme:dark}}}}

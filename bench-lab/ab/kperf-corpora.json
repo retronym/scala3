@@ -3,7 +3,7 @@
   "profile": {
     "async": "cycles+instructions+cache-misses+branch-misses",
     "kperf": "/tmp/asprof-kperf.sock",
-    "lib": "/Users/jzaugg-virtus/code/.worktrees/async-profiler/xctrace-async-prof-research-437784/build/lib/libasyncProfiler.dylib",
+    "lib": "/Users/jzaugg-virtus/code/.worktrees/async-profiler/integration-kperf-flamegraph/build/lib/libasyncProfiler.dylib",
     "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java"
   },
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
