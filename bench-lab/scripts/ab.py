@@ -181,7 +181,7 @@ def summary(r):
     m, p = r.get("secondaryMetrics", {}), r["primaryMetric"]
     get = lambda k: m[k]["score"] if k in m else None
     return {"ms": p["score"], "err": p["scoreError"], "alloc": get("gc.alloc.rate.norm"), "gc": get("gc.time"),
-            "cyc": get("xctrace.CORE_ACTIVE_CYCLE"), "ipc": get("xctrace.IPC.bench")}
+            "cyc": get("xctrace.CORE_ACTIVE_CYCLE"), "ipc": get("xctrace.IPC.bench"), "inst": get("xctrace.INST_ALL")}
 
 
 def mean(xs):
@@ -191,8 +191,8 @@ def mean(xs):
 
 def report(spec):
     print(f"### {spec.name}\n")
-    print("| corpus | variant | ms/op (per round) | mean | Δ | cycles/op | Δ | IPC | alloc/op | GC time |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("| corpus | variant | ms/op (per round) | mean | Δ | instructions/op (per round) | Δ | cycles/op | Δ | IPC | alloc/op | GC time |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for corpus in spec.corpora:
         base = None
         for variant in spec.variants:
@@ -203,12 +203,13 @@ def report(spec):
                     rs.append(summary(json.load(open(f))[0]))
             if not rs:
                 continue
-            row = {k: mean(s[k] for s in rs) for k in ("ms", "cyc", "ipc", "alloc", "gc")}
+            row = {k: mean(s[k] for s in rs) for k in ("ms", "cyc", "ipc", "alloc", "gc", "inst")}
             base = base or row
             pct = lambda k: f"{100 * (row[k] / base[k] - 1):+.1f}%" if row[k] and base[k] and row is not base else ""
             fmt = lambda x, f: f.format(x) if x is not None else "–"
             per = " / ".join(f"{s['ms']:.0f} ± {s['err']:.0f}" for s in rs)
-            print(f"| {corpus} | {variant} | {per} | {row['ms']:.0f} | {pct('ms')} | {fmt(row['cyc'] and row['cyc'] / 1e9, '{:.2f}G')} | "
+            insts = " / ".join(f"{s['inst'] / 1e9:.3f}G" for s in rs if s.get("inst"))
+            print(f"| {corpus} | {variant} | {per} | {row['ms']:.0f} | {pct('ms')} | {insts} | {pct('inst')} | {fmt(row['cyc'] and row['cyc'] / 1e9, '{:.2f}G')} | "
                   f"{pct('cyc')} | {fmt(row['ipc'], '{:.2f}')} | {fmt(row['alloc'] and row['alloc'] / 1e6, '{:.0f} MB')} | "
                   f"{fmt(row['gc'] and row['gc'] / 1e3, '{:.1f} s')} |")
     if "async" in spec.profile:
