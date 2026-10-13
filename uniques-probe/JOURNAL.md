@@ -210,3 +210,27 @@ Deterministic counters (`-Ydetailed-stats`, one scalaz compile):
 | global AppliedUniques puts | 3.68M | 1.19M | 1.19M |
 
 **Finding (so far):** the cache recovers most of U's identity cost while keeping its churn reduction. Timing is pending.
+
+## Exp 12, profiled: base, U, U + direct-mapped cache keyed on part hashes (2026-10-13 21:31–21:43)
+
+One corpus (scalaz), one run per variant: patched JDK 26, kperf cycles and instructions sampled every 10M events, 12 × 5 s warmup and 12 × 5 s profiled, `-Xms4G -Xmx4G` for all (`bench-lab/ab/prof-scalaz.json`). Compared with `bench-lab/scripts/profdiff.py`: cycles on the benchmark thread per op, from the samples. Indicative (one run each).
+
+| variant | cycles/op | ms/op |
+|---|---|---|
+| base | 17.96G | 4465 ± 200 |
+| U | 17.27G (−3.8%) | 4209 ± 96 |
+| U + cache (part-hash keys) | 16.86G (−6.1%) | 4081 ± 96 |
+
+Base → U: biggest decreases are all weak-table overheads, in cycles per op:
+- `ReferenceQueue.poll` (via `ContinuationSupport.pinIfSupported`): −341M.
+- `AppliedUniques.linkedListLoop`: −174M.
+- `WeakHashSet.resize`: −129M.
+- `Entry.tail_=`: −63M.
+
+Increases are lost identity, spread thinly: `SimpleIdentityMap.apply` +58M, `Hashable.finishHash` +37M, `BaseClassSet.recur` +36M.
+
+U → U + cache: most of that comes back (`SimpleIdentityMap.apply` −90M, `finishHash` −53M, `Type.loop` −44M, `widen` −35M), at a cost of +145M in the cache lookup (`enterUncached`) and about +46M of `identityHashCode` for uncached parts. Net −2.3%.
+
+The first cache version keyed on identity hashes only, and on stock JDK 25 cost cycles: on fresh objects `identityHashCode` takes the VM slow path, and there each call toggles W^X write protection. Keying on the parts' own hashes fixed that.
+
+**Finding (new):** in base, `ReferenceQueue.poll()` from `WeakHashSet.removeStaleEntries` takes 2.5% of compiler-thread cycles. 2.0% of that is AppliedUniques, which polls on every lookup and pays one locked `poll()` per stale entry; millions of entries die per compile. This is independent of the hash-consing semantics → Exp 13: a weak table without a reference queue, in the style of `ThreadLocal.ThreadLocalMap`. Lookups unlink cleared entries they pass, and a full sweep runs before growing, so the table grows only for live entries. That should also stop the table growing because of stale entries (4M slots for 417K live).
