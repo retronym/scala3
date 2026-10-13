@@ -871,7 +871,9 @@ object Denotations {
           // 10 times. Best out of 10: 18154ms with `prev` field, 17777ms without.
           cnt += 1
           if cnt > MaxPossiblePhaseId then
+            GoBackStats.record(cnt, bail = true)
             return atPhase(coveredInterval.firstPhaseId)(current)
+        GoBackStats.record(cnt, bail = false)
         cur
       end goBack
 
@@ -1391,3 +1393,36 @@ object Denotations {
     def toMessage(using Context) =
       em"Cyclic macro dependency; macro refers to a toplevel symbol in ${symbol.source} from which the macro is called"
 }
+
+// TEMPORARY instrumentation for the goBack investigation (retronym/scala3#16). Not for merge.
+object GoBackStats {
+  private val enabled = java.lang.Boolean.getBoolean("dotty.goBackStats")
+  private val hist = new java.util.concurrent.atomic.AtomicLongArray(MaxPossiblePhaseId + 2)
+  private val bails = new java.util.concurrent.atomic.AtomicLong
+  private val callers = new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]
+  private val skip = Set("Denotations", "Symbols", "SymDenotations", "Contexts", "GoBackStats", "Decorators", "Phases")
+  if enabled then
+    Runtime.getRuntime.nn.addShutdownHook(new Thread(() => dump()))
+
+  def record(cnt: Int, bail: Boolean): Unit = if enabled then
+    hist.incrementAndGet(cnt)
+    if bail then
+      bails.incrementAndGet()
+      if (bails.get() & 15) == 0 then
+        val frames = new Throwable().getStackTrace.nn.iterator
+          .map(_.nn)
+          .filter(f => !skip.exists(n => f.getClassName.nn.contains("core." + n)))
+          .take(3).map(f => s"${f.getClassName.nn.stripPrefix("dotty.tools.")}.${f.getMethodName}:${f.getLineNumber}")
+          .mkString(" <- ")
+        callers.computeIfAbsent(frames, _ => new java.util.concurrent.atomic.LongAdder).nn.increment()
+
+  def dump(): Unit =
+    val total = (0 until hist.length()).map(hist.get).sum
+    val steps = (0 until hist.length()).map(i => i.toLong * hist.get(i)).sum
+    System.err.nn.println(s"[goBack] calls=$total bails=${bails.get} totalSteps=$steps")
+    for i <- 0 until hist.length() if hist.get(i) != 0 do System.err.nn.println(f"[goBack]   cnt=$i%3d  ${hist.get(i)}%,d")
+    import scala.jdk.CollectionConverters.*
+    for (k, v) <- callers.asScala.toSeq.sortBy(-_._2.sum).take(25) do
+      System.err.nn.println(f"[goBack]   bail-sample ${v.sum}%,6d  $k")
+}
+
