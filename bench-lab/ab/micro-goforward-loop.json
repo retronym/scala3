@@ -6,7 +6,7 @@
     "xctrace": "ipc"
   },
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
-  "rounds": 1,
+  "rounds": 2,
   "corpora": {
     "dottyUtil": "-wi 10 -i 10 -w 2 -r 2"
   },

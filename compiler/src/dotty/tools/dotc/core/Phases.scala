@@ -22,6 +22,19 @@ import scala.compiletime.uninitialized
 
 object Phases {
 
+  /** A linked denotation transformer, as goForward sees it.
+   *
+   *  @param isIdentity      the transformer is an `IdentityDenotTransformer`: transforming returns the argument
+   *  @param lastPhaseId     `transformer.lastPhaseId`
+   *  @param nextNonIdentity the first linked transformer at or after this one that is not an identity
+   *                         (`phases.length` if none)
+   */
+  final class TransformerStep(
+    val transformer: DenotTransformer,
+    val isIdentity: Boolean,
+    val lastPhaseId: PhaseId,
+    val nextNonIdentity: PhaseId)
+
   inline def phaseOf(id: PhaseId)(using Context): Phase =
     ctx.base.phases(id)
 
@@ -254,26 +267,19 @@ object Phases {
           nextDenotTransformerId(i) = nextDenotTransformerId(phase.id + 1)
       refreshDenotTransformerCaches() // lastPhaseId depends on nextDenotTransformerId
 
-    /** Recompute `denotTransformerIsIdentity`, `denotTransformerLastPhaseId` and `denotTransformerNextNonIdentity`
-     *  from the current plan
-     */
+    /** Recompute `transformerSteps` from the current plan */
     private def refreshDenotTransformerCaches()(using Context): Unit =
-      denotTransformerIsIdentity = new Array[Boolean](denotTransformers.length)
-      denotTransformerLastPhaseId = new Array[Int](denotTransformers.length)
-      for i <- 0 until denotTransformers.length do
-        val t = denotTransformers(i)
-        if t != null then
-          denotTransformerIsIdentity(i) = t.isInstanceOf[IdentityDenotTransformer]
-          denotTransformerLastPhaseId(i) = t.lastPhaseId
-      denotTransformerNextNonIdentity = new Array[Int](nextDenotTransformerId.length)
-      var i = nextDenotTransformerId.length
-      while i > 0 do
-        i -= 1
-        val j = nextDenotTransformerId(i)
-        denotTransformerNextNonIdentity(i) =
-          if j > i && j < nextDenotTransformerId.length then denotTransformerNextNonIdentity(j)
-          else if j == i && denotTransformerIsIdentity(i) && i + 1 < nextDenotTransformerId.length then denotTransformerNextNonIdentity(i + 1)
-          else j
+      transformerSteps = new Array[TransformerStep | Null](phases.length)
+      var nextNonIdentity = phases.length
+      var id = phases.length - 1
+      while id >= 0 do
+        val transformer = denotTransformers(id)
+        val isLinked = transformer != null && nextDenotTransformerId(id) == id
+        if isLinked then
+          val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
+          if !isIdentity then nextNonIdentity = id
+          transformerSteps(id) = TransformerStep(transformer, isIdentity, transformer.lastPhaseId, nextNonIdentity)
+        id -= 1
 
     private var myParserPhase: Phase = uninitialized
     private var myTyperPhase: Phase = uninitialized

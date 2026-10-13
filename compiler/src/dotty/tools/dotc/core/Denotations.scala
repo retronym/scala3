@@ -847,9 +847,9 @@ object Denotations {
             val transformer = ctx.base.denotTransformers(nextTransformerId)
             if GoForwardStats.enabled then GoForwardStats.transformed(nextTransformerId, transformer)
             val lastPid =
-              if GoForwardSite.CACHE_LAST_PHASE_ID then ctx.base.denotTransformerLastPhaseId(nextTransformerId)
+              if GoForwardSite.CACHE_LAST_PHASE_ID then ctx.base.transformerSteps(nextTransformerId).nn.lastPhaseId
               else transformer.lastPhaseId
-            if GoForwardSite.SKIP_IDENTITY && ctx.base.denotTransformerIsIdentity(nextTransformerId) then
+            if GoForwardSite.SKIP_IDENTITY && ctx.base.transformerSteps(nextTransformerId).nn.isIdentity then
               // an identity transform returns cur: the validity of cur just extends to the transformer's last phase
               cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, lastPid)
             else
@@ -922,12 +922,8 @@ object Denotations {
      */
     private final def goForwardRuns(ctx: Context): SingleDenotation =
       // The phase plan, read once per call
-      val base = ctx.base
-      val nextTransformerAt   = base.nextDenotTransformerId          // phase id => first transformer at or after it
-      val nextNonIdentityAt   = base.denotTransformerNextNonIdentity // phase id => first non-identity transformer at or after it
-      val isIdentity          = base.denotTransformerIsIdentity
-      val lastPhaseOf         = base.denotTransformerLastPhaseId
-      val transformers        = base.denotTransformers
+      val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
+      val steps = ctx.base.transformerSteps                   // transformer id => its TransformerStep
 
       val targetPeriod = ctx.period
       val runId        = targetPeriod.runId
@@ -956,20 +952,19 @@ object Denotations {
           cur.validFor = Period(runId, firstPhase, transformerId)
           return cur
 
-        if isIdentity(transformerId) then
+        val step = steps(transformerId).nn
+        if step.isIdentity then
           // Skip the run of identities: up to the next real transformer, or just past the target
-          val stop = math.min(nextNonIdentityAt(transformerId), nextTransformerAt(targetPhase))
+          val stop = math.min(step.nextNonIdentity, nextTransformerAt(targetPhase))
           cur.validFor = Period(runId, firstPhase, stop)
         else
-          val transformer = transformers(transformerId)
-          val transformed = transformAt(transformer, cur, ctx)
-          val lastPhase = lastPhaseOf(transformerId)
+          val transformed = transformAt(step.transformer, cur, ctx)
           if transformed eq cur then
-            cur.validFor = Period(runId, firstPhase, lastPhase)
+            cur.validFor = Period(runId, firstPhase, step.lastPhaseId)
           else
-            SingleDenotation.assertNotPackage(transformed, transformer, ctx)
+            SingleDenotation.assertNotPackage(transformed, step.transformer, ctx)
             transformed.insertAfter(cur)
-            transformed.validFor = Period(runId, transformerId + 1, lastPhase)
+            transformed.validFor = Period(runId, transformerId + 1, step.lastPhaseId)
             cur = transformed
       end while
       throw AssertionError("unreachable")
