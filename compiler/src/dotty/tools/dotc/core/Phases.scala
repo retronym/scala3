@@ -22,19 +22,6 @@ import scala.compiletime.uninitialized
 
 object Phases {
 
-  /** A linked denotation transformer, as goForward sees it.
-   *
-   *  @param isIdentity      the transformer is an `IdentityDenotTransformer`: transforming returns the argument
-   *  @param lastPhaseId     `transformer.lastPhaseId`
-   *  @param nextNonIdentity the first linked transformer at or after this one that is not an identity
-   *                         (`phases.length` if none)
-   */
-  final class TransformerStep(
-    val transformer: DenotTransformer,
-    val isIdentity: Boolean,
-    val lastPhaseId: PhaseId,
-    val nextNonIdentity: PhaseId)
-
   inline def phaseOf(id: PhaseId)(using Context): Phase =
     ctx.base.phases(id)
 
@@ -220,36 +207,10 @@ object Phases {
         nextDenotTransformerId(i) = lastTransformerId
       }
 
-      refreshDenotTransformerCaches()(using runCtx)
-      denotTransformerIndex = Array.fill(phases.length)(-1)
-      val dense = collection.mutable.ArrayBuffer[DenotTransformer]()
-      for i <- 0 until phases.length if denotTransformers(i) != null do
-        denotTransformerIndex(i) = dense.length
-        dense += denotTransformers(i)
-      denseDenotTransformers = dense.toArray
-      if GoForwardSite.MODE == "pe" then
-        GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
-      else if GoForwardSite.MODE == "shared" then
-        goForwardSharedOk = GoForwardUnrolledShared.matches(denseDenotTransformers)
-        if !goForwardSharedOk && denseDenotTransformers.length > 1 then
-          System.err.println(s"[goForward=shared] plan does not match the generated shape; using goForward")
-      else if GoForwardSite.MODE == "unrolled" then
-        goForwardUnrolledOk = GoForwardUnrolled.matches(denseDenotTransformers)
-        if !goForwardUnrolledOk && denseDenotTransformers.length > 1 then
-          System.err.println(s"[goForward=unrolled] plan does not match the generated shape; using goForward")
-      else if GoForwardSite.MODE == "mh" || GoForwardSite.MODE == "spun" then
-        GoForwardSite.linkDispatch(denseDenotTransformers.asInstanceOf[Array[AnyRef]])
-
       if (fuse)
         this.fusedPhases = (NoPhase :: phasess).toArray
       else
         this.fusedPhases = this.phases
-
-      if sys.props.contains("dotty.goForward.printShape") then // DO NOT MERGE
-        def group(id: Int) = fusedPhases.indexWhere(p => p.start <= id && id <= p.end)
-        println(denseDenotTransformers.zipWithIndex.map((t, k) =>
-          val p = t.asInstanceOf[Phase]
-          s"$k ${t.getClass.getName} phase=${p.id} name=${p.phaseName} group=${group(p.id)}").mkString("[goForwardShape]\n", "\n", ""))
 
       if myCheckCapturesPhase.exists then
         myCheckCapturesPhaseId = myCheckCapturesPhase.id
@@ -265,21 +226,6 @@ object Phases {
       for i <- 0 until nextDenotTransformerId.length do
         if nextDenotTransformerId(i) == phase.id then
           nextDenotTransformerId(i) = nextDenotTransformerId(phase.id + 1)
-      refreshDenotTransformerCaches() // lastPhaseId depends on nextDenotTransformerId
-
-    /** Recompute `transformerSteps` from the current plan */
-    private def refreshDenotTransformerCaches()(using Context): Unit =
-      transformerSteps = new Array[TransformerStep | Null](phases.length)
-      var nextNonIdentity = phases.length
-      var id = phases.length - 1
-      while id >= 0 do
-        val transformer = denotTransformers(id)
-        val isLinked = transformer != null && nextDenotTransformerId(id) == id
-        if isLinked then
-          val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
-          if !isIdentity then nextNonIdentity = id
-          transformerSteps(id) = TransformerStep(transformer, isIdentity, transformer.lastPhaseId, nextNonIdentity)
-        id -= 1
 
     private var myParserPhase: Phase = uninitialized
     private var myTyperPhase: Phase = uninitialized

@@ -583,13 +583,6 @@ object Denotations {
   end infoMeet
 
   /** A non-overloaded denotation */
-  object SingleDenotation:
-    /** DO NOT MERGE: a denotation transformer may not transform a package (see `goForwardLoop`) */
-    def assertNotPackage(d: SingleDenotation, transformer: DenotTransformer, ctx: Context): Unit = d match
-      case d: ClassDenotation =>
-        assert(!d.is(Package)(using ctx), s"illegal transformation of package denotation by transformer $transformer")
-      case _ =>
-
   abstract class SingleDenotation(symbol: Symbol, initInfo: Type, isType: Boolean) extends Denotation(symbol, initInfo, isType) {
     protected def newLikeThis(symbol: Symbol, info: Type, pre: Type, isRefinedMethod: Boolean)(using Context): SingleDenotation
 
@@ -697,7 +690,7 @@ object Denotations {
      *  2) the union of all validity periods is a contiguous
      *     interval.
      */
-    protected[core] var nextInRun: SingleDenotation = this // protected[core]: GoForwardUnrolled (DO NOT MERGE)
+    protected var nextInRun: SingleDenotation = this
 
     /** The version of this SingleDenotation that was valid in the first phase
      *  of this run.
@@ -820,11 +813,6 @@ object Denotations {
         if exists then initial.bringForward().current else this
 
       def goForward =
-        if GoForwardStats.enabled then GoForwardStats.enter()
-        try goForward1
-        finally if GoForwardStats.enabled then GoForwardStats.exit()
-
-      def goForward1 =
         var cur = this
         // search for containing period as long as nextInRun increases.
         var next = nextInRun
@@ -840,43 +828,34 @@ object Denotations {
           // not found, cur points to highest existing variant
           val nextTransformerId = ctx.base.nextDenotTransformerId(cur.validFor.lastPhaseId)
           if currentPeriod.lastPhaseId <= nextTransformerId then
-            if GoForwardStats.enabled then GoForwardStats.extended()
             cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nextTransformerId)
           else
             var startPid = nextTransformerId + 1
             val transformer = ctx.base.denotTransformers(nextTransformerId)
-            if GoForwardStats.enabled then GoForwardStats.transformed(nextTransformerId, transformer)
-            val lastPid =
-              if GoForwardSite.CACHE_LAST_PHASE_ID then ctx.base.transformerSteps(nextTransformerId).nn.lastPhaseId
-              else transformer.lastPhaseId
-            if GoForwardSite.SKIP_IDENTITY && ctx.base.transformerSteps(nextTransformerId).nn.isIdentity then
-              // an identity transform returns cur: the validity of cur just extends to the transformer's last phase
-              cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, lastPid)
+            //println(s"transforming $this with $transformer")
+            val savedPeriod = ctx.period
+            val mutCtx = ctx.asInstanceOf[FreshContext]
+            try
+              mutCtx.setPhase(transformer)
+              next = transformer.transform(cur)
+                // We temporarily update the context with the new phase instead of creating a
+                // new one. This is done for performance. We cut down on about 30% of context
+                // creations that way, and also avoid phase caches in contexts to get large.
+                // To work correctly, we need to demand that the context with the new phase
+                // is not retained in the result.
+            finally
+              mutCtx.setPeriod(savedPeriod)
+            if next eq cur then
+              startPid = cur.validFor.firstPhaseId
             else
-              //println(s"transforming $this with $transformer")
-              val savedPeriod = ctx.period
-              val mutCtx = ctx.asInstanceOf[FreshContext]
-              try
-                mutCtx.setPhase(transformer)
-                next = transformer.transform(cur)
-                  // We temporarily update the context with the new phase instead of creating a
-                  // new one. This is done for performance. We cut down on about 30% of context
-                  // creations that way, and also avoid phase caches in contexts to get large.
-                  // To work correctly, we need to demand that the context with the new phase
-                  // is not retained in the result.
-              finally
-                mutCtx.setPeriod(savedPeriod)
-              if next eq cur then
-                startPid = cur.validFor.firstPhaseId
-              else
-                assertNotPackage(next, transformer)
-                next.insertAfter(cur)
-                cur = next
-              cur.validFor = Period(currentPeriod.runId, startPid, lastPid)
-              //printPeriods(cur)
-              //println(s"new denot: $cur, valid for ${cur.validFor}")
+              assertNotPackage(next, transformer)
+              next.insertAfter(cur)
+              cur = next
+            cur.validFor = Period(currentPeriod.runId, startPid, transformer.lastPhaseId)
+            //printPeriods(cur)
+            //println(s"new denot: $cur, valid for ${cur.validFor}")
           cur.current // multiple transformations could be required
-      end goForward1
+      end goForward
 
       def goBack: SingleDenotation =
         // currentPeriod < end of valid; in this case a version must exist
@@ -904,145 +883,10 @@ object Denotations {
       else if valid.runId != currentPeriod.runId then
         toNewRun
       else if currentPeriod > valid then
-        GoForwardSite.MODE match
-          case "off" => if GoForwardSite.LOOP then goForwardRuns(ctx) else goForward
-          case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, false, ctx)
-          case "shared" => if ctx.base.goForwardSharedOk then GoForwardUnrolledShared.go(this, ctx) else goForward
-          case "unrolled" => if ctx.base.goForwardUnrolledOk then GoForwardUnrolled.go(this, ctx) else goForward
-          case "mh" | "spun" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, true, ctx)
-          case _ => GoForwardSite.invoke(this, ctx).asInstanceOf[SingleDenotation]
+        goForward
       else
         goBack
     end current
-
-    /** `current` when `ctx.period` is after `validFor`: brings this denotation forward to the target phase.
-     *
-     *  One loop over the phase plan, instead of recursing into `current` after each transform. A run of identity
-     *  transformers is skipped in one step: they would return the version unchanged, so its validity just extends.
-     */
-    private final def goForwardRuns(ctx: Context): SingleDenotation =
-      // The phase plan, read once per call
-      val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
-      val steps = ctx.base.transformerSteps                   // transformer id => its TransformerStep
-
-      val targetPeriod = ctx.period
-      val runId        = targetPeriod.runId
-      val targetPhase  = targetPeriod.lastPhaseId
-
-      var cur: SingleDenotation = this
-      while true do
-        if targetPhase <= cur.validFor.lastPhaseId then
-          return cur
-
-        // A later version may already cover the target
-        val valid = cur.validFor
-        var next = cur.nextInRun
-        while next.validFor > valid && !next.validFor.contains(targetPeriod) do
-          cur = next
-          next = next.nextInRun
-        if next.validFor > valid then
-          return next
-
-        // `cur` is the latest version: extend or transform it
-        val firstPhase = cur.validFor.firstPhaseId
-        val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
-
-        if targetPhase <= transformerId then
-          // No transformer runs before the target
-          cur.validFor = Period(runId, firstPhase, transformerId)
-          return cur
-
-        val step = steps(transformerId).nn
-        if step.isIdentity then
-          // Skip the run of identities: up to the next real transformer, or just past the target
-          val stop = math.min(step.nextNonIdentity, nextTransformerAt(targetPhase))
-          cur.validFor = Period(runId, firstPhase, stop)
-        else
-          val transformed = transformAt(step.transformer, cur, ctx)
-          if transformed eq cur then
-            cur.validFor = Period(runId, firstPhase, step.lastPhaseId)
-          else
-            SingleDenotation.assertNotPackage(transformed, step.transformer, ctx)
-            transformed.insertAfter(cur)
-            transformed.validFor = Period(runId, transformerId + 1, step.lastPhaseId)
-            cur = transformed
-      end while
-      throw AssertionError("unreachable")
-    end goForwardRuns
-
-    /** `transformer.transform(d)`, run at the transformer's phase. The context is updated in place rather than copied,
-     *  for performance, so the result must not retain it.
-     */
-    private def transformAt(transformer: DenotTransformer, d: SingleDenotation, ctx: Context): SingleDenotation =
-      val savedPeriod = ctx.period
-      val mutCtx = ctx.asInstanceOf[FreshContext]
-      try
-        mutCtx.setPhase(transformer)
-        transformer.transform(d)(using ctx)
-      finally
-        mutCtx.setPeriod(savedPeriod)
-
-    /** DO NOT MERGE: `current` when `ctx.period` is after `validFor` (`goForward`), with the `cur.current` recursion
-     *  turned into a loop, written for the jvm-loop-unroller partial evaluator (see `GoForwardSite`): the arrays are
-     *  the phase plan's, constant per run, and the transformer is chosen by `Specialize.split`, so that each arm calls
-     *  `transform` on a constant receiver of a known class. No closures: the residual is a hidden class.
-     *
-     *  @param transformers     the denotation transformers, in phase order
-     *  @param transformerIndex for a phase id, the index in `transformers` of the phase's transformer
-     *  @param nextIds          `ctx.base.nextDenotTransformerId`
-     *  @param dispatch         call `transform` through `GoForwardSite.transform`, a `tableSwitch` of handles bound to
-     *                          each transformer's class (`-Ddotty.goForward=mh`); false when partially evaluated
-     */
-    final def goForwardLoop(transformers0: Array[DenotTransformer], transformerIndex0: Array[Int], nextIds0: Array[Int],
-                            dispatch: Boolean, ctx: Context): SingleDenotation =
-      val transformers = unroller.pe.Specialize.constant(transformers0)
-      val transformerIndex = unroller.pe.Specialize.constant(transformerIndex0)
-      val nextIds = unroller.pe.Specialize.constant(nextIds0)
-      val currentPeriod = ctx.period
-      var self: SingleDenotation = this
-      while true do
-        val valid = self.validFor
-        if valid == Nowhere || valid.runId != currentPeriod.runId || !(currentPeriod > valid) then
-          return self.current(using ctx)
-        var cur = self
-        // search for containing period as long as nextInRun increases.
-        var next = cur.nextInRun
-        while next.validFor > valid && !next.validFor.contains(currentPeriod) do
-          cur = next
-          next = next.nextInRun
-        if next.validFor > valid then
-          return next // next.validFor contains currentPeriod
-        // not found, cur points to highest existing variant
-        val nextTransformerId = nextIds(cur.validFor.lastPhaseId)
-        if currentPeriod.lastPhaseId <= nextTransformerId then
-          cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nextTransformerId)
-        else
-          var startPid = nextTransformerId + 1
-          // `transformer` is a constant in each `split` arm. Its last use is inside the `try`, so that past it the
-          // arms' states agree again and they share one tail (the residual must stay under HugeMethodLimit).
-          val k = unroller.pe.Specialize.split(transformerIndex(nextTransformerId), transformers.length)
-          val transformer = transformers(k)
-          val lastPid = transformer.lastPhaseId(using ctx)
-          val savedPeriod = ctx.period
-          val mutCtx = ctx.asInstanceOf[FreshContext]
-          try
-            mutCtx.setPhase(transformer)
-            next =
-              if dispatch then GoForwardSite.transform(k, transformer, cur, ctx).asInstanceOf[SingleDenotation]
-              else transformer.transform(cur)(using ctx)
-            if next ne cur then SingleDenotation.assertNotPackage(next, transformer, ctx)
-          finally
-            mutCtx.setPeriod(savedPeriod)
-          if next eq cur then
-            startPid = cur.validFor.firstPhaseId
-          else
-            next.insertAfter(cur)
-            cur = next
-          cur.validFor = Period(currentPeriod.runId, startPid, lastPid)
-        self = cur // multiple transformations could be required
-      end while
-      throw AssertionError("unreachable")
-    end goForwardLoop
 
     private def demandOutsideDefinedMsg(using Context): String =
       s"demanding denotation of $this at phase ${ctx.phase}(${ctx.phaseId}) outside defined interval: defined periods are${definedPeriodsString}"
@@ -1094,7 +938,7 @@ object Denotations {
     }
 
     /** Insert this denotation so that it follows `prev`. */
-    private[core] def insertAfter(prev: SingleDenotation) = { // not private: called from goForwardLoop's residual class
+    private def insertAfter(prev: SingleDenotation) = {
       this.nextInRun = prev.nextInRun
       prev.nextInRun = this
     }
