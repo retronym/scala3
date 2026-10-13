@@ -36,6 +36,9 @@ object Uniques:
   // DO NOT MERGE: experiment switch, multiplies the initial capacity of the unique tables
   @sharable val capacityFactor: Int = sys.props.get("dotty.uniquesCapacityFactor").fold(1)(_.toInt)
 
+  // DO NOT MERGE: experiment switch, see ParamRef.computeHash
+  @sharable var uncacheOpenHKParamRefs: Boolean = sys.props.contains("dotty.uncacheOpenHKParamRefs")
+
   // DO NOT MERGE: experiment switch, see `localBinderOf`
   @sharable var localMethodParamUniques: Boolean = sys.props.contains("dotty.localMethodParamUniques")
 
