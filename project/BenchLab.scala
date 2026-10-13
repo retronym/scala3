@@ -15,7 +15,13 @@ import scala.sys.process.{Process => SysProcess, ProcessLogger}
  *    Instruments' stock CPU Counters template (top-down breakdown).
  *  - `benchLabAsync <events> <jmh args>`: async-profiler, recording JFR, then flame graphs with `jfrconv`.
  *    `<events>` is a comma-separated list of `cpu`, `wall`, `alloc`, `lock`, or another async-profiler event
- *    (e.g. `cycles`, `cache-misses` on Linux). The library is `$ASYNC_PROFILER_LIB`, else found in the usual places.
+ *    (e.g. `cycles`, `cache-misses` on Linux), optionally `<event>@<interval>`; with kperf, several PMU events in one
+ *    session joined by `+` (`cycles+cache-misses@5000`), each graphed separately. The library is `$ASYNC_PROFILER_LIB`, else found in the usual places.
+ *    Native stacks via the VM (`cstack=vm`), vtable/itable receiver types, JIT compile tasks; flame graphs of the
+ *    benchmark threads, reversed, split by thread and classified by category. Optional settings before the JMH
+ *    arguments: `lib=<path>` (another libasyncProfiler, e.g. a development build), `tag=<label>` (appended to the output directory and graph titles, to tell variants apart) and `kperf=<socket>` (macOS PMU
+ *    events such as `cycles` or `cache-misses` through a running `asprof-kperf` helper; adds the frame-pointer JVM
+ *    flags the kernel's stack walk needs).
  */
 object BenchLab {
   private def parser(name: String, arg: String): State => Parser[(String, String)] = _ =>
@@ -29,7 +35,8 @@ object BenchLab {
   }
 
   private def jmhRun(s: State, out: File, prof: String, jmhArgs: String, andThen: String*): State = {
-    val run = s"""scala3-bench-lab/Jmh/run -rf json -rff ${out / "result.json"} -prof "$prof" $jmhArgs"""
+    // -o: JMH's output also goes to a file as it runs, for watching a run from outside sbt
+    val run = s"""scala3-bench-lab/Jmh/run -o ${out / "jmh.log"} -rf json -rff ${out / "result.json"} -prof "$prof" $jmhArgs"""
     s.copy(remainingCommands = (run +: andThen).map(Exec(_, None)).toList ++ s.remainingCommands)
   }
 
@@ -46,41 +53,129 @@ object BenchLab {
     "/opt/homebrew/lib/libasyncProfiler.dylib", "/usr/local/lib/libasyncProfiler.dylib",
     "/usr/local/lib/libasyncProfiler.so", "/usr/lib/libasyncProfiler.so")
 
-  val asyncCommand: Command = Command.arb(parser("benchLabAsync", "<events>")) { case (s, (eventsArg, jmhArgs)) =>
+  val asyncCommand: Command = Command.arb(parser("benchLabAsync", "<events>")) { case (s, (eventsArg, rest)) =>
+    // optional settings before the JMH arguments: lib=<libasyncProfiler>, kperf=<asprof-kperf socket>, tag=<label>
+    val (settings, jmhArgs) = {
+      val words = rest.split(" ", -1).toList
+      val (kv, others) = words.span(w => w.matches("(lib|kperf|tag)=\\S+"))
+      (kv.map { w => val i = w.indexOf('='); w.take(i) -> w.drop(i + 1) }.toMap, others.mkString(" "))
+    }
     val events = eventsArg.split(",").toList.filter(_.nonEmpty)
     val opts = events.map {
       case "alloc" => "alloc=512k"
       case "lock" => "lock=1ms"
       case "cpu" => "event=cpu;interval=1000000" // ns
+      case e if e.contains("+") => s"event=$e" // several PMU events in one session (kperf), each optionally <event>@<period>
+      case e if e.contains("@") => s"event=${e.takeWhile(_ != '@')};interval=${e.dropWhile(_ != '@').tail}"
       case e => s"event=$e"
     }
-    val lib = sys.env.get("ASYNC_PROFILER_LIB").orElse(asyncLibCandidates.find(new File(_).exists))
-    val out = outDir(s, "async-" + events.mkString("-"))
-    val prof = (s"async:output=jfr;dir=$out" :: lib.map("libPath=" + _).toList ::: opts).mkString(";")
-    val kinds = events.map { case k @ ("wall" | "alloc" | "lock") => k; case _ => "cpu" }.distinct
-    jmhRun(s, out, prof, jmhArgs, s"benchLabJfrconv $out ${kinds.mkString(",")}")
+    val lib = settings.get("lib").orElse(sys.env.get("ASYNC_PROFILER_LIB")).orElse(asyncLibCandidates.find(new File(_).exists))
+    // tag: names a variant of the setup (e.g. a profiler build or helper mode) in the directory and graph titles
+    val tag = settings.get("tag")
+    val out = outDir(s, "async-" + events.mkString("-") + tag.fold("")(t => s"($t)"))
+    val (raw, jvmArgs) = settings.get("kperf") match {
+      case Some(sock) =>
+        // macOS PMU events through the asprof-kperf helper (already running, as root, on that socket): the kernel
+        // walks the stack by frame pointers, so compiled code must keep them
+        (s"rawCommand=kperf=$sock",
+         "-jvmArgsPrepend \"-XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints -XX:+PreserveFramePointer\" ")
+      case None =>
+        // cstack=vm: native frames walked through the VM's own structures; features: receiver classes in vtable/itable
+        // stubs, the method being compiled in JIT threads' stacks, mixed Java and native frames
+        // (through rawCommand: JMH's own cstack option does not know vm)
+        ("rawCommand=cstack=vm,features=mixed+vtable+comptask", "")
+    }
+    val prof = (s"async:output=jfr;dir=$out" :: lib.map("libPath=" + _).toList ::: raw :: opts).mkString(";")
+    val kinds = events.flatMap {
+      case k @ ("wall" | "alloc" | "lock") => List(k)
+      // per-event graphs of a multi-event session: jfrconv --hw <event>
+      case e if e.contains("+") => e.split("\\+").toList.map(ev => "hw:" + ev.takeWhile(_ != '@'))
+      case _ => List("cpu")
+    }.distinct
+    // the jfrconv built beside that library, if any, understands its JFR best
+    val jfrconv = lib.map(l => new File(l).getParentFile.getParentFile / "bin" / "jfrconv").filter(_.exists).map(_.getPath).getOrElse("jfrconv")
+    jmhRun(s, out, prof, jvmArgs + jmhArgs, s"benchLabJfrconv $out ${kinds.mkString(",")} $jfrconv${tag.fold("")(" " + _)}")
   }
 
-  /** `benchLabJfrconv <dir> <kinds>`: flame graphs of each JFR file under `<dir>`, for each kind of sample
-   *  (`cpu`, `wall`, `alloc`, `lock`, comma-separated).
+  /** `benchLabJfrconv <dir> <kinds> [<jfrconv> [<tag>]]`: flame graphs of each JFR file under `<dir>`, for each kind
+   *  of sample (`cpu`, `wall`, `alloc`, `lock`, `hw:<event>`, comma-separated), and an `index.html` linking them;
+   *  `<tag>` is appended to the titles.
    */
-  val jfrconvCommand: Command = Command.arb(parser("benchLabJfrconv", "<dir>")) { case (s, (dirArg, kindsArg)) =>
+  val jfrconvCommand: Command = Command.arb(parser("benchLabJfrconv", "<dir>")) { case (s, (dirArg, rest)) =>
     val dir = file(dirArg)
-    val jfrs = (dir ** "*.jfr").get
-    if (jfrs.isEmpty) s.log.warn(s"no JFR files under $dir")
-    for (jfr <- jfrs; kind <- kindsArg.split(",").toList.filter(_.nonEmpty)) {
-      val base = jfr.getPath.stripSuffix(".jfr")
-      def conv(suffix: String, extra: String*): Unit = {
-        val cmd = Seq("jfrconv", s"--$kind", "--minwidth", "0.2") ++ extra ++ Seq(jfr.getPath, s"$base-$kind$suffix.html")
-        if (SysProcess(cmd).!(ProcessLogger(_ => ())) != 0) s.log.warn(s"failed: ${cmd.mkString(" ")}")
-      }
-      // Stacks through the JMH stub are the benchmark threads; the rest are JIT, GC and JMH itself.
-      conv("", "-I", ".*jmh_generated.*")
-      conv("-reverse", "-I", ".*jmh_generated.*", "--reverse")
-      conv("-threads", "--threads")
+    val (kindsArg, jfrconv, tag) = rest.split(" ").toList.filter(_.nonEmpty) match {
+      case k :: j :: t :: _ => (k, j, s" ($t)")
+      case k :: j :: _ => (k, j, "")
+      case k :: _ => (k, "jfrconv", "")
+      case Nil => ("cpu", "jfrconv", "")
     }
-    s.log.info(s"flame graphs in $dir")
+    val jfrs = (dir ** "*.jfr").get.sortBy(_.getPath)
+    if (jfrs.isEmpty) s.log.warn(s"no JFR files under $dir")
+    val kinds = kindsArg.split(",").toList.filter(_.nonEmpty)
+    // the graphs of one recording, for the index: (kind label, variant, file)
+    val graphs = for (jfr <- jfrs) yield {
+      val base = jfr.getPath.stripSuffix(".jfr")
+      val bench = benchLabel(jfr)
+      jfr -> (for (kind <- kinds; (variant, extra) <- variants) yield {
+        // hw:<event>: one event of a multi-event hardware counter session
+        val (kindArgs, label) =
+          if (kind.startsWith("hw:")) (Seq("--hw", kind.drop(3)), "hw-" + kind.drop(3)) else (Seq(s"--$kind"), kind)
+        val out = file(s"$base-$label${if (variant == "bench") "" else "-" + variant}.html")
+        val title = s"$bench: ${label.stripPrefix("hw-")}, $variant$tag"
+        val cmd = Seq(jfrconv) ++ kindArgs ++ Seq("--minwidth", "0.2", "--title", title) ++ extra ++ Seq(jfr.getPath, out.getPath)
+        if (SysProcess(cmd).!(ProcessLogger(_ => ())) != 0) s.log.warn(s"failed: ${cmd.mkString(" ")}")
+        (label.stripPrefix("hw-"), variant, out)
+      })
+    }
+    writeIndex(dir, graphs)
+    s.log.info(s"flame graphs in $dir, index: ${dir / "index.html"}")
     s
+  }
+
+  // The benchmark threads, by name (JMH's stub frame is missing from kernel-walked kperf stacks); the rest are JIT, GC
+  // and JMH itself. Then all threads, split by thread and by category (GC, JIT compilation, interpreter, ...).
+  private val variants = List(
+    "bench" -> Seq("--threads", "-I", ".*jmh-worker.*"),
+    "reverse" -> Seq("--threads", "-I", ".*jmh-worker.*", "--reverse"),
+    "threads" -> Seq("--threads"),
+    "classify" -> Seq("--classify"))
+
+  /** `ParserBenchmark.parse corpus=scalaz` from JMH's per-benchmark directory `<class>.<method>-<mode>-<param>-<value>...` */
+  private def benchLabel(jfr: File): String = {
+    val name = jfr.getParentFile.getName.stripPrefix("dotty.tools.benchlab.")
+    name.split("-", -1).toList match {
+      case bench :: _ :: params => (bench :: params.grouped(2).map(_.mkString("=")).toList).mkString(" ")
+      case _ => name
+    }
+  }
+
+  private def writeIndex(dir: File, graphs: Seq[(File, List[(String, String, File)])]): Unit = {
+    def esc(x: String) = x.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
+    val sections = graphs.map { case (jfr, gs) =>
+      val rows = gs.groupBy(_._1).toList.sortBy { case (k, _) => gs.indexWhere(_._1 == k) }.map { case (kind, vs) =>
+        val links = vs.map { case (_, v, f) => s"""<a href="${esc(IO.relativize(dir, f).getOrElse(f.getPath))}">$v</a>""" }
+        s"<tr><th>${esc(kind)}</th><td>${links.mkString(" · ")}</td></tr>"
+      }
+      val jfrLink = esc(IO.relativize(dir, jfr).getOrElse(jfr.getPath))
+      s"""<section><h2>${esc(benchLabel(jfr))}</h2><table>${rows.mkString}</table><p class="k">recording: <a href="$jfrLink">${esc(jfr.getName)}</a></p></section>"""
+    }
+    IO.write(dir / "index.html",
+      s"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+         |<title>${esc(dir.getName)}</title>
+         |<style>
+         |:root { --bg: #f6f7f9; --panel: #fff; --fg: #1d232b; --muted: #5d6875; --line: #dde2e8; --link: #2f6fb2; }
+         |@media (prefers-color-scheme: dark) { :root { --bg: #14181d; --panel: #1b2027; --fg: #e3e8ee; --muted: #94a0ad; --line: #2c333c; --link: #6ea8e6; color-scheme: dark; } }
+         |body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, system-ui, sans-serif; }
+         |main { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 14px; }
+         |h1 { font-size: 20px; margin: 0; overflow-wrap: anywhere; } h2 { font-size: 15px; margin: 0 0 8px; } a { color: var(--link); }
+         |section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+         |th { text-align: left; font-weight: 600; padding: 2px 16px 2px 0; } .k { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+         |</style>
+         |<main><h1>${esc(dir.getName)}</h1>
+         |<p class="k">bench: benchmark threads · reverse: the same, by leaf · threads: all threads · classify: all threads by category</p>
+         |${sections.mkString("\n")}
+         |</main>
+         |""".stripMargin)
   }
 
   val commands: Seq[Command] = Seq(xctraceCommand, asyncCommand, jfrconvCommand)
