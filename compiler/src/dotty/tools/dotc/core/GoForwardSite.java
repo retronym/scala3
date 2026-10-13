@@ -22,6 +22,11 @@ public final class GoForwardSite {
 
     public static final String MODE = System.getProperty("dotty.goForward", "off");
 
+    /** goForward reads lastPhaseId from ContextBase.denotTransformerLastPhaseId instead of calling it (-Ddotty.goForward.cacheLastPhaseId) */
+    public static final boolean CACHE_LAST_PHASE_ID = Boolean.getBoolean("dotty.goForward.cacheLastPhaseId");
+    /** goForward skips the call for IdentityDenotTransformers, extending validity instead (-Ddotty.goForward.skipIdentity) */
+    public static final boolean SKIP_IDENTITY = Boolean.getBoolean("dotty.goForward.skipIdentity");
+
     private static final MethodType TYPE = MethodType.methodType(Object.class, Object.class, Object.class);
     private static final MutableCallSite SITE = new MutableCallSite(TYPE);
     private static final MethodHandle INVOKER = SITE.dynamicInvoker();

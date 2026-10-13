@@ -1127,6 +1127,12 @@ object Contexts {
 
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
 
+    /** For each phase id: whether its denotation transformer is an IdentityDenotTransformer, and its lastPhaseId
+     *  (see `refreshDenotTransformerCaches`), so that goForward needs no calls on the transformer for either
+     */
+    private[core] var denotTransformerIsIdentity: Array[Boolean] = uninitialized
+    private[core] var denotTransformerLastPhaseId: Array[Int] = uninitialized
+
     /** The non-null elements of `denotTransformers`, and for each phase id the index of its transformer there
      *  (-1 if none): the shape `SingleDenotation.goForwardLoop` dispatches on (DO NOT MERGE: GoForwardSite)
      */

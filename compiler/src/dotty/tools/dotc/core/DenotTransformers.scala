@@ -79,6 +79,7 @@ object DenotTransformers {
    *  installed using `installAfter` and `enteredAfter` at the end of the phase.
    */
   trait IdentityDenotTransformer extends DenotTransformer {
-    def transform(ref: SingleDenotation)(using Context): SingleDenotation = ref
+    // final: goForward relies on it to skip the call for identity transformers
+    final def transform(ref: SingleDenotation)(using Context): SingleDenotation = ref
   }
 }
