@@ -15,10 +15,10 @@ That question needs a different instrument:
 
 1. **An sbt project in this repo, built against the bootstrapped compiler.** The bootstrapped compiler is the bytecode that ships, so it is the one whose JIT behaviour matters. A non-bootstrapped variant can be added for quick iteration.
 
-2. **No file I/O in the measured region.** Sources are read once into memory (`VirtualFile`). The classpath is jars: dotc caches jar classpaths across runs (`ZipAndJarClassPathFactory`'s `FileBasedCache`), so each jar is opened once per JVM. Output goes to a `VirtualDirectory`, so class files and TASTy are still generated (the backend's work is real work) but never written. This needs no new compiler flag; a `-Y` flag to discard output would only help outside the repo (sbt, the CLI) and would also skip the serialization we want to measure.
+2. **No file I/O in the measured region.** Sources are read once into memory (`VirtualFile`). So is the classpath (`InMemoryClasspath`): the scala-library jar and the JDK's `java.base` (more with `-Dbenchlab.jdkModules=`), served to dotc by a platform whose classpath is in-memory directories, instead of jars and the jrt file system, which dotc caches process-wide. Output goes to an in-memory directory, so class files and TASTy are still generated (the backend's work is real work) but never written. This needs no new compiler flag; a `-Y` flag to discard output would only help outside the repo (sbt, the CLI) and would also skip the serialization we want to measure.
 
 3. **Macro and micro in one harness, sharing inputs.**
-   - Macro: one op is one full compilation of a corpus, with a fresh `Run` per op on a shared root context, as in a warm compile server.
+   - Macro: one op is one full compilation of a corpus from scratch: a new `ContextBase`, platform, `Compiler` and `Run`, in a warm JVM. It pays for what a cold compile pays (definitions, classpath indexing, symbol loading) except file reads and JIT warmup, and nothing carries over between ops but the name table, so there is no crosstalk to reason about. `-p context=shared` instead reuses one root context and `Compiler`, a fresh `Run` per op, as in a warm compile server; dotc then keeps every earlier `Run` alive (through the root context's docstrings and GADT state, and phase instance state), about 240 MB per scalaz compile, until the heap runs out.
    - Phase: split a macro run by phase rather than benchmarking phases separately. The compiler records phase boundaries on its thread, and the counter samples are split by phase.
    - Operation: subtyping, implicit search, member lookup and similar, replaying inputs recorded from a real compilation, with explicit cold- and warm-cache variants.
 
@@ -54,7 +54,11 @@ Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing on
 
 ### No file I/O in the measured window
 
-Checked on `dottyUtil` (File Activity trace attached to a warm `CompileLoop`, and a `SecurityManager` logging file access during 10 runs after 15 warmups): the compiler does no file I/O per run. What remains is one-off: the JVM lazily loading a class first used late in warmup (one `stat` per classpath directory, then a read of the class file) and the odd lazy read from the scala-library jar.
+Checked on `dottyUtil` with JFR file events (`jdk.FileRead`, `jdk.FileWrite`, no threshold) over 10 `CompileLoop` runs: all reads fall in the first run (the classpath snapshot, and the JVM loading compiler classes on first use), none after it. An earlier check, with the jar classpath, found the same apart from the odd lazy read from the scala-library jar.
+
+### Live heap across ops
+
+`CompileLoop` prints the live heap after each run (after a full GC), and `-Dbenchlab.histoAt=<runs>` writes class histograms, to diff what survives. From scratch per op, it stays flat (scalaz: 110 MB over 8 runs); with `-Dbenchlab.shared` it grows by a whole `Run` per op.
 
 ## Plan
 
