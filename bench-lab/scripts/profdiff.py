@@ -4,7 +4,7 @@ a differential flame graph of the benchmark threads, and the methods whose self 
   python3 -I bench-lab/scripts/profdiff.py [--event cycles] [--jfrconv <jfrconv>] [--top 25] <run-a> <run-b> <out-dir>
 
 A run is a profile dir written by benchLabAsync, or an ab.py cell (its `profile-dir` file points there). Samples are
-normalized per op (ops per iteration = ceil(iteration time / score)), so runs of different lengths or speeds compare;
+normalized per op (each iteration has ceil(iteration time / its mean op time) ops), so runs of different lengths or speeds compare;
 with hardware events the table is in events per op.
 """
 import argparse, collections, glob, json, math, os, subprocess, sys
@@ -22,9 +22,9 @@ def load(run, event, jfrconv, out_dir, name):
     d = profile_dir(run)
     jfr = glob.glob(os.path.join(d, "**", "*.jfr"), recursive=True)[0]
     res = json.load(open(os.path.join(d, "result.json")))[0]
-    # JMH runs whole ops until the iteration time is up, so an iteration has ceil(time / score) ops (at least one)
+    # JMH runs whole ops until the iteration time is up, so an iteration with mean op time t has ceil(time / t) ops
     iteration_ms = float(res["measurementTime"].split()[0]) * 1000
-    ops = res["measurementIterations"] * math.ceil(iteration_ms / res["primaryMetric"]["score"])
+    ops = sum(math.ceil(iteration_ms / t) for t in res["primaryMetric"]["rawData"][0])
     collapsed = os.path.join(out_dir, f"{name}-{event}.collapsed")
     select = [s for label, s in regraph.events_of(d) if label.removeprefix("hw-") == event][0]
     subprocess.run([jfrconv, "-J-Xmx8g", *select, "--threads", "-I", ".*jmh-worker.*", "-o", "collapsed", jfr, collapsed],
