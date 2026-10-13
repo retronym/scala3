@@ -41,31 +41,28 @@ w("""  )
   def go(self: SingleDenotation, ctx: Context): SingleDenotation =
     head(self, ctx)((cur, nti) => dispatch(ctx.base.denotTransformerIndex(nti), cur, nti, ctx))
 
-  /** The loop head: walk to the containing version if any, else return what `onTransform(cur, nextTransformerId)`
-   *  returns. Inline, with an inline continuation, so that each step has its own copy and its own successor call.
+  /** The loop head, without a loop: walk to the containing version if any, else return what
+   *  `onTransform(cur, nextTransformerId)` returns. Inline, with an inline continuation, so that each step has its own
+   *  copy and its own successor call. The rare case of extending the current version's validity without a transform
+   *  re-enters `go` instead of looping.
    */
-  private inline def head(self0: SingleDenotation, ctx: Context)(inline onTransform: (SingleDenotation, Int) => SingleDenotation): SingleDenotation =
-    var self = self0
-    var result: SingleDenotation | Null = null
-    while result == null do
-      val currentPeriod = ctx.period
-      val valid = self.validFor
-      if valid == Nowhere || valid.runId != currentPeriod.runId || !(currentPeriod > valid) then
-        result = self.current(using ctx)
+  private inline def head(self: SingleDenotation, ctx: Context)(inline onTransform: (SingleDenotation, Int) => SingleDenotation): SingleDenotation =
+    val currentPeriod = ctx.period
+    val valid = self.validFor
+    if valid == Nowhere || valid.runId != currentPeriod.runId || !(currentPeriod > valid) then self.current(using ctx)
+    else
+      var cur = self
+      var next = cur.nextInRun
+      while next.validFor > valid && !next.validFor.contains(currentPeriod) do // existing later versions: usually none
+        cur = next
+        next = next.nextInRun
+      if next.validFor > valid then next
       else
-        var cur = self
-        var next = cur.nextInRun
-        while next.validFor > valid && !next.validFor.contains(currentPeriod) do
-          cur = next
-          next = next.nextInRun
-        if next.validFor > valid then result = next
-        else
-          val nti = ctx.base.nextDenotTransformerId(cur.validFor.lastPhaseId)
-          if currentPeriod.lastPhaseId <= nti then
-            cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nti)
-            self = cur
-          else result = onTransform(cur, nti)
-    result
+        val nti = ctx.base.nextDenotTransformerId(cur.validFor.lastPhaseId)
+        if currentPeriod.lastPhaseId <= nti then
+          cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nti)
+          go(cur, ctx)
+        else onTransform(cur, nti)
 
   /** Bookkeeping after a transform: link `next` in and set the validity of the new current version */
   private def finish(cur: SingleDenotation, next: SingleDenotation, nti: Int, lastPid: Int, ctx: Context): SingleDenotation =
