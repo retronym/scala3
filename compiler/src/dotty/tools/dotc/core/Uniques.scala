@@ -39,6 +39,9 @@ object Uniques:
   // DO NOT MERGE: experiment switch, see ParamRef.computeHash
   @sharable var uncacheOpenHKParamRefs: Boolean = sys.props.contains("dotty.uncacheOpenHKParamRefs")
 
+  // DO NOT MERGE: experiment switch, slots (a power of two) of AppliedUniques' cache of uncached applied types
+  @sharable val uncachedAppliedCacheSize: Int = sys.props.get("dotty.uncachedAppliedCache").fold(0)(_.toInt)
+
   // DO NOT MERGE: experiment switch, see `localBinderOf`
   @sharable var localMethodParamUniques: Boolean = sys.props.contains("dotty.localMethodParamUniques")
 
@@ -173,14 +176,40 @@ object Uniques:
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
       val h = doHash(null, tycon, args)
-      def newType = new CachedAppliedType(tycon, args, h)
       if monitored then recordCaching(h, classOf[CachedAppliedType])
-      if h == NotCached then newType
+      if h == NotCached then enterUncached(tycon, args)
       else
         val local = if localMethodParamUniques then localBinderOf(tycon, args) else null
         if local != null then local.localApplied.enterIfNew(tycon, args, h)
         else enterGlobal(tycon, args, h)
       end if
+
+    // A direct-mapped cache of uncached applied types, keyed by the identities of their parts. Recently built ones
+    // are shared again (their hash stays NotCached); an older one is simply replaced by a new instance.
+    private val uncachedCache: Array[AppliedType | Null] | Null =
+      if uncachedAppliedCacheSize > 0 then new Array[AppliedType | Null](uncachedAppliedCacheSize) else null
+
+    private def enterUncached(tycon: Type, args: List[Type]): AppliedType =
+      val cache = uncachedCache
+      if cache == null then new CachedAppliedType(tycon, args, NotCached)
+      else
+        var k = System.identityHashCode(tycon)
+        var xs = args
+        while !xs.isEmpty do
+          k = k * 31 + System.identityHashCode(xs.head)
+          xs = xs.tail
+        val i = (k ^ (k >>> 16)) & (cache.length - 1)
+        val e = cache(i)
+        if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then
+          val p = probe
+          if p != null then p.hit("applied-dm", e, e.args ne args)
+          e
+        else
+          val tp = new CachedAppliedType(tycon, args, NotCached)
+          cache(i) = tp
+          val p = probe
+          if p != null then p.miss("applied-dm", tp)
+          tp
 
     private def enterGlobal(tycon: Type, args: List[Type], h: Int): AppliedType =
         def newType = new CachedAppliedType(tycon, args, h)
