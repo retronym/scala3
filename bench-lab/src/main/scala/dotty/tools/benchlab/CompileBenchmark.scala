@@ -23,6 +23,7 @@ class CompileBenchmark:
 
   @Setup(Level.Trial)
   def setup(): Unit =
+    Announce.jvm(s"CompileBenchmark($corpus)")
     compiler = InMemoryCompiler(Corpus.load(corpus), scalacOptions.split(" ").toList.filter(_.nonEmpty))
     compiler.compile()
     println(s"\n[bench-lab] $corpus: ${compiler.corpus.files.size} sources -> ${compiler.outputCount} output files")

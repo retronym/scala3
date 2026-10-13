@@ -1,43 +1,47 @@
 package dotty.tools.benchlab.xctrace;
 
 import javax.management.ObjectName;
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * The JIT's code map (start, size, name per compiled method and stub), written by the {@code Compiler.perfmap}
- * diagnostic command to /tmp/perf-<pid>.map. Dumped from inside the JVM, so no jcmd or extra JVM flags.
+ * The JIT's code map: start, size and name of each compiled method. From the {@code Compiler.codelist} diagnostic
+ * command (every platform; {@code Compiler.perfmap} is Linux only), invoked in-process, so no jcmd or extra JVM
+ * flags. Methods compiled and then flushed before the dump are missing, and stubs are not listed.
  */
 final class PerfMap {
-    private final TreeMap<Long, long[]> starts = new TreeMap<>();   // start -> [size, index]
-    private final String[] names;
+    // "<id> <tier> <state> <method> [<blob start>, <code begin> - <code end>]"
+    private static final Pattern LINE = Pattern.compile("^\\d+ \\d+ \\d+ (\\S+) \\[(0x\\p{XDigit}+), 0x\\p{XDigit}+ - (0x\\p{XDigit}+)\\]");
 
-    private PerfMap(Path file) throws IOException {
-        var lines = Files.readAllLines(file);
-        names = new String[lines.size()];
-        int i = 0;
-        for (String line : lines) {
-            String[] p = line.split(" ", 3);
-            if (p.length < 3) continue;
-            long start = Long.parseUnsignedLong(p[0].replaceFirst("^0x", ""), 16);
-            long size = Long.parseUnsignedLong(p[1].replaceFirst("^0x", ""), 16);
-            names[i] = p[2];
-            starts.put(start, new long[]{size, i++});
+    private final TreeMap<Long, long[]> starts = new TreeMap<>();   // start -> [size, index]
+    private final List<String> names = new ArrayList<>();
+
+    private PerfMap(String codelist) {
+        for (String line : codelist.split("\n")) {
+            Matcher m = LINE.matcher(line);
+            if (!m.find()) continue;
+            long start = Long.parseUnsignedLong(m.group(2).substring(2), 16);
+            long end = Long.parseUnsignedLong(m.group(3).substring(2), 16);
+            starts.put(start, new long[]{end - start, names.size()});
+            names.add(m.group(1).replaceFirst("\\(.*", ""));
         }
     }
 
     static PerfMap dump() {
         try {
             ObjectName dcmd = new ObjectName("com.sun.management:type=DiagnosticCommand");
-            ManagementFactory.getPlatformMBeanServer().invoke(dcmd, "compilerPerfmap",
+            String out = (String) ManagementFactory.getPlatformMBeanServer().invoke(dcmd, "compilerCodelist",
                     new Object[]{new String[0]}, new String[]{String[].class.getName()});
-            return new PerfMap(Path.of("/tmp/perf-" + ProcessHandle.current().pid() + ".map"));
+            PerfMap map = new PerfMap(out);
+            System.err.println("[xctrace] code map: " + map.names.size() + " compiled methods");
+            return map;
         } catch (Exception e) {
-            System.err.println("[xctrace] no perf map, attribution off: " + e);
+            System.err.println("[xctrace] no code map, attribution off: " + e);
             return null;
         }
     }
@@ -47,7 +51,7 @@ final class PerfMap {
         if (addr != null) {
             long a = Long.parseUnsignedLong(addr.replaceFirst("^0x", ""), 16);
             Map.Entry<Long, long[]> e = starts.floorEntry(a);
-            if (e != null && a < e.getKey() + e.getValue()[0]) return names[(int) e.getValue()[1]];
+            if (e != null && a < e.getKey() + e.getValue()[0]) return names.get((int) e.getValue()[1]);
         }
         if (frameName != null && !frameName.startsWith("0x")) return frameName;
         return addr == null ? "<no backtrace>" : "<unknown " + addr + ">";

@@ -14,11 +14,12 @@ public class Main {
     public static void main(String[] argv) throws Exception {
         List<String> args = new ArrayList<>(List.of(argv));
         boolean defaults = !args.remove("-noDefaultProf");
-        List<String> extra = new ArrayList<>();
+        // Defaults go last: JMH runs beforeIteration in order and afterIteration in reverse, so JitProfiler's window
+        // then excludes other profilers' own setup and analysis (xctrace's start, parsing its export).
+        List<String> extra = new ArrayList<>(args);
         if (defaults)
             for (String p : DEFAULTS)
                 if (!given(args, p)) { extra.add("-prof"); extra.add(p); }
-        extra.addAll(args);
         org.openjdk.jmh.Main.main(extra.toArray(new String[0]));
     }
 

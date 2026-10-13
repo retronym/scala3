@@ -50,7 +50,7 @@ async-profiler: `benchLabAsync <events> <jmh args>` records JFR over the measure
 sbt "benchLabAsync cpu,alloc -p corpus=dottyUtil CompileBenchmark"
 ```
 
-Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
+Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees). `-p corpus=/abs/path` compiles the `.scala` files under any directory (with a known corpus's options when the directory name matches one). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
 
 ### No file I/O in the measured window
 
