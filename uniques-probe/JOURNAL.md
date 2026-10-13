@@ -57,3 +57,18 @@ Deterministic `Stats` counters (`-Ydetailed-stats`, one compile per variant):
 Allocation per compile (thread-allocated bytes, nonbootstrapped, 15 runs): 3957 MB to 3893 MB (−1.6%). Wall time inconclusive on a loaded machine.
 
 **Finding:** uncaching removes the churn but costs identity: the extra subtype calls are `eq` fast paths falling through to structural comparison. An earlier bench-lab run showing 2× instructions was an artefact of load average 38 on 18 cores and is discarded.
+
+## Exp 3: bench-lab A/B, base vs uncache, idle machine (2026-10-13 17:46–18:08)
+
+bench-lab `CompileBenchmark` (bootstrapped, a fresh context per op), `benchLabXctrace ipc -p corpus=scalaz -wi 10 -i 10 -w 10 -r 10`, JDK 25, A/B/A/B, load average about 4 to 6 (the benchmark's own GC and JIT threads included).
+
+| run | ms/op | cycles/op (bench thread) | IPC (bench) | instructions/op | alloc/op | GC time / count |
+|---|---|---|---|---|---|---|
+| base 1 | 4805 ± 102 | 17.95G | 3.54 | 63.5G | 3976 MB | 4.8 s / 135 |
+| uncache 1 | 4092 ± 105 | 15.69G | 3.96 | 62.1G | 3941 MB | 3.3 s / 270 |
+| base 2 | 4638 ± 120 | 17.59G | 3.57 | 62.8G | 3985 MB | 4.9 s / 141 |
+| uncache 2 | 3993 ± 47 | 15.63G | 4.00 | 62.5G | 3940 MB | 3.3 s / 266 |
+
+**Finding:** uncache is 14% faster (mean 4722 to 4043 ms/op) and 12% fewer cycles on the compiler thread, with the same instructions: the extra subtype work (Exp 2b) costs about what the saved lookups did, and the win is memory stalls (IPC 3.55 to 3.98). GC time drops by a third (fewer weak references to discover and process, fewer promoted entries), though young collections double in number; not yet understood.
+
+Cycles by method (bench thread), base: `TypeApplications.appliedTo` 4.6% (where `AppliedUniques.enterIfNew` and its loop are inlined) and `WeakHashSet.resize` 2.4%. Both drop out of the top list with uncache. The resize cost is separate: a fresh context starts the table at 64K slots and doubles it to 4M every compile, counting stale entries.
