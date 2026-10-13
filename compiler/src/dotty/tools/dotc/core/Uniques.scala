@@ -8,6 +8,7 @@ import Decorators.*
 import util.{WeakHashSet, Stats}
 import WeakHashSet.Entry
 import scala.annotation.tailrec
+import scala.annotation.internal.sharable
 
 class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
   override def hash(x: Type): Int = x.hash
@@ -19,6 +20,13 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
  *  with the given parts exists already and creates a new one if not.
  */
 object Uniques:
+
+  // DO NOT MERGE: hook for probing hash-consing traffic from a test driver
+  trait Probe:
+    /** `freshParts`: the caller allocated parts (a probe type, an args list) that the hit makes garbage */
+    def hit(table: String, tp: Type, freshParts: Boolean): Unit
+    def miss(table: String, tp: Type): Unit
+  @sharable var probe: Probe | Null = null
 
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
   private inline def recordCaching(h: Int, clazz: Class[?]): Unit =
@@ -33,7 +41,12 @@ object Uniques:
   def unique[T <: Type](tp: T)(using Context): T =
     recordCaching(tp)
     if tp.hash == NotCached then tp
-    else ctx.uniques.put(tp).asInstanceOf[T]
+    else
+      val r = ctx.uniques.put(tp).asInstanceOf[T]
+      val p = probe
+      if p != null then
+        if r eq tp then p.miss("uniques", r) else p.hit("uniques", r, true)
+      r
 
   final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
     override def hash(x: NamedType): Int = x.hash
@@ -58,12 +71,17 @@ object Uniques:
         def linkedListLoop(entry: Entry[NamedType] | Null): NamedType = entry match
           case null                    =>
             Stats.record(statsItem("miss"))
-            addEntryAt(bucket, newType, h, oldHead)
+            val r = addEntryAt(bucket, newType, h, oldHead)
+            val p = probe
+            if p != null then p.miss("named", r)
+            r
           case _                       =>
             if entry.hash == h then
               val e = entry.get
               if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then
                 Stats.record(statsItem("hit"))
+                val p = probe
+                if p != null then p.hit("named", e, false)
                 e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
@@ -99,12 +117,17 @@ object Uniques:
         def linkedListLoop(entry: Entry[AppliedType] | Null): AppliedType = entry match
           case null                    =>
             Stats.record(statsItem("miss"))
-            addEntryAt(bucket, newType, h, oldHead)
+            val r = addEntryAt(bucket, newType, h, oldHead)
+            val p = probe
+            if p != null then p.miss("applied", r)
+            r
           case _                       =>
             if entry.hash == h then
               val e = entry.get
               if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then
                 Stats.record(statsItem("hit"))
+                val p = probe
+                if p != null then p.hit("applied", e, e.args ne args)
                 e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
