@@ -234,3 +234,21 @@ U → U + cache: most of that comes back (`SimpleIdentityMap.apply` −90M, `fin
 The first cache version keyed on identity hashes only, and on stock JDK 25 cost cycles: on fresh objects `identityHashCode` takes the VM slow path, and there each call toggles W^X write protection. Keying on the parts' own hashes fixed that.
 
 **Finding (new):** in base, `ReferenceQueue.poll()` from `WeakHashSet.removeStaleEntries` takes 2.5% of compiler-thread cycles. 2.0% of that is AppliedUniques, which polls on every lookup and pays one locked `poll()` per stale entry; millions of entries die per compile. This is independent of the hash-consing semantics → Exp 13: a weak table without a reference queue, in the style of `ThreadLocal.ThreadLocalMap`. Lookups unlink cleared entries they pass, and a full sweep runs before growing, so the table grows only for live entries. That should also stop the table growing because of stale entries (4M slots for 417K live).
+
+## Exp 13: weak tables without a reference queue (2026-10-13 21:47–22:07)
+
+`-Ddotty.weakNoQueue`: entries are created without a `ReferenceQueue` and `removeStaleEntries` does nothing. When `count` reaches the threshold, the whole table is swept for cleared entries, and the table doubles only if live entries still fill three quarters of it (as in `ThreadLocal.ThreadLocalMap`). `resize` drops cleared entries. Cleared entries are not unlinked during lookups.
+
+Same profile setup as Exp 12 (`bench-lab/ab/prof-exp13.json`). The first UDMh recording came back nearly empty (868 KB, against about 116 MB for the others; samples lost in the kperf helper), so it was rerun. `ab.py` now rejects kperf runs with implausibly few cycles per op on the benchmark threads.
+
+| comparison | cycles/op | ms/op |
+|---|---|---|
+| base → NQ | 17.86G → 18.50G (+3.6%) | 4406 → 4550 |
+| base → UDMh (U + cache keyed on part hashes) | 17.86G → 16.54G (−7.4%) | 4406 → 4005 |
+| UDMh → UDMh + NQ | 16.54G → 16.99G (+2.7%) | 4005 → 4108 |
+
+Base → NQ:
+- **Saved:** `ReferenceQueue.poll` (via `pinIfSupported`), −459M.
+- **Added:** `linkedListLoop` +391M and `Reference.get` +161M, because cleared entries stay in the chains until a sweep; `addEntryAt` +290M, the inlined full-table sweeps, which recur because garbage refills the table quickly.
+
+**Finding:** rejected. With millions of short-lived entries the queue pays for itself: it names exactly the entries that died, which is cheaper than scanning for them. Under UDMh the remaining poll cost is only 120M cycles/op (0.7%), so there is little left to win there. UDMh reproduces: −7.4% here against −6.1% in Exp 12.
