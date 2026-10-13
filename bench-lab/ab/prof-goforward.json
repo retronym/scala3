@@ -13,7 +13,8 @@
   },
   "variants": {
     "off": "-Ddotty.goForward=off",
-    "pe": "-Ddotty.goForward=pe"
+    "pe": "-Ddotty.goForward=pe",
+    "mh": "-Ddotty.goForward=mh"
   },
   "loadgate": {
     "maxCores": 1.5,
