@@ -131,3 +131,11 @@ bench-lab, `-wi 15 -i 10 -w 5 -r 5`, base/U interleaved per corpus, two rounds. 
 | re2s | 279 ± 9 / 270 ± 18 | 275 ± 9 / 273 ± 12 | −0.2% | 1.06G, 1.04G → 1.04G, 1.03G | −1.4% |
 
 **Finding:** U is never worse, with cycles down 1.5–4.5% on corpora with about 100× less method-param churn than scalaz. The extra structural subtyping from lost identity does not show as a regression on any of them. Allocation is unchanged. GC count rises 3–4× under U on every corpus (17 → 71, 20 → 77, 18 → 81) with GC time about the same: Exp 9.
+
+## Exp 9: the GC count, and a confound (2026-10-13 19:45)
+
+`-Xlog:gc` in my driver (G1, `-Xms4G -Xmx4G`, 40 re2s compiles): base and U have identical pause mixes. A plain bench-lab run with `-jvmArgsAppend "-Xlog:gc*..."` for both variants: `gc.count` 7–8 in both, 294 against 304 young pauses.
+
+**Cause:** a `-jvmArgsAppend` on the JMH command line replaces `@Fork(jvmArgsAppend = Array("-Xms4G", "-Xmx4G", "-Xss2M"))` instead of adding to it, as `jvmArgs` in result.json shows. In Exps 3–8, base ran with a fixed 4 GB heap and every switch variant with sbt's `-Xms1024m -Xmx8192m`. The higher GC count under U was this heap difference.
+
+**Retractions:** the base-against-switch comparisons in Exps 3, 4 and 8 (the 14% on scalaz included) are confounded and need rerunning. Still valid: comparisons among switch variants, which shared the same JVM arguments (local against U in Exp 4, and Exps 5–6); the deterministic counters (Exp 2, 2b, 7); and the driver's allocation numbers. Exp 10 reruns base against U with the same heap arguments passed to both.
