@@ -170,7 +170,8 @@ object ProbeMain:
     val dir = Path.of(args(0))
     val files = Files.walk(dir).iterator.asScala.map(_.toString).filter(_.endsWith(".scala")).toList.sorted
     val cp = System.getProperty("java.class.path")
-    val opts = List("-classpath", cp, "-d", Files.createTempDirectory("probe").toString, "-nowarn", "-source", "3.0", "-Xkind-projector", "-language:implicitConversions") ++ args.drop(1)
+    // corpus options follow the directory, e.g. scalaz: -nowarn -source 3.0 -Xkind-projector -language:implicitConversions
+    val opts = List("-classpath", cp, "-d", Files.createTempDirectory("probe").toString) ++ args.drop(1)
     var ctxOut: Context = null
     val driver = new Driver:
       override protected def doCompile(compiler: Compiler, files: List[dotty.tools.io.AbstractFile])(using Context) =
