@@ -3827,6 +3827,11 @@ object Types extends TypeUtils {
 
     private var myParamRefs: List[ParamRefType] | Null = null
 
+    // DO NOT MERGE: see `Uniques.uncacheOpenHKParamRefs`
+    protected def resetParamRefHashes(): Unit =
+      val refs = myParamRefs
+      if refs != null then refs.foreach(_.resetHash())
+
     def paramRefs: List[ParamRefType] = {
       if myParamRefs == null then
         def recur(paramNames: List[ThisName], i: Int): List[ParamRefType] =
@@ -4408,6 +4413,8 @@ object Types extends TypeUtils {
 
     override val isDeclaredVarianceLambda = variances.nonEmpty
     if isDeclaredVarianceLambda then setVariances(typeParams, variances)
+    // types over our params built while constructing us were not hash-consed; ones built from now on are
+    if Uniques.uncacheOpenHKParamRefs then resetParamRefHashes()
 
     def declaredVariances =
       if isDeclaredVarianceLambda then typeParams.map(_.declaredVariance)
@@ -4845,7 +4852,15 @@ object Types extends TypeUtils {
     // same instance; most such types are transient (see #18 in retronym/scala3).
     override def computeHash(bs: Binders): Int =
       if Uniques.uncacheMethodParamRefs && binder.isInstanceOf[MethodOrPoly] then NotCached
+      else if Uniques.uncacheOpenHKParamRefs && binderUnderConstruction then NotCached
       else doHash(paramNum, binder.identityHash(bs))
+
+    // an HK type lambda's `resType` is null until its constructor has computed it
+    private def binderUnderConstruction: Boolean = binder match
+      case b: HKTypeLambda => b.resType == null
+      case _ => false
+
+    private[core] def resetHash(): Unit = myHash = HashUnknown
 
     override def equals(that: Any): Boolean = equals(that, null)
 
