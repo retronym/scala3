@@ -1,0 +1,17 @@
+{
+  "name": "kperf-corpora",
+  "profile": {
+    "async": "cycles+instructions+cache-misses+branch-misses",
+    "kperf": "/tmp/asprof-kperf.sock",
+    "lib": "/Users/jzaugg-virtus/code/.worktrees/async-profiler/xctrace-async-prof-research-437784/build/lib/libasyncProfiler.dylib",
+    "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 1,
+  "corpora": {"tastyQuery": "-wi 12 -w 5 -i 12 -r 5", "dottyUtil": "-wi 12 -w 5 -i 12 -r 5", "re2s": "-wi 12 -w 5 -i 12 -r 5"},
+  "variants": {
+    "base": "",
+    "U": "-Ddotty.uncacheMethodParamRefs",
+    "UDM": "-Ddotty.uncacheMethodParamRefs -Ddotty.uncachedAppliedCache=4096"
+  }
+}

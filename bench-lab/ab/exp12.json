@@ -1,0 +1,13 @@
+{
+  "name": "exp12",
+  "profile": {"xctrace": "ipc"},
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 2,
+  "corpora": {"scalaz": "-wi 10 -i 10 -w 10 -r 10", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
+  "variants": {
+    "base": "",
+    "U": "-Ddotty.uncacheMethodParamRefs",
+    "UDM": "-Ddotty.uncacheMethodParamRefs -Ddotty.uncachedAppliedCache=4096"
+  },
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}
