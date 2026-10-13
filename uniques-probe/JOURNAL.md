@@ -90,3 +90,32 @@ Same bench-lab setup as Exp 3; an extra `localBinder` field on `CachedAppliedTyp
 Cycles by method (bench thread): base `AppliedUniques.enterIfNew` 4.8% and `WeakHashSet.resize` 2.5%; uncache `AppliedUniques.enterIfNew` 1.8%; local `AppliedUniques.enterIfNew` 1.6% and `LocalAppliedUniques.enterIfNew` 1.5%.
 
 **Finding:** per-binder tables take 8% off base, but uncaching takes 13%. Keeping identity for these types is worth less than the lookups (and the longer-lived entries, see GC time) cost. Uncache stays the lead.
+
+## Exp 5 and 6: table capacity, HK lambdas under construction (2026-10-13 18:42–19:11)
+
+Both on top of uncache (U):
+- Exp 5, `-Ddotty.uniquesCapacityFactor=8`: start the three tables 8× larger, to avoid regrowing them from 64K slots on every compile.
+- Exp 6, `-Ddotty.uncacheOpenHKParamRefs`: types over the params of an `HKTypeLambda` whose `resType` is still null (it is under construction) are not cached. Those had a 0.2% hit rate (Exp 2). A `ParamRef` caches its hash, so the lambda resets its param refs' hashes at the end of its constructor. Probe on scalaz: applied lookups 1.19M to 1.06M, misses 501K to 384K, about 10K hits lost; 0 errors.
+
+| run | ms/op | cycles/op | IPC | GC time |
+|---|---|---|---|---|
+| U 1 | 4131 ± 289 (overlapped my low-priority probe runs; discarded) | 15.59G | 3.90 | 3.4 s |
+| U 2 | 3993 ± 60 | 15.47G | 4.01 | 3.4 s |
+| U+openHK 1 / 2 | 3934 ± 71 / 4092 ± 86 | 15.39G / 15.46G | 4.05 / 3.95 | 3.1 / 3.3 s |
+| U+cap8 1 / 2 | 3949 ± 88 / 4286 ± 199 | 15.45G / 15.01G | 4.03 / 3.88 | 3.0 / 3.4 s |
+
+**Finding:** within noise on scalaz, at most 1–3%. With U the applied table stays small, so regrowing it no longer shows in the profile. Parked.
+
+## Exp 7: is scalaz representative? (2026-10-13)
+
+Probe (`-Dprobe.lambdas`) on the other corpora that need no dependencies. Applied lookups by the binders of the params they mention:
+
+| corpus | applied misses over method/poly params | their hit % | applied misses with no params (hit %) |
+|---|---|---|---|
+| scalaz | 1.84M | 26% | 276K (66%) |
+| tastyQuery | 13.6K | 13% | 19.2K (68%) |
+| dottyUtil | 9.3K | 21% | 9.3K (60%) |
+| areWeFastYet | 2.7K | 27% | 3.6K (58%) |
+| re2s | 543 | 4% | 1.5K (99%) |
+
+**Finding:** scalaz is an outlier, with about 100× the method-param churn of the others: higher-kinded typeclass code where asSeenFrom of polymorphic signatures dominates. The pattern (a low hit rate on these types) holds everywhere, so U should be neutral to slightly positive elsewhere, but the extra structural subtyping could show up as a regression. To be measured.
