@@ -33,15 +33,76 @@ object ProbeMain:
 
     def miss(table: String, tp: Type): Unit =
       totalsFor(table).misses += 1
+      if Lambdas.enabled then Lambdas.miss(table, tp)
       n += 1
       if n % SampleEvery == 0 then
         val k = key(table, tp)
         sampled.getOrElseUpdate(k, Counts()).misses += 1
         tracked += ((k, WeakReference(tp)))
 
+    override def unique(candidate: Type, result: Type): Unit =
+      if Lambdas.enabled then Lambdas.unique(candidate, result)
+
     def key(table: String, tp: Type): Key =
       val (phase, site) = where()
       Key(table, phase, site, shape(tp))
+
+  /** With `-Dprobe.lambdas`: attributes each miss to the lambdas whose params it mentions, then, when the lambda is
+   *  offered to `unique`, to whether the lambda was a hit (so everything built while constructing it is garbage) or a
+   *  miss. Holds every lambda strongly, so survival figures are meaningless in this mode.
+   */
+  object Lambdas:
+    val enabled = sys.props.contains("probe.lambdas")
+    private val tables = Vector("applied", "named", "uniques")
+    private val pending = java.util.IdentityHashMap[LambdaType, Array[Long]]()
+    private val finalized = java.util.IdentityHashMap[LambdaType, java.lang.Boolean]()
+    // (lambda class, lambda hit?) -> (#lambdas, inner misses per table)
+    val stats = mutable.HashMap[(String, Boolean), Array[Long]]()
+    val afterConstruction = new Array[Long](3)
+    val noBinder = new Array[Long](3)
+
+    def binders(tp: Type): Set[LambdaType] =
+      val found = mutable.Set[LambdaType]()
+      def visit(t: Type, depth: Int): Unit = if depth < 6 then t match
+        case t: ParamRef => found += t.binder
+        case t: AppliedType => visit(t.tycon, depth + 1); t.args.foreach(visit(_, depth + 1))
+        case t: TypeBounds => visit(t.lo, depth + 1); visit(t.hi, depth + 1)
+        case t: AndOrType => visit(t.tp1, depth + 1); visit(t.tp2, depth + 1)
+        case t: RefinedType => visit(t.parent, depth + 1); visit(t.refinedInfo, depth + 1)
+        case t: AnnotatedType => visit(t.parent, depth + 1)
+        case t: NamedType => visit(t.prefix, depth + 1)
+        case t: ExprType => visit(t.resType, depth + 1)
+        case t: LambdaType => t.paramInfos.foreach(visit(_, depth + 1)); visit(t.resType, depth + 1)
+        case _ =>
+      visit(tp, 0)
+      found.toSet
+
+    def miss(table: String, tp: Type): Unit =
+      val i = tables.indexOf(table)
+      val bs = binders(tp)
+      if bs.isEmpty then noBinder(i) += 1
+      // attribute to the innermost lambda still under construction, if any
+      val open = bs.filterNot(finalized.containsKey)
+      if open.isEmpty then { if bs.nonEmpty then afterConstruction(i) += 1 }
+      else for b <- open do pending.computeIfAbsent(b, _ => new Array[Long](3))(i) += 1
+
+    def unique(candidate: Type, result: Type): Unit = candidate match
+      case l: LambdaType =>
+        val inner = Option(pending.remove(l)).getOrElse(new Array[Long](3))
+        val hit = result ne candidate
+        val s = stats.getOrElseUpdate((l.getClass.getSimpleName, hit), new Array[Long](4))
+        s(0) += 1; for i <- 0 until 3 do s(i + 1) += inner(i)
+        finalized.put(l, hit)
+      case _ =>
+
+    def report(): Unit =
+      println(s"\n== lambda construction (inner misses attributed to every open binder they mention, so nested lambdas double count)")
+      println(f"${"lambda"}%-22s ${"hit?"}%5s ${"#lambdas"}%10s ${"applied"}%11s ${"named"}%9s ${"uniques"}%9s")
+      for ((cls, hit), s) <- stats.toList.sortBy(-_._2(1)) do
+        println(f"$cls%-22s ${hit.toString}%5s ${s(0)}%,10d ${s(1)}%,11d ${s(2)}%,9d ${s(3)}%,9d")
+      println(f"never offered to unique: ${pending.size}%,d lambdas, inner misses ${pending.values.asScala.map(_(0)).sum}%,d applied")
+      println(f"misses over params of finalized lambdas: applied=${afterConstruction(0)}%,d named=${afterConstruction(1)}%,d uniques=${afterConstruction(2)}%,d")
+      println(f"misses mentioning no params: applied=${noBinder(0)}%,d named=${noBinder(1)}%,d uniques=${noBinder(2)}%,d")
 
   // frames that are plumbing between the interesting caller and the unique table
   private val plumbing =
@@ -116,6 +177,7 @@ object ProbeMain:
       val g = P.sampled.toList.groupMapReduce((k, _) => group(k))((k, c) => (c.misses, alive(k), c.hits, c.hitsFresh))((a, b) => (a._1 + b._1, a._2 + b._2, a._3 + b._3, a._4 + b._4))
       for (name, (m, a, h, hf)) <- g.toList.sortBy(-_._2._1).take(top) do
         println(f"${m * SampleEvery}%,11d ${if m == 0 then "    -" else f"${100.0 * a / m}%5.1f"}%% ${h * SampleEvery}%,12d ${100.0 * h / (h + m).max(1)}%5.1f%% ${hf * SampleEvery}%,12d  $name")
+    if Lambdas.enabled then Lambdas.report()
     report("by table", _.table, 10)
     report("by table/phase", k => s"${k.table} ${k.phase}", 30)
     report("by table/shape", k => s"${k.table} ${k.shape}", 30)
