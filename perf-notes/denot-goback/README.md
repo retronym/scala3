@@ -42,6 +42,81 @@ Status: **confirmed.** On scalaz: 3.98M `goBack` calls, of which 308,719 (7.7%) 
 - async-profiler (bench-lab, JDK 26): `goBack` self 2.26% → 0.25%; `recomputeDenot` incl 5.00% → 2.71%.
 - Wall-clock JMH and xctrace counter A/B were inconclusive: the machine was loaded (load average 8–12, instructions per op ±38% between runs). Re-run on a quiet machine.
 
+## Diagram: data structure and algorithm, before and after
+
+Phase ids below are illustrative: `M` = Mixin, `C` = CapturedVars, `E` = Erasure, `T` = the phase `atPhaseBeforeTransforms` uses, `N` = the next denot transformer after `C`.
+
+### The flock: one ring per symbol per run
+
+```
+Symbol                                      (one-slot cache)
+ ├─ lastDenot ──────────────────┐            checkedPeriod == ctx.period ? lastDenot : recompute
+ └─ checkedPeriod               │
+                                ▼
+   ┌──────────────┐   nextInRun   ┌──────────────┐   nextInRun   ┌──────────────┐
+   │ D1           │ ────────────▶ │ D2           │ ────────────▶ │ D3           │
+   │ validFor     │               │ validFor     │               │ validFor     │
+   │ [1 .. E-1]   │               │ [E .. M]     │               │ [M+1 .. 99]  │
+   └──────────────┘               └──────────────┘               └──────────────┘
+          ▲                                                              │
+          └───────────────────────── nextInRun (wraps) ──────────────────┘
+
+ invariants: periods disjoint, union contiguous, ring ordered by phase; no `prev` pointer
+```
+
+`current` at phase `p`, starting from `this` (normally `lastDenot`):
+
+```
+  p inside this.validFor   → this
+  p after  this.validFor   → goForward: follow nextInRun while periods increase;
+                             if none covers p, run the next DenotTransformer and insertAfter
+  p before this.validFor   → goBack: follow nextInRun (wrapping) until validFor contains p
+
+  e.g. lastDenot = D3, p = E+2:   D3 ──▶ D1 ✗ ──▶ D2 ✓        (2 steps)
+```
+
+### The degenerate case: symbol looked up before it exists
+
+`MegaPhase` runs the Mixin group at `C+1`. A forwarder's param symbol is created there, so its ring has a single node whose period starts after the last denot transformer before `C+1`. `MixinOps.mkForwarderSym` then annotates it inside `atPhaseBeforeTransforms`, i.e. at phase `T`, far earlier:
+
+```
+   ┌──────────────┐
+   │ F            │ ◀──┐
+   │ [C+1 .. N]   │    │ nextInRun = itself
+   └──────────────┘ ───┘
+
+   query at phase T  (T < C+1: no node can ever contain it)
+```
+
+**Before:** spin until the defensive counter trips, then go through `current` again at another phase.
+
+```
+  cur = F
+  F ✗ → F ✗ → F ✗ → F ✗ → … → F ✗          cnt = 1 .. 256  (MaxPossiblePhaseId)
+                                  │
+                                  ▼
+  coveredInterval      (another lap: F → F)              → [C+1 .. N]
+  atPhase(C+1)(current)  (switch context phase, re-enter current → goBack, 0 steps) → F
+```
+
+**After:** stop when the walk is back at its start, and return the earliest node seen.
+
+```
+  cur = F, earliest = F
+  F ✗ → F  (cur eq this: one full lap) → return earliest = F                1 step
+```
+
+The same applies to multi-node rings:
+
+```
+  ring  X [60..62] ──▶ Y [63..99] ──▶ (X),   this = Y,   query at phase 10
+
+  before:  Y ✗ → X ✗ → Y ✗ → X ✗ → … (256 steps) → atPhase(60)(current) → Y → X  ⇒ X
+  after:   Y ✗ → X ✗ (earliest = X) → Y (eq this) → return X                       ⇒ X   (2 steps)
+```
+
+The result is the same node the old fallback returned. This was checked with an `eq` assertion on all 308,719 such lookups while compiling scalaz. Per op, that removes about 79M of the 82M `goBack` loop steps (−96%), and `goBack` self time drops from 2.56% to 0.15% of samples.
+
 ## Side question: why no `prev` pointer?
 
 The only rationale is the comment in `goBack` from a8b05409c9 (2016, JDK 8): best-of-10 wall-clock compiling dotc, 18154ms with `prev` vs 17777ms without (~2%). No size or upkeep argument given.
