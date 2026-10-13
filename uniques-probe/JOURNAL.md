@@ -139,3 +139,34 @@ bench-lab, `-wi 15 -i 10 -w 5 -r 5`, base/U interleaved per corpus, two rounds. 
 **Cause:** a `-jvmArgsAppend` on the JMH command line replaces `@Fork(jvmArgsAppend = Array("-Xms4G", "-Xmx4G", "-Xss2M"))` instead of adding to it, as `jvmArgs` in result.json shows. In Exps 3–8, base ran with a fixed 4 GB heap and every switch variant with sbt's `-Xms1024m -Xmx8192m`. The higher GC count under U was this heap difference.
 
 **Retractions:** the base-against-switch comparisons in Exps 3, 4 and 8 (the 14% on scalaz included) are confounded and need rerunning. Still valid: comparisons among switch variants, which shared the same JVM arguments (local against U in Exp 4, and Exps 5–6); the deterministic counters (Exp 2, 2b, 7); and the driver's allocation numbers. Exp 10 reruns base against U with the same heap arguments passed to both.
+
+## Exp 10: base vs U with the same JVM arguments (2026-10-13 19:48–20:14)
+
+Same as Exp 3, but `-jvmArgsAppend "-Xms4G -Xmx4G -Xss2M[ -Ddotty.uncacheMethodParamRefs]"` for both variants (checked in result.json `jvmArgs`). Stopped after round 1 of tastyQuery and both rounds of scalaz, at wrap-up.
+
+| run | ms/op | cycles/op | IPC | alloc/op | GC time / count |
+|---|---|---|---|---|---|
+| scalaz base 1 / 2 | 4609 ± 159 / 4733 ± 149 | 17.26G / 17.56G | 3.55 / 3.48 | 3997 / 4013 MB | 4.9 / 5.0 s, 139 / 136 |
+| scalaz U 1 / 2 | 4045 ± 88 / 4236 ± 164 | 15.84G / 15.79G | 3.96 / 3.80 | 3980 / 3981 MB | 2.8 / 2.8 s, 114 / 112 |
+| tastyQuery base 1 | 773 ± 52 | 3.06G | 3.22 | 646 MB | 0.4 s / 44 |
+| tastyQuery U 1 | 794 ± 34 | 3.09G | 3.10 | 644 MB | 0.4 s / 19 |
+
+**Finding:** the scalaz win holds without the confound: −11% time (mean 4671 to 4141 ms/op), −9% cycles on the compiler thread, and GC time down 43% (fewer weak references to process and fewer promoted entries). tastyQuery is neutral (one round). The cross-corpus gains in Exp 8 were the heap confound; the cross-corpus result is now "no regression", not "small win".
+
+## Summary so far
+
+- **Problem:** `AppliedUniques` is hot from memory stalls, not collisions. Most of its traffic, and nearly all of its churn, is applied types over the params of method and poly types. Those lambdas are never hash-consed, so such a type can only be hit by operations on the same lambda instance, and most die young. Each one costs a `WeakReference`, global table growth (to 4M slots on scalaz) and GC reference processing.
+- **Lead change:** don't hash-cons a type that mentions a `ParamRef` of a `MethodOrPoly` (`ParamRef.computeHash` returns `NotCached`).
+  - scalaz: −11% time, −9% cycles, −43% GC time.
+  - tastyQuery: neutral.
+  - Cost: about 23% more subtype calls on scalaz, from lost `eq` shortcuts, which the measurements show is outweighed.
+  - Implicit caching is unaffected on scalaz.
+- **Ruled out or parked:**
+  - Per-binder tables that keep identity: worse than U.
+  - Larger initial tables: noise.
+  - Also uncaching types over HK lambdas under construction: noise.
+- **Not done yet:**
+  - `testCompilation` with U on by default (correctness).
+  - Exp 10 round 2 on tastyQuery, plus dottyUtil and re2s.
+  - Corpora with library dependencies (bench-lab only has the JDK and the Scala library on its classpath).
+  - Turning the switch into a real change: remove the probe and the DO NOT MERGE commits, and write a comment and a test.
