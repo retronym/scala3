@@ -185,3 +185,28 @@ Idea (@retronym): demarcate an arena around implicit search, since a failing can
 Most of it (162K of the 207K applied misses on scalaz) is under the search but outside `tryImplicit`: eligibility, implicit scope, ranking.
 
 **Finding:** a clean scope with almost pure garbage on scalaz, but small coverage. The churn U removes is mostly in megaphase transforms, which have no speculative scope. An implicit-search arena is worth at most about 1% on top of U on scalaz, perhaps more on implicit-heavy code. Ranked below a bounded direct-mapped cache for method-param types, which would target U's measured cost (lost `eq` hits).
+
+## Exp 12: a direct-mapped cache on top of U (2026-10-13 20:25–)
+
+`-Ddotty.uncachedAppliedCache=<slots>`: under U, applied types over method/poly params have hash `NotCached`. AppliedUniques keeps a strong, direct-mapped array of them, indexed by a hash of the identity hash codes of `tycon` and `args` (their identity test is `tycon eq` and `args eqElements` anyway). A matching slot is shared; otherwise the new type replaces it. Cached types keep hash `NotCached`, so caches gated on the hash behave as under U. Retention is bounded by the slot count.
+
+Probe, scalaz, U plus the cache:
+
+| slots | cache lookups | cache hits | hit % |
+|---|---|---|---|
+| 1024 | 2.52M | 601K | 23.8% |
+| 4096 | 2.52M | 623K | 24.7% |
+| 16384 | 2.52M | 638K | 25.3% |
+
+Base had 657K hits on these types in the global table, so 1024 slots win back about 91% of them: the hits have strong temporal locality.
+
+Deterministic counters (`-Ydetailed-stats`, one scalaz compile):
+
+| counter | base | U | U + 4K cache |
+|---|---|---|---|
+| subtype calls | 2.16M | 2.67M (+23%) | 2.28M (+5.5%) |
+| `Symbol.denot` | 129.7M | 135.5M | 130.2M |
+| `typeParams` | 13.22M | 13.91M | 13.30M |
+| global AppliedUniques puts | 3.68M | 1.19M | 1.19M |
+
+**Finding (so far):** the cache recovers most of U's identity cost while keeping its churn reduction. Timing is pending.
