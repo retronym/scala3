@@ -14,7 +14,8 @@
   "variants": {
     "off": "-Ddotty.goForward=off",
     "pe": "-Ddotty.goForward=pe",
-    "mh": "-Ddotty.goForward=mh"
+    "mh": "-Ddotty.goForward=mh",
+    "spun": "-Ddotty.goForward=spun"
   },
   "loadgate": {
     "maxCores": 1.5,
