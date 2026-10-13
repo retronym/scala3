@@ -858,9 +858,11 @@ object Denotations {
       end goForward
 
       def goBack: SingleDenotation =
-        // currentPeriod < end of valid; in this case a version must exist
-        // but to be defensive we check for infinite loop anyway
+        // currentPeriod < end of valid. A version exists unless currentPeriod precedes
+        // the first one (e.g. a symbol created in a late phase is queried at an earlier
+        // phase). In that case, after one lap of the ring, return the earliest version.
         var cur = this
+        var earliest = this
         var cnt = 0
         while !cur.validFor.contains(currentPeriod) do
           //println(s"searching: $cur at $currentPeriod, valid for ${cur.validFor}")
@@ -870,8 +872,15 @@ object Denotations {
           // performance: Test setup: Compile everything in dotc and immediate subdirectories
           // 10 times. Best out of 10: 18154ms with `prev` field, 17777ms without.
           cnt += 1
-          if cnt > MaxPossiblePhaseId then
+          if cur eq this then
             GoBackStats.record(cnt, bail = true)
+            if GoBackStats.checkEquiv then
+              val expected = atPhase(coveredInterval.firstPhaseId)(current)
+              assert(expected eq earliest, s"goBack mismatch: $expected / $earliest")
+            return earliest
+          if cur.validFor.firstPhaseId < earliest.validFor.firstPhaseId then earliest = cur
+          if cnt > MaxPossiblePhaseId then
+            // defensive: `this` should always be on its own ring
             return atPhase(coveredInterval.firstPhaseId)(current)
         GoBackStats.record(cnt, bail = false)
         cur
@@ -1397,6 +1406,7 @@ object Denotations {
 // TEMPORARY instrumentation for the goBack investigation (retronym/scala3#16). Not for merge.
 object GoBackStats {
   private val enabled = java.lang.Boolean.getBoolean("dotty.goBackStats")
+  val checkEquiv = java.lang.Boolean.getBoolean("dotty.goBackCheck")
   private val hist = new java.util.concurrent.atomic.AtomicLongArray(MaxPossiblePhaseId + 2)
   private val bails = new java.util.concurrent.atomic.AtomicLong
   private val callers = new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]
