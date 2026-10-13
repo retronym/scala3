@@ -30,6 +30,9 @@ object Uniques:
     def unique(candidate: Type, result: Type): Unit = ()
   @sharable var probe: Probe | Null = null
 
+  // DO NOT MERGE: experiment switch, see ParamRef.computeHash
+  @sharable var uncacheMethodParamRefs: Boolean = sys.props.contains("dotty.uncacheMethodParamRefs")
+
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
   private inline def recordCaching(h: Int, clazz: Class[?]): Unit =
     if monitored then
