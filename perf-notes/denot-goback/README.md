@@ -32,7 +32,15 @@ Callers (bottom-up, approx share of the 2.25%):
 
 A symbol created at the ambient phase has a one-element ring whose `validFor` starts after `CapturedVars`. Querying it at an earlier phase (e.g. `dst.addAnnotations` on fresh forwarder params inside `atPhaseBeforeTransforms`; possibly `enteredAfter` at `Mixin.next`; backend `atPhase(erasure/typer)` on late symbols) can never match. `goBack` then loops `MaxPossiblePhaseId` (= `PhaseMask`, 255) times round the one-element ring before bailing out to `atPhase(coveredInterval.firstPhaseId)(current)`. That fits "all self time, L1-hot loop".
 
-Status: **TODO** — instrument `goBack` (iteration histogram, bail-out count, by caller) and confirm.
+Status: **confirmed.** On scalaz: 3.98M `goBack` calls, of which 308,719 (7.7%) are bail-outs. At 256 steps each, they account for 79.0M of the 81.9M loop steps (96.5%). Top callers: `MixinOps.mkForwarderSym` (param annotations in `atPhaseBeforeTransforms`, `enteredAfter`), `Mixin.mkMixinForwarderSym` (`atPhase(erasurePhase)`), backend `BCSignatureGen.computeMemberType`, `GenericSignatures`, Memoize, Constructors.
+
+## Fix
+
+`goBack` keeps track of the earliest version seen and returns it when the walk gets back to `this`, after one lap. That is the same result as the old fallback `atPhase(coveredInterval.firstPhaseId)(current)` (asserted `eq` on all 308,719 bail-outs with `-Ddotty.goBackCheck=true`).
+
+- Loop steps on scalaz: 81.9M → 3.2M.
+- async-profiler (bench-lab, JDK 26): `goBack` self 2.26% → 0.25%; `recomputeDenot` incl 5.00% → 2.71%.
+- Wall-clock JMH and xctrace counter A/B were inconclusive: the machine was loaded (load average 8–12, instructions per op ±38% between runs). Re-run on a quiet machine.
 
 ## Side question: why no `prev` pointer?
 
@@ -53,8 +61,10 @@ Upkeep: `nextInRun` is mutated only in `insertAfter` and `replaceWith`; the latt
 
 ## TODO
 
-- [ ] Instrument `goBack`: iteration histogram, bail-out count, by caller
-- [ ] Confirm / refute H1 on scalaz corpus
-- [ ] Fix: early exit on lap completion in `goBack`
+- [x] Instrument `goBack`: iteration histogram, bail-out count, by caller
+- [x] Confirm / refute H1 on scalaz corpus
+- [x] Fix: early exit on lap completion in `goBack`
+- [ ] Wall-clock A/B on a quiet machine
+- [ ] Clean upstream commit (drop TEMP commits)
 - [ ] Reduce phase hopping in `MixinOps.mkForwarderSym`
 - [ ] Re-measure `prev` pointer with JMH (future work)
