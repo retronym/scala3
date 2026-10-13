@@ -170,3 +170,18 @@ Same as Exp 3, but `-jvmArgsAppend "-Xms4G -Xmx4G -Xss2M[ -Ddotty.uncacheMethodP
   - Exp 10 round 2 on tastyQuery, plus dottyUtil and re2s.
   - Corpora with library dependencies (bench-lab only has the JDK and the Scala library on its classpath).
   - Turning the switch into a real change: remove the probe and the DO NOT MERGE commits, and write a comment and a test.
+
+## Exp 11: how much churn happens under implicit search? (2026-10-13)
+
+Idea (@retronym): demarcate an arena around implicit search, since a failing candidate's typer state is discarded, then drop the arena on failure or promote it on success. Probe on base, sampled events tagged by whether an `ImplicitSearch` frame is on the stack (`explore` is inline, so other speculative scopes are undercounted):
+
+| | scalaz | tastyQuery |
+|---|---|---|
+| applied misses under implicit search | 207K of 2.34M (9%) | 6.5K of 37K (17%) |
+| … surviving to the end of the run | 3–4% | 11–29% |
+| uniques misses under implicit search | 28K of 424K (7%) | 1.9K of 29K (7%) |
+| named misses under implicit search | 13K of 467K (3%) | 4.5K of 86K (5%) |
+
+Most of it (162K of the 207K applied misses on scalaz) is under the search but outside `tryImplicit`: eligibility, implicit scope, ranking.
+
+**Finding:** a clean scope with almost pure garbage on scalaz, but small coverage. The churn U removes is mostly in megaphase transforms, which have no speculative scope. An implicit-search arena is worth at most about 1% on top of U on scalaz, perhaps more on implicit-heavy code. Ranked below a bounded direct-mapped cache for method-param types, which would target U's measured cost (lost `eq` hits).

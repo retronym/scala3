@@ -141,7 +141,13 @@ object ProbeMain:
       .replace("dotty.tools.dotc.", "")
     val area = frames.iterator.flatMap(f => areas.collectFirst { case (k, v) if f.contains("." + k + ".") || f.contains("." + k + "$") => v }).nextOption().getOrElse("-")
     val phase = frames.reverseIterator.flatMap(f => phases.collectFirst { case (k, v) if f.contains(k) => v }).nextOption().getOrElse("other")
-    (phase, s"$area | $site")
+    // speculative scopes on the stack, outermost first
+    val scope =
+      if frames.exists(_.contains("Implicits$ImplicitSearch.tryImplicit")) then "in implicit candidate"
+      else if frames.exists(_.contains("Implicits$ImplicitSearch")) then "in implicit search (other)"
+      else if frames.exists(f => f.contains("Contexts$Context.explore") || f.contains("exploreInFreshCtx") || f.contains("TypeComparer.either")) then "in other speculative"
+      else "not speculative"
+    (s"$phase / $scope", s"$area | $site")
 
   // what kinds of "temporary" types occur in the type's parts (shallow, no Context needed)
   def shape(tp: Type): String =
@@ -210,7 +216,8 @@ object ProbeMain:
         println(f"${m * SampleEvery}%,11d ${if m == 0 then "    -" else f"${100.0 * a / m}%5.1f"}%% ${h * SampleEvery}%,12d ${100.0 * h / (h + m).max(1)}%5.1f%% ${hf * SampleEvery}%,12d  $name")
     if Lambdas.enabled then Lambdas.report()
     report("by table", _.table, 10)
-    report("by table/phase", k => s"${k.table} ${k.phase}", 30)
+    report("by table/phase/scope", k => s"${k.table} ${k.phase}", 40)
+    report("by table/scope", k => s"${k.table} ${k.phase.dropWhile(_ != '/')}", 20)
     report("by table/shape", k => s"${k.table} ${k.shape}", 30)
     report("applied: by phase/site", k => if k.table == "applied" then s"${k.phase} ${k.site}" else "(other tables)", 40)
     report("applied: by shape/area", k => if k.table == "applied" then s"${k.shape} ${k.site.takeWhile(_ != '|')}" else "(other tables)", 40)
