@@ -22,6 +22,19 @@ import scala.compiletime.uninitialized
 
 object Phases {
 
+  /** A linked denotation transformer, as `SingleDenotation.current` sees it.
+   *
+   *  @param isIdentity      the transformer is an `IdentityDenotTransformer`: transforming returns the argument
+   *  @param lastPhaseId     `transformer.lastPhaseId`
+   *  @param nextNonIdentity the first linked transformer at or after this one that is not an identity
+   *                         (`phases.length` if none)
+   */
+  final class TransformerStep(
+    val transformer: DenotTransformer,
+    val isIdentity: Boolean,
+    val lastPhaseId: PhaseId,
+    val nextNonIdentity: PhaseId)
+
   inline def phaseOf(id: PhaseId)(using Context): Phase =
     ctx.base.phases(id)
 
@@ -207,6 +220,8 @@ object Phases {
         nextDenotTransformerId(i) = lastTransformerId
       }
 
+      computeTransformerSteps()(using runCtx)
+
       if (fuse)
         this.fusedPhases = (NoPhase :: phasess).toArray
       else
@@ -226,6 +241,21 @@ object Phases {
       for i <- 0 until nextDenotTransformerId.length do
         if nextDenotTransformerId(i) == phase.id then
           nextDenotTransformerId(i) = nextDenotTransformerId(phase.id + 1)
+      computeTransformerSteps() // lastPhaseId depends on nextDenotTransformerId
+
+    /** Recompute `transformerSteps` from the current plan */
+    private def computeTransformerSteps()(using Context): Unit =
+      transformerSteps = new Array[TransformerStep | Null](phases.length)
+      var nextNonIdentity = phases.length
+      var id = phases.length - 1
+      while id >= 0 do
+        val transformer = denotTransformers(id)
+        val isLinked = transformer != null && nextDenotTransformerId(id) == id
+        if isLinked then
+          val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
+          if !isIdentity then nextNonIdentity = id
+          transformerSteps(id) = TransformerStep(transformer, isIdentity, transformer.lastPhaseId, nextNonIdentity)
+        id -= 1
 
     private var myParserPhase: Phase = uninitialized
     private var myTyperPhase: Phase = uninitialized
