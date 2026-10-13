@@ -899,7 +899,8 @@ object Denotations {
       else if currentPeriod > valid then
         GoForwardSite.MODE match
           case "off" => goForward
-          case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, ctx)
+          case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, false, ctx)
+          case "mh" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, true, ctx)
           case _ => GoForwardSite.invoke(this, ctx).asInstanceOf[SingleDenotation]
       else
         goBack
@@ -913,9 +914,11 @@ object Denotations {
      *  @param transformers     the denotation transformers, in phase order
      *  @param transformerIndex for a phase id, the index in `transformers` of the phase's transformer
      *  @param nextIds          `ctx.base.nextDenotTransformerId`
+     *  @param dispatch         call `transform` through `GoForwardSite.transform`, a `tableSwitch` of handles bound to
+     *                          each transformer's class (`-Ddotty.goForward=mh`); false when partially evaluated
      */
     final def goForwardLoop(transformers0: Array[DenotTransformer], transformerIndex0: Array[Int], nextIds0: Array[Int],
-                            ctx: Context): SingleDenotation =
+                            dispatch: Boolean, ctx: Context): SingleDenotation =
       val transformers = unroller.pe.Specialize.constant(transformers0)
       val transformerIndex = unroller.pe.Specialize.constant(transformerIndex0)
       val nextIds = unroller.pe.Specialize.constant(nextIds0)
@@ -941,13 +944,16 @@ object Denotations {
           var startPid = nextTransformerId + 1
           // `transformer` is a constant in each `split` arm. Its last use is inside the `try`, so that past it the
           // arms' states agree again and they share one tail (the residual must stay under HugeMethodLimit).
-          val transformer = transformers(unroller.pe.Specialize.split(transformerIndex(nextTransformerId), transformers.length))
+          val k = unroller.pe.Specialize.split(transformerIndex(nextTransformerId), transformers.length)
+          val transformer = transformers(k)
           val lastPid = transformer.lastPhaseId(using ctx)
           val savedPeriod = ctx.period
           val mutCtx = ctx.asInstanceOf[FreshContext]
           try
             mutCtx.setPhase(transformer)
-            next = transformer.transform(cur)(using ctx)
+            next =
+              if dispatch then GoForwardSite.transform(k, transformer, cur, ctx).asInstanceOf[SingleDenotation]
+              else transformer.transform(cur)(using ctx)
             if next ne cur then SingleDenotation.assertNotPackage(next, transformer, ctx)
           finally
             mutCtx.setPeriod(savedPeriod)
