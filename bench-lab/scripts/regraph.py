@@ -34,7 +34,19 @@ def events_of(profile_dir):
 
 FORCE = False
 HEAP = "24g"
-RENDERED_AFTER = 0  # graphs older than this (epoch secs) are redone, e.g. ones bench-lab rendered with another jfrconv
+
+
+# `<jfr stem>.regraph` records which jfrconv build rendered that recording's graphs: graphs that bench-lab (or an
+# older build) rendered are redone even when they are newer than the recording
+def stamp(jfrconv):
+    return f"{os.path.realpath(jfrconv)} {os.path.getmtime(jfrconv):.0f}"
+
+
+def stamp_of(jfr):
+    try:
+        return open(jfr[:-4] + ".regraph").read().strip()
+    except OSError:
+        return None
 
 
 def graph_path(jfr, label, kind):
@@ -44,7 +56,7 @@ def graph_path(jfr, label, kind):
 def render_one(jfrconv, jfr, label, select, kind, title):
     extra, reverse = KINDS[kind]
     out = graph_path(jfr, label, kind)
-    if not FORCE and os.path.exists(out) and os.path.getmtime(out) > RENDERED_AFTER and os.path.getmtime(out) > os.path.getmtime(jfr):
+    if not FORCE and os.path.exists(out) and stamp_of(jfr) == stamp(jfrconv) and os.path.getmtime(out) > os.path.getmtime(jfr):
         return None
     # reverse graphs of deep Scala stacks need a lot of heap (over 8 GB for a 1 GB kperf JFR)
     cmd = [jfrconv, f"-J-Xmx{HEAP if reverse else '4g'}", *select, *extra, *(["--reverse"] if reverse else []), "--minwidth", "0.2", "--title", title, jfr, out]
@@ -69,6 +81,10 @@ def regraph(dirs, jfrconv=None, jobs=4, title_of=None):
     problems += [p for p in map(lambda t: render_one(*t), reverse) if p]
     for p in problems:
         print(p, file=sys.stderr)
+    for jfr in {t[1] for t in tasks}:
+        if not any(p.startswith(jfr[:-4]) for p in problems):
+            with open(jfr[:-4] + ".regraph", "w") as f:
+                f.write(stamp(jfrconv) + "\n")
     return len(tasks) - len(problems), problems
 
 
@@ -78,10 +94,9 @@ if __name__ == "__main__":
     ap.add_argument("-j", "--jobs", type=int, default=4)
     ap.add_argument("--heap", default=HEAP, help="jfrconv heap for reverse graphs")
     ap.add_argument("--force", action="store_true", help="redo graphs that are already up to date")
-    ap.add_argument("--since", type=float, default=0, help="redo graphs older than this epoch time")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args()
-    FORCE, RENDERED_AFTER, HEAP = a.force, a.since, a.heap
+    FORCE, HEAP = a.force, a.heap
     ok, problems = regraph(a.dirs, a.jfrconv, a.jobs)
     print(f"{ok} graphs written, {len(problems)} problems")
     sys.exit(1 if problems else 0)
