@@ -215,7 +215,7 @@ object Phases {
       denseDenotTransformers = dense.toArray
       if GoForwardSite.MODE == "pe" then
         GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
-      else if GoForwardSite.MODE == "mh" then
+      else if GoForwardSite.MODE == "mh" || GoForwardSite.MODE == "spun" then
         GoForwardSite.linkDispatch(denseDenotTransformers.asInstanceOf[Array[AnyRef]])
 
       if (fuse)

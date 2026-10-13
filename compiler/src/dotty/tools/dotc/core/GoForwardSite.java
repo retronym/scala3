@@ -58,7 +58,7 @@ public final class GoForwardSite {
         for (int i = 0; i < CACHE_SLOTS; i++)
             if (Arrays.equals(shape, cachedShapes[i])) dispatcher = cachedDispatchers[i];
         if (dispatcher == null) {
-            dispatcher = buildDispatcher(shape);
+            dispatcher = MODE.equals("spun") ? spinDispatcher(shape) : buildDispatcher(shape);
             cachedShapes[nextSlot] = shape;
             cachedDispatchers[nextSlot] = dispatcher;
             nextSlot = (nextSlot + 1) % CACHE_SLOTS;
@@ -66,6 +66,68 @@ public final class GoForwardSite {
         }
         DISPATCH_SITE.setTarget(dispatcher);
         linkedShape = shape;
+    }
+
+    /**
+     * {@code -Ddotty.goForward=spun}: a hidden class whose static {@code transform(k, t, d, c)} is a {@code tableswitch}
+     * on {@code k}; arm k is {@code checkcast Ck; invokevirtual Ck.transform}, the default arm (and arms for classes
+     * we cannot name) the generic {@code invokeinterface}. About 12 bytes per arm, so C2 compiles it as a unit with
+     * one monomorphic, statically bound call per arm, unlike MethodHandles.tableSwitch's LambdaForm.
+     */
+    private static MethodHandle spinDispatcher(Class<?>[] shape) {
+        try {
+            String sd = "dotty/tools/dotc/core/Denotations$SingleDenotation";
+            String cx = "dotty/tools/dotc/core/Contexts$Context";
+            String dt = "dotty/tools/dotc/core/DenotTransformers$DenotTransformer";
+            String erased = "(L" + sd + ";L" + cx + ";)L" + sd + ";";
+            org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_MAXS);
+            // version 50: no stack map frames needed
+            cw.visit(org.objectweb.asm.Opcodes.V1_6, org.objectweb.asm.Opcodes.ACC_FINAL | org.objectweb.asm.Opcodes.ACC_SUPER,
+                    "dotty/tools/dotc/core/GoForwardDispatch", null, "java/lang/Object", null);
+            org.objectweb.asm.MethodVisitor mv = cw.visitMethod(
+                    org.objectweb.asm.Opcodes.ACC_STATIC, "transform", "(IL" + dt + ";L" + sd + ";L" + cx + ";)L" + sd + ";", null, null);
+            mv.visitCode();
+            org.objectweb.asm.Label generic = new org.objectweb.asm.Label();
+            org.objectweb.asm.Label[] arms = new org.objectweb.asm.Label[shape.length];
+            for (int k = 0; k < arms.length; k++) arms[k] = new org.objectweb.asm.Label();
+            mv.visitVarInsn(org.objectweb.asm.Opcodes.ILOAD, 0);
+            mv.visitTableSwitchInsn(0, shape.length - 1, generic, arms);
+            for (int k = 0; k < shape.length; k++) {
+                mv.visitLabel(arms[k]);
+                Class<?> c = shape[k];
+                if (!java.lang.reflect.Modifier.isPublic(c.getModifiers()) || c.isHidden() || c.getName().indexOf('/') >= 0) {
+                    mv.visitJumpInsn(org.objectweb.asm.Opcodes.GOTO, generic);
+                    continue;
+                }
+                String internal = c.getName().replace('.', '/');
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
+                mv.visitTypeInsn(org.objectweb.asm.Opcodes.CHECKCAST, internal);
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 2);
+                mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 3);
+                mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEVIRTUAL, internal, "transform", erased, false);
+                mv.visitInsn(org.objectweb.asm.Opcodes.ARETURN);
+            }
+            mv.visitLabel(generic);
+            mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 1);
+            mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 2);
+            mv.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 3);
+            mv.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKEINTERFACE, dt, "transform", erased, true);
+            mv.visitInsn(org.objectweb.asm.Opcodes.ARETURN);
+            mv.visitMaxs(0, 0);
+            mv.visitEnd();
+            cw.visitEnd();
+            byte[] bytes = cw.toByteArray();
+            String dump = System.getProperty("dotty.goForward.dump");
+            if (dump != null) java.nio.file.Files.write(java.nio.file.Path.of(dump, "GoForwardDispatch.class"), bytes);
+            MethodHandles.Lookup hidden = MethodHandles.lookup().defineHiddenClass(bytes, true);
+            Class<?> sdC = Class.forName("dotty.tools.dotc.core.Denotations$SingleDenotation");
+            Class<?> cxC = Class.forName("dotty.tools.dotc.core.Contexts$Context");
+            Class<?> dtC = Class.forName("dotty.tools.dotc.core.DenotTransformers$DenotTransformer");
+            return hidden.findStatic(hidden.lookupClass(), "transform", MethodType.methodType(sdC, int.class, dtC, sdC, cxC))
+                    .asType(DISPATCH);
+        } catch (ReflectiveOperationException | java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static MethodHandle buildDispatcher(Class<?>[] shape) {
