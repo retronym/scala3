@@ -13,7 +13,6 @@
   },
   "variants": {
     "off": "-Ddotty.goForward=off",
-    "plain": "-Ddotty.goForward=plain",
     "pe": "-Ddotty.goForward=pe"
   },
   "loadgate": {
