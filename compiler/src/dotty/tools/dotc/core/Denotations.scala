@@ -813,6 +813,11 @@ object Denotations {
         if exists then initial.bringForward().current else this
 
       def goForward =
+        if GoForwardStats.enabled then GoForwardStats.enter()
+        try goForward1
+        finally if GoForwardStats.enabled then GoForwardStats.exit()
+
+      def goForward1 =
         var cur = this
         // search for containing period as long as nextInRun increases.
         var next = nextInRun
@@ -828,10 +833,12 @@ object Denotations {
           // not found, cur points to highest existing variant
           val nextTransformerId = ctx.base.nextDenotTransformerId(cur.validFor.lastPhaseId)
           if currentPeriod.lastPhaseId <= nextTransformerId then
+            if GoForwardStats.enabled then GoForwardStats.extended()
             cur.validFor = Period(currentPeriod.runId, cur.validFor.firstPhaseId, nextTransformerId)
           else
             var startPid = nextTransformerId + 1
             val transformer = ctx.base.denotTransformers(nextTransformerId)
+            if GoForwardStats.enabled then GoForwardStats.transformed(nextTransformerId, transformer)
             //println(s"transforming $this with $transformer")
             val savedPeriod = ctx.period
             val mutCtx = ctx.asInstanceOf[FreshContext]
@@ -855,7 +862,7 @@ object Denotations {
             //printPeriods(cur)
             //println(s"new denot: $cur, valid for ${cur.validFor}")
           cur.current // multiple transformations could be required
-      end goForward
+      end goForward1
 
       def goBack: SingleDenotation =
         // currentPeriod < end of valid; in this case a version must exist
