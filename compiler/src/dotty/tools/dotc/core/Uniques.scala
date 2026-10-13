@@ -26,6 +26,8 @@ object Uniques:
     /** `freshParts`: the caller allocated parts (a probe type, an args list) that the hit makes garbage */
     def hit(table: String, tp: Type, freshParts: Boolean): Unit
     def miss(table: String, tp: Type): Unit
+    /** Every call of `unique`, with the type offered and the one returned */
+    def unique(candidate: Type, result: Type): Unit = ()
   @sharable var probe: Probe | Null = null
 
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
@@ -46,6 +48,7 @@ object Uniques:
       val p = probe
       if p != null then
         if r eq tp then p.miss("uniques", r) else p.hit("uniques", r, true)
+        p.unique(tp, r)
       r
 
   final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
