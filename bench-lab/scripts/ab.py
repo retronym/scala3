@@ -11,6 +11,7 @@ A spec (paths relative to the repository root):
     "benchmark": "CompileBenchmark",
     "profile": {"xctrace": "ipc"},                     # or {"async": "cycles+instructions", "kperf": "/tmp/asprof-kperf.sock",
                                                        #     "lib": "<libasyncProfiler>", "jvm": "<java>"}
+    "jvm": "<java>",                                   # optional: JMH -jvm for every run (checked against result.json)
     "jvmArgs": "-Xms4G -Xmx4G -Xss2M",                 # given to every variant, see below
     "rounds": 2,
     "corpora": {"scalaz": "-wi 10 -i 10 -w 10 -r 10", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
@@ -42,6 +43,7 @@ class Spec:
         self.benchmark = s.get("benchmark", "CompileBenchmark")
         self.profile = s.get("profile", {"xctrace": "ipc"})
         self.jvm_args = s.get("jvmArgs", "-Xms4G -Xmx4G -Xss2M")
+        self.jvm = s.get("jvm") or self.profile.get("jvm")
         self.rounds = s.get("rounds", 2)
         self.corpora = s["corpora"]
         self.variants = s["variants"]
@@ -66,13 +68,13 @@ class Spec:
 
     def command(self, corpus, iters, variant, flags, tag):
         jvm_args = " ".join(x for x in [self.jvm_args, flags] if x)
-        jmh = f'-p corpus={corpus} {iters} -jvmArgsAppend "{jvm_args}" {self.benchmark}'
+        jvm = f"-jvm {self.jvm} " if self.jvm else ""
+        jmh = f'{jvm}-p corpus={corpus} {iters} -jvmArgsAppend "{jvm_args}" {self.benchmark}'
         p = self.profile
         if "xctrace" in p:
             return f"benchLabXctrace {p['xctrace']} {jmh}"
         settings = [f"{k}={p[k]}" for k in ("lib", "kperf") if k in p] + [f"tag={tag}"]
-        jvm = f"-jvm {p['jvm']} " if "jvm" in p else ""
-        return f"benchLabAsync {p['async']} {' '.join(settings)} {jvm}{jmh}"
+        return f"benchLabAsync {p['async']} {' '.join(settings)} {jmh}"
 
 
 def jmh_lock_held():
@@ -110,6 +112,8 @@ def check(spec, prof, started, flags):
     rs = json.load(open(res))
     if not rs:
         return "empty result.json"
+    if spec.jvm and os.path.realpath(rs[0]["jvm"]) != os.path.realpath(spec.jvm):
+        return f"ran on {rs[0]['jvm']}, not {spec.jvm}"
     args = rs[0]["jvmArgs"]
     for a in (spec.jvm_args + " " + flags).split():
         if a not in args:
