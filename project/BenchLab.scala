@@ -128,7 +128,8 @@ object BenchLab {
       })
     }
     writeIndex(dir, graphs)
-    s.log.info(s"flame graphs in $dir, index: ${dir / "index.html"}")
+    writeRootIndex(dir.getParentFile)
+    s.log.info(s"flame graphs in $dir, index: ${dir / "index.html"}; all runs: ${dir.getParentFile / "index.html"}")
     s
   }
 
@@ -149,8 +150,54 @@ object BenchLab {
     }
   }
 
+  private def esc(x: String) = x.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
+
+  private val style =
+    """:root { --bg: #f6f7f9; --panel: #fff; --fg: #1d232b; --muted: #5d6875; --line: #dde2e8; --link: #2f6fb2; }
+      |@media (prefers-color-scheme: dark) { :root { --bg: #14181d; --panel: #1b2027; --fg: #e3e8ee; --muted: #94a0ad; --line: #2c333c; --link: #6ea8e6; color-scheme: dark; } }
+      |body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, system-ui, sans-serif; }
+      |main { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 14px; }
+      |h1 { font-size: 20px; margin: 0; overflow-wrap: anywhere; } h2 { font-size: 15px; margin: 0 0 8px; overflow-wrap: anywhere; } a { color: var(--link); }
+      |section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+      |th { text-align: left; font-weight: 600; padding: 2px 16px 2px 0; } .k { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+      |""".stripMargin
+
+  /** `<root>/index.html`: every run directory under `<root>` that has an index, newest first, with its JMH scores. */
+  private def writeRootIndex(root: File): Unit = {
+    val runs = IO.listFiles(root).filter(d => (d / "index.html").exists).sortBy(d => -(d / "index.html").lastModified)
+    def scores(d: File): String = {
+      // the primary metric of each benchmark in result.json: name, params, score (the first "score" after a benchmark)
+      val f = d / "result.json"
+      if (!f.exists) "" else {
+        val json = IO.read(f)
+        json.split("\"jmhVersion\"").toList.drop(1).flatMap { r =>
+          val bench = "\"benchmark\"\\s*:\\s*\"[^\"]*\\.([^.\"]+\\.[^.\"]+)\"".r.findFirstMatchIn(r).map(_.group(1))
+          val params = "\"params\"\\s*:\\s*\\{([^}]*)\\}".r.findFirstMatchIn(r).map(_.group(1)).getOrElse("")
+            .split(",").map(_.replaceAll("[\"\\s]", "").replace(":", "=")).filter(p => p.nonEmpty && !p.endsWith("=")).mkString(" ")
+          val score = "\"primaryMetric\"\\s*:\\s*\\{\\s*\"score\"\\s*:\\s*([0-9.eE+-]+)\\s*,\\s*\"scoreError\"\\s*:\\s*([0-9.eE+-]+|\"NaN\")".r.findFirstMatchIn(r)
+          for (b <- bench; m <- score) yield {
+            val err = scala.util.Try(m.group(2).toDouble).toOption.fold("")(e => f" ± $e%.0f")
+            f"$b $params: ${m.group(1).toDouble}%.1f$err"
+          }
+        }.mkString("; ")
+      }
+    }
+    val rows = runs.map { d =>
+      val when = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date((d / "index.html").lastModified))
+      s"""<section><h2><a href="${esc(d.getName)}/index.html">${esc(d.getName)}</a></h2><p class="k">$when · ${esc(scores(d))}</p></section>"""
+    }
+    IO.write(root / "index.html",
+      s"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+         |<title>bench-lab runs</title>
+         |<style>$style</style>
+         |<main><h1>bench-lab runs</h1>
+         |<p class="k">One section per profile run (latest first): its flame graphs and JMH scores (ms/op).</p>
+         |${rows.mkString("\n")}
+         |</main>
+         |""".stripMargin)
+  }
+
   private def writeIndex(dir: File, graphs: Seq[(File, List[(String, String, File)])]): Unit = {
-    def esc(x: String) = x.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
     val sections = graphs.map { case (jfr, gs) =>
       val rows = gs.groupBy(_._1).toList.sortBy { case (k, _) => gs.indexWhere(_._1 == k) }.map { case (kind, vs) =>
         val links = vs.map { case (_, v, f) => s"""<a href="${esc(IO.relativize(dir, f).getOrElse(f.getPath))}">$v</a>""" }
@@ -162,16 +209,9 @@ object BenchLab {
     IO.write(dir / "index.html",
       s"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
          |<title>${esc(dir.getName)}</title>
-         |<style>
-         |:root { --bg: #f6f7f9; --panel: #fff; --fg: #1d232b; --muted: #5d6875; --line: #dde2e8; --link: #2f6fb2; }
-         |@media (prefers-color-scheme: dark) { :root { --bg: #14181d; --panel: #1b2027; --fg: #e3e8ee; --muted: #94a0ad; --line: #2c333c; --link: #6ea8e6; color-scheme: dark; } }
-         |body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, system-ui, sans-serif; }
-         |main { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 14px; }
-         |h1 { font-size: 20px; margin: 0; overflow-wrap: anywhere; } h2 { font-size: 15px; margin: 0 0 8px; } a { color: var(--link); }
-         |section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-         |th { text-align: left; font-weight: 600; padding: 2px 16px 2px 0; } .k { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
-         |</style>
+         |<style>$style</style>
          |<main><h1>${esc(dir.getName)}</h1>
+         |<p class="k"><a href="../index.html">all runs</a></p>
          |<p class="k">bench: benchmark threads · reverse: the same, by leaf · threads: all threads · classify: all threads by category</p>
          |${sections.mkString("\n")}
          |</main>
