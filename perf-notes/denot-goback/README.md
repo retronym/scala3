@@ -1,0 +1,60 @@
+# `SingleDenotation.current` / `goBack` hotspot
+
+Investigation notes (living doc). Not intended for upstream as-is.
+
+## Observation
+
+`CompileBenchmark.compile context=fresh corpus=scalaz`, async-profiler cpu, JDK 26, reverse flame graph: `SingleDenotation.goBack$1` is ~2.25% CPU, almost all **self** time.
+
+![reverse flame graph](flame-reverse-goBack.webp)
+
+Callers (bottom-up, approx share of the 2.25%):
+
+- `MixinOps.mkForwarderSym` (the `tap` lambda: `addAnnotations`, `paramSymss`, `atPhaseBeforeTransforms`) — largest
+- `Symbol.enteredAfter` ← `MixinOps.mkForwarderSym`
+- `Mixin.mkMixinForwarderSym` / `Mixin.mixinForwarders`
+- backend `BCodeHelpers` / `BTypesFromSymbols` / `SymUtils`
+
+## Background: denotation time-travel
+
+- `Period` = `(runId, firstPhaseId, lastPhaseId)` packed in an `Int`.
+- A symbol's denotation versions within a run form a *flock*: a ring linked by `nextInRun`, sorted by phase, non-overlapping, contiguous; the last wraps to `initial`. No `prev` pointer.
+- `Symbol` caches a single `(lastDenot, checkedPeriod)`. Any change of `ctx.period` misses → `computeDenot` → `recomputeDenot` → `lastDenot.current`, which overwrites `lastDenot`. Alternating phases thrash this one-slot cache.
+- `current`: different run → `toNewRun`; `period > valid` → `goForward` (walk forward, lazily run the next `DenotTransformer`, `insertAfter`); else → `goBack` (walk `nextInRun` *forwards*, wrapping round the ring, until a version contains the period).
+- New symbols get `currentStablePeriod` (from just after the previous denot transformer to the next one). `installAfter` / `enteredAfter` / `ensureFreshScopeAfter` splice new versions at `phase.next`.
+
+## Why Mixin hits this
+
+- `MegaPhase.run` transforms the whole group at `atPhase(miniPhases.last.next)`. For the Mixin group that is after `CapturedVars`; `LazyVals`, `Memoize`, `CapturedVars` are all denot transformers.
+- Mixin code hops between: ambient (post-CapturedVars), `thisPhase`, `thisPhase.next` (`enteredAfter`, `ensureFreshScopeAfter`), `erasurePhase`, `atPhaseBeforeTransforms`. Each backward hop = cache miss + `goBack`.
+
+## Hypothesis H1: degenerate spin in `goBack`
+
+A symbol created at the ambient phase has a one-element ring whose `validFor` starts after `CapturedVars`. Querying it at an earlier phase (e.g. `dst.addAnnotations` on fresh forwarder params inside `atPhaseBeforeTransforms`; possibly `enteredAfter` at `Mixin.next`; backend `atPhase(erasure/typer)` on late symbols) can never match. `goBack` then loops `MaxPossiblePhaseId` (= `PhaseMask`, 255) times round the one-element ring before bailing out to `atPhase(coveredInterval.firstPhaseId)(current)`. That fits "all self time, L1-hot loop".
+
+Status: **TODO** — instrument `goBack` (iteration histogram, bail-out count, by caller) and confirm.
+
+## Side question: why no `prev` pointer?
+
+The only rationale is the comment in `goBack` from a8b05409c9 (2016, JDK 8): best-of-10 wall-clock compiling dotc, 18154ms with `prev` vs 17777ms without (~2%). No size or upkeep argument given.
+
+JOL (scala3-compiler 3.7.3, JDK 21), instance sizes:
+
+| class | compressed oops | trailing gap | +`prev` (est.) | uncompressed |
+|---|---|---|---|---|
+| `SymDenotation` | 80 | 4B @76 | 80 (free) | 120 |
+| `ClassDenotation` | 120 | none | 128 | 200 |
+| `PackageClassDenotation` | 128 | none | 128–136 | 216 |
+| `UniqueRefDenotation` / `JointRefDenotation` | 56 | 4B @52 | 56 (free) | 80 |
+
+Upkeep: `nextInRun` is mutated only in `insertAfter` and `replaceWith`; the latter currently walks the ring to find the predecessor, which `prev` would make O(1).
+
+`prev` would make `goBack` from the newest to the previous version 1 hop instead of a full lap, but does not fix H1.
+
+## TODO
+
+- [ ] Instrument `goBack`: iteration histogram, bail-out count, by caller
+- [ ] Confirm / refute H1 on scalaz corpus
+- [ ] Fix: early exit on lap completion in `goBack`
+- [ ] Reduce phase hopping in `MixinOps.mkForwarderSym`
+- [ ] Re-measure `prev` pointer with JMH (future work)
