@@ -8,6 +8,7 @@ import vulpix.TestConfiguration
 import org.junit.Test
 import org.junit.Assert.*
 
+import java.lang.ref.WeakReference
 import java.nio.file.Files
 import scala.collection.mutable.ArrayBuffer
 
@@ -66,10 +67,12 @@ class MultiRunRetentionTest:
 
     object driver extends Driver:
       var lastRun: Run | Null = null
+      val runs = ArrayBuffer.empty[WeakReference[Run]]
       override protected def newCompiler(using Context): Compiler = new Compiler:
         override def newRun(using Context): Run =
           val run = super.newRun
           lastRun = run
+          runs += WeakReference(run)
           run
       def compileRepeatedly(n: Int): Unit =
         val args = Array("-classpath", TestConfiguration.basicClasspath, "-d", out.toString) ++ files
@@ -88,5 +91,16 @@ class MultiRunRetentionTest:
           assertTrue(rootCtx.docCtx.get.docstring(rootCtx.definitions.orType).isDefined)
         // The docstrings of symbols replaced by a later run must be dropped.
         assertEquals(List.fill(n)(docstringCounts.head), docstringCounts.toList)
+        // Only the last run may stay reachable from the root context (e.g. through
+        // `Definitions.initCtx`); earlier runs must be collectable.
+        def retained = runs.init.zipWithIndex.collect { case (r, i) if r.get() != null => i + 1 }
+        var attempts = 0
+        while retained.nonEmpty && attempts < 20 do
+          System.gc()
+          Thread.sleep(50)
+          attempts += 1
+        assertEquals("runs retained after a later run", Nil, retained.toList)
+        java.lang.ref.Reference.reachabilityFence(compiler)
+        java.lang.ref.Reference.reachabilityFence(rootCtx)
 
     driver.compileRepeatedly(4)

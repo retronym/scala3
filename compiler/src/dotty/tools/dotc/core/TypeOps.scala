@@ -66,6 +66,13 @@ object TypeOps:
      */
     private[TypeOps] var approxCount: Int = 0
 
+    // Approximations made by a recreated map, when a `LazyRef` is forced, are not counted in
+    // the original `approxCount`. They never were reliably: such a `LazyRef` is typically forced
+    // after `asSeenFrom` has read `approxCount`.
+    override protected def recreate =
+      val pre = this.pre; val cls = this.cls
+      c => AsSeenFromMap(pre, cls)(using c)
+
     def apply(tp: Type): Type = {
 
       /** Map a `C.this` type to the right prefix. If the prefix is unstable, and

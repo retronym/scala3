@@ -759,82 +759,89 @@ object Checking {
    *  @return The `info` of `sym`, with problematic aliases expanded away.
    */
   def checkNoPrivateLeaks(sym: Symbol)(using Context): Type = {
-    class NotPrivate extends TypeMap {
-      var errors: List[Message] = Nil
-      private var inCaptureSet: Boolean = false
-
-      def accessBoundary(sym: Symbol): Symbol =
-        if (sym.is(Private) || !sym.owner.isClass) sym.owner
-        else if (sym.privateWithin.exists) sym.privateWithin
-        else if (sym.is(Package)) sym
-        else accessBoundary(sym.owner)
-
-      val symBoundary = accessBoundary(sym)
-
-      /** Is `other` leaked outside its access boundary ?
-       *  @pre  The signature of `sym` refers to `other`
-       */
-      def isLeaked(other: Symbol) =
-        other.is(Private, butNot = TypeParam)
-        && {
-          val otherBoundary = other.owner
-          val otherLinkedBoundary = otherBoundary.linkedClass
-          !(symBoundary.isContainedIn(otherBoundary) ||
-            otherLinkedBoundary.exists && symBoundary.isContainedIn(otherLinkedBoundary))
-        }
-        && !(inCaptureSet && (!Feature.ccEnabled || other.isAllOf(LocalParamAccessor)))
-            // All references are skipped in capture sets when CC is not enabled.
-            // Class parameters in capture sets are not treated as leaked since in
-            // phase CheckCaptures these are treated as normal vals.
-
-      def apply(tp: Type): Type = tp match {
-        case tp: NamedType =>
-          val prevErrors = errors
-          var tp1 =
-            if (isLeaked(tp.symbol)) {
-              errors =
-                em"non-private ${sym.showLocated} refers to private ${tp.symbol}\nin its type signature ${sym.info}"
-                :: errors
-              tp
-            }
-            else mapOver(tp)
-          if ((errors ne prevErrors) && tp.info.isTypeAlias) {
-            // try to dealias to avoid a leak error
-            val savedErrors = errors
-            errors = prevErrors
-            val tp2 = apply(tp.superType)
-            if (errors eq prevErrors) tp1 = tp2
-            else errors = savedErrors
-          }
-          tp1
-        case tp: ClassInfo =>
-          def transformedParent(tp: Type): Type = tp match {
-            case ref: TypeRef => ref
-            case ref: AppliedType => ref
-            case AnnotatedType(parent, annot) =>
-              AnnotatedType(transformedParent(parent), annot)
-            case _ => defn.ObjectType // can happen if class files are missing
-          }
-          tp.derivedClassInfo(
-            prefix = apply(tp.prefix),
-            declaredParents =
-              tp.declaredParents.map(p => transformedParent(apply(p)))
-            )
-        case tp @ AnnotatedType(underlying, annot: RetainingAnnotation) =>
-          val underlying1 = this(underlying)
-          val saved = inCaptureSet
-          inCaptureSet = true
-          val annot1 = annot.mapWith(this)
-          inCaptureSet = saved
-          derivedAnnotatedType(tp, underlying1, annot1)
-        case _ =>
-          mapOver(tp)
-      }
-    }
-    val notPrivate = new NotPrivate
+    val notPrivate = NotPrivate(sym)
     val info = notPrivate(sym.info)
     notPrivate.errors.foreach(report.errorOrMigrationWarning(_, sym.srcPos, MigrationVersion.Scala2to3))
     info
+  }
+
+  /** The type map of `checkNoPrivateLeaks`. */
+  private class NotPrivate(sym: Symbol)(using Context) extends TypeMap {
+    // As before, leaks found only when a mapped `LazyRef` is forced are not reported.
+    override protected def recreate =
+      val sym = this.sym
+      c => NotPrivate(sym)(using c)
+
+    var errors: List[Message] = Nil
+    private var inCaptureSet: Boolean = false
+
+    def accessBoundary(sym: Symbol): Symbol =
+      if (sym.is(Private) || !sym.owner.isClass) sym.owner
+      else if (sym.privateWithin.exists) sym.privateWithin
+      else if (sym.is(Package)) sym
+      else accessBoundary(sym.owner)
+
+    val symBoundary = accessBoundary(sym)
+
+    /** Is `other` leaked outside its access boundary ?
+     *  @pre  The signature of `sym` refers to `other`
+     */
+    def isLeaked(other: Symbol) =
+      other.is(Private, butNot = TypeParam)
+      && {
+        val otherBoundary = other.owner
+        val otherLinkedBoundary = otherBoundary.linkedClass
+        !(symBoundary.isContainedIn(otherBoundary) ||
+          otherLinkedBoundary.exists && symBoundary.isContainedIn(otherLinkedBoundary))
+      }
+      && !(inCaptureSet && (!Feature.ccEnabled || other.isAllOf(LocalParamAccessor)))
+          // All references are skipped in capture sets when CC is not enabled.
+          // Class parameters in capture sets are not treated as leaked since in
+          // phase CheckCaptures these are treated as normal vals.
+
+    def apply(tp: Type): Type = tp match {
+      case tp: NamedType =>
+        val prevErrors = errors
+        var tp1 =
+          if (isLeaked(tp.symbol)) {
+            errors =
+              em"non-private ${sym.showLocated} refers to private ${tp.symbol}\nin its type signature ${sym.info}"
+              :: errors
+            tp
+          }
+          else mapOver(tp)
+        if ((errors ne prevErrors) && tp.info.isTypeAlias) {
+          // try to dealias to avoid a leak error
+          val savedErrors = errors
+          errors = prevErrors
+          val tp2 = apply(tp.superType)
+          if (errors eq prevErrors) tp1 = tp2
+          else errors = savedErrors
+        }
+        tp1
+      case tp: ClassInfo =>
+        def transformedParent(tp: Type): Type = tp match {
+          case ref: TypeRef => ref
+          case ref: AppliedType => ref
+          case AnnotatedType(parent, annot) =>
+            AnnotatedType(transformedParent(parent), annot)
+          case _ => defn.ObjectType // can happen if class files are missing
+        }
+        tp.derivedClassInfo(
+          prefix = apply(tp.prefix),
+          declaredParents =
+            tp.declaredParents.map(p => transformedParent(apply(p)))
+          )
+      case tp @ AnnotatedType(underlying, annot: RetainingAnnotation) =>
+        val underlying1 = this(underlying)
+        val saved = inCaptureSet
+        inCaptureSet = true
+        val annot1 = annot.mapWith(this)
+        inCaptureSet = saved
+        derivedAnnotatedType(tp, underlying1, annot1)
+      case _ =>
+        mapOver(tp)
+    }
   }
 
   /** Verify classes extending AnyVal meet the requirements */

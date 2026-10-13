@@ -793,12 +793,18 @@ final class ClassfileParser(
   }
   // sigToType
 
+  // The owner of the completing context is unrelated to the classfile and may be a symbol of the
+  // current run. Don't retain it in the annotation trees of classpath symbols, which outlive the
+  // run. The spliced trees (literals and enum references) define no symbols, so any owner will do.
+  private def typedSplice(tree: tpd.Tree)(using Context): untpd.Tree =
+    untpd.TypedSplice(tree)(using ctx.withOwner(classRoot.symbol))
+
   class EnumTag(sig: String, name: NameOrString) {
     def toTree(using ctx: Context): untpd.Tree = {
       val enumClassTp = sigToType(sig)
       val enumModuleClass = enumClassTp.classSymbol.companionModule
       val tmref = TermRef(enumModuleClass.termRef, name.name)
-      untpd.TypedSplice(ref(tmref))
+      typedSplice(ref(tmref))
     }
   }
 
@@ -810,7 +816,7 @@ final class ClassfileParser(
 
     // ... but constants need to actually be typed with a ConstantType, so we
     // can't rely on type inference, and type them early.
-    def lit(c: Constant): untpd.Tree = untpd.TypedSplice(tpd.Literal(c))
+    def lit(c: Constant): untpd.Tree = typedSplice(tpd.Literal(c))
 
     val tag = in.nextByte.toChar
     val index = in.nextChar
