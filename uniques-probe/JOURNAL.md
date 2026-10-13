@@ -119,3 +119,15 @@ Probe (`-Dprobe.lambdas`) on the other corpora that need no dependencies. Applie
 | re2s | 543 | 4% | 1.5K (99%) |
 
 **Finding:** scalaz is an outlier, with about 100× the method-param churn of the others: higher-kinded typeclass code where asSeenFrom of polymorphic signatures dominates. The pattern (a low hit rate on these types) holds everywhere, so U should be neutral to slightly positive elsewhere, but the extra structural subtyping could show up as a regression. To be measured.
+
+## Exp 8: base vs U on other corpora (2026-10-13 19:11–19:43)
+
+bench-lab, `-wi 15 -i 10 -w 5 -r 5`, base/U interleaved per corpus, two rounds. tastyQuery is added to bench-lab's corpora with `-Yexplicit-nulls`.
+
+| corpus | base ms/op (r1 / r2) | U ms/op (r1 / r2) | Δ time | cycles/op base → U | Δ cycles |
+|---|---|---|---|---|---|
+| tastyQuery | 825 ± 33 / 829 ± 36 | 797 ± 22 / 804 ± 54 | −3.4% | 3.16G, 3.12G → 3.03G, 2.95G | −4.5% |
+| dottyUtil | 169 ± 7 / 167 ± 20 | 168 ± 8 / 150 ± 6 | −5% (noisy) | 0.65G, 0.62G → 0.64G, 0.61G | −1.6% |
+| re2s | 279 ± 9 / 270 ± 18 | 275 ± 9 / 273 ± 12 | −0.2% | 1.06G, 1.04G → 1.04G, 1.03G | −1.4% |
+
+**Finding:** U is never worse, with cycles down 1.5–4.5% on corpora with about 100× less method-param churn than scalaz. The extra structural subtyping from lost identity does not show as a regression on any of them. Allocation is unchanged. GC count rises 3–4× under U on every corpus (17 → 71, 20 → 77, 18 → 81) with GC time about the same: Exp 9.
