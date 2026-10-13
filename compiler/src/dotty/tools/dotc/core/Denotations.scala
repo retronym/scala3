@@ -905,7 +905,7 @@ object Denotations {
         toNewRun
       else if currentPeriod > valid then
         GoForwardSite.MODE match
-          case "off" => goForward
+          case "off" => if GoForwardSite.LOOP then goForwardRuns(ctx) else goForward
           case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, false, ctx)
           case "shared" => if ctx.base.goForwardSharedOk then GoForwardUnrolledShared.go(this, ctx) else goForward
           case "unrolled" => if ctx.base.goForwardUnrolledOk then GoForwardUnrolled.go(this, ctx) else goForward
@@ -914,6 +914,78 @@ object Denotations {
       else
         goBack
     end current
+
+    /** `current` when `ctx.period` is after `validFor`: brings this denotation forward to the target phase.
+     *
+     *  One loop over the phase plan, instead of recursing into `current` after each transform. A run of identity
+     *  transformers is skipped in one step: they would return the version unchanged, so its validity just extends.
+     */
+    private final def goForwardRuns(ctx: Context): SingleDenotation =
+      // The phase plan, read once per call
+      val base = ctx.base
+      val nextTransformerAt   = base.nextDenotTransformerId          // phase id => first transformer at or after it
+      val nextNonIdentityAt   = base.denotTransformerNextNonIdentity // phase id => first non-identity transformer at or after it
+      val isIdentity          = base.denotTransformerIsIdentity
+      val lastPhaseOf         = base.denotTransformerLastPhaseId
+      val transformers        = base.denotTransformers
+
+      val targetPeriod = ctx.period
+      val runId        = targetPeriod.runId
+      val targetPhase  = targetPeriod.lastPhaseId
+
+      var cur: SingleDenotation = this
+      while true do
+        if targetPhase <= cur.validFor.lastPhaseId then
+          return cur
+
+        // A later version may already cover the target
+        val valid = cur.validFor
+        var next = cur.nextInRun
+        while next.validFor > valid && !next.validFor.contains(targetPeriod) do
+          cur = next
+          next = next.nextInRun
+        if next.validFor > valid then
+          return next
+
+        // `cur` is the latest version: extend or transform it
+        val firstPhase = cur.validFor.firstPhaseId
+        val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
+
+        if targetPhase <= transformerId then
+          // No transformer runs before the target
+          cur.validFor = Period(runId, firstPhase, transformerId)
+          return cur
+
+        if isIdentity(transformerId) then
+          // Skip the run of identities: up to the next real transformer, or just past the target
+          val stop = math.min(nextNonIdentityAt(transformerId), nextTransformerAt(targetPhase))
+          cur.validFor = Period(runId, firstPhase, stop)
+        else
+          val transformer = transformers(transformerId)
+          val transformed = transformAt(transformer, cur, ctx)
+          val lastPhase = lastPhaseOf(transformerId)
+          if transformed eq cur then
+            cur.validFor = Period(runId, firstPhase, lastPhase)
+          else
+            SingleDenotation.assertNotPackage(transformed, transformer, ctx)
+            transformed.insertAfter(cur)
+            transformed.validFor = Period(runId, transformerId + 1, lastPhase)
+            cur = transformed
+      end while
+      throw AssertionError("unreachable")
+    end goForwardRuns
+
+    /** `transformer.transform(d)`, run at the transformer's phase. The context is updated in place rather than copied,
+     *  for performance, so the result must not retain it.
+     */
+    private def transformAt(transformer: DenotTransformer, d: SingleDenotation, ctx: Context): SingleDenotation =
+      val savedPeriod = ctx.period
+      val mutCtx = ctx.asInstanceOf[FreshContext]
+      try
+        mutCtx.setPhase(transformer)
+        transformer.transform(d)(using ctx)
+      finally
+        mutCtx.setPeriod(savedPeriod)
 
     /** DO NOT MERGE: `current` when `ctx.period` is after `validFor` (`goForward`), with the `cur.current` recursion
      *  turned into a loop, written for the jvm-loop-unroller partial evaluator (see `GoForwardSite`): the arrays are

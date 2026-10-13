@@ -254,7 +254,9 @@ object Phases {
           nextDenotTransformerId(i) = nextDenotTransformerId(phase.id + 1)
       refreshDenotTransformerCaches() // lastPhaseId depends on nextDenotTransformerId
 
-    /** Recompute `denotTransformerIsIdentity` and `denotTransformerLastPhaseId` from the current plan */
+    /** Recompute `denotTransformerIsIdentity`, `denotTransformerLastPhaseId` and `denotTransformerNextNonIdentity`
+     *  from the current plan
+     */
     private def refreshDenotTransformerCaches()(using Context): Unit =
       denotTransformerIsIdentity = new Array[Boolean](denotTransformers.length)
       denotTransformerLastPhaseId = new Array[Int](denotTransformers.length)
@@ -263,6 +265,15 @@ object Phases {
         if t != null then
           denotTransformerIsIdentity(i) = t.isInstanceOf[IdentityDenotTransformer]
           denotTransformerLastPhaseId(i) = t.lastPhaseId
+      denotTransformerNextNonIdentity = new Array[Int](nextDenotTransformerId.length)
+      var i = nextDenotTransformerId.length
+      while i > 0 do
+        i -= 1
+        val j = nextDenotTransformerId(i)
+        denotTransformerNextNonIdentity(i) =
+          if j > i && j < nextDenotTransformerId.length then denotTransformerNextNonIdentity(j)
+          else if j == i && denotTransformerIsIdentity(i) && i + 1 < nextDenotTransformerId.length then denotTransformerNextNonIdentity(i + 1)
+          else j
 
     private var myParserPhase: Phase = uninitialized
     private var myTyperPhase: Phase = uninitialized

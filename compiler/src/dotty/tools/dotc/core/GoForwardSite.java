@@ -26,6 +26,9 @@ public final class GoForwardSite {
     public static final boolean CACHE_LAST_PHASE_ID = Boolean.getBoolean("dotty.goForward.cacheLastPhaseId");
     /** goForward skips the call for IdentityDenotTransformers, extending validity instead (-Ddotty.goForward.skipIdentity) */
     public static final boolean SKIP_IDENTITY = Boolean.getBoolean("dotty.goForward.skipIdentity");
+    /** goForward as one loop over hoisted plan arrays, skipping runs of identity transformers in one step; implies
+     *  both of the above (-Ddotty.goForward.loop) */
+    public static final boolean LOOP = Boolean.getBoolean("dotty.goForward.loop");
 
     private static final MethodType TYPE = MethodType.methodType(Object.class, Object.class, Object.class);
     private static final MutableCallSite SITE = new MutableCallSite(TYPE);
