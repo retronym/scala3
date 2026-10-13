@@ -15,6 +15,7 @@ object Corpus:
     "small" -> Nil,
     "dottyUtil" -> Nil,
     "re2s" -> Nil,
+    "tastyQuery" -> List("-Yexplicit-nulls", "-Wconf:msg=Unnecessary .nn:s"),
     "scalaz" -> List("-nowarn", "-source", "3.0", "-Xkind-projector", "-language:implicitConversions"),
   )
 
