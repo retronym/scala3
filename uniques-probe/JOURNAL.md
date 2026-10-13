@@ -72,3 +72,21 @@ bench-lab `CompileBenchmark` (bootstrapped, a fresh context per op), `benchLabXc
 **Finding:** uncache is 14% faster (mean 4722 to 4043 ms/op) and 12% fewer cycles on the compiler thread, with the same instructions: the extra subtype work (Exp 2b) costs about what the saved lookups did, and the win is memory stalls (IPC 3.55 to 3.98). GC time drops by a third (fewer weak references to discover and process, fewer promoted entries), though young collections double in number; not yet understood.
 
 Cycles by method (bench thread), base: `TypeApplications.appliedTo` 4.6% (where `AppliedUniques.enterIfNew` and its loop are inlined) and `WeakHashSet.resize` 2.4%. Both drop out of the top list with uncache. The resize cost is separate: a fresh context starts the table at 64K slots and doubles it to 4M every compile, counting stale entries.
+
+## Exp 4: per-binder tables (2026-10-13 18:09–18:41)
+
+`-Ddotty.localMethodParamUniques`: each `MethodOrPoly` owns a small open-addressing table, holding strongly the applied types whose `tycon` or a direct arg is one of its params (directly, or through an applied type routed the same way). These keep identity (types stay cached, and all hits on them come from the same lambda instance anyway) but skip the global weak table. The routing is shallow, so some types over method params (inside `TypeBounds`, refinements and so on) still go global.
+
+Probe (one compile): 2.42M of 3.68M applied lookups go to binder tables, with 750K hits; global applied misses fall from 2.34M to 558K. 38% of binder-table entries are alive at the end of the run, since a table holds its entries as long as its binder lives.
+
+Same bench-lab setup as Exp 3; an extra `localBinder` field on `CachedAppliedType` is present in all variants, adding about 30 MB/op of allocation to base.
+
+| run | ms/op | cycles/op | IPC | alloc/op | GC time / count |
+|---|---|---|---|---|---|
+| base 1 / 2 | 4639 ± 52 / 4589 ± 77 | 17.68G / 17.56G | 3.50 / 3.55 | 4024 / 4007 MB | 4.9 s / 150, 135 |
+| uncache 1 / 2 | 4009 ± 82 / 3991 ± 57 | 15.65G / 15.55G | 4.00 / 4.04 | 3976 / 3954 MB | 3.2 s / 268, 278 |
+| local 1 / 2 | 4218 ± 62 / 4264 ± 104 | 16.35G / 16.41G | 3.85 / 3.78 | 3978 / 3980 MB | 3.8–3.9 s / 257, 271 |
+
+Cycles by method (bench thread): base `AppliedUniques.enterIfNew` 4.8% and `WeakHashSet.resize` 2.5%; uncache `AppliedUniques.enterIfNew` 1.8%; local `AppliedUniques.enterIfNew` 1.6% and `LocalAppliedUniques.enterIfNew` 1.5%.
+
+**Finding:** per-binder tables take 8% off base, but uncaching takes 13%. Keeping identity for these types is worth less than the lookups (and the longer-lived entries, see GC time) cost. Uncache stays the lead.
