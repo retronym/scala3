@@ -91,10 +91,10 @@ public class JitProfiler implements InternalProfiler {
             Thread.currentThread().interrupt();
         }
         stream.close();
-        return results();
+        return results(bp);
     }
 
-    private Collection<? extends Result> results() {
+    private Collection<? extends Result> results(BenchmarkParams bp) {
         List<Event> all;
         synchronized (events) { all = new ArrayList<>(events); }
         Window lastWarmup = null;
@@ -114,6 +114,15 @@ public class JitProfiler implements InternalProfiler {
         top(sb, "compiled while measuring", compiled);
         top(sb, "deoptimized while measuring", deopted);
         System.err.print(sb);
+        // stderr of the fork is easily lost (sbt in the background); keep a copy
+        try {
+            java.nio.file.Path f = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+                    "benchlab-jit-" + bp.getBenchmark().replaceAll(".*\\.", "") + "-" + ProcessHandle.current().pid() + ".txt");
+            java.nio.file.Files.writeString(f, bp.getParam("corpus") + "\n" + sb);
+            System.err.println("[jit] report: " + f);
+        } catch (Exception e) {
+            System.err.println("[jit] could not write report: " + e);
+        }
 
         long[] m = count(all, measured);
         long[] w = lastWarmup == null ? new long[3] : count(all, List.of(lastWarmup));

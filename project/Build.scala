@@ -2411,6 +2411,12 @@ object Build {
       // JMH with bench-lab's default profilers (allocation, JIT activity)
       Jmh / run / mainClass := Some("dotty.tools.benchlab.Main"),
       // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
+      // The worktree's .jvmopts (e.g. -XX:+DebugNonSafepoints for profilers) reaches the benchmark forks too: JMH starts
+      // them with its launcher's JVM options, then the benchmark's @Fork(jvmArgsAppend), which win (heap, stack size).
+      Jmh / run / javaOptions ++= {
+        val f = (ThisBuild / baseDirectory).value / ".jvmopts"
+        if (f.exists) IO.readLines(f).map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")) else Nil
+      },
       Jmh / run / javaOptions ++= Seq(
         s"-Dbenchlab.scalaLibrary=${(`scala-library-bootstrapped` / Compile / packageBin).value}",
         s"-Dbenchlab.corpora=${sys.env.getOrElse("SCALA3_BENCHMARKS", ((ThisBuild / baseDirectory).value / ".." / "scala3-benchmarks").getCanonicalPath)}/bench-sources",

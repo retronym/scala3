@@ -18,11 +18,18 @@ object Corpus:
     "scalaz" -> List("-nowarn", "-source", "3.0", "-Xkind-projector", "-language:implicitConversions"),
   )
 
-  /** A corpus from a lampepfl/scala3-benchmarks checkout (`benchlab.corpora` is its `bench-sources`). */
+  /** A corpus from a lampepfl/scala3-benchmarks checkout (`benchlab.corpora` is its `bench-sources`), or, given an
+   *  absolute path, the sources under that directory, with the options of the known corpus of the same name, if any.
+   */
   def load(name: String): Corpus =
-    val opts = options.getOrElse(name, sys.error(s"unknown corpus $name; known: ${options.keys.toList.sorted.mkString(", ")}"))
-    val root = Path.of(sys.props.getOrElse("benchlab.corpora", sys.error("-Dbenchlab.corpora=<scala3-benchmarks>/bench-sources not set")))
-    val dir = root.resolve(name)
+    val absolute = Path.of(name).isAbsolute
+    val dir =
+      if absolute then Path.of(name)
+      else Path.of(sys.props.getOrElse("benchlab.corpora", sys.error("-Dbenchlab.corpora=<scala3-benchmarks>/bench-sources not set"))).resolve(name)
+    val opts = options.get(dir.getFileName.toString) match
+      case Some(o) => o
+      case None if absolute => Nil
+      case None => sys.error(s"unknown corpus $name; known: ${options.keys.toList.sorted.mkString(", ")}, or an absolute path")
     val paths = Files.walk(dir).iterator.asScala.filter(_.toString.endsWith(".scala")).toList.sorted
     if paths.isEmpty then sys.error(s"no sources in $dir")
     Corpus(name, paths.map(p => VirtualFile(dir.relativize(p).toString, Files.readAllBytes(p))), shared ++ opts)

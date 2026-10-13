@@ -26,7 +26,9 @@ class ParserBenchmark:
   private var compiler: InMemoryCompiler = compiletime.uninitialized
 
   @Setup(Level.Trial)
-  def setup(): Unit = compiler = InMemoryCompiler(Corpus.load(corpus), List("-Ystop-after:parser"))
+  def setup(): Unit =
+    Announce.jvm(s"ParserBenchmark($corpus)")
+    compiler = InMemoryCompiler(Corpus.load(corpus), List("-Ystop-after:parser"))
 
   @Benchmark
   def parse(): Unit = compiler.compile()
@@ -51,6 +53,7 @@ class PicklerBenchmark:
 
   @Setup(Level.Trial)
   def setup(): Unit =
+    Announce.jvm(s"PicklerBenchmark($corpus)")
     val run = InMemoryCompiler(Corpus.load(corpus), List("-Ystop-after:pickler")).compileRun()
     val runCtx = run.runContext
     items = (for
