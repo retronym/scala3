@@ -4826,7 +4826,11 @@ object Types extends TypeUtils {
       else infos(paramNum)
     }
 
-    override def computeHash(bs: Binders): Int = doHash(paramNum, binder.identityHash(bs))
+    // A method or poly type is never hash-consed, so a type over its params can only be shared by operations on the
+    // same instance; most such types are transient (see #18 in retronym/scala3).
+    override def computeHash(bs: Binders): Int =
+      if Uniques.uncacheMethodParamRefs && binder.isInstanceOf[MethodOrPoly] then NotCached
+      else doHash(paramNum, binder.identityHash(bs))
 
     override def equals(that: Any): Boolean = equals(that, null)
 

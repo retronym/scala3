@@ -176,6 +176,18 @@ object ProbeMain:
       override protected def doCompile(compiler: Compiler, files: List[dotty.tools.io.AbstractFile])(using Context) =
         ctxOut = ctx
         super.doCompile(compiler, files)
+    sys.props.get("probe.runs") match
+      case Some(n) =>
+        // timing mode: no probe, a fresh compile per run
+        val tmx = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+        val tid = Thread.currentThread.threadId
+        for i <- 1 to n.toInt do
+          val a0 = tmx.getThreadAllocatedBytes(tid); val t0 = System.nanoTime
+          val rep = Driver().process((opts ++ files).toArray)
+          val ms = (System.nanoTime - t0) / 1e6; val mb = (tmx.getThreadAllocatedBytes(tid) - a0) / 1e6
+          println(f"run $i%2d: $ms%8.1f ms  $mb%8.1f MB allocated  errors=${rep.errorCount}")
+        return
+      case None =>
     Uniques.probe = P
     val t0 = System.nanoTime
     val rep = driver.process((opts ++ files).toArray)
