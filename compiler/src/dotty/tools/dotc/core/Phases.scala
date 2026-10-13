@@ -213,9 +213,6 @@ object Phases {
         denotTransformerIndex(i) = dense.length
         dense += denotTransformers(i)
       denseDenotTransformers = dense.toArray
-      if sys.props.contains("dotty.goForward.printShape") then
-        println(denseDenotTransformers.zipWithIndex.map((t, k) =>
-          s"$k ${t.getClass.getName} lastPhaseId=${t.asInstanceOf[Phase].end} phase=${t.asInstanceOf[Phase].id}").mkString("[goForwardShape]\n", "\n", ""))
       if GoForwardSite.MODE == "pe" then
         GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
       else if GoForwardSite.MODE == "shared" then
@@ -233,6 +230,12 @@ object Phases {
         this.fusedPhases = (NoPhase :: phasess).toArray
       else
         this.fusedPhases = this.phases
+
+      if sys.props.contains("dotty.goForward.printShape") then // DO NOT MERGE
+        def group(id: Int) = fusedPhases.indexWhere(p => p.start <= id && id <= p.end)
+        println(denseDenotTransformers.zipWithIndex.map((t, k) =>
+          val p = t.asInstanceOf[Phase]
+          s"$k ${t.getClass.getName} phase=${p.id} name=${p.phaseName} group=${group(p.id)}").mkString("[goForwardShape]\n", "\n", ""))
 
       if myCheckCapturesPhase.exists then
         myCheckCapturesPhaseId = myCheckCapturesPhase.id
