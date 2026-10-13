@@ -27,6 +27,7 @@ object ProbeMain:
 
     def hit(table: String, tp: Type, freshParts: Boolean): Unit =
       val c = totalsFor(table); c.hits += 1; if freshParts then c.hitsFresh += 1
+      if Lambdas.enabled then Lambdas.hit(table, tp)
       n += 1
       if n % SampleEvery == 0 then
         val s = sampled.getOrElseUpdate(key(table, tp), Counts()); s.hits += 1; if freshParts then s.hitsFresh += 1
@@ -61,10 +62,11 @@ object ProbeMain:
     val afterConstruction = new Array[Long](3)
     val noBinder = new Array[Long](3)
 
-    def binders(tp: Type): Set[LambdaType] =
-      val found = mutable.Set[LambdaType]()
+    // identity set: a binder under construction must not be hashed
+    def binders(tp: Type): Iterable[LambdaType] =
+      val found = java.util.Collections.newSetFromMap(java.util.IdentityHashMap[LambdaType, java.lang.Boolean]())
       def visit(t: Type, depth: Int): Unit = if depth < 6 then t match
-        case t: ParamRef => found += t.binder
+        case t: ParamRef => found.add(t.binder)
         case t: AppliedType => visit(t.tycon, depth + 1); t.args.foreach(visit(_, depth + 1))
         case t: TypeBounds => visit(t.lo, depth + 1); visit(t.hi, depth + 1)
         case t: AndOrType => visit(t.tp1, depth + 1); visit(t.tp2, depth + 1)
@@ -72,14 +74,27 @@ object ProbeMain:
         case t: AnnotatedType => visit(t.parent, depth + 1)
         case t: NamedType => visit(t.prefix, depth + 1)
         case t: ExprType => visit(t.resType, depth + 1)
-        case t: LambdaType => t.paramInfos.foreach(visit(_, depth + 1)); visit(t.resType, depth + 1)
+        case t: LambdaType =>
+          if t.paramInfos != null then t.paramInfos.foreach(visit(_, depth + 1))
+          if t.resType != null then visit(t.resType, depth + 1)
         case _ =>
       visit(tp, 0)
-      found.toSet
+      found.asScala.toList
+
+    // (table, kind of binders mentioned) -> (hits, misses)
+    val byBinderKind = mutable.HashMap[(String, String), Array[Long]]()
+    def binderKind(bs: Iterable[LambdaType]): String =
+      if bs.isEmpty then "no params"
+      else if bs.exists(_.isInstanceOf[MethodOrPoly]) then "params of method/poly (never uniqued)"
+      else if bs.exists(b => !finalized.containsKey(b)) then "params of HK lambda under construction"
+      else "params of finished HK lambda"
+    def hit(table: String, tp: Type): Unit =
+      byBinderKind.getOrElseUpdate((table, binderKind(binders(tp))), new Array[Long](2))(0) += 1
 
     def miss(table: String, tp: Type): Unit =
       val i = tables.indexOf(table)
       val bs = binders(tp)
+      byBinderKind.getOrElseUpdate((table, binderKind(bs)), new Array[Long](2))(1) += 1
       if bs.isEmpty then noBinder(i) += 1
       // attribute to the innermost lambda still under construction, if any
       val open = bs.filterNot(finalized.containsKey)
@@ -102,6 +117,9 @@ object ProbeMain:
         println(f"$cls%-22s ${hit.toString}%5s ${s(0)}%,10d ${s(1)}%,11d ${s(2)}%,9d ${s(3)}%,9d")
       println(f"never offered to unique: ${pending.size}%,d lambdas, inner misses ${pending.values.asScala.map(_(0)).sum}%,d applied")
       println(f"misses over params of finalized lambdas: applied=${afterConstruction(0)}%,d named=${afterConstruction(1)}%,d uniques=${afterConstruction(2)}%,d")
+      println("\n== lookups by the binders of the params they mention: hits | misses | hit%")
+      for ((t, k), Array(h, m)) <- byBinderKind.toList.sortBy(x => (x._1._1, -x._2(1))) do
+        println(f"$t%-8s $h%,11d $m%,11d ${100.0 * h / (h + m)}%5.1f%%  $k")
       println(f"misses mentioning no params: applied=${noBinder(0)}%,d named=${noBinder(1)}%,d uniques=${noBinder(2)}%,d")
 
   // frames that are plumbing between the interesting caller and the unique table
