@@ -169,11 +169,15 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
 
     @tailrec
     def linkedListLoop(entry: Entry[A] | Null): A = entry match {
-      case null                    => addEntryAt(bucket, elem, h, oldHead)
+      case null                    =>
+        Stats.record(statsItem("miss"))
+        addEntryAt(bucket, elem, h, oldHead)
       case _                       =>
         if entry.hash == h then
           val entryElem = entry.get
-          if entryElem != null && isEqual(elem, entryElem) then entryElem
+          if entryElem != null && isEqual(elem, entryElem) then
+            Stats.record(statsItem("hit"))
+            entryElem
           else linkedListLoop(entry.tail)
         else linkedListLoop(entry.tail)
     }
