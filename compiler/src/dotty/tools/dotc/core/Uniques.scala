@@ -10,7 +10,7 @@ import WeakHashSet.Entry
 import scala.annotation.tailrec
 import scala.annotation.internal.sharable
 
-class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
+class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity * Uniques.capacityFactor):
   override def hash(x: Type): Int = x.hash
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
@@ -32,6 +32,9 @@ object Uniques:
 
   // DO NOT MERGE: experiment switch, see ParamRef.computeHash
   @sharable var uncacheMethodParamRefs: Boolean = sys.props.contains("dotty.uncacheMethodParamRefs")
+
+  // DO NOT MERGE: experiment switch, multiplies the initial capacity of the unique tables
+  @sharable val capacityFactor: Int = sys.props.get("dotty.uniquesCapacityFactor").fold(1)(_.toInt)
 
   // DO NOT MERGE: experiment switch, see `localBinderOf`
   @sharable var localMethodParamUniques: Boolean = sys.props.contains("dotty.localMethodParamUniques")
@@ -112,7 +115,7 @@ object Uniques:
         p.unique(tp, r)
       r
 
-  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
+  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4 * capacityFactor) with Hashable:
     override def hash(x: NamedType): Int = x.hash
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
@@ -162,7 +165,7 @@ object Uniques:
 
   end NamedTypeUniques
 
-  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
+  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2 * capacityFactor) with Hashable:
     override def hash(x: AppliedType): Int = x.hash
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
