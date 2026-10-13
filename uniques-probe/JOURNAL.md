@@ -252,3 +252,18 @@ Base → NQ:
 - **Added:** `linkedListLoop` +391M and `Reference.get` +161M, because cleared entries stay in the chains until a sweep; `addEntryAt` +290M, the inlined full-table sweeps, which recur because garbage refills the table quickly.
 
 **Finding:** rejected. With millions of short-lived entries the queue pays for itself: it names exactly the entries that died, which is cheaper than scanning for them. Under UDMh the remaining poll cost is only 120M cycles/op (0.7%), so there is little left to win there. UDMh reproduces: −7.4% here against −6.1% in Exp 12.
+
+## Exp 14: U + cache on the other corpora, profiled (2026-10-13 22:12–22:30)
+
+Same profile setup (`bench-lab/ab/prof-corpora.json`): base against UDMh (U plus the direct-mapped cache keyed on part hashes), one run each. The first tastyQuery base run overlapped other load on the machine (load average 12.9; 1001 ms/op) and was rerun. `profdiff.py` now counts ops per iteration from each iteration's mean; counting from the overall score skewed sub-second benchmarks.
+
+| corpus | base cycles/op | UDMh cycles/op | Δ cycles | ms/op base → UDMh |
+|---|---|---|---|---|
+| scalaz (Exp 13) | 17.86G | 16.54G | −7.4% | 4406 → 4005 |
+| tastyQuery | 3.38G | 3.34G | −1.1% | 845 → 805 |
+| re2s | 1.11G | 1.08G | −2.1% | 266 → 261 |
+| dottyUtil | 0.64G | 0.68G | +4.9% | 156 → 161 |
+
+On the small corpora no method's self cycles per op move by more than about 9M. The top entries are the same methods moving between compiled and inlined frames ([i]/[j]), i.e. JIT variation, and the dottyUtil delta is spread across the whole profile. The one attributable change on tastyQuery is the expected one, `WeakHashSet.resize` −6M.
+
+**Finding:** neutral within run-to-run noise on corpora with little method-param churn, and −7.4% on scalaz, which has about 100× more. No regression attributable to the change.
