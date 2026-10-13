@@ -1134,6 +1134,8 @@ object Contexts {
     private[core] var denotTransformerIndex: Array[Int] = uninitialized
     /** -Ddotty.goForward=unrolled: this plan has the classes GoForwardUnrolled was generated for */
     private[core] var goForwardUnrolledOk: Boolean = false
+    /** -Ddotty.goForward=shared: this plan has the classes GoForwardUnrolledShared was generated for */
+    private[core] var goForwardSharedOk: Boolean = false
 
     /** Flag to suppress inlining, set after overflow */
     private[dotc] var stopInlining: Boolean = false

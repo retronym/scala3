@@ -218,6 +218,10 @@ object Phases {
           s"$k ${t.getClass.getName} lastPhaseId=${t.asInstanceOf[Phase].end} phase=${t.asInstanceOf[Phase].id}").mkString("[goForwardShape]\n", "\n", ""))
       if GoForwardSite.MODE == "pe" then
         GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
+      else if GoForwardSite.MODE == "shared" then
+        goForwardSharedOk = GoForwardUnrolledShared.matches(denseDenotTransformers)
+        if !goForwardSharedOk && denseDenotTransformers.length > 1 then
+          System.err.println(s"[goForward=shared] plan does not match the generated shape; using goForward")
       else if GoForwardSite.MODE == "unrolled" then
         goForwardUnrolledOk = GoForwardUnrolled.matches(denseDenotTransformers)
         if !goForwardUnrolledOk && denseDenotTransformers.length > 1 then

@@ -900,6 +900,7 @@ object Denotations {
         GoForwardSite.MODE match
           case "off" => goForward
           case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, false, ctx)
+          case "shared" => if ctx.base.goForwardSharedOk then GoForwardUnrolledShared.go(this, ctx) else goForward
           case "unrolled" => if ctx.base.goForwardUnrolledOk then GoForwardUnrolled.go(this, ctx) else goForward
           case "mh" | "spun" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, true, ctx)
           case _ => GoForwardSite.invoke(this, ctx).asInstanceOf[SingleDenotation]
