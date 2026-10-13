@@ -213,8 +213,15 @@ object Phases {
         denotTransformerIndex(i) = dense.length
         dense += denotTransformers(i)
       denseDenotTransformers = dense.toArray
+      if sys.props.contains("dotty.goForward.printShape") then
+        println(denseDenotTransformers.zipWithIndex.map((t, k) =>
+          s"$k ${t.getClass.getName} lastPhaseId=${t.asInstanceOf[Phase].end} phase=${t.asInstanceOf[Phase].id}").mkString("[goForwardShape]\n", "\n", ""))
       if GoForwardSite.MODE == "pe" then
         GoForwardSite.link(denseDenotTransformers.asInstanceOf[Array[AnyRef]], denotTransformerIndex, nextDenotTransformerId)
+      else if GoForwardSite.MODE == "unrolled" then
+        goForwardUnrolledOk = GoForwardUnrolled.matches(denseDenotTransformers)
+        if !goForwardUnrolledOk && denseDenotTransformers.length > 1 then
+          System.err.println(s"[goForward=unrolled] plan does not match the generated shape; using goForward")
       else if GoForwardSite.MODE == "mh" || GoForwardSite.MODE == "spun" then
         GoForwardSite.linkDispatch(denseDenotTransformers.asInstanceOf[Array[AnyRef]])
 

@@ -697,7 +697,7 @@ object Denotations {
      *  2) the union of all validity periods is a contiguous
      *     interval.
      */
-    protected var nextInRun: SingleDenotation = this
+    protected[core] var nextInRun: SingleDenotation = this // protected[core]: GoForwardUnrolled (DO NOT MERGE)
 
     /** The version of this SingleDenotation that was valid in the first phase
      *  of this run.
@@ -900,6 +900,7 @@ object Denotations {
         GoForwardSite.MODE match
           case "off" => goForward
           case "plain" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, false, ctx)
+          case "unrolled" => if ctx.base.goForwardUnrolledOk then GoForwardUnrolled.go(this, ctx) else goForward
           case "mh" | "spun" => goForwardLoop(ctx.base.denseDenotTransformers, ctx.base.denotTransformerIndex, ctx.base.nextDenotTransformerId, true, ctx)
           case _ => GoForwardSite.invoke(this, ctx).asInstanceOf[SingleDenotation]
       else
