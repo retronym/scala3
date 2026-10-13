@@ -32,6 +32,11 @@ def events_of(profile_dir):
     return [(e, [f"--{e}"]) for e in spec.split("-") if e in ("cpu", "wall", "alloc", "lock")] or [("cpu", ["--cpu"])]
 
 
+FORCE = False
+HEAP = "24g"
+RENDERED_AFTER = 0  # graphs older than this (epoch secs) are redone, e.g. ones bench-lab rendered with another jfrconv
+
+
 def graph_path(jfr, label, kind):
     return f"{jfr[:-4]}-{label}{'' if kind == 'bench' else '-' + kind}.html"
 
@@ -39,7 +44,10 @@ def graph_path(jfr, label, kind):
 def render_one(jfrconv, jfr, label, select, kind, title):
     extra, reverse = KINDS[kind]
     out = graph_path(jfr, label, kind)
-    cmd = [jfrconv, *select, *extra, *(["--reverse"] if reverse else []), "--minwidth", "0.2", "--title", title, jfr, out]
+    if not FORCE and os.path.exists(out) and os.path.getmtime(out) > RENDERED_AFTER and os.path.getmtime(out) > os.path.getmtime(jfr):
+        return None
+    # reverse graphs of deep Scala stacks need a lot of heap (over 8 GB for a 1 GB kperf JFR)
+    cmd = [jfrconv, f"-J-Xmx{HEAP if reverse else '4g'}", *select, *extra, *(["--reverse"] if reverse else []), "--minwidth", "0.2", "--title", title, jfr, out]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return f"{out}: jfrconv failed: {r.stderr.strip()[:300]}" if r.returncode else None
 
@@ -53,8 +61,12 @@ def regraph(dirs, jfrconv=None, jobs=4, title_of=None):
             for label, select in events_of(d):
                 for kind in KINDS:
                     tasks.append((jfrconv, jfr, label, select, kind, f"{name}: {label.removeprefix('hw-')}, {kind}"))
+    # reverse graphs one at a time (each may take HEAP), the rest in parallel
+    reverse = [t for t in tasks if KINDS[t[4]][1]]
+    forward = [t for t in tasks if not KINDS[t[4]][1]]
     with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
-        problems = [p for p in pool.map(lambda t: render_one(*t), tasks) if p]
+        problems = [p for p in pool.map(lambda t: render_one(*t), forward) if p]
+    problems += [p for p in map(lambda t: render_one(*t), reverse) if p]
     for p in problems:
         print(p, file=sys.stderr)
     return len(tasks) - len(problems), problems
@@ -64,8 +76,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jfrconv", default=DEFAULT_JFRCONV)
     ap.add_argument("-j", "--jobs", type=int, default=4)
+    ap.add_argument("--heap", default=HEAP, help="jfrconv heap for reverse graphs")
+    ap.add_argument("--force", action="store_true", help="redo graphs that are already up to date")
+    ap.add_argument("--since", type=float, default=0, help="redo graphs older than this epoch time")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args()
+    FORCE, RENDERED_AFTER, HEAP = a.force, a.since, a.heap
     ok, problems = regraph(a.dirs, a.jfrconv, a.jobs)
     print(f"{ok} graphs written, {len(problems)} problems")
     sys.exit(1 if problems else 0)
