@@ -872,7 +872,7 @@ object Denotations {
           // performance: Test setup: Compile everything in dotc and immediate subdirectories
           // 10 times. Best out of 10: 18154ms with `prev` field, 17777ms without.
           cnt += 1
-          if cur eq this then
+          if (cur eq this) && !GoBackStats.oldSpin then
             GoBackStats.record(cnt, bail = true)
             if GoBackStats.checkEquiv then
               val expected = atPhase(coveredInterval.firstPhaseId)(current)
@@ -1407,6 +1407,8 @@ object Denotations {
 object GoBackStats {
   private val enabled = java.lang.Boolean.getBoolean("dotty.goBackStats")
   val checkEquiv = java.lang.Boolean.getBoolean("dotty.goBackCheck")
+  // A/B switch: restore the old 256-iteration spin
+  val oldSpin = java.lang.Boolean.getBoolean("dotty.goBackOldSpin")
   private val hist = new java.util.concurrent.atomic.AtomicLongArray(MaxPossiblePhaseId + 2)
   private val bails = new java.util.concurrent.atomic.AtomicLong
   private val callers = new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]
