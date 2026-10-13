@@ -164,6 +164,9 @@ object Substituters:
     }
 
   final class SubstBindingMap[BT <: BindingType](val from: BT, val to: BT)(using Context) extends DeepTypeMap, BiTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstBindingMap(from, to)(using c)
     def apply(tp: Type): Type = subst(tp, from, to, this)(using mapCtx)
     override def mapCapability(c: Capability) = c match
       case c @ ResultCap(binder) if binder eq from =>
@@ -183,6 +186,10 @@ object Substituters:
   }
 
   final class SubstBindingsMap(val from: Array[BindingType], val to: Array[BindingType])(using Context) extends DeepTypeMap, BiTypeMap {
+
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstBindingsMap(from, to)(using c)
 
     def apply(tp: Type): Type = tp match
       case tp: BoundType =>
@@ -212,35 +219,59 @@ object Substituters:
   }
 
   final class Subst1Map(from: Symbol, to: Type)(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => Subst1Map(from, to)(using c)
     def apply(tp: Type): Type = subst1(tp, from, to, this)(using mapCtx)
   }
 
   final class Subst2Map(from1: Symbol, to1: Type, from2: Symbol, to2: Type)(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from1 = this.from1; val to1 = this.to1; val from2 = this.from2; val to2 = this.to2
+      c => Subst2Map(from1, to1, from2, to2)(using c)
     def apply(tp: Type): Type = subst2(tp, from1, to1, from2, to2, this)(using mapCtx)
   }
 
   final class SubstMap(from: List[Symbol], to: List[Type])(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstMap(from, to)(using c)
     def apply(tp: Type): Type = subst(tp, from, to, this)(using mapCtx)
   }
 
   final class SubstSymMap(from: List[Symbol], to: List[Symbol])(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstSymMap(from, to)(using c)
     def apply(tp: Type): Type = substSym(tp, from, to, this)(using mapCtx)
     def inverse = SubstSymMap(to, from) // implicitly requires that `to` contains no duplicates.
   }
 
   final class SubstThisMap(from: ClassSymbol, to: Type)(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstThisMap(from, to)(using c)
     def apply(tp: Type): Type = substThis(tp, from, to, this)(using mapCtx)
   }
 
   final class SubstRecThisMap(from: Type, to: Type)(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstRecThisMap(from, to)(using c)
     def apply(tp: Type): Type = substRecThis(tp, from, to, this)(using mapCtx)
   }
 
   final class SubstParamMap(from: ParamRef, to: Type)(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstParamMap(from, to)(using c)
     def apply(tp: Type): Type = substParam(tp, from, to, this)(using mapCtx)
   }
 
   final class SubstParamsMap(from: BindingType, to: List[Type])(using Context) extends DeepTypeMap {
+    override protected def recreate =
+      val from = this.from; val to = this.to
+      c => SubstParamsMap(from, to)(using c)
     def apply(tp: Type): Type = substParams(tp, from, to, this)(using mapCtx)
   }
 

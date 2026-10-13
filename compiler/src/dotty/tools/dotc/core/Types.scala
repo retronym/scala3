@@ -3877,6 +3877,10 @@ object Types extends TypeUtils {
      *  overloads impossible. See `tests/pos/annot-17242.scala` for example.
      */
     private class IntegrateMap(from: List[Symbol], to: List[Type])(using Context) extends TypeMap:
+      override protected def recreate =
+        val lt = self; val from = this.from; val to = this.to
+        c => lt.IntegrateMap(from, to)(using c)
+
       override def apply(tp: Type) =
         // Same implementation as in `SubstMap`, except the `derivedSelect` in
         // the `NamedType` case, and the default case that just calls `mapOver`.
@@ -6173,6 +6177,13 @@ object Types extends TypeUtils {
 
     def apply(tp: Type): Type
 
+    // A factory for an equivalent fresh map in a given context, or null. If defined, it must
+    // not capture this map or any context. Mapping over a `LazyRef` yields another `LazyRef`
+    // that applies the map when forced; without a factory its closure retains this map and
+    // hence the context, and therefore the run, that created it. Such unforced `LazyRef`s
+    // end up in the infos of symbols loaded from the classpath, which outlive the run.
+    protected def recreate: (Context => TypeMap) | Null = null
+
     protected def derivedSelect(tp: NamedType, pre: Type): Type =
       tp.derivedSelect(pre)
     protected def derivedRefinedType(tp: RefinedType, parent: Type, info: Type): Type =
@@ -6383,17 +6394,26 @@ object Types extends TypeUtils {
           else classType1
 
         case tp: LazyRef =>
-          LazyRef { refCtx =>
-            given Context = refCtx
-            val ref1 = tp.ref
-            if refCtx.runId == mapCtx.runId then this(ref1)
-            else // splice in new run into map context
-              val saved = mapCtx
-              mapCtx = mapCtx.fresh
-                .setPeriod(Period(refCtx.runId, mapCtx.phaseId))
-                .setRun(refCtx.run)
-              try this(ref1) finally mapCtx = saved
-          }
+          val recreate = this.recreate
+          if recreate != null then
+            // Capture only `recreate`, `tp` and the phase, neither `this` nor a context.
+            val phaseId = mapCtx.phaseId
+            LazyRef { refCtx =>
+              val ref1 = tp.ref(using refCtx)
+              recreate(refCtx.withPhase(phaseId))(ref1)
+            }
+          else
+            LazyRef { refCtx =>
+              given Context = refCtx
+              val ref1 = tp.ref
+              if refCtx.runId == mapCtx.runId then this(ref1)
+              else // splice in new run into map context
+                val saved = mapCtx
+                mapCtx = mapCtx.fresh
+                  .setPeriod(Period(refCtx.runId, mapCtx.phaseId))
+                  .setRun(refCtx.run)
+                try this(ref1) finally mapCtx = saved
+            }
 
         case tp: ClassInfo =>
           mapClassInfo(tp)
