@@ -1,0 +1,14 @@
+{
+  "name": "goforward",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {"xctrace": "ipc"},
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M -Xbootclasspath/a:/Users/jzaugg-virtus/code/jvm-loop-unroller/target/jvm-loop-unroller-0.1.0-SNAPSHOT.jar",
+  "rounds": 2,
+  "corpora": {"scalaz": "-wi 10 -i 10 -w 10 -r 10", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
+  "variants": {
+    "off": "-Ddotty.goForward=off",
+    "plain": "-Ddotty.goForward=plain",
+    "pe": "-Ddotty.goForward=pe"
+  },
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}
