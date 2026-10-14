@@ -1,5 +1,6 @@
-"""(Re)renders the flame graphs of async-profiler runs with a given jfrconv, by default the integration build of
-retronym/async-profiler (kperf multi-event JFR with `--hw`, and the flame.html with search/filter and bottom-up view).
+"""(Re)renders the flame graphs of async-profiler runs with a given jfrconv, by default `$JFRCONV` or the integration
+build of retronym/async-profiler (kperf multi-event JFR with `--hw`, and the flame.html with search/filter and bottom-up
+view).
 
   python3 -I bench-lab/scripts/regraph.py [--jfrconv <jfrconv>] [-j <jobs>] <profile-dir>...
 
@@ -7,9 +8,12 @@ A profile dir is one that bench-lab's benchLabAsync wrote, `out/bench-lab/async-
 it, each event and each graph kind below, writes `<jfr stem>-<label>[-<kind>].html` (the names bench-lab uses, so its
 indexes keep working), plus the classified forward and reverse graphs of the benchmark threads.
 """
-import argparse, concurrent.futures, glob, os, re, subprocess, sys
+import argparse, concurrent.futures, glob, os, re, shutil, subprocess, sys
 
-DEFAULT_JFRCONV = os.path.expanduser("~/code/.worktrees/async-profiler/integration-kperf-flamegraph/build/bin/jfrconv")
+# $JFRCONV, else a build of retronym/async-profiler's integration branch if checked out at the usual place, else the
+# jfrconv on the PATH (which lacks --hw and the extended flame graph controls)
+_INTEGRATION = os.path.expanduser("~/code/.worktrees/async-profiler/integration-kperf-flamegraph/build/bin/jfrconv")
+DEFAULT_JFRCONV = os.environ.get("JFRCONV") or (_INTEGRATION if os.path.exists(_INTEGRATION) else "jfrconv")
 
 # per kind: jfrconv options (thread filter, classification), and whether to render bottom-up
 BENCH = ["--threads", "-I", ".*jmh-worker.*"]
@@ -40,7 +44,8 @@ HEAP = "24g"
 # `<jfr stem>.regraph` records which jfrconv build rendered that recording's graphs: graphs that bench-lab (or an
 # older build) rendered are redone even when they are newer than the recording
 def stamp(jfrconv):
-    return f"{os.path.realpath(jfrconv)} {os.path.getmtime(jfrconv):.0f} minwidth={MINWIDTH}"
+    path = shutil.which(jfrconv) or jfrconv
+    return f"{os.path.realpath(path)} {os.path.getmtime(path):.0f} minwidth={MINWIDTH}"
 
 
 def stamp_of(jfr):
