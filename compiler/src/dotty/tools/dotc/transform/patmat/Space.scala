@@ -65,11 +65,16 @@ sealed trait Space extends Showable:
     else if a == Empty then true
     else if b == Empty then false
     else
-      ctx.property(IsSubspaceCacheKey).get.getOrElseUpdate((a, b), computeIsSubspace(a, b))
+      PatmatStats.count(PatmatStats.IsSubspaceCalls)
+      val cache = ctx.property(IsSubspaceCacheKey).get
+      if PatmatStats.enabled then
+        if cache.contains((a, b)) then PatmatStats.count(PatmatStats.IsSubspaceHit) else PatmatStats.count(PatmatStats.IsSubspaceComputed)
+      cache.getOrElseUpdate((a, b), computeIsSubspace(a, b))
 
   @sharable private var mySimplified: Space | Null = null
 
   def simplify(using Context): Space =
+    PatmatStats.count(PatmatStats.SimplifyCalls)
     val simplified = mySimplified
     if simplified == null then
       val simplified = SpaceEngine.computeSimplify(this)
@@ -102,12 +107,15 @@ case class Typ(tp: Type, decomposed: Boolean = true) extends Space:
   def decompose(using Context): List[Typ] =
     val decompose = myDecompose
     if decompose == null then
+      PatmatStats.count(PatmatStats.TypDecomposeComputed)
       val decompose = tp match
         case Parts(parts) => parts.map(Typ(_, decomposed = true))
         case _            => ListOfTypNoType
       myDecompose = decompose
       decompose
-    else decompose
+    else
+      PatmatStats.count(PatmatStats.TypDecomposeHit)
+      decompose
 end Typ
 
 /** Space representing an extractor pattern */
@@ -125,17 +133,17 @@ object SpaceEngine {
 
   /** Simplify space such that a space equal to `Empty` becomes `Empty` */
   def computeSimplify(space: Space)(using Context): Space = trace(i"simplify($space)")(space match {
-    case Prod(tp, fun, spaces) =>
+    case Prod(tp, fun, spaces) => PatmatStats.count(PatmatStats.SimplifyProd); PatmatStats.timed(PatmatStats.TSimplifyProd):
       val sps = spaces.mapconserve(simplify)
       if sps.contains(Empty) then Empty
       else if decompose(tp).isEmpty then Empty
       else if sps eq spaces then space else Prod(tp, fun, sps)
-    case Or(spaces) =>
+    case Or(spaces) => PatmatStats.count(PatmatStats.SimplifyOr); PatmatStats.add(PatmatStats.SimplifyOrElems, spaces.size); PatmatStats.timed(PatmatStats.TSimplifyOr):
       val spaces2 = spaces.map(simplify).filter(_ != Empty)
       if spaces2.isEmpty then Empty
       else if spaces2.lengthIs == 1 then spaces2.head
       else if spaces2.corresponds(spaces)(_ eq _) then space else Or(spaces2)
-    case typ: Typ =>
+    case typ: Typ => PatmatStats.count(PatmatStats.SimplifyTyp); PatmatStats.timed(PatmatStats.TSimplifyTyp):
       if decompose(typ).isEmpty then Empty
       else
         val cls = typ.tp.classSymbol
@@ -155,6 +163,7 @@ object SpaceEngine {
   /** Try to expand a case class type into a Prod space with its field types.
    *  Returns null if the expansion is not possible (no companion, custom unapply, etc). */
   private def expandCaseClass(tp: Type)(using Context): Prod | Null =
+    PatmatStats.count(PatmatStats.ExpandCaseClass)
     val cls = tp.classSymbol
     val companion = cls.companionModule
     if !companion.exists then return null
@@ -185,7 +194,7 @@ object SpaceEngine {
     }
 
   /** Flatten space to get rid of `Or` for pretty print */
-  def flatten(space: Space)(using Context): Seq[Space] = space match {
+  def flatten(space: Space)(using Context): Seq[Space] = { PatmatStats.count(PatmatStats.Flatten); space } match {
     case Prod(tp, fun, spaces) =>
       val ss = LazyList(spaces*).map(flatten)
 
@@ -242,6 +251,7 @@ object SpaceEngine {
 
   /** Intersection of two spaces  */
   def intersect(a: Space, b: Space)(using Context): Space = trace(i"intersect($a & $b)") {
+    PatmatStats.count(PatmatStats.Intersect)
     (a, b) match {
       case (Empty, _) | (_, Empty) => Empty
       case (_, Or(ss)) => Or(ss.map(intersect(a, _)).filter(_ ne Empty))
@@ -267,6 +277,7 @@ object SpaceEngine {
 
   /** The space of a not covered by b */
   def minus(a: Space, b: Space)(using Context): Space = trace(i"minus($a - $b)") {
+    PatmatStats.count(PatmatStats.Minus)
     (a, b) match {
       case (Empty, _) => Empty
       case (_, Empty) => a
@@ -377,7 +388,8 @@ object SpaceEngine {
   }
 
   /** Return the space that represents the pattern `pat` */
-  def project(pat: Tree)(using Context): Space = trace(i"project($pat ${pat.className} ${pat.tpe})")(pat match {
+  def project(pat: Tree)(using Context): Space = trace(i"project($pat ${pat.className} ${pat.tpe})")({ PatmatStats.count(PatmatStats.Project); PatmatStats.timed(PatmatStats.TProject)(projectImpl(pat)) })
+  private def projectImpl(pat: Tree)(using Context): Space = (pat match {
     case Literal(c) =>
       if (c.value.isInstanceOf[Symbol])
         Typ(c.value.asInstanceOf[Symbol].termRef, decomposed = false)
@@ -546,7 +558,10 @@ object SpaceEngine {
     tp.isPrimitiveValueType && (defn.boxedType(tp).classSymbol eq pt.classSymbol)
 
   /** Is `tp1` a subtype of `tp2`?  */
-  def isSubType(tp1: Type, tp2: Type)(using Context): Boolean = trace(i"$tp1 <:< $tp2") {
+  def isSubType(tp1: Type, tp2: Type)(using Context): Boolean =
+    PatmatStats.count(PatmatStats.IsSubType)
+    PatmatStats.timed(PatmatStats.TIsSubType)(isSubTypeImpl(tp1, tp2))
+  private def isSubTypeImpl(tp1: Type, tp2: Type)(using Context): Boolean = trace(i"$tp1 <:< $tp2") {
     if tp1 == ConstantType(Constant(null)) && !ctx.mode.is(Mode.SafeNulls)
     then tp2 == ConstantType(Constant(null))
     else if tp1.isTupleXXLExtract(tp2) then true // See isTupleXXLExtract, fixes TupleXXL parameter type
@@ -576,7 +591,10 @@ object SpaceEngine {
 
   /** Return term parameter types of the extractor `unapp`.
    *  Parameter types of the case class type `tp`. Adapted from `unapplyPlan` in patternMatcher  */
-  def signature(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): List[Type] = trace(i"signature($unapp, $scrutineeTp, $argLen)") {
+  def signature(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): List[Type] =
+    PatmatStats.count(PatmatStats.Signature)
+    PatmatStats.timed(PatmatStats.TSignature)(signatureImpl(unapp, scrutineeTp, argLen))
+  private def signatureImpl(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): List[Type] = trace(i"signature($unapp, $scrutineeTp, $argLen)") {
     val unappSym = unapp.symbol
 
     val mt: MethodType = unapp.widen match {
@@ -592,6 +610,7 @@ object SpaceEngine {
           // the unapply parameter type
           pt.instantiate(targs).asInstanceOf[MethodType]
         case _ =>
+          PatmatStats.count(PatmatStats.SignatureInfer)
           val locked = ctx.typerState.ownedVars
           val tvars = constrained(pt)
           val mt = pt.instantiate(tvars).asInstanceOf[MethodType]
@@ -663,6 +682,7 @@ object SpaceEngine {
 
   /** Whether the extractor covers the given type */
   def covers(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): Boolean = trace(i"covers($unapp, $scrutineeTp, $argLen)") {
+    PatmatStats.count(PatmatStats.Covers)
     SpaceEngine.isIrrefutable(unapp, argLen)
     || unapp.symbol == defn.TypeTest_unapply && {
       val AppliedType(_, _ :: tp :: Nil) = unapp.prefix.widen.dealias: @unchecked
@@ -675,7 +695,11 @@ object SpaceEngine {
   }
 
   /** Decompose a type into subspaces -- assume the type can be decomposed */
-  def decompose(tp: Type)(using Context): List[Type] = trace(i"decompose($tp)") {
+  def decompose(tp: Type)(using Context): List[Type] =
+    PatmatStats.count(PatmatStats.DecomposeType)
+    PatmatStats.decomposing(tp)
+    PatmatStats.timed(PatmatStats.TDecompose)(decomposeImpl(tp))
+  private def decomposeImpl(tp: Type)(using Context): List[Type] = trace(i"decompose($tp)") {
     def rec(tp: Type, mixins: List[Type]): List[Type] = tp.dealias match
       case AndType(tp1, tp2) =>
         var tpB   = tp2
@@ -1172,11 +1196,22 @@ object SpaceEngine {
   /** Returns `true` if the match is definitely exhaustive. */
   def checkMatch(m: Match)(using Context): Boolean =
     inContext(ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))) {
-      val isExhaustive = exhaustivityCheckable(m.selector) &&
-        inContext(ctx.withProperty(ExpandingCaseClassesKey, Some(mutable.Set.empty))) {
-          checkExhaustivity(m)
-        }
-      if reachabilityCheckable(m.selector) then checkReachability(m)
-      isExhaustive
+      if PatmatStats.enabled then
+        var isExhaustive = false
+        val exh = if exhaustivityCheckable(m.selector) then PatmatStats.measure {
+          isExhaustive = inContext(ctx.withProperty(ExpandingCaseClassesKey, Some(mutable.Set.empty))) {
+            checkExhaustivity(m)
+          }
+        } else null
+        val reach = if reachabilityCheckable(m.selector) then PatmatStats.measure(checkReachability(m)) else null
+        PatmatStats.record(m, exh, reach)
+        isExhaustive
+      else
+        val isExhaustive = exhaustivityCheckable(m.selector) &&
+          inContext(ctx.withProperty(ExpandingCaseClassesKey, Some(mutable.Set.empty))) {
+            checkExhaustivity(m)
+          }
+        if reachabilityCheckable(m.selector) then checkReachability(m)
+        isExhaustive
     }
 }
