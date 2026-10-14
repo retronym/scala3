@@ -27,7 +27,9 @@ def cell_row(spec, corpus, variant, cell):
     p = r["primaryMetric"]
     m = r.get("secondaryMetrics", {})
     cyc = m.get("xctrace.CORE_ACTIVE_CYCLE", {}).get("score")
-    flags = " ".join(a for a in r["jvmArgs"] if a.startswith("-Ddotty."))
+    ins = m.get("xctrace.INST_ALL", {}).get("score")
+    scalac = r.get("params", {}).get("scalacOptions", "")
+    flags = " ".join([a for a in r["jvmArgs"] if a.startswith("-Ddotty.")] + ([scalac] if scalac else []))
     graphs = ""
     pd = os.path.join(cell, "profile-dir")
     if os.path.exists(pd):
@@ -43,8 +45,41 @@ def cell_row(spec, corpus, variant, cell):
     html_row = (f'<tr data-corpus="{esc(corpus)}" data-profiled="{1 if graphs else 0}">'
                 f"<td>{esc(corpus)}</td><td>{esc(variant)} #{esc(os.path.basename(cell))}</td>"
                 f"<td>{p['score']:.0f} ± {p['scoreError']:.0f}</td><td>{f'{cyc / 1e9:.2f}G' if cyc else ''}</td>"
+                f"<td>{f'{ins / 1e9:.3f}G' if ins else ''}</td>"
                 f"<td><code>{esc(flags) or '(none)'}</code></td><td class=\"when\">{stamp(when)}</td><td>{graphs}</td></tr>")
-    return html_row, when, corpus
+    return html_row, when, corpus, (variant, p["score"], cyc, ins)
+
+
+def summary(name, cells):
+    """Per corpus and variant: mean ms/op, cycles/op and instructions/op over rounds, each against the spec's first
+    variant (spec variant order if bench-lab/ab/<name>.json exists, else alphabetical)."""
+    spec_f = os.path.join(REPO, "bench-lab", "ab", f"{name}.json")
+    order = list(json.load(open(spec_f)).get("variants", {})) if os.path.exists(spec_f) else []
+    out = []
+    for corpus in sorted(cells):
+        vs = cells[corpus]
+        names = [v for v in order if v in vs] + sorted(v for v in vs if v not in order)
+        def stats(xs):
+            xs = [x for x in xs if x]
+            if not xs:
+                return None, None
+            mean = sum(xs) / len(xs)
+            sd = (sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5 if len(xs) > 1 else 0.0
+            return mean, sd
+        base = {k: stats([c[i] for c in vs[names[0]]])[0] for i, k in ((1, "ms"), (2, "cyc"), (3, "ins"))}
+        for v in names:
+            cs = vs[v]
+            tds = [f"<td>{esc(corpus)}</td><td>{esc(v)}</td><td>{len(cs)}</td>"]
+            for i, k, fmt in ((1, "ms", lambda x: f"{x:.0f}"), (2, "cyc", lambda x: f"{x / 1e9:.3f}G"), (3, "ins", lambda x: f"{x / 1e9:.3f}G")):
+                mean, sd = stats([c[i] for c in cs])
+                if mean is None:
+                    tds.append("<td></td><td></td>"); continue
+                rel_sd = f" ± {100 * sd / mean:.1f}%" if len(cs) > 1 else ""
+                d = "" if v == names[0] or not base[k] else f"{100 * (mean / base[k] - 1):+.2f}%"
+                tds.append(f"<td>{fmt(mean)}{rel_sd}</td><td>{d}</td>")
+            out.append("<tr>" + "".join(tds) + "</tr>")
+    return ("<table class=\"summary\"><tr><th>corpus</th><th>variant</th><th>n</th><th>ms/op</th><th>Δ</th><th>cycles/op</th><th>Δ</th>"
+            "<th>instructions/op</th><th>Δ</th></tr>" + "".join(out) + "</table>") if out else ""
 
 
 def stamp(t):
@@ -80,7 +115,7 @@ sections = []
 all_corpora = set()
 for spec_dir in glob.glob(os.path.join(root, "*/")):
     name = os.path.basename(spec_dir.rstrip("/"))
-    rows, whens, corpora = [], [], set()
+    rows, whens, corpora, cells = [], [], set(), {}
     for corpus_dir in sorted(glob.glob(os.path.join(spec_dir, "*/"))):
         corpus = os.path.basename(corpus_dir.rstrip("/"))
         if corpus.startswith("diff-"):
@@ -92,6 +127,7 @@ for spec_dir in glob.glob(os.path.join(root, "*/")):
                     row = cell_row(name, corpus, variant, cell)
                     if row:
                         rows.append(row[0]); whens.append(row[1]); corpora.add(row[2])
+                        cells.setdefault(corpus, {}).setdefault(row[3][0], []).append(row[3])
     diffs = sorted(glob.glob(os.path.join(spec_dir, "diff-*", "*.html")))
     if not rows and not diffs:
         continue
@@ -101,8 +137,8 @@ for spec_dir in glob.glob(os.path.join(root, "*/")):
     last = max(whens) if whens else os.path.getmtime(spec_dir)
     span = f"{stamp(min(whens))} – {stamp(last)}" if whens else stamp(last)
     has_notes = os.path.exists(os.path.join(spec_dir, "NOTES.md"))
-    sections.append((last, f"""<section data-last="{last:.0f}" data-notes="{1 if has_notes else 0}"><h2>{esc(name)} <span class="when">{span}</span></h2>{notes(os.path.join(spec_dir, "NOTES.md"))}{diff_html}
-<table><tr><th>corpus</th><th>variant</th><th>ms/op</th><th>cycles/op (xctrace)</th><th>flags</th><th>finished</th><th>flame graphs</th></tr>{''.join(rows)}</table></section>"""))
+    sections.append((last, f"""<section data-last="{last:.0f}" data-notes="{1 if has_notes else 0}"><h2>{esc(name)} <span class="when">{span}</span></h2>{notes(os.path.join(spec_dir, "NOTES.md"))}{diff_html}{summary(name, cells)}
+<table><tr><th>corpus</th><th>variant</th><th>ms/op</th><th>cycles/op (xctrace)</th><th>instructions/op</th><th>flags</th><th>finished</th><th>flame graphs</th></tr>{''.join(rows)}</table></section>"""))
 sections = [h for _, h in sorted(sections, key=lambda x: -x[0])]
 chips = "".join(f'<button class="chip" data-corpus="{esc(c)}">{esc(c)}</button>' for c in sorted(all_corpora))
 
