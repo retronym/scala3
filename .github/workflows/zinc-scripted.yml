@@ -1,0 +1,71 @@
+name: Zinc scripted tests vs. scala3-sbt-bridge
+
+on:
+  push:
+    branches: ['ci/zinc-scripted-vs-scala3-bridge']
+  workflow_dispatch:
+    inputs:
+      zinc_ref:
+        description: 'sbt/zinc ref (tag, SHA or branch) to test; overrides the pinned SHA. Use "develop" to track the tip.'
+        required: false
+  schedule:
+    - cron: '0 5 * * 1'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+env:
+  # Move this forward periodically. The patch in .github/zinc must apply to it.
+  ZINC_PINNED_SHA: b6c94565e5bee6ad01eacd1e350a1c6d252b248e
+
+jobs:
+  zinc_scripted:
+    name: Zinc scripted (label 3.x)
+    runs-on: ubuntu-latest
+    # Only meaningful on the fork this was written for.
+    if: github.repository != 'scala/scala3'
+    steps:
+      - name: Checkout scala3
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Publish Scala 3 locally
+        run: ./project/scripts/sbt scala3-bootstrapped/publishLocal
+
+      - name: Checkout zinc
+        uses: actions/checkout@v4
+        with:
+          repository: sbt/zinc
+          ref: ${{ inputs.zinc_ref || env.ZINC_PINNED_SHA }}
+          path: zinc
+
+      - name: Patch zinc
+        working-directory: zinc
+        run: git apply ../.github/zinc/zinc-scala3-bridge.patch
+
+      - name: Skip known failures
+        working-directory: zinc
+        run: |
+          # Format: scenario (group/name), then the reason. Delete from this list once it passes.
+          true
+
+      - name: Run zinc scripted tests
+        working-directory: zinc
+        run: |
+          # The version Scala 3 publishes locally, e.g. 3.10.1-RC1-bin-SNAPSHOT
+          SCALA_VERSION=$(ls ~/.ivy2/local/org.scala-lang/scala3-sbt-bridge/ | head -n1)
+          echo "Testing zinc $(git rev-parse HEAD) against Scala $SCALA_VERSION"
+          ZINC_SCRIPTED_DEFAULT_LABEL=3.x sbt -Dzinc.scala3ForBridge=$SCALA_VERSION scripted 2>&1 | tee ../scripted.log
