@@ -1,8 +1,11 @@
 {
   "name": "positioned-nocheck",
+  "historical": "-Ddotty.primeSpans was replaced by the per-Run -Yno-prime-spans (retronym/scala3 1a64cdb214): rerun against a later build, \"base\" would measure priming on. Kept for the results under out/ab.",
   "benchmark": "CompileBenchmark",
   "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
-  "profile": {"xctrace": "ipc"},
+  "profile": {
+    "xctrace": "ipc"
+  },
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
   "rounds": 2,
   "corpora": {
@@ -20,5 +23,8 @@
     "nocheck": "-p scalacOptions=-Yno-check-positions",
     "both": "-p scalacOptions=-Yno-check-positions"
   },
-  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+  "loadgate": {
+    "maxCores": 1.5,
+    "quietSecs": 30
+  }
 }
