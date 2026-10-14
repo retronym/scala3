@@ -17,6 +17,9 @@ import cc.{CapturingType, derivedCapturingType}
 import scala.compiletime.uninitialized
 
 object OrderingConstraint {
+  /** DO NOT MERGE: -Ddotty.replaceDirect, `replace` reads entries from the bindings it iterates */
+  final val replaceDirect: Boolean = java.lang.Boolean.getBoolean("dotty.replaceDirect")
+
 
   /** If true, use reverse dependencies in `replace` to avoid checking the bounds
    *  of all parameters in the constraint. This can speed things up, but there are some
@@ -728,7 +731,22 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
           current.adjustDeps(newDepEntry, oldDepEntry, other, ignoreBinding = param)
       end replaceParamIn
 
-      if optimizeReplace then
+      if optimizeReplace && OrderingConstraint.replaceDirect then
+        // DO NOT MERGE (experiment): as below, reading this constraint's entries from the binding
+        // rather than looking each binder up again (a linear scan of boundsMap per parameter)
+        boundsMap.foreachBinding { (poly, entries) =>
+          var i = 0
+          val n = poly.paramNames.length
+          while i < n do
+            val other = poly.paramRefs(i)
+            entries(i) match
+              case _: TypeBounds =>
+                if coDepsOfParam.contains(other) || contraDepsOfParam.contains(other) then
+                  replaceParamIn(other)
+              case _ => replaceParamIn(other)
+            i += 1
+        }
+      else if optimizeReplace then
         current.foreachParam { (p, i) =>
           val other = p.paramRefs(i)
           entry(other) match
