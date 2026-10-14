@@ -34,10 +34,63 @@ object BenchLab {
     dir
   }
 
-  private def jmhRun(s: State, out: File, prof: String, jmhArgs: String, andThen: String*): State = {
+  private def jmhRun(s: State, out: File, prof: String, jmhArgs: String, andThen: String*): State =
+    jmhRunAfter(s, Nil, out, prof, jmhArgs, andThen*)
+
+  // `before`: commands to run first (e.g. building the audit agent); `prof` may be empty
+  private def jmhRunAfter(s: State, before: Seq[String], out: File, prof: String, jmhArgs: String, andThen: String*): State = {
     // -o: JMH's output also goes to a file as it runs, for watching a run from outside sbt
-    val run = s"""scala3-bench-lab/Jmh/run -o ${out / "jmh.log"} -rf json -rff ${out / "result.json"} -prof "$prof" $jmhArgs"""
-    s.copy(remainingCommands = (run +: andThen).map(Exec(_, None)).toList ++ s.remainingCommands)
+    val profArg = if (prof.isEmpty) "" else s"""-prof "$prof" """
+    val run = s"""scala3-bench-lab/Jmh/run -o ${out / "jmh.log"} -rf json -rff ${out / "result.json"} $profArg$jmhArgs"""
+    s.copy(remainingCommands = (before ++ (run +: andThen)).map(Exec(_, None)).toList ++ s.remainingCommands)
+  }
+
+  /** The caller-audit agent (bench-lab/doc/caller-audit.md): bench-lab's audit classes in a jar with a Premain-Class.
+   *  They stay on the benchmark's classpath too; the jar only makes them an agent.
+   */
+  val benchLabAuditAgent = taskKey[File]("bench-lab's caller-audit agent jar")
+
+  def auditAgentJar: Def.Initialize[Task[File]] = Def.task {
+    val classes = (Compile / Keys.classDirectory).value
+    (Compile / Keys.compile).value
+    val jar = (ThisBuild / Keys.baseDirectory).value / "out" / "bench-lab" / "audit-agent.jar"
+    val files = ((classes / "dotty" / "tools" / "benchlab" / "audit") ** "*.class").get.map(f => f -> IO.relativize(classes, f).get)
+    val manifest = new java.util.jar.Manifest()
+    manifest.getMainAttributes.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0")
+    manifest.getMainAttributes.put(new java.util.jar.Attributes.Name("Premain-Class"), "dotty.tools.benchlab.audit.AuditAgent")
+    IO.jar(files, jar, manifest, None)
+    jar
+  }
+
+  /** `benchLabAudit <spec> <jmh args>`: runs JMH with the audit agent and the probes of `<spec>` (a file, or a name in
+   *  bench-lab/audit without `.audit`) in each fork, then merges the forks' reports (scripts/auditfold.py) into
+   *  `out/bench-lab/audit-<spec>/report.md`. The counts do not depend on the iteration count: a short run will do.
+   */
+  val auditCommand: Command = Command.arb(parser("benchLabAudit", "<spec>")) { case (s, (specArg, jmhArgs)) =>
+    val root = Project.extract(s).get(ThisBuild / Keys.baseDirectory)
+    val spec = { val f = file(specArg); if (f.exists) f.getAbsoluteFile else root / "bench-lab" / "audit" / s"$specArg.audit" }
+    if (!spec.exists) sys.error(s"no audit spec $specArg (nor $spec)")
+    val name = spec.getName.stripSuffix(".audit")
+    val out = outDir(s, s"audit-$name")
+    val jar = root / "out" / "bench-lab" / "audit-agent.jar"
+    val agent = s"-javaagent:$jar=spec=$spec,out=${out / "audit-{pid}.json"}"
+    jmhRunAfter(s, Seq("scala3-bench-lab/benchLabAuditAgent"), out, "", s"""-jvmArgsPrepend "$agent" $jmhArgs""",
+      s"benchLabAuditFold $out")
+  }
+
+  val auditFoldCommand: Command = Command.arb(parser("benchLabAuditFold", "<dir>")) { case (s, (dirArg, _)) =>
+    val root = Project.extract(s).get(ThisBuild / Keys.baseDirectory)
+    val dir = file(dirArg)
+    val reports = (dir * "audit-*.json").get.map(_.getPath).sorted
+    if (reports.isEmpty) s.log.warn(s"no audit reports in $dir (did the agent load? see jmh.log)")
+    else {
+      val md = new StringBuilder
+      val cmd = Seq("python3", "-I", (root / "bench-lab" / "scripts" / "auditfold.py").getPath) ++ reports
+      if (SysProcess(cmd).!(ProcessLogger(l => md.append(l).append('\n'), l => s.log.warn(l))) != 0) s.log.warn(s"failed: ${cmd.mkString(" ")}")
+      IO.write(dir / "report.md", md.toString)
+      s.log.info(s"audit report: ${dir / "report.md"} (${reports.size} forks; refold with scripts/auditfold.py --by method|outside=<package>)")
+    }
+    s
   }
 
   val xctraceCommand: Command = Command.arb(parser("benchLabXctrace", "<template>")) { case (s, (template, jmhArgs)) =>
@@ -218,5 +271,5 @@ object BenchLab {
          |""".stripMargin)
   }
 
-  val commands: Seq[Command] = Seq(xctraceCommand, asyncCommand, jfrconvCommand)
+  val commands: Seq[Command] = Seq(xctraceCommand, asyncCommand, jfrconvCommand, auditCommand, auditFoldCommand)
 }

@@ -1,0 +1,16 @@
+# Positioned.envelope: how often it fills in a child's span, from which constructor path, and which code made the
+# span-less children it fills (the audit behind the span-priming change; see doc/caller-audit.md).
+
+# envelope as called by the Positioned constructor and by withSpan, split by whether a TreeCopier is on the stack
+count envelope.ctor     at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#<init>  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
+count envelope.withSpan at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#withSpan  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
+# a fill: envelope on a span-less child, from `include`
+count fill              at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#include$1  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
+
+# trees created without a span, tagged with the code that made them (skipping Positioned and tree constructors)
+tag   origin    at=dotty.tools.dotc.ast.Positioned#<init>  exit  when=dotty.tools.benchlab.audit.Predicates#spanless  depth=6  skip=^dotty\.tools\.dotc\.ast\.Positioned\.(?!withSpan$)|^dotty\.tools\.dotc\.ast\.Positioned\$\.|^dotty\.tools\.dotc\.ast\.Trees\$.*\.<init>$
+
+# the fills: who fills (the code whose tree's envelope reached the child), with the child's class and its creator
+sites filler          at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#include$1  depth=4  qualify=class  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier  skip=^dotty\.tools\.dotc\.ast\.Positioned\.(?!withSpan$)|^dotty\.tools\.dotc\.ast\.Positioned\$\.|^dotty\.tools\.dotc\.ast\.Trees\$.*\.<init>$
+sites filler-origin   at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#include$1  depth=4  qualify=tag  skip=^dotty\.tools\.dotc\.ast\.Positioned\.(?!withSpan$)|^dotty\.tools\.dotc\.ast\.Positioned\$\.|^dotty\.tools\.dotc\.ast\.Trees\$.*\.<init>$
+sites filled-origin   at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#include$1  depth=0  qualify=tag,class
