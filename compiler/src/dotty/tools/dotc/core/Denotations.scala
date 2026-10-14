@@ -819,7 +819,7 @@ object Denotations {
       def goForward: SingleDenotation =
         val targetPhase = currentPeriod.lastPhaseId
         val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
-        val steps = ctx.base.transformerSteps                   // transformer id => its TransformerStep
+        val steps = ctx.base.denotTransformers                  // transformer id => its TransformerStep
 
         var cur = coveringOrLatest(this)
         while cur.validFor.lastPhaseId < targetPhase do
