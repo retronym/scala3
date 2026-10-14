@@ -164,7 +164,6 @@ object Phases {
       setSpecificPhases()
       var phasesAfter: Set[String] = Set.empty
       nextDenotTransformerId = new Array[Int](phases.length)
-      denotTransformers = new Array[DenotTransformer](phases.length)
 
       var phaseId: PhaseId = 0
       def nextPhaseId = {
@@ -216,15 +215,13 @@ object Phases {
         i -= 1
         val phase = phases(i)
         phase match {
-          case transformer: DenotTransformer =>
-            lastTransformerId = i
-            denotTransformers(i) = transformer
+          case _: DenotTransformer => lastTransformerId = i
           case _ =>
         }
         nextDenotTransformerId(i) = lastTransformerId
       }
 
-      computeTransformerSteps()(using runCtx)
+      computeDenotTransformers()(using runCtx)
 
       if (fuse)
         this.fusedPhases = (NoPhase :: phasess).toArray
@@ -245,23 +242,23 @@ object Phases {
       for i <- 0 until nextDenotTransformerId.length do
         if nextDenotTransformerId(i) == phase.id then
           nextDenotTransformerId(i) = nextDenotTransformerId(phase.id + 1)
-      computeTransformerSteps() // lastPhaseId depends on nextDenotTransformerId
+      computeDenotTransformers() // lastPhaseId depends on nextDenotTransformerId
 
-    /** Recompute `transformerSteps` from the current plan */
-    private def computeTransformerSteps()(using Context): Unit =
-      transformerSteps = new Array[TransformerStep](phases.length)
+    /** Recompute `denotTransformers` from the current plan */
+    private def computeDenotTransformers()(using Context): Unit =
+      denotTransformers = new Array[TransformerStep](phases.length)
       var nextNonIdentity = phases.length
       var id = phases.length - 1
       while id >= 0 do
-        val transformer = denotTransformers(id)
-        val isLinked = transformer != null && nextDenotTransformerId(id) == id
-        if isLinked then
-          val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
-          if !isIdentity then nextNonIdentity = id
-          transformerSteps(id) = TransformerStep(transformer,
-            transformerPeriod = Period(NoRunId, transformer.start, transformer.end),
-            resultPeriod = Period(NoRunId, id + 1, transformer.lastPhaseId),
-            isIdentity, transformer.lastPhaseId, nextNonIdentity)
+        phases(id) match
+          case transformer: DenotTransformer if nextDenotTransformerId(id) == id => // linked
+            val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
+            if !isIdentity then nextNonIdentity = id
+            denotTransformers(id) = TransformerStep(transformer,
+              transformerPeriod = Period(NoRunId, transformer.start, transformer.end),
+              resultPeriod = Period(NoRunId, id + 1, transformer.lastPhaseId),
+              isIdentity, transformer.lastPhaseId, nextNonIdentity)
+          case _ =>
         id -= 1
 
     private var myParserPhase: Phase = uninitialized
