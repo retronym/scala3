@@ -3,7 +3,7 @@ package dotc
 package ast
 
 import util.Spans.*
-import util.{SourceFile, SourcePosition, SrcPos, WrappedSourceFile}
+import util.{CallerAudit, SourceFile, SourcePosition, SrcPos, WrappedSourceFile}
 import core.Contexts.*
 import core.Decorators.*
 import core.NameOps.*
@@ -52,7 +52,12 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
     if primed.exists then
       src.primedSpan = NoSpan
       primed
-    else envelope(src)
+    else
+      if CallerAudit.ENABLED then Positioned.auditEnvelope("ctor", envelope(src))
+      else envelope(src)
+
+  if CallerAudit.ENABLED && !span.exists && this.isInstanceOf[Trees.Tree[?]] then
+    CallerAudit.tag(this, Positioned.originProbe.site())
 
   def source: SourceFile = mySource
 
@@ -74,7 +79,9 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
     else {
       val newpd: this.type =
         if !mySpan.exists then
-          if span.exists then envelope(source, span.startPos) // fill in children spans
+          if span.exists then
+            if CallerAudit.ENABLED then Positioned.auditEnvelope("withSpan", envelope(source, span.startPos))
+            else envelope(source, span.startPos) // fill in children spans
           this
         else
           cloneIn(source)
@@ -101,6 +108,7 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
           else if (p.span.exists) span.union(p.span)
           else if (span.exists) {
             if (span.end != MaxOffset)
+              if CallerAudit.ENABLED then Positioned.auditFill(p)
               p.span = p.envelope(src, span.endPos)
             span
           }
@@ -130,6 +138,37 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
           includeChildren(span1.startPos, 0)
       span2.toSynthetic
   }
+
+  /** This node is a copy of `original` that took its span without computing its envelope (see
+   *  `TreeCopier.copySource`). Assign spans to its span-less children, as computing the envelope
+   *  would have. Only children that are not shared with `original` are looked at: the shared ones
+   *  were positioned when `original` was, and are likely cold in the cache.
+   */
+  def positionNewChildren(original: Positioned): Unit =
+    def isUnpositioned(x: Any): Boolean = x match
+      case p: Positioned => !p.span.exists && p.source == source
+      case xs: List[?] => xs.exists(isUnpositioned)
+      case _ => false
+    def needsPosition(x: Any, y: Any): Boolean =
+      if x.asInstanceOf[AnyRef] eq y.asInstanceOf[AnyRef] then false
+      else (x, y) match
+        case (x :: xs, y :: ys) => needsPosition(x, y) || needsPosition(xs, ys)
+        case (m: untpd.Modifiers, _) => isUnpositioned(m.mods) || isUnpositioned(m.annotations)
+        case _ => isUnpositioned(x)
+    if span.exists then
+      var needed = productArity != original.productArity // e.g. Template copied to DerivingTemplate
+      var n = 0
+      while !needed && n < productArity do
+        needed = needsPosition(productElement(n), original.productElement(n))
+        n += 1
+      // As the constructor's envelope and then `withSpan` would have, when no child had a span
+      if needed && !envelope(source).exists then envelope(source, span.startPos)
+      else if CallerAudit.ENABLED then
+        var k = 0
+        while k < productArity do
+          if isUnpositioned(productElement(k)) then
+            Positioned.missedProbe.record(s"${getClass.getSimpleName} elem $k, original span ${original.span}")
+          k += 1
 
   /** Clone this node but assign it a fresh id which marks it as a node in `file`. */
   def cloneIn(src: SourceFile): this.type = {
@@ -239,6 +278,41 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
 }
 
 object Positioned {
+  /** Prime `SourceFile.primedSpan` in `TreeCopier` (see `TreeCopier.copySource`); `-Ddotty.primeSpans=false` for A/B */
+  @sharable val primeSpans: Boolean = System.getProperty("dotty.primeSpans", "true") == "true"
+
+  // -Ddotty.audit=<file>: who creates span-less trees, and whose `envelope` fills them in later
+  private def auditSkip(f: StackWalker.StackFrame): Boolean =
+    val cls = f.getClassName
+    cls == "dotty.tools.dotc.ast.Positioned" && f.getMethodName != "withSpan"
+    || cls == "dotty.tools.dotc.ast.Positioned$"
+    || f.getMethodName == "<init>" && cls.startsWith("dotty.tools.dotc.ast.Trees$")
+  @sharable private[ast] lazy val originProbe: CallerAudit.Probe = CallerAudit.probe("origin", 3, auditSkip)
+  @sharable private lazy val fillerProbe: CallerAudit.Probe = CallerAudit.probe("filler", 4, auditSkip)
+  @sharable private lazy val fillPairProbe: CallerAudit.Probe = CallerAudit.probe("filler x origin", 4, auditSkip)
+  @sharable private[ast] lazy val missedProbe: CallerAudit.Probe = CallerAudit.probe("missed by positionNewChildren", 6, auditSkip)
+  @sharable private lazy val filledOriginProbe: CallerAudit.Probe = CallerAudit.probe("origin of filled", 1, _ => false)
+
+  @sharable private var auditFills = 0L
+
+  /** Count `envelope` calls by path, whether a `TreeCopier` is on the stack, and whether they filled a child. */
+  private def auditEnvelope(path: String, span: => Span): Span =
+    val before = auditFills
+    val result = span
+    val kind = s"$path.${if CallerAudit.onStack("dotty.tools.dotc.ast.Trees$Instance$TreeCopier") then "copier" else "other"}"
+    CallerAudit.count(s"envelope.$kind")
+    if auditFills > before then CallerAudit.count(s"envelope.$kind.filled")
+    result
+
+  private def auditFill(child: Positioned): Unit =
+    auditFills += 1
+    val copier = CallerAudit.onStack("dotty.tools.dotc.ast.Trees$Instance$TreeCopier")
+    CallerAudit.count(if copier then "fill.copier" else "fill.other")
+    val origin = CallerAudit.tagOf(child)
+    fillerProbe.record(s"${child.getClass.getSimpleName}${if copier then ", copier" else ""}")
+    fillPairProbe.record(origin)
+    filledOriginProbe.add(s"$origin  [${child.getClass.getSimpleName}]")
+
   @sharable private var debugId = Int.MinValue
   @sharable private var ids: java.util.WeakHashMap[Positioned, Int] | Null = null
   @sharable private var nextId: Int = 0
