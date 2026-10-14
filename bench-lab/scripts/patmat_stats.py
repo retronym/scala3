@@ -19,7 +19,7 @@ CORPORA = os.environ.get("SCALA3_BENCHMARKS", os.path.expanduser("~/code/lampepf
 OPTIONS = {
     "small": [], "dottyUtil": [], "re2s": [],
     "tastyQuery": ["-Yexplicit-nulls", "-Wconf:msg=Unnecessary .nn:s"],
-    "scalaz": ["-nowarn", "-source", "3.0", "-Xkind-projector", "-language:implicitConversions"],
+    "scalaz": ["-source", "3.0", "-Xkind-projector", "-language:implicitConversions"],
 }
 
 

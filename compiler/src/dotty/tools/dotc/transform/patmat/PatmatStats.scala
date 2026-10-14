@@ -153,3 +153,19 @@ import scala.language.unsafeNulls
       case "" | "true" => System.err.print(out.toString)
       case file => java.nio.file.Files.writeString(java.nio.file.Path.of(file), out.toString)
 end PatmatStats
+
+/** DO NOT MERGE: experiments in the space engine, each behind its own flag, to be A/B'd together. */
+object PatmatFlags:
+  private def flag(name: String): Boolean = java.lang.Boolean.getBoolean(s"dotty.patmat$name")
+  /** Spaces cache their (structural) hash code: `isSubspace` cache keys hash whole space trees. */
+  final val hashMemo: Boolean = flag("HashMemo")
+  /** The result of `simplify` is its own simplification, so simplifying it again is a memo hit. */
+  final val simplifyFixpoint: Boolean = flag("SimplifyFixpoint")
+  /** Reachability keeps the union of the previous cases as it goes, instead of re-simplifying `Or(prevs)` per case. */
+  final val prevUnion: Boolean = flag("PrevUnion")
+  /** `signature` results are cached per run (when nothing involved is provisional). */
+  final val signatureCache: Boolean = flag("SignatureCache")
+  /** `isSubType` results are cached per `checkMatch` (when neither type is provisional). */
+  final val subTypeCache: Boolean = flag("SubTypeCache")
+  /** `minus(a, Or(ss))` simplifies after each step of its fold, so emptied parts drop out early. */
+  final val minusFoldSimplify: Boolean = flag("MinusFoldSimplify")

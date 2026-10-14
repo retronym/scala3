@@ -51,6 +51,9 @@ import SpaceEngine.*
 /** A key to be used in a context property that caches the results of isSubspace checks */
 private val IsSubspaceCacheKey = new Property.Key[mutable.HashMap[(Space, Space), Boolean]]
 
+/** DO NOT MERGE (-Ddotty.patmatSubTypeCache): caches `isSubType` during one `checkMatch` */
+private val SubTypeCacheKey = new Property.Key[mutable.HashMap[(Type, Type), Boolean]]
+
 /** A key to be used in a context property that caches the decompositions of types during one `checkMatch` */
 private val DecomposeCacheKey = new Property.Key[util.HashMap[Type, List[Type]]]
 
@@ -82,8 +85,15 @@ sealed trait Space extends Showable:
     if simplified == null then
       val simplified = SpaceEngine.computeSimplify(this)
       mySimplified = simplified
+      if PatmatFlags.simplifyFixpoint && (simplified ne this) && simplified.mySimplified == null then
+        simplified.mySimplified = simplified
       simplified
     else simplified
+
+  /** Marks this space as simplified (its own simplification). */
+  private[patmat] def asSimplified: this.type =
+    mySimplified = this
+    this
 
   def toText(p: Printer): Text = inContext(p.printerContext)(this match {
     case Empty    => s"Empty"
@@ -105,6 +115,13 @@ case object Empty extends Space
 case class Typ(tp: Type, decomposed: Boolean = true) extends Space:
   private var myDecompose: List[Typ] | Null = null
 
+  private var myHash: Int = 0
+  override def hashCode: Int =
+    if PatmatFlags.hashMemo then
+      if myHash == 0 then myHash = scala.runtime.ScalaRunTime._hashCode(this)
+      myHash
+    else scala.runtime.ScalaRunTime._hashCode(this)
+
   def canDecompose(using Context): Boolean = decompose != ListOfTypNoType
 
   def decompose(using Context): List[Typ] =
@@ -122,10 +139,22 @@ case class Typ(tp: Type, decomposed: Boolean = true) extends Space:
 end Typ
 
 /** Space representing an extractor pattern */
-case class Prod(tp: Type, unappTp: TermRef, params: List[Space]) extends Space
+case class Prod(tp: Type, unappTp: TermRef, params: List[Space]) extends Space:
+  private var myHash: Int = 0
+  override def hashCode: Int =
+    if PatmatFlags.hashMemo then
+      if myHash == 0 then myHash = scala.runtime.ScalaRunTime._hashCode(this)
+      myHash
+    else scala.runtime.ScalaRunTime._hashCode(this)
 
 /** Union of spaces */
-case class Or(spaces: Seq[Space]) extends Space
+case class Or(spaces: Seq[Space]) extends Space:
+  private var myHash: Int = 0
+  override def hashCode: Int =
+    if PatmatFlags.hashMemo then
+      if myHash == 0 then myHash = scala.runtime.ScalaRunTime._hashCode(this)
+      myHash
+    else scala.runtime.ScalaRunTime._hashCode(this)
 
 object SpaceEngine {
   def simplify(space: Space)(using Context): Space           = space.simplify
@@ -285,7 +314,9 @@ object SpaceEngine {
       case (Empty, _) => Empty
       case (_, Empty) => a
       case (Or(ss), _) => Or(ss.map(minus(_, b)))
-      case (_, Or(ss)) => ss.foldLeft(a)(minus)
+      case (_, Or(ss)) =>
+        if PatmatFlags.minusFoldSimplify then ss.foldLeft(a)((acc, s) => simplify(minus(acc, s)))
+        else ss.foldLeft(a)(minus)
       case (a @ Typ(tp1, _), b @ Typ(tp2, _)) =>
         if isSubType(tp1, tp2) then Empty
         else if canDecompose(a) then minus(Or(decompose(a)), b)
@@ -563,7 +594,10 @@ object SpaceEngine {
   /** Is `tp1` a subtype of `tp2`?  */
   def isSubType(tp1: Type, tp2: Type)(using Context): Boolean =
     PatmatStats.count(PatmatStats.IsSubType)
-    PatmatStats.timed(PatmatStats.TIsSubType)(isSubTypeImpl(tp1, tp2))
+    ctx.property(SubTypeCacheKey) match
+      case Some(cache) if !tp1.isProvisional && !tp2.isProvisional =>
+        cache.getOrElseUpdate((tp1, tp2), PatmatStats.timed(PatmatStats.TIsSubType)(isSubTypeImpl(tp1, tp2)))
+      case _ => PatmatStats.timed(PatmatStats.TIsSubType)(isSubTypeImpl(tp1, tp2))
   private def isSubTypeImpl(tp1: Type, tp2: Type)(using Context): Boolean = trace(i"$tp1 <:< $tp2") {
     if tp1 == ConstantType(Constant(null)) && !ctx.mode.is(Mode.SafeNulls)
     then tp2 == ConstantType(Constant(null))
@@ -596,7 +630,21 @@ object SpaceEngine {
    *  Parameter types of the case class type `tp`. Adapted from `unapplyPlan` in patternMatcher  */
   def signature(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): List[Type] =
     PatmatStats.count(PatmatStats.Signature)
-    PatmatStats.timed(PatmatStats.TSignature)(signatureImpl(unapp, scrutineeTp, argLen))
+    if PatmatFlags.signatureCache && !unapp.isProvisional && !scrutineeTp.isProvisional then
+      val cache = signatureCacheOfRun
+      val key = (unapp, scrutineeTp, argLen)
+      cache.lookup(key) match
+        case null =>
+          val sig = PatmatStats.timed(PatmatStats.TSignature)(signatureImpl(unapp, scrutineeTp, argLen))
+          if !sig.exists(_.isProvisional) then cache(key) = sig
+          sig
+        case sig => sig
+    else PatmatStats.timed(PatmatStats.TSignature)(signatureImpl(unapp, scrutineeTp, argLen))
+
+  @sharable private var runSignatureCache: (Run | Null, util.HashMap[(TermRef, Type, Int), List[Type]]) = (null, util.HashMap())
+  private def signatureCacheOfRun(using Context): util.HashMap[(TermRef, Type, Int), List[Type]] =
+    if runSignatureCache._1 ne ctx.run then runSignatureCache = (ctx.run, util.HashMap())
+    runSignatureCache._2
   private def signatureImpl(unapp: TermRef, scrutineeTp: Type, argLen: Int)(using Context): List[Type] = trace(i"signature($unapp, $scrutineeTp, $argLen)") {
     val unappSym = unapp.symbol
 
@@ -1169,13 +1217,16 @@ object SpaceEngine {
       // Project toplevel wildcard pattern to nullable
       if isNullable && isWildcardArg(pat) then Or(project(pat) :: nullSpace :: Nil)
       else project(pat)
+    // -Ddotty.patmatPrevUnion: the simplified union of `prevs`, kept up to date as cases are added
+    var prevUnion: Space = Empty
+    var prevNonEmpty: List[Space] = Nil
     @tailrec def recur(cases: List[CaseDef], prevs: List[Space], deferred: List[Tree]): Unit =
       cases match
         case Nil =>
         case (c @ CaseDef(pat, _, _)) :: rest =>
           val (curr, maybePartial) = resolveCaseDef(c, projectPat)
           val covered = trace("covered")(simplify(intersect(curr, targetSpace)))
-          val prev = trace("prev")(simplify(Or(prevs)))
+          val prev = if PatmatFlags.prevUnion then prevUnion else trace("prev")(simplify(Or(prevs)))
           if prev == Empty && covered == Empty then // defer until a case is reachable
             recur(rest, prevs, pat :: deferred)
           else
@@ -1205,6 +1256,10 @@ object SpaceEngine {
 
             // in redundancy check, take guard as false for a sound approximation
             val newPrev = if maybePartial then prevs else covered :: prevs
+            if PatmatFlags.prevUnion && !maybePartial && covered != Empty then
+              // as simplify(Or(newPrev)): the non-empty (already simplified) spaces, most recent first
+              prevNonEmpty = covered :: prevNonEmpty
+              prevUnion = if prevNonEmpty.tail.isEmpty then covered else Or(prevNonEmpty).asSimplified
             recur(rest, newPrev, Nil)
 
     recur(m.cases, Nil, Nil)
@@ -1221,7 +1276,8 @@ object SpaceEngine {
     runDecomposeCache._2
 
   def checkMatch(m: Match)(using Context): Boolean =
-    val ctx1 = ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))
+    val ctx0 = ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))
+    val ctx1 = if PatmatFlags.subTypeCache then ctx0.withProperty(SubTypeCacheKey, Some(mutable.HashMap.empty)) else ctx0
     inContext(
       if decomposeCache then ctx1.withProperty(DecomposeCacheKey, Some(util.HashMap()))
       else if decomposeCacheRun then ctx1.withProperty(DecomposeCacheKey, Some(decomposeCacheOfRun))
