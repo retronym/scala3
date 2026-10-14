@@ -2530,6 +2530,9 @@ object Build {
         url = url(homepageUrl)
       )
     ),
+  ) ++ (
+    // Projects that publish all Compile artifacts (`Compile / publishArtifact := true`) would otherwise still build and publish docs.
+    if (Versions.skipDocs) Seq(Compile / packageDoc / publishArtifact := false) else Nil
   )
 
   lazy val commonDistSettings = Seq(
