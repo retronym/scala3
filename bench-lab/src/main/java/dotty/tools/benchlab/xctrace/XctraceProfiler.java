@@ -279,6 +279,29 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     /**
+     * Replaces characters that XML 1.0 forbids with '?'. xctrace writes symbol names verbatim, and a JIT perf-map
+     * name can contain control characters (seen: U+0001 in a frame name), which the StAX parser rejects.
+     */
+    static final class XmlCharFilter extends java.io.FilterReader {
+        XmlCharFilter(Reader in) { super(in); }
+
+        private static char clean(char c) {
+            return c < 0x20 && c != '\t' && c != '\n' && c != '\r' || c == 0xFFFE || c == 0xFFFF ? '?' : c;
+        }
+
+        @Override public int read() throws IOException {
+            int c = super.read();
+            return c < 0 ? c : clean((char) c);
+        }
+
+        @Override public int read(char[] buf, int off, int len) throws IOException {
+            int n = super.read(buf, off, len);
+            for (int i = off; i < off + n; i++) buf[i] = clean(buf[i]);
+            return n;
+        }
+    }
+
+    /**
      * Streams an xctrace table export. Rows refer back to earlier elements ({@code ref="n"} for {@code id="n"}), so
      * every element with an id is remembered as (fmt, text, addr, name). Calls back with each row's top-level children
      * by tag; for a backtrace, addr and name are its leaf frame's.
@@ -287,7 +310,7 @@ public class XctraceProfiler implements InternalProfiler {
         XMLInputFactory f = XMLInputFactory.newInstance();
         f.setProperty(XMLInputFactory.IS_COALESCING, true);
         Map<String, String[]> ids = new HashMap<>();
-        try (Reader in = Files.newBufferedReader(xml)) {
+        try (Reader in = new XmlCharFilter(Files.newBufferedReader(xml))) {
             XMLStreamReader r = f.createXMLStreamReader(in);
             Deque<String[]> stack = new ArrayDeque<>();   // [tag, id, fmt, text]
             Map<String, String[]> row = null;
