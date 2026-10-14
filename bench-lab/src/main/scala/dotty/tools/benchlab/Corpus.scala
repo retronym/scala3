@@ -47,7 +47,7 @@ object Corpus:
    *  in-memory sourcepath, for the library classes `Definitions` loads before the run enters the compilation units.
    */
   def scalaLibrary: Corpus =
-    def prop(key: String) = sys.props.getOrElse(key, sys.error(s"-D$key not set"))
+    def prop(key: String): String = sys.props.getOrElse(key, sys.error(s"-D$key not set")).nn
     val dirs = prop("benchlab.scalaLibrarySources").split(java.io.File.pathSeparator).toList.map(Path.of(_)).filter(Files.isDirectory(_))
     val options = Files.readAllLines(Path.of(prop("benchlab.scalaLibraryOptions"))).asScala.toList.filter(_.nonEmpty)
     val root = dotty.tools.io.virtualDirectory("memory-scala-library-sources")
