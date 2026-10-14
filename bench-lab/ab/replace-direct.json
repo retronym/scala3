@@ -17,6 +17,8 @@
   },
   "variants": {
     "loopU": "-Ddotty.uncacheMethodParamRefs",
-    "loopU-rd": "-Ddotty.uncacheMethodParamRefs -Ddotty.replaceDirect=true"
+    "loopU-rd": "-Ddotty.uncacheMethodParamRefs -Ddotty.replaceDirect=true",
+    "loopU-pg": "-Ddotty.uncacheMethodParamRefs -Ddotty.patmatGc=true",
+    "loopU-pg-rd": "-Ddotty.uncacheMethodParamRefs -Ddotty.patmatGc=true -Ddotty.replaceDirect=true"
   }
 }

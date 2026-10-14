@@ -50,6 +50,9 @@ class PatternMatcher extends MiniPhase {
       tree
     else {
       // check exhaustivity and unreachability
+      // DO NOT MERGE (-Ddotty.patmatGc): collect instantiated type variables of the typer state first, so that the
+      // checks' explore states don't start from (and drag along) everything instantiated since the phase began
+      if PatternMatcher.patmatGc then ctx.typerState.gc()
       val isExhaustive = SpaceEngine.checkMatch(tree)
 
       // Widen termrefs with underlying `=> T` types. Otherwise ElimByName will produce
@@ -66,6 +69,9 @@ class PatternMatcher extends MiniPhase {
 }
 
 object PatternMatcher {
+  /** DO NOT MERGE: -Ddotty.patmatGc, gc the typer state before each exhaustivity/reachability check */
+  final val patmatGc: Boolean = java.lang.Boolean.getBoolean("dotty.patmatGc")
+
   import ast.tpd.*
 
   val name: String = "patternMatcher"
