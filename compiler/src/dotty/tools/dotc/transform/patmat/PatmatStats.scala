@@ -169,3 +169,9 @@ object PatmatFlags:
   final val subTypeCache: Boolean = flag("SubTypeCache")
   /** `minus(a, Or(ss))` simplifies after each step of its fold, so emptied parts drop out early. */
   final val minusFoldSimplify: Boolean = flag("MinusFoldSimplify")
+  /** `isSameUnapply` is false at once for extractors with different symbols (not Java records). */
+  final val sameUnapplySym: Boolean = flag("SameUnapplySym")
+  /** A constant is not a subspace of a different constant: skipped without `isSubspace` (and its cache). */
+  final val constantSkip: Boolean = flag("ConstantSkip")
+  /** `isSubType` of two class type refs is false at once when the first class does not derive from the second. */
+  final val classFastFail: Boolean = flag("ClassFastFail")

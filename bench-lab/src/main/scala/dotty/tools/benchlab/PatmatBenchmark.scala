@@ -31,8 +31,8 @@ import dotty.tools.dotc.transform.patmat.SpaceEngine
  *  where the compiler meets them partly cold.
  *
  *  Corpora: those of `Corpus.load`, or synthetic sources to expose how the cost grows with the size of a match:
- *  `sealed<N>` (a sealed trait with N case classes of two fields, matched with N constructor patterns and with N type
- *  patterns) and `ints<N>` (an Int matched against N literals).
+ *  `sealed<N>` (a sealed trait T with N case classes of two fields, matched with N constructor patterns, with N type
+ *  patterns, as a pair `(T, T)` with N diagonal cases and a wildcard, and as an `Option[T]` with N `Some` cases) and `ints<N>` (an Int matched against N literals).
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Array(Mode.AverageTime))
@@ -108,8 +108,8 @@ object PatmatBenchmark:
     compiler.compileRun()
     sink.toArray
 
-  val SyntheticMethods = Set("ctor", "tpe", "ints")
-  def isSynthetic(name: String): Boolean = name.startsWith("sealed") || name.startsWith("ints")
+  val SyntheticMethods = Set("ctor", "tpe", "ints", "tup", "opt")
+  def isSynthetic(name: String): Boolean = name.matches("(sealed|ints)[0-9]+")
 
   def corpus(name: String): Corpus =
     def n(prefix: String) = name.stripPrefix(prefix).toInt
@@ -121,6 +121,8 @@ object PatmatBenchmark:
     val classes = (0 until n).map(i => s"final case class C$i(a: Int, b: T) extends T").mkString("\n")
     val ctorCases = (0 until n).map(i => s"    case C$i(_, _) => $i").mkString("\n")
     val typeCases = (0 until n).map(i => s"    case _: C$i => $i").mkString("\n")
+    val tupleCases = (0 until n).map(i => s"    case (C$i(_, _), C$i(_, _)) => $i").mkString("\n")
+    val optionCases = (0 until n).map(i => s"    case Some(C$i(_, _)) => $i").mkString("\n")
     s"""package synthetic
        |sealed trait T
        |$classes
@@ -129,6 +131,12 @@ object PatmatBenchmark:
        |$ctorCases
        |  def tpe(t: T): Int = t match
        |$typeCases
+       |  def tup(a: T, b: T): Int = (a, b) match
+       |$tupleCases
+       |    case _ => -1
+       |  def opt(o: Option[T]): Int = o match
+       |$optionCases
+       |    case None => -1
        |""".stripMargin
 
   def intsSource(n: Int): String =
@@ -145,9 +153,21 @@ object PatmatBenchmark:
  */
 object PatmatLoop:
   def main(args: Array[String]): Unit =
-    val corpus = args.headOption.getOrElse("scalaz")
+    // <corpus>[:<method>]: for the synthetic corpora, only the match in that method (ctor, tpe, tup, opt, ints)
+    val (corpus, method) = args.headOption.getOrElse("scalaz").split(":") match
+      case Array(c, m) => (c, Some(m))
+      case Array(c) => (c, None)
+      case _ => sys.error("<corpus>[:<method>]")
     val passes = args.lift(1).fold(10)(_.toInt)
-    val recorded = PatmatBenchmark.record(PatmatBenchmark.corpus(corpus))
+    val all = PatmatBenchmark.record(PatmatBenchmark.corpus(corpus))
+    val recorded =
+      if PatmatBenchmark.isSynthetic(corpus) then
+        all.filter { r =>
+          given Context = r.ctx
+          val m = ctx.owner.enclosingMethod.name.toString
+          method.fold(PatmatBenchmark.SyntheticMethods(m))(_ == m)
+        }
+      else all
     val states = recorded.map(_.ctx.typerState).distinct
     val gadts = recorded.map(_.ctx.gadtState).distinct
     println(s"$corpus: ${recorded.length} matches, ${states.length} typer states, ${gadts.length} GADT states")

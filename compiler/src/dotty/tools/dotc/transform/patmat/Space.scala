@@ -262,6 +262,13 @@ object SpaceEngine {
       case (_, Empty) => false
       case (Or(ss), _) => ss.forall(isSubspace(_, b))
       case (a @ Typ(tp1, _), Or(ss)) =>  // optimization: don't go to subtraction too early
+        if PatmatFlags.constantSkip && tp1.isInstanceOf[ConstantType] then
+          ss.exists {
+            case Typ(tp2: ConstantType, _) if tp1 != tp2 => false
+            case s => isSubspace(a, s)
+          }
+          || canDecompose(a) && isSubspace(Or(decompose(a)), b)
+        else
         ss.exists(isSubspace(a, _))
         || canDecompose(a) && isSubspace(Or(decompose(a)), b)
       case (_, Or(_))  => simplify(minus(a, b)) == Empty
@@ -602,8 +609,17 @@ object SpaceEngine {
     if tp1 == ConstantType(Constant(null)) && !ctx.mode.is(Mode.SafeNulls)
     then tp2 == ConstantType(Constant(null))
     else if tp1.isTupleXXLExtract(tp2) then true // See isTupleXXLExtract, fixes TupleXXL parameter type
+    else if PatmatFlags.classFastFail && unrelatedClassRefs(tp1, tp2) then false
     else tp1 <:< tp2
   }
+
+  /** Both are references to classes (not bottom types), the first not deriving from the second. */
+  private def unrelatedClassRefs(tp1: Type, tp2: Type)(using Context): Boolean = (tp1, tp2) match
+    case (r1: TypeRef, r2: TypeRef) =>
+      val c1 = r1.symbol
+      val c2 = r2.symbol
+      c1.isClass && c2.isClass && !defn.isBottomClass(c1) && !c2.is(Opaque) && !c1.derivesFrom(c2)
+    case _ => false
 
   /** True if we can assume that the two unapply methods are the same.
    *  That is, given the same parameter, they return the same result.
@@ -620,6 +636,7 @@ object SpaceEngine {
     // two such extractors as the same when they unapply the same record type.
     (javaRecordUnapplyParam(tp1), javaRecordUnapplyParam(tp2)) match
       case (Some(rec1), Some(rec2)) => rec1 =:= rec2
+      case _ if PatmatFlags.sameUnapplySym && (tp1.symbol ne tp2.symbol) => false
       case _ =>
         // always assume two TypeTest[S, T].unapply are the same if they are equal in types
         (isStable(tp1) && isStable(tp2) || tp1.symbol == defn.TypeTest_unapply)
