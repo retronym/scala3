@@ -69,6 +69,14 @@ Profile tools, for any `benchLabAsync` profile directory or async-profiler `ab.p
 - `frameweight.py`: the weight of frames matching a regex across runs: self, self plus the itable/vtable stubs it calls, inclusive, and inclusive short of frames matching `--until`.
 - `subtree.py`: one frame's subtree: its callers, and where the time inside it goes, by categories (`-c name=regex`).
 
+### Caller audits
+
+"Which callers rely on X, and how often?" `benchLabAudit <spec> <jmh args>` runs the benchmark with an agent that weaves probes into the compiler as it loads, with no compiler change: counts at a method's entry or exit, the distinct call sites reaching it, and tags pairing the code that made an object with the code that later relies on it. Specs are in `audit/`; reports are merged and folded with `scripts/auditfold.py`. See `doc/caller-audit.md`.
+
+```bash
+sbt "benchLabAudit positioned-envelope -p corpus=dottyUtil -wi 1 -i 1 -w 1 -r 1 CompileBenchmark"
+```
+
 ### Variance reduction
 
 What makes a difference between variants stand out from the noise, with the evidence from the Positioned campaigns (`positioned-serial`: re2s, 4 variants × 5 rounds, xctrace ipc):
@@ -104,6 +112,7 @@ Checked on `dottyUtil` with JFR file events (`jdk.FileRead`, `jdk.FileWrite`, no
 - TODO 3b. Optimizer benchmark: compile with `-opt` in setup, capture the class nodes before global optimization, and per op run `GlobalOptimizer` and `LocalOptimizer` on copies with fresh optimizer state (the call graph is keyed on node identity). Needs compiler refactoring: the optimizer wiring moved out of `GenBCode.getCodeGen` into a factory, and a hook to capture the pending class nodes at the start of `CodeGen.finish` (e.g. a `GenBCode` subclass installed via `Compiler.phases`). Re-reading unoptimized class files instead would lack the inline info attribute and differ from the in-compiler input.
 - DONE 4. Variant driver: `ab.py` (JVM flags and compiler settings, interleaved, with deltas), `abtrees.py` (builds).
 - TODO 4b. Paired A/B within one fork (`doc/paired-ab.md`): variants alternate by iteration, sharing the fork's compiled code.
+- DONE 7. Caller audits (`benchLabAudit`, `doc/caller-audit.md`).
 - TODO 5. Linux parity.
 - TODO 6. First experiment: JIT inlining limits on the compiler, with the stalls before and after and where they moved.
 - Future work: PMI-sampled templates (instruction-level attribution, needs a one-off template saved in Instruments), Processor Trace for exact control flow on M4/M5, a non-bootstrapped variant.

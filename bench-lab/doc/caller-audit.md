@@ -10,9 +10,9 @@ The prototype has to be edited into the compiler and rebuilt for each question, 
 
 ## Key decisions
 
-1. **Probes are woven in by a Java agent, not written into the compiler.** A probe names a place in the compiler (`Class#method`, with a line, or a call site within it) and is woven in with the ClassFile API when the class loads. An audit then needs no compiler edit or rebuild, works on any build including released ones, and costs nothing when the agent is absent. Writing probes into the source stays possible (a small runtime API), for conditions too awkward to name from outside.
+1. **Probes are woven in by a Java agent, not written into the compiler.** A probe names a method of the compiler (`Class#method`, at its entry or before its returns, optionally only when called from a given method) and is woven in when the class loads. An audit then needs no compiler edit or rebuild, works on any build including released ones, and costs nothing when the agent is absent. Writing probes into the source stays possible (a small runtime API), for conditions too awkward to name from outside.
 
-   The probe is placed at a line (or the call of a method) rather than taking an arbitrary condition, because "the code inside this branch ran" is what most of these questions reduce to, as `envelope`'s fill branch did.
+   Probes sit at method boundaries, with a caller filter (`from=`) and a predicate (`when=`), rather than at lines: lines move from build to build, and "this method, called from there" named `envelope`'s fill branch exactly (the call from `include`).
 
 2. **A probe records a site, optionally qualified.**
    - The site is the first frames of the stack after dropping those a regex matches, e.g. `Positioned` internals and tree constructors.
@@ -33,7 +33,7 @@ The prototype has to be edited into the compiler and rebuilt for each question, 
 
 ## Supporting changes
 
-- A Java agent jar built by sbt from bench-lab sources. It needs the ClassFile API, so JDK 24 or later in the fork. The bench JDKs (25, and the patched 26) qualify; sbt's own JDK 21 does not need to.
+- A Java agent jar built by sbt from bench-lab sources (`benchLabAuditAgent`). It weaves with the ASM on the benchmark's classpath (JMH's generator brings it) rather than the ClassFile API, which sbt's JDK 21 lacks.
 - The runtime API from the prototype (`probe`, `count`, `tag`/`tagOf`, `onStack`), moved to bench-lab and made thread-local and sampled. The woven code calls it.
 
 ## Prior art
@@ -45,7 +45,6 @@ The prototype has to be edited into the compiler and rebuilt for each question, 
 
 ## Plan
 
-- TODO 1. Runtime library in bench-lab (thread-local, sampled), the JSON report, and a merge-and-fold script. Check: the prototype's findings reproduced with source-written probes against the library. Reference: commit 28546dde44, run with `-Ddotty.primeSpans=false`. dottyUtil should give envelope from the constructor 38674 copier calls (779 filled) and 114917 others (3067 filled), and 13053 fills (2241 under the copier) from 222 origin sites. Expect differences of a few counts from run to run.
-- TODO 2. The agent: probes at method entry, at a line, at the call of a method; site qualifier from the receiver or an argument; tag and tag read-back on `this` or an argument. Check: the same findings, with the probes declared in a spec and no compiler edit.
-- TODO 3. `benchLabAudit` in sbt.
-- Future work: conditions over arguments, e.g. `!p.span.exists`; probes on field writes.
+- DONE 1. Runtime (`audit/Audit.java`: concurrent counts, sampling, weak identity tags, JSON report), agent (`audit/AuditAgent.java`, `audit/Spec.java`), predicates (`audit/Predicates.scala`), `scripts/auditfold.py` (merge reports, fold by method or first frame outside a package), `benchLabAudit <spec> <jmh args>`. Spec of the envelope audit: `bench-lab/audit/positioned-envelope.audit`.
+  Check against the prototype (one dottyUtil compile, master): fills 2241 under the copier and 10812 others, as the prototype's; constructor envelopes 38685 under the copier (prototype 38674) and 116716 others (114917); `withSpan` envelopes 2204 and 19623 (2204, 19601). The prototype ran on its branch, whose source differs a little from master. Distinct sites differ more (filler 553 vs 469), for the same reason or a difference in which frames are skipped: not yet pinned down.
+- Future work: conditions over arguments (e.g. on `p` rather than the receiver); probes on field writes; probes at a call site inside a method, for callers that `from=` cannot tell apart.

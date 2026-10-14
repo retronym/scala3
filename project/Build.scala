@@ -2410,6 +2410,7 @@ object Build {
       publish / skip := true,
       // JMH with bench-lab's default profilers (allocation, JIT activity)
       Jmh / run / mainClass := Some("dotty.tools.benchlab.Main"),
+      BenchLab.benchLabAuditAgent := BenchLab.auditAgentJar.value,
       // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
       // The worktree's .jvmopts (e.g. -XX:+DebugNonSafepoints for profilers) reaches the benchmark forks too: JMH starts
       // them with its launcher's JVM options, then the benchmark's @Fork(jvmArgsAppend), which win (heap, stack size).
