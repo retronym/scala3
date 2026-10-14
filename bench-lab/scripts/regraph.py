@@ -33,13 +33,14 @@ def events_of(profile_dir):
 
 
 FORCE = False
+MINWIDTH = "0.01"  # percent of samples below which jfrconv drops a frame; small enough to zoom into details
 HEAP = "24g"
 
 
 # `<jfr stem>.regraph` records which jfrconv build rendered that recording's graphs: graphs that bench-lab (or an
 # older build) rendered are redone even when they are newer than the recording
 def stamp(jfrconv):
-    return f"{os.path.realpath(jfrconv)} {os.path.getmtime(jfrconv):.0f}"
+    return f"{os.path.realpath(jfrconv)} {os.path.getmtime(jfrconv):.0f} minwidth={MINWIDTH}"
 
 
 def stamp_of(jfr):
@@ -59,7 +60,7 @@ def render_one(jfrconv, jfr, label, select, kind, title):
     if not FORCE and os.path.exists(out) and stamp_of(jfr) == stamp(jfrconv) and os.path.getmtime(out) > os.path.getmtime(jfr):
         return None
     # reverse graphs of deep Scala stacks need a lot of heap (over 8 GB for a 1 GB kperf JFR)
-    cmd = [jfrconv, f"-J-Xmx{HEAP if reverse else '4g'}", *select, *extra, *(["--reverse"] if reverse else []), "--minwidth", "0.2", "--title", title, jfr, out]
+    cmd = [jfrconv, f"-J-Xmx{HEAP if reverse else '4g'}", *select, *extra, *(["--reverse"] if reverse else []), "--minwidth", MINWIDTH, "--title", title, jfr, out]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return f"{out}: jfrconv failed: {r.stderr.strip()[:300]}" if r.returncode else None
 
@@ -94,9 +95,10 @@ if __name__ == "__main__":
     ap.add_argument("-j", "--jobs", type=int, default=4)
     ap.add_argument("--heap", default=HEAP, help="jfrconv heap for reverse graphs")
     ap.add_argument("--force", action="store_true", help="redo graphs that are already up to date")
+    ap.add_argument("--minwidth", default=MINWIDTH, help="jfrconv --minwidth, in percent (default %(default)s)")
     ap.add_argument("dirs", nargs="+")
     a = ap.parse_args()
-    FORCE, HEAP = a.force, a.heap
+    FORCE, HEAP, MINWIDTH = a.force, a.heap, a.minwidth
     ok, problems = regraph(a.dirs, a.jfrconv, a.jobs)
     print(f"{ok} graphs written, {len(problems)} problems")
     sys.exit(1 if problems else 0)
