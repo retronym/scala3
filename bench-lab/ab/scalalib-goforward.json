@@ -6,7 +6,7 @@
   "jvmArgs": "-Xms8G -Xmx8G -Xss2M",
   "rounds": 2,
   "corpora": {
-    "scalaLibrary": "-bm ss -wi 6 -i 6 -f 1",
+    "scalaLibrary": "-bm ss -wi 8 -i 8 -f 1",
     "scalaz": "-wi 10 -i 10 -w 10 -r 10 -f 1",
     "tastyQuery": "-wi 15 -i 10 -w 5 -r 5 -f 1"
   },
