@@ -613,6 +613,10 @@ object SpaceEngine {
             // After all, there's nothing strictly "wrong" with unassigned type vars,
             // it just fails TreeChecker's linting.
             maximizeType(unapplyArgType, Spans.NoSpan)
+          // The subtype checks can instantiate `tvars` in the constraint only, which `maximizeType`
+          // skips. Collect them now: during PatternMatcher this is the run's root typer state, and the
+          // explore states of the exhaustivity checks would carry them until the end of the phase.
+          ctx.typerState.gc()
           mt
     }
 
