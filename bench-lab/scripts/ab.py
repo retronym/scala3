@@ -17,7 +17,8 @@ A spec (paths relative to the repository root):
     "corpora": {"scalaz": "-wi 10 -i 10 -w 10 -r 10", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
     "variants": {"base": "", "U": "-Ddotty.uncacheMethodParamRefs"},   # the first is the baseline of the report
     "variantJmhArgs": {"U": "-p scalacOptions=-Yno-check-positions"},  # optional: extra JMH arguments per variant
-    "loadgate": {"maxCores": 1.5, "quietSecs": 30}    # optional, see loadgate.py
+    "loadgate": {"maxCores": 1.5, "quietSecs": 30},   # optional, see loadgate.py
+    "historical": "<why>"                             # optional: the spec is kept for its results; `run` refuses it
   }
 
 Cells run round by round, corpus by corpus, variants interleaved within each, so drift hits every variant alike.
@@ -52,6 +53,7 @@ class Spec:
         self.variants = s["variants"]
         self.variant_jmh_args = s.get("variantJmhArgs", {})
         self.loadgate = s.get("loadgate")
+        self.historical = s.get("historical")  # why the spec no longer measures what its names say; report only
         self.out = os.path.join(REPO, "out", "ab", self.name)
 
     def cells(self):
@@ -178,6 +180,8 @@ def check_samples(spec, prof, dest):
 
 
 def run(spec, dry):
+    if spec.historical:
+        sys.exit(f"{spec.name} is historical, kept for its results; not running it: {spec.historical}")
     cells = list(spec.cells())
     todo = [c for c in cells if not os.path.exists(os.path.join(spec.cell_dir(c[1], c[3], c[0]), "result.json"))]
     log(f"{spec.name}: {len(cells)} cells, {len(todo)} to run")
