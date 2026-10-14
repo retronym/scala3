@@ -190,6 +190,7 @@ public class XctraceProfiler implements InternalProfiler {
         Map<String, long[]> sums = new TreeMap<>();
         Map<String, Integer> samples = new TreeMap<>();
         Map<String, long[]> byLeaf = new HashMap<>();
+        Map<String, long[]> byThread = new HashMap<>();
         rows(table, row -> {
             String[] t = row.get("thread");
             String[] m = row.get("pmc-events");
@@ -202,6 +203,8 @@ public class XctraceProfiler implements InternalProfiler {
             long[] s = sums.computeIfAbsent(g, k -> new long[events.size()]);
             for (int i = 0; i < xs.length; i++) s[i] += Long.parseLong(xs[i]);
             samples.merge(g, 1, Integer::sum);
+            long[] th = byThread.computeIfAbsent(threadName(t[0]), k -> new long[events.size()]);
+            for (int i = 0; i < xs.length; i++) th[i] += Long.parseLong(xs[i]);
             if (perfMap != null && g.equals("bench") && bt != null) {
                 String leaf = perfMap.name(bt[2], bt[3]);
                 long[] l = byLeaf.computeIfAbsent(leaf, k -> new long[events.size() + 1]);
@@ -210,6 +213,7 @@ public class XctraceProfiler implements InternalProfiler {
             }
         });
         if (perfMap != null) attribution(byLeaf, events);
+        threads(byThread, events);
         long[] bench = sums.getOrDefault("bench", new long[events.size()]);
         out.add(new ScalarResult("xctrace.bench.oncpu", samples.getOrDefault("bench", 0) * sampleUs / 1e6, "s", POLICY));
         int cyc = events.indexOf("CORE_ACTIVE_CYCLE"), ins = events.indexOf("INST_ALL");
@@ -236,6 +240,27 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     /** Writes, per event, the methods that were running when it counted; prints the top few to the fork's stderr. */
+    /** A thread name with its id dropped and numbered names folded (Thread-12, GC Thread#3), so short-lived threads
+     *  started per op, such as the pickler's executor, add up. */
+    static String threadName(String threadFmt) {
+        return threadFmt.replaceAll(" \\(0x[0-9a-f]+\\)", "").replaceAll(" \\(pid: \\d+\\)", "")
+            .replaceAll("#\\d+", "#N").replaceAll("Thread-\\d+", "Thread-N").trim();
+    }
+
+    /** `<trace>.threads.txt`: each thread's share of the process's cycles and its instructions per op, with its
+     *  group. The groups' totals are in the results; this says what is in them, e.g. which threads are "other". */
+    private void threads(Map<String, long[]> byThread, List<String> events) throws IOException {
+        int cyc = events.indexOf("CORE_ACTIVE_CYCLE"), ins = events.indexOf("INST_ALL");
+        if (cyc < 0) return;
+        long all = byThread.values().stream().mapToLong(t -> t[cyc]).sum();
+        if (all == 0) return;
+        StringBuilder sb = new StringBuilder("cycles%  instructions/op  group  thread\n");
+        byThread.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue()[cyc], a.getValue()[cyc])).limit(25)
+            .forEach(e -> sb.append(String.format("%6.2f%%  %14s  %-5s  %s%n", 100.0 * e.getValue()[cyc] / all,
+                ins < 0 ? "" : String.format("%.3fG", e.getValue()[ins] / (double) ops / 1e9), group(e.getKey()), e.getKey())));
+        Files.writeString(dir.resolve(trace.getFileName() + ".threads.txt"), sb);
+    }
+
     private void attribution(Map<String, long[]> byLeaf, List<String> events) throws IOException {
         StringBuilder sb = new StringBuilder();
         int n = events.size();
