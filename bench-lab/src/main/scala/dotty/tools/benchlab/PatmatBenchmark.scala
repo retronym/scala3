@@ -20,7 +20,11 @@ import dotty.tools.dotc.transform.patmat.SpaceEngine
  *  Setup compiles the corpus up to the pattern matcher with that phase replaced by one that records each match it is
  *  about to check, as `PatternMatcher.transformMatch` sees it (cases already transformed, nested matches translated)
  *  and the context it runs in. One op checks every recorded match again (or those `matches` selects), each in a fresh
- *  typer state on top of the recorded context and with warnings discarded.
+ *  typer state and GADT state on top of the recorded context and with warnings discarded (see `checkContext`).
+ *
+ *  The run's root typer state is empty by the time the ops run (the pattern matcher's phase has ended), so type
+ *  variables that checks leave in it during a compilation (scalaz, see retronym/scala3#22) are not reproduced: the
+ *  benchmark measures the checks as they are with that leak fixed.
  *
  *  Per-match state of the space engine (spaces, their simplify and decompose memos, the isSubspace cache) is rebuilt per
  *  op as in the compiler; caches outside it (denotations, base types, member lookups) are warm after the first op,
@@ -70,13 +74,20 @@ class PatmatBenchmark:
     var i = 0
     while i < recorded.length do
       val r = recorded(i)
-      if SpaceEngine.checkMatch(r.tree)(using r.ctx.fresh.setNewTyperState().setReporter(Reporter.NoReporter)) then
+      if SpaceEngine.checkMatch(r.tree)(using PatmatBenchmark.checkContext(r)) then
         exhaustive += 1
       i += 1
     exhaustive
 
 object PatmatBenchmark:
   final class Recorded(val tree: tpd.Match, val ctx: Context, val pos: String)
+
+  /** The context of one check: the recorded one with a fresh typer state and GADT state, so that nothing a check adds
+   *  to them carries over to later ops (the recorded contexts share the run's root states: a check that leaves a GADT
+   *  symbol there, as one in scalaz's Tree.scala does, would otherwise slow every later op), and warnings discarded.
+   */
+  def checkContext(r: Recorded): Context =
+    r.ctx.fresh.setNewTyperState().setFreshGADTBounds.setReporter(Reporter.NoReporter)
 
   /** The pattern matcher, recording each match it checks before checking it. */
   final class RecordingPatternMatcher(sink: mutable.ArrayBuffer[Recorded]) extends PatternMatcher:
@@ -128,3 +139,29 @@ object PatmatBenchmark:
        |$cases
        |    case _ => 0
        |""".stripMargin
+
+/** `PatmatLoop [corpus] [passes]`: checks every recorded match of the corpus in a loop outside JMH, printing each
+ *  pass's time and the size of state that could carry over between passes, to find what makes passes slower.
+ */
+object PatmatLoop:
+  def main(args: Array[String]): Unit =
+    val corpus = args.headOption.getOrElse("scalaz")
+    val passes = args.lift(1).fold(10)(_.toInt)
+    val recorded = PatmatBenchmark.record(PatmatBenchmark.corpus(corpus))
+    val states = recorded.map(_.ctx.typerState).distinct
+    val gadts = recorded.map(_.ctx.gadtState).distinct
+    println(s"$corpus: ${recorded.length} matches, ${states.length} typer states, ${gadts.length} GADT states")
+    def sizes(): String =
+      val binders = states.iterator.map(_.constraint.domainLambdas.size).sum
+      val owned = states.iterator.map(_.ownedVars.size).sum
+      val gadtSyms = gadts.iterator.map(_.gadt.symbols.size).sum
+      s"binders $binders, owned vars $owned, GADT symbols $gadtSyms"
+    println(s"before: ${sizes()}")
+    for pass <- 1 to passes do
+      val t0 = System.nanoTime
+      for r <- recorded do
+        val before = r.ctx.gadtState.gadt.symbols
+        SpaceEngine.checkMatch(r.tree)(using PatmatBenchmark.checkContext(r))
+        val added = r.ctx.gadtState.gadt.symbols.filterNot(before.contains)
+        if pass == 1 && added.nonEmpty then println(s"  ${r.pos}: GADT symbols added to the recorded context's state: ${added.map(_.showFullName(using r.ctx)).mkString(", ")}")
+      println(f"pass $pass%3d: ${(System.nanoTime - t0) / 1e6}%8.1f ms; ${sizes()}")

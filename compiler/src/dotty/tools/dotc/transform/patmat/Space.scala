@@ -1211,12 +1211,21 @@ object SpaceEngine {
   end checkReachability
 
   /** Returns `true` if the match is definitely exhaustive. */
-  /** DO NOT MERGE: -Ddotty.patmatDecomposeCache, memoize `decompose(Type)` per `checkMatch` */
-  private val decomposeCache = java.lang.Boolean.getBoolean("dotty.patmatDecomposeCache")
+  /** DO NOT MERGE: -Ddotty.patmatDecomposeCache=true|run, memoize `decompose(Type)` per `checkMatch`, or per run */
+  private val decomposeCacheMode = System.getProperty("dotty.patmatDecomposeCache", "false").nn
+  private val decomposeCache = decomposeCacheMode == "true"
+  private val decomposeCacheRun = decomposeCacheMode == "run"
+  @sharable private var runDecomposeCache: (Run | Null, util.HashMap[Type, List[Type]]) = (null, util.HashMap())
+  private def decomposeCacheOfRun(using Context): util.HashMap[Type, List[Type]] =
+    if runDecomposeCache._1 ne ctx.run then runDecomposeCache = (ctx.run, util.HashMap())
+    runDecomposeCache._2
 
   def checkMatch(m: Match)(using Context): Boolean =
     val ctx1 = ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))
-    inContext(if decomposeCache then ctx1.withProperty(DecomposeCacheKey, Some(util.HashMap())) else ctx1) {
+    inContext(
+      if decomposeCache then ctx1.withProperty(DecomposeCacheKey, Some(util.HashMap()))
+      else if decomposeCacheRun then ctx1.withProperty(DecomposeCacheKey, Some(decomposeCacheOfRun))
+      else ctx1) {
       if PatmatStats.enabled then
         var isExhaustive = false
         val exh = if exhaustivityCheckable(m.selector) then PatmatStats.measure {
