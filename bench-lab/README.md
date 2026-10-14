@@ -65,6 +65,7 @@ Profile tools, for any `benchLabAsync` profile directory or async-profiler `ab.p
 
 - `regraph.py`: (re)renders the flame graphs with a chosen `jfrconv` (`--jfrconv`, `$JFRCONV`, else a build of retronym/async-profiler's integration branch if present, which has `--hw` for kperf events and the extended flame graph controls), adding classified forward and reverse graphs of the benchmark threads. Up-to-date graphs are skipped (a `.regraph` stamp records the `jfrconv` build and `--minwidth`).
 - `profdiff.py`: two runs compared per op (ops counted from each iteration's mean): a differential flame graph and the methods whose self time changed most.
+- `abindex.py`: `out/ab/index.html`, every campaign with its cells, flame graphs and differential graphs, filterable, with each campaign's `NOTES.md` and a findings log from `out/ab/FINDINGS.md`.
 
 ### No file I/O in the measured window
 
