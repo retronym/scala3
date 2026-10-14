@@ -1,0 +1,15 @@
+{
+  "name": "prof-27296",
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "async": "cycles@10000000+instructions@10000000",
+    "kperf": "/tmp/asprof-kperf.sock",
+    "lib": "/Users/jzaugg-virtus/code/.worktrees/async-profiler/integration-kperf-flamegraph/build/lib/libasyncProfiler.dylib"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 1,
+  "corpora": {"scalaz": "-wi 12 -w 5 -i 12 -r 5", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
+  "trees": {"base": "../goforward-base", "loop": "."},
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}

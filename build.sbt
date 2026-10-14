@@ -28,6 +28,7 @@ val `scala3-tasty-inspector` = Build.`scala3-tasty-inspector`
 //val `scala3-bench-bootstrapped` = Build.`scala3-bench-bootstrapped`
 //val `scala3-bench-micro` = Build.`scala3-bench-micro`
 //val `scala3-bench-run` = Build.`scala3-bench-run`
+val `scala3-bench-lab` = Build.`scala3-bench-lab`
 val `tasty-core-nonbootstrapped` = Build.`tasty-core-nonbootstrapped`
 val `tasty-core-bootstrapped` = Build.`tasty-core-bootstrapped`
 val `scala3-directives-parser-nonbootstrapped` = Build.`scala3-directives-parser-nonbootstrapped`

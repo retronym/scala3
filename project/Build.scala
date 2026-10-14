@@ -32,6 +32,8 @@ import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport._
 import org.scalajs.linker.interface.ESVersion
 
 import sbtbuildinfo.BuildInfoPlugin
+import pl.project13.scala.sbt.JmhPlugin
+import pl.project13.scala.sbt.JmhPlugin.autoImport.Jmh
 import sbtbuildinfo.BuildInfoPlugin.autoImport._
 
 import scala.xml.{Node => XmlNode, NodeSeq => XmlNodeSeq, _}
@@ -65,6 +67,8 @@ object Build {
   val ideTestsScalaJSClasspath = taskKey[Seq[File]]("Scala.js dependency classpath to use in IDE tests")
 
   val fetchScalaJSSource = taskKey[File]("Fetch the sources of Scala.js")
+
+  val optimize = settingKey[Boolean]("Enable the Scala 2 optimizer (-opt) when compiling the stdlib and compiler. Disable for faster local development with `set Global / optimize := false` or `SCALA3_BUILD_OPTIMIZE=false`.")
 
   lazy val SourceDeps = config("sourcedeps")
 
@@ -120,6 +124,7 @@ object Build {
 
   // Settings shared globally (scoped in Global). Used in build.sbt
   lazy val globalSettings = Def.settings(
+    commands ++= BenchLab.commands,
     onLoad := (Global / onLoad).value andThen { state =>
       def exists(submodule: String) = {
         val path = Paths.get(submodule)
@@ -135,6 +140,8 @@ object Build {
 
       state
     },
+
+    optimize := sys.env.get("SCALA3_BUILD_OPTIMIZE").forall(_.toBoolean),
 
     // I find supershell more distracting than helpful
     useSuperShell := false,
@@ -248,6 +255,11 @@ object Build {
       LibraryProperties.content(version.value, currentYear)
     }
     generatePropertiesFile(fileName, contents)
+  }
+
+  /** `opts` if `Global / optimize` is enabled, otherwise nothing */
+  def optimizeOptions(opts: String*): Def.Initialize[Seq[String]] = Def.setting {
+    if ((Global / optimize).value) opts else Nil
   }
 
   val enableBspAllProjects = sys.env.get("ENABLE_BSP_ALL_PROJECTS").map(_.toBoolean).getOrElse{
@@ -976,8 +988,8 @@ object Build {
       scalacOptions ++= Seq(
         "-release:17",
         s"-sourcepath:${(Compile / sourceDirectory).value}",
-        "-opt:local", // Important: local optimization are fine, inlining is prohibited!
       ),
+      scalacOptions ++= optimizeOptions("-opt:local").value, // Important: local optimization are fine, inlining is prohibited!
       target := target.value / "scala2-library",
       Compile / sourceDirectory := (Compile / Keys.target).value / "sources" / scalaVersion.value,
       Compile / sources := (Compile / sources).dependsOn(
@@ -1009,8 +1021,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-non-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:**,!java.**").value,
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1099,8 +1111,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:**,!java.**").value,
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1627,7 +1639,7 @@ object Build {
       bootstrappedScalaInstanceSettings,
       // Optimize the compiler, but only inline its own code,
       // since it may be used with a different standard library than it was compiled with.
-      Compile / compile / scalacOptions ++= Seq("-opt", "-opt-inline:dotty.**"),
+      Compile / compile / scalacOptions ++= optimizeOptions("-opt", "-opt-inline:dotty.**").value,
       /* Add the sources of scalajs-ir.
        * To guarantee that dotty can bootstrap without depending on a version
        * of scalajs-ir built with a different Scala compiler, we add its
@@ -2388,6 +2400,28 @@ object Build {
   /*lazy val `scala3-bench-micro` = project.in(file("bench-micro"))
     .asDottyBench(Bootstrapped)
     .settings(Jmh / run / mainClass := Some("org.openjdk.jmh.Main"))*/
+
+  /** JMH benchmarks and hardware counters for the working tree's bootstrapped compiler; see bench-lab/README.md. */
+  lazy val `scala3-bench-lab` = project.in(file("bench-lab"))
+    .dependsOn(`scala3-compiler-bootstrapped`)
+    .enablePlugins(JmhPlugin)
+    .settings(commonBootstrappedSettings)
+    .settings(
+      publish / skip := true,
+      // JMH with bench-lab's default profilers (allocation, JIT activity)
+      Jmh / run / mainClass := Some("dotty.tools.benchlab.Main"),
+      // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
+      // The worktree's .jvmopts (e.g. -XX:+DebugNonSafepoints for profilers) reaches the benchmark forks too: JMH starts
+      // them with its launcher's JVM options, then the benchmark's @Fork(jvmArgsAppend), which win (heap, stack size).
+      Jmh / run / javaOptions ++= {
+        val f = (ThisBuild / baseDirectory).value / ".jvmopts"
+        if (f.exists) IO.readLines(f).map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")) else Nil
+      },
+      Jmh / run / javaOptions ++= Seq(
+        s"-Dbenchlab.scalaLibrary=${(`scala-library-bootstrapped` / Compile / packageBin).value}",
+        s"-Dbenchlab.corpora=${sys.env.getOrElse("SCALA3_BENCHMARKS", ((ThisBuild / baseDirectory).value / ".." / "scala3-benchmarks").getCanonicalPath)}/bench-sources",
+      ),
+    )
 
   val testcasesOutputDir = taskKey[Seq[String]]("Root directory where tests classes are generated")
   val testcasesSourceRoot = taskKey[String]("Root directory where tests sources are generated")
