@@ -610,8 +610,11 @@ def fetch_comments(gh: Gh, db, repo: str, since: dt.date, keywords: dict[str, re
     """
     pages_per_cursor = 30
     for kind, path in (("issue", f"repos/{repo}/issues/comments"), ("review", f"repos/{repo}/pulls/comments")):
-        ck = f"comments-cursor:{repo}:{kind}"
-        cursor = max(state_get(db, ck, ""), f"{since.isoformat()}T00:00:00Z")
+        ck, fk = f"comments-cursor:{repo}:{kind}", f"comments-from:{repo}:{kind}"
+        since_ts = f"{since.isoformat()}T00:00:00Z"
+        covered_from = state_get(db, fk)
+        # resume from the cursor, unless --since now reaches further back than what was covered
+        cursor = state_get(db, ck, since_ts) if covered_from and covered_from <= since_ts else since_ts
         n = 0
         while True:
             last = None
@@ -637,6 +640,8 @@ def fetch_comments(gh: Gh, db, repo: str, since: dt.date, keywords: dict[str, re
                 break
             cursor = last
             log(f"[{repo}] {kind} comments: {n} so far, cursor {cursor}")
+        state_set(db, fk, min(covered_from or since_ts, since_ts))
+        db.commit()
         log(f"[{repo}] {kind} comments: {n} fetched")
 
 
@@ -693,7 +698,7 @@ def build_report(db, repos: list[str], since: dt.date) -> dict:
             f"select * from flaky_events where repo in ({','.join('?' * len(repos))}) and failed_at>=? order by failed_at",
             (*repos, since_s)):
         repo = e["repo"]
-        prs = json.loads(e["prs"] or "[]") or sha_prs.get((repo, e["head_sha"]), [])
+        prs = json.loads(e["prs"] or "[]") or (sha_prs.get((repo, e["head_sha"]), []) if e["event"].startswith("pull_request") else [])
         units = db.execute("select * from flaky_units where repo=? and source=? and event_key=?",
                            (repo, e["source"], e["key"])).fetchall()
         t_fail = parse_ts(e["failed_at"])
@@ -715,7 +720,7 @@ def build_report(db, repos: list[str], since: dt.date) -> dict:
                     or [(s["kind"], s["sig"], s["detail"]) for s in sigs if s["kind"] == "suite"]
                     or [(s["kind"], s["sig"], s["detail"]) for s in sigs if s["kind"] == "infra"]
                     or [(s["kind"], s["sig"], s["detail"]) for s in sigs if s["kind"] == "sbt-task"][:1]
-                    or [("job", f"{u['name']} › {u['failed_step'] or '?'}", "")])
+                    or [("job", f"{u['name']} › {u['failed_step']}" if u["failed_step"] else f"{u['name']} (log expired)", "")])
             ev["units"].append({"name": u["name"], "step": u["failed_step"], "url": u["url"], "dur": dur,
                                 "recovered": u["recovered"], "log": log_status.get((repo, u["unit_id"]), "pending"),
                                 "sigs": [f"{k}:{s}" for k, s, _ in keys]})
@@ -790,16 +795,29 @@ def digest(data: dict, rng: str) -> str:
     com_w = [c for c in data["comments"] if in_w(c["created_at"])]
     meta = {(c["repo"], f"{c['kind']}:{c['sig']}"): c for c in data["clusters"]}
     fmt = lambda t: t.strftime("%Y-%m-%d %H:%M")
+    cov = data["coverage"]
+    prev_partial = p0.date().isoformat() < cov   # comparison window (partly) predates the cache
+    win_partial = w0.date().isoformat() < cov
     out = [f"# Flaky CI digest — range {rng}: {fmt(w0)} → {fmt(now)} UTC",
            "", f"Repos: {', '.join(data['repos'])}. Compared with the previous {days}d ({fmt(p0)} → {fmt(w0)}). "
-           f"Data in the cache starts {data['coverage']}" + (" — the windows are partly before that, so counts there are incomplete." if p0.date().isoformat() < data["coverage"] else "."), ""]
+           f"Data in the cache starts {cov}." + (" **This range starts before that; its counts are incomplete and there is no comparison period.**" if win_partial
+     else " **The comparison period is partly before that; 'previous' counts (marked *) are incomplete.**" if prev_partial else ""), ""]
 
+    def expired(events):
+        units = [u for e in events for u in e["units"]]
+        return sum(u["log"] != "ok" for u in units), len(units)
+    xw, nw = expired(ev_w)
+    xp, np_ = expired(ev_p)
+    if xw or xp:
+        out += [f"Logs unavailable (expired or not fetched) for {xw}/{nw} failed jobs in this range and {xp}/{np_} in the previous period; "
+                "those are clustered as `job:<name> (log expired)`, so test-level clusters undercount older failures and "
+                "'first seen' / 'previous' comparisons for test signatures are biased towards recent dates.", ""]
     out += ["## Totals", "", "| repo | flaky failures | previous period | Actions runs | flake rate | flakiness comments |", "|---|---|---|---|---|---|"]
     for r in data["repos"]:
         runs = (sum(n for h, n in data["runs_per_hour"].get(r, {}).items() if h >= w0.strftime("%Y-%m-%dT%H")) if days <= 1 else
                 sum(n for d, n in data["runs_per_day"].get(r, {}).items() if d >= w0.date().isoformat()))
         gha = sum(1 for e in ev_w if e["repo"] == r and e["source"] != "status")
-        out.append(f"| {r} | {sum(e['repo'] == r for e in ev_w)} | {sum(e['repo'] == r for e in ev_p)} | {runs} | "
+        out.append(f"| {r} | {sum(e['repo'] == r for e in ev_w)} | {sum(e['repo'] == r for e in ev_p)}{'*' if prev_partial else ''} | {runs} | "
                    f"{(gha / runs * 100 if runs else 0):.2f}% | {sum(c['repo'] == r for c in com_w)} |")
 
     def tally(events):
@@ -818,16 +836,18 @@ def digest(data: dict, rng: str) -> str:
         m = meta.get(key, {})
         jobs = ", ".join(f"{j} ×{n}" for j, n in c["jobs"].most_common(3))
         det = f" — `{m['detail'][:160]}`" if m.get("detail") else ""
-        return (f"- **{key[0]}** `{key[1]}`: {c['n']} in range (previous {cp.get(key, {}).get('n', 0)}), {len(c['prs'])} PRs, "
+        prev = "n/a" if win_partial else f"{cp.get(key, {}).get('n', 0)}{'*' if prev_partial else ''}"
+        return (f"- **{key[0]}** `{key[1]}`: {c['n']} in range (previous {prev}), {len(c['prs'])} PRs, "
                 f"first ever {m.get('first', '?')[:10]}, last {c['last'][:10]}; jobs: {jobs}; "
                 f"comment mentions (all time): {m.get('comment_mentions', 0)}{det}; e.g. {c['ex']}")
     ranked = sorted(cw.items(), key=lambda kv: -kv[1]["n"])
     out += ["", "## Top clusters in range", ""] + ([line(k, c) for k, c in ranked[:30]] or ["- none"])
     new = [(k, c) for k, c in ranked if meta.get(k, {}).get("first", "") and in_w(meta[k]["first"])]
-    out += ["", "## Clusters first seen in this range", ""] + ([line(k, c) for k, c in new[:20]] or ["- none"])
+    out += ["", "## Clusters first seen in this range", ""] + (["- n/a: the comparison period predates the data, so everything would look new"] if prev_partial else [line(k, c) for k, c in new[:20]] or ["- none"])
     gone = sorted(((k, c) for k, c in cp.items() if k not in cw and c["n"] >= 2), key=lambda kv: -kv[1]["n"])
     out += ["", "## Clusters active in the previous period but not in this one (possibly fixed)", ""]
-    out += [f"- **{k[0]}** `{k[1]}`: {c['n']} in previous period, last {c['last'][:10]}" for k, c in gone[:15]] or ["- none"]
+    out += (["- n/a: the comparison period predates the data"] if prev_partial else
+            [f"- **{k[0]}** `{k[1]}`: {c['n']} in previous period, last {c['last'][:10]}" for k, c in gone[:15]] or ["- none"])
     kinds = Counter(u["sigs"][0].split(":")[0] if u["sigs"] else "job" for e in ev_w for u in e["units"])
     out += ["", "## Failure kinds in range", "", ", ".join(f"{k}: {n}" for k, n in kinds.most_common()) or "none"]
     if 0 < len(ev_w) <= 60:

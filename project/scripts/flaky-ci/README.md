@@ -63,7 +63,7 @@ Supported Markdown: headings, paragraphs, `-`/`1.` lists, pipe tables, `**bold**
 
 ### Digging deeper
 
-- Cached logs: `local/flaky-ci/logs/<owner>__<repo>/<job-id>.log.gz` (`zcat … | grep -n '\[error\]'`). The job id is the last path segment of the log link.
+- Cached logs: `local/flaky-ci/logs/<owner>__<repo>/<job-id>.log.gz` (`gzip -dc … | grep -n '\[error\]'`; macOS `zcat` does not read `.gz`). The job id is the last path segment of the log link.
 - SQLite: `local/flaky-ci/flaky.sqlite` — tables `flaky_events`, `flaky_units` (failed jobs), `signatures`, `runs`, `comments`.
 - To check whether a cluster was fixed, search merged PRs: `gh search prs --repo scala/scala3 --merged "<test name>"`.
 
