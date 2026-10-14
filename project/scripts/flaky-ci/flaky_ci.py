@@ -660,7 +660,7 @@ TEST_REF = re.compile(r"\b(tests?/(?:files/)?[\w-]+/[\w./-]+?)(?=[\s`'\",)\]]|\.
 def build_report(db, repos: list[str], since: dt.date) -> dict:
     since_s = since.isoformat()
     data = {"generated": iso_now(), "since": since_s, "repos": repos, "weeks": [], "events": [], "clusters": [],
-            "comments": [], "runs_per_day": {}, "runs_per_hour": {}, "ranges": RANGES, "summaries": {}}
+            "comments": [], "runs_per_day": {}, "runs_per_hour": {}, "ranges": RANGES, "summaries": {}, "repo_summaries": {}}
     # earliest day for which every repo's runs were fetched
     firsts = [db.execute("select min(day) from fetched_windows where repo=?", (r,)).fetchone()[0] for r in repos]
     data["coverage"] = max([f for f in firsts if f] or [since_s])
@@ -698,7 +698,10 @@ def build_report(db, repos: list[str], since: dt.date) -> dict:
             f"select * from flaky_events where repo in ({','.join('?' * len(repos))}) and failed_at>=? order by failed_at",
             (*repos, since_s)):
         repo = e["repo"]
-        prs = json.loads(e["prs"] or "[]") or (sha_prs.get((repo, e["head_sha"]), []) if e["event"].startswith("pull_request") else [])
+        # Only PR-triggered runs belong to a PR: GitHub also tags push runs with unrelated fork PRs whose
+        # head branch has the same name (e.g. 2.13.x), and commits/{sha}/pulls returns the PR that merged a commit.
+        is_pr = e["event"].startswith("pull_request") or e["source"] == "status"
+        prs = (json.loads(e["prs"] or "[]") or sha_prs.get((repo, e["head_sha"]), [])) if is_pr else []
         units = db.execute("select * from flaky_units where repo=? and source=? and event_key=?",
                            (repo, e["source"], e["key"])).fetchall()
         t_fail = parse_ts(e["failed_at"])
@@ -798,7 +801,10 @@ def digest(data: dict, rng: str) -> str:
     cov = data["coverage"]
     prev_partial = p0.date().isoformat() < cov   # comparison window (partly) predates the cache
     win_partial = w0.date().isoformat() < cov
+    target = summary_name(rng, data["repos"][0] if len(data["repos"]) == 1 else None)
     out = [f"# Flaky CI digest — range {rng}: {fmt(w0)} → {fmt(now)} UTC",
+           "", f"Write the summary for this digest to `{target}` next to the database"
+           + ("; it must have a section for every repo, including quiet ones." if len(data["repos"]) > 1 else "."),
            "", f"Repos: {', '.join(data['repos'])}. Compared with the previous {days}d ({fmt(p0)} → {fmt(w0)}). "
            f"Data in the cache starts {cov}." + (" **This range starts before that; its counts are incomplete and there is no comparison period.**" if win_partial
      else " **The comparison period is partly before that; 'previous' counts (marked *) are incomplete.**" if prev_partial else ""), ""]
@@ -865,15 +871,23 @@ def digest(data: dict, rng: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def summary_name(rng: str, repo: str | None = None) -> str:
+    """summary-1m.md covers all repos; summary-1m--scala__scala.md covers one."""
+    return f"summary-{rng}--{repo.replace('/', '__')}.md" if repo else f"summary-{rng}.md"
+
+
 def render(data: dict, out: Path, summary_dir: Path):
     tpl = (Path(__file__).parent / "dashboard.html").read_text()
-    for rng in RANGES:
-        f = summary_dir / f"summary-{rng}.md"
-        if f.exists():
-            data["summaries"][rng] = {
-                "markdown": f.read_text(),
+    def load(f: Path):
+        log(f"  summary: {f}")
+        return {"markdown": f.read_text(),
                 "written": dt.datetime.fromtimestamp(f.stat().st_mtime, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-            log(f"  summary for {rng}: {f}")
+    for rng in RANGES:
+        if (f := summary_dir / summary_name(rng)).exists():
+            data["summaries"][rng] = load(f)
+        for repo in data["repos"]:
+            if (f := summary_dir / summary_name(rng, repo)).exists():
+                data["repo_summaries"].setdefault(repo, {})[rng] = load(f)
     payload = json.dumps(data, default=list, separators=(",", ":")).replace("</", "<\\/")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(tpl.replace("/*__DATA__*/null", payload))
@@ -902,6 +916,7 @@ def main():
     rp.add_argument("--out", type=Path, default=Path("local/flaky-ci/index.html"))
     rp.add_argument("--summary-dir", type=Path,
                     help="directory holding summary-<range>.md agent summaries (default: next to --db)")
+    rp.add_argument("--source-url", help="link shown in the dashboard header, e.g. the PR or repo hosting this script")
     dg = sub.add_parser("digest", help="print a Markdown overview of one time range for an agent to summarise")
     dg.add_argument("--range", choices=list(RANGES), required=True)
     args = ap.parse_args()
@@ -932,7 +947,9 @@ def main():
     elif args.cmd == "digest":
         sys.stdout.write(digest(build_report(db, repos, args.since), args.range))
     else:
-        render(build_report(db, repos, args.since), args.out, args.summary_dir or args.db.parent)
+        data = build_report(db, repos, args.since)
+        data["source_url"] = args.source_url
+        render(data, args.out, args.summary_dir or args.db.parent)
 
 
 if __name__ == "__main__":
