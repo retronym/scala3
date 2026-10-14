@@ -43,7 +43,16 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Publish Scala 3 locally
-        run: ./project/scripts/sbt scala3-bootstrapped/publishLocal
+        # Just the bridge and what it needs at runtime; skips scaladoc, the REPL, Scala.js and friends.
+        run: >
+          ./project/scripts/sbt
+          scala3-sbt-bridge-bootstrapped/publishLocalBin
+          scala3-interfaces/publishLocalBin
+          scala3-compiler-bootstrapped/publishLocalBin
+          scala3-library-bootstrapped/publishLocalBin
+          scala-library-bootstrapped/publishLocalBin
+          tasty-core-bootstrapped/publishLocalBin
+          scala3-directives-parser-bootstrapped/publishLocalBin
 
       - name: Checkout zinc
         uses: actions/checkout@v4
