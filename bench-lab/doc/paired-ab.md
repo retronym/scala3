@@ -39,6 +39,8 @@ One fork per variant lands about 3% off. Whether the mean or the median is used 
 
 ## Plan
 
+First use: the Positioned changes, all per-Run settings since retronym/scala3 1a64cdb214. With `-Yno-parallel-pickling` throughout: base adds `-Yno-prime-spans`; prime adds nothing; nocheck adds `-Yno-prime-spans -Yno-check-positions`; both adds `-Yno-check-positions`.
+
 - TODO 1. `variants` in `CompileBenchmark`, timing per variant from JMH's iteration results; check on two identical variants that the paired difference is near zero and its spread smaller than across forks.
 - TODO 2. Per-variant counters in `XctraceProfiler`.
 - TODO 3. Paired summaries in `ab.py report` and `abindex.py`.
