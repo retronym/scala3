@@ -30,7 +30,7 @@ class CompileBenchmark:
     Announce.jvm(s"CompileBenchmark($corpus)")
     compiler = InMemoryCompiler(Corpus.load(corpus), scalacOptions.split(" ").toList.filter(_.nonEmpty), shared = context == "shared")
     compiler.compile()
-    println(s"\n[bench-lab] $corpus: ${compiler.corpus.files.size} sources -> ${compiler.outputCount} output files; classpath in memory: ${InMemoryClasspath.default}")
+    println(s"\n[bench-lab] $corpus: ${compiler.corpus.files.size} sources -> ${compiler.outputCount} output files; classpath in memory: ${compiler.classpathSnapshot}")
 
   @Benchmark
   def compile(): Unit = compiler.compile()
@@ -46,7 +46,7 @@ object CompileLoop:
     val n = args.lift(1).fold(20)(_.toInt)
     val histoAt = sys.props.get("benchlab.histoAt").toList.flatMap(_.split(",")).map(_.trim.toInt).toSet
     val compiler = InMemoryCompiler(Corpus.load(corpus), args.drop(2).toList, shared = sys.props.contains("benchlab.shared"))
-    println(s"classpath in memory: ${InMemoryClasspath.default}")
+    println(s"classpath in memory: ${compiler.classpathSnapshot}")
     val memory = java.lang.management.ManagementFactory.getMemoryMXBean
     for i <- 1 to n do
       val t0 = System.nanoTime
