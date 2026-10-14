@@ -69,6 +69,8 @@ object Versions {
   def isRelease = sys.env.get("RELEASEBUILD").contains("yes")
   def isNightly = sys.env.get("NIGHTLYBUILD").contains("yes")
   def isBenchmark = sys.env.get("BENCHMARKBUILD").contains("yes")
+  /** Set SKIP_DOCS to omit the API documentation (-javadoc.jar) artifacts when publishing, e.g. for CI jobs that only need the compiler jars. */
+  def skipDocs = sys.env.contains("SKIP_DOCS")
 
   /** Version calculated for `nonbootstrapped` projects */
   val dottyNonBootstrappedVersion = {
