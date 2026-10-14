@@ -52,6 +52,20 @@ sbt "benchLabAsync cpu,alloc -p corpus=dottyUtil CompileBenchmark"
 
 Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees). `-p corpus=/abs/path` compiles the `.scala` files under any directory (with a known corpus's options when the directory name matches one). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
 
+### A/B campaigns
+
+`scripts/ab.py` runs a campaign described by a JSON spec (`ab/example-*.json`): a benchmark under one profile (an xctrace template, or async-profiler events, with kperf if given), over corpora and JVM-flag variants, round by round with the variants interleaved, so drift hits all of them alike. It is resumable (cells with a `result.json` are skipped), waits for a quiet machine (`loadgate`) and for any other JMH run, and checks that each run measured what it claims: the JVM, the JVM arguments (JMH's `-jvmArgsAppend` replaces the benchmark's `@Fork(jvmArgsAppend)`, so every variant gets the spec's `jvmArgs`), and, for kperf, that samples were not lost. `ab.py report` prints a table per corpus (ms/op, instructions, cycles, IPC, allocation, each against the first variant) and, for async-profiler campaigns, an index of every cell's flame graphs. Results go to `out/ab/<name>/<corpus>/<variant>/<round>`.
+
+```bash
+python3 -I bench-lab/scripts/ab.py run bench-lab/ab/example-gc.json
+python3 -I bench-lab/scripts/ab.py report bench-lab/ab/example-gc.json
+```
+
+Profile tools, for any `benchLabAsync` profile directory or async-profiler `ab.py` cell:
+
+- `regraph.py`: (re)renders the flame graphs with a chosen `jfrconv` (`--jfrconv`, `$JFRCONV`, else a build of retronym/async-profiler's integration branch if present, which has `--hw` for kperf events and the extended flame graph controls), adding classified forward and reverse graphs of the benchmark threads. Up-to-date graphs are skipped (a `.regraph` stamp records the `jfrconv` build and `--minwidth`).
+- `profdiff.py`: two runs compared per op (ops counted from each iteration's mean): a differential flame graph and the methods whose self time changed most.
+
 ### No file I/O in the measured window
 
 Checked on `dottyUtil` with JFR file events (`jdk.FileRead`, `jdk.FileWrite`, no threshold) over 10 `CompileLoop` runs: all reads fall in the first run (the classpath snapshot, and the JVM loading compiler classes on first use), none after it. An earlier check, with the jar classpath, found the same apart from the odd lazy read from the scala-library jar.
@@ -68,7 +82,7 @@ Checked on `dottyUtil` with JFR file events (`jdk.FileRead`, `jdk.FileWrite`, no
 - TODO 2. Phase attribution of the counters.
 - TODO 3. Operation-level micro benchmarks with recorded inputs and cache control.
 - TODO 3b. Optimizer benchmark: compile with `-opt` in setup, capture the class nodes before global optimization, and per op run `GlobalOptimizer` and `LocalOptimizer` on copies with fresh optimizer state (the call graph is keyed on node identity). Needs compiler refactoring: the optimizer wiring moved out of `GenBCode.getCodeGen` into a factory, and a hook to capture the pending class nodes at the start of `CodeGen.finish` (e.g. a `GenBCode` subclass installed via `Compiler.phases`). Re-reading unoptimized class files instead would lack the inline info attribute and differ from the in-compiler input.
-- TODO 4. Variant driver (JVM flags, compiler settings, builds), interleaved, with deltas and noise.
+- DONE 4. Variant driver: `ab.py` (JVM flags and compiler settings, interleaved, with deltas), `abtrees.py` (builds). Still to do: noise estimates beyond the per-round spread.
 - TODO 5. Linux parity.
 - TODO 6. First experiment: JIT inlining limits on the compiler, with the stalls before and after and where they moved.
 - Future work: PMI-sampled templates (instruction-level attribution, needs a one-off template saved in Instruments), Processor Trace for exact control flow on M4/M5, a non-bootstrapped variant.

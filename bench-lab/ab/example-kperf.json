@@ -1,0 +1,10 @@
+{
+  "name": "example-kperf",
+  "benchmark": "CompileBenchmark",
+  "profile": {"async": "cycles+instructions+cache-misses+branch-misses", "kperf": "/tmp/asprof-kperf.sock",
+              "lib": "<libasyncProfiler of a retronym/async-profiler integration build>"},
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 1,
+  "corpora": {"dottyUtil": "-wi 12 -w 5 -i 12 -r 5"},
+  "variants": {"base": "", "no-tiered": "-XX:-TieredCompilation"}
+}

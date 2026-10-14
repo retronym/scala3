@@ -1,0 +1,10 @@
+{
+  "name": "example-gc",
+  "benchmark": "CompileBenchmark",
+  "profile": {"xctrace": "ipc"},
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 2,
+  "corpora": {"dottyUtil": "-wi 15 -w 3 -i 10 -r 3", "re2s": "-wi 15 -w 3 -i 10 -r 3"},
+  "variants": {"g1": "", "parallel": "-XX:+UseParallelGC"},
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}
