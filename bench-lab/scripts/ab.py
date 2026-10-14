@@ -157,10 +157,17 @@ def run(spec, dry):
             shutil.rmtree(prof)  # shared between runs: start clean so nothing stale is picked up
         os.makedirs(dest, exist_ok=True)
         log(f"round {r} {corpus} {variant}")
-        started = time.time()
-        with open(os.path.join(dest, "sbt.log"), "w") as out:
-            # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
-            rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+        for attempt in range(3):
+            started = time.time()
+            with open(os.path.join(dest, "sbt.log"), "w") as out:
+                # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
+                rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+            # a run that fails within a minute never got going: most likely another session's JMH took the lock
+            # between wait_until_quiet and JMH's start; wait again and retry
+            if rc == 0 or time.time() - started > 60:
+                break
+            log(f"  sbt exited with {rc} after {time.time() - started:.0f} s; waiting and retrying")
+            wait_until_quiet(spec)
         problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags)
         if not problem and "async" in spec.profile and spec.profile["async"].startswith("cycles"):
             problem = check_samples(spec, prof, dest)

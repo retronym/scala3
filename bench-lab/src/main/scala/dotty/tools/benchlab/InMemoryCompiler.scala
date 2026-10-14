@@ -17,8 +17,10 @@ import dotty.tools.io.AbstractFile
  *  and nothing survives from one compilation to the next but JVM-wide state (the name table). With `shared = true`, all
  *  compilations share one root context and `Compiler`, each a new `Run`, as a warm compile server would; dotc then
  *  retains every earlier `Run` through state on the root context and in phases, so the heap grows with each compilation.
+ *
+ *  Subclasses may override `newCompiler`, e.g. to replace a phase with an instrumented one.
  */
-final class InMemoryCompiler(val corpus: Corpus, extraOptions: List[String] = Nil, shared: Boolean = false,
+class InMemoryCompiler(val corpus: Corpus, extraOptions: List[String] = Nil, shared: Boolean = false,
     classpath: InMemoryClasspath = InMemoryClasspath.default) extends Driver:
 
   /** The output of the latest compilation. */
