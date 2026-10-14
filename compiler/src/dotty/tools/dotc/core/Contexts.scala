@@ -1128,7 +1128,7 @@ object Contexts {
     /** For each phase id with a linked denotation transformer, what `goForward` needs to know about it; null for
      *  other phase ids
      */
-    private[core] var denotTransformers: Array[TransformerStep] = uninitialized
+    private[core] var denotTransformers: Array[DenotTransformerInfo] = uninitialized
 
     /** Flag to suppress inlining, set after overflow */
     private[dotc] var stopInlining: Boolean = false

@@ -11,7 +11,7 @@ import Symbols.NoSymbol
 import Symbols.*
 import Types.*
 import Periods.*
-import Phases.TransformerStep
+import Phases.DenotTransformerInfo
 import Flags.*
 import DenotTransformers.*
 import Decorators.*
@@ -819,7 +819,7 @@ object Denotations {
       def goForward: SingleDenotation =
         val targetPhase = currentPeriod.lastPhaseId
         val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
-        val steps = ctx.base.denotTransformers                  // transformer id => its TransformerStep
+        val transformers = ctx.base.denotTransformers           // transformer id => its DenotTransformerInfo
 
         var cur = coveringOrLatest(this)
         while cur.validFor.lastPhaseId < targetPhase do
@@ -827,9 +827,9 @@ object Denotations {
           cur =
             if targetPhase <= transformerId then extend(cur, transformerId)
             else
-              val step = steps(transformerId)
-              if step.isIdentity then extend(cur, math.min(step.nextNonIdentity, nextTransformerAt(targetPhase)))
-              else transformAt(step, cur)
+              val info = transformers(transformerId)
+              if info.isIdentity then extend(cur, math.min(info.nextNonIdentity, nextTransformerAt(targetPhase)))
+              else transformAt(info, cur)
           cur = coveringOrLatest(cur)
         cur
       end goForward
@@ -852,7 +852,7 @@ object Denotations {
         d.validFor = d.validFor.withLastPhaseId(lastPhase)
         d
 
-      /** `d` brought forward over `step`: the transformer's result, installed as the next version if it is new.
+      /** `d` brought forward over `info.transformer`: its result, installed as the next version if it is new.
        *
        *  The transform runs in the context, temporarily updated with the transformer's phase instead of creating a
        *  new one. This is done for performance. We cut down on about 30% of context
@@ -860,19 +860,19 @@ object Denotations {
        *  To work correctly, we need to demand that the context with the new phase
        *  is not retained in the result.
        */
-      def transformAt(step: TransformerStep, d: SingleDenotation): SingleDenotation =
+      def transformAt(info: DenotTransformerInfo, d: SingleDenotation): SingleDenotation =
         val mutCtx = ctx.asInstanceOf[FreshContext]
         val transformed =
           try
-            mutCtx.setPeriod(step.transformerPeriod.inRun(currentPeriod.runId))
-            step.transformer.transform(d)
+            mutCtx.setPeriod(info.transformerPeriod.inRun(currentPeriod.runId))
+            info.transformer.transform(d)
           finally
             mutCtx.setPeriod(currentPeriod)
-        if transformed eq d then extend(d, step.lastPhaseId)
+        if transformed eq d then extend(d, info.lastPhaseId)
         else
-          assertNotPackage(transformed, step.transformer)
+          assertNotPackage(transformed, info.transformer)
           transformed.insertAfter(d)
-          transformed.validFor = step.resultPeriod.inRun(currentPeriod.runId)
+          transformed.validFor = info.resultPeriod.inRun(currentPeriod.runId)
           transformed
 
       def goBack: SingleDenotation =

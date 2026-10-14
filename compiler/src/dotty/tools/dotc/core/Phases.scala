@@ -31,7 +31,7 @@ object Phases {
    *  @param nextNonIdentity   the first linked transformer at or after this one that is not an identity
    *                           (`phases.length` if none)
    */
-  final class TransformerStep(
+  final class DenotTransformerInfo(
     val transformer: DenotTransformer,
     val transformerPeriod: Period,
     val resultPeriod: Period,
@@ -246,7 +246,7 @@ object Phases {
 
     /** Recompute `denotTransformers` from the current plan */
     private def computeDenotTransformers()(using Context): Unit =
-      denotTransformers = new Array[TransformerStep](phases.length)
+      denotTransformers = new Array[DenotTransformerInfo](phases.length)
       var nextNonIdentity = phases.length
       var id = phases.length - 1
       while id >= 0 do
@@ -254,7 +254,7 @@ object Phases {
           case transformer: DenotTransformer if nextDenotTransformerId(id) == id => // linked
             val isIdentity = transformer.isInstanceOf[IdentityDenotTransformer]
             if !isIdentity then nextNonIdentity = id
-            denotTransformers(id) = TransformerStep(transformer,
+            denotTransformers(id) = DenotTransformerInfo(transformer,
               transformerPeriod = Period(NoRunId, transformer.start, transformer.end),
               resultPeriod = Period(NoRunId, id + 1, transformer.lastPhaseId),
               isIdentity, transformer.lastPhaseId, nextNonIdentity)
