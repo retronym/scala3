@@ -278,8 +278,9 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
 }
 
 object Positioned {
-  /** Prime `SourceFile.primedSpan` in `TreeCopier` (see `TreeCopier.copySource`); `-Ddotty.primeSpans=false` for A/B */
-  @sharable val primeSpans: Boolean = System.getProperty("dotty.primeSpans", "true") == "true"
+  // Prime `SourceFile.primedSpan` in `TreeCopier` (see `TreeCopier.copySource`). Set per Run from -Yno-prime-spans,
+  // not read from the settings per copy, which would cost more than priming saves. Global, like `ids` and `debugId`.
+  @sharable var primeSpans: Boolean = true
 
   // -Ddotty.audit=<file>: who creates span-less trees, and whose `envelope` fills them in later
   private def auditSkip(f: StackWalker.StackFrame): Boolean =
