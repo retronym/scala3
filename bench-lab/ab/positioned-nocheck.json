@@ -1,0 +1,24 @@
+{
+  "name": "positioned-nocheck",
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {"xctrace": "ipc"},
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 2,
+  "corpora": {
+    "re2s": "-wi 15 -i 8 -w 5 -r 5",
+    "dottyUtil": "-wi 15 -i 8 -w 5 -r 5",
+    "scalaz": "-wi 8 -i 6 -w 10 -r 10"
+  },
+  "variants": {
+    "base": "-Ddotty.primeSpans=false",
+    "prime": "",
+    "nocheck": "-Ddotty.primeSpans=false",
+    "both": ""
+  },
+  "variantJmhArgs": {
+    "nocheck": "-p scalacOptions=-Yno-check-positions",
+    "both": "-p scalacOptions=-Yno-check-positions"
+  },
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}

@@ -16,6 +16,7 @@ A spec (paths relative to the repository root):
     "rounds": 2,
     "corpora": {"scalaz": "-wi 10 -i 10 -w 10 -r 10", "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"},
     "variants": {"base": "", "U": "-Ddotty.uncacheMethodParamRefs"},   # the first is the baseline of the report
+    "variantJmhArgs": {"U": "-p scalacOptions=-Yno-check-positions"},  # optional: extra JMH arguments per variant
     "loadgate": {"maxCores": 1.5, "quietSecs": 30}    # optional, see loadgate.py
   }
 
@@ -49,6 +50,7 @@ class Spec:
         self.rounds = s.get("rounds", 2)
         self.corpora = s["corpora"]
         self.variants = s["variants"]
+        self.variant_jmh_args = s.get("variantJmhArgs", {})
         self.loadgate = s.get("loadgate")
         self.out = os.path.join(REPO, "out", "ab", self.name)
 
@@ -71,7 +73,8 @@ class Spec:
     def command(self, corpus, iters, variant, flags, tag):
         jvm_args = " ".join(x for x in [self.jvm_args, flags] if x)
         jvm = f"-jvm {self.jvm} " if self.jvm else ""
-        jmh = f'{jvm}-p corpus={corpus} {iters} -jvmArgsAppend "{jvm_args}" {self.benchmark}'
+        extra = self.variant_jmh_args.get(variant, "")
+        jmh = f'{jvm}-p corpus={corpus} {iters} {extra + " " if extra else ""}-jvmArgsAppend "{jvm_args}" {self.benchmark}'
         p = self.profile
         if "xctrace" in p:
             return f"benchLabXctrace {p['xctrace']} {jmh}"
