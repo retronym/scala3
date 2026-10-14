@@ -20,6 +20,8 @@ A spec (paths relative to the repository root):
   }
 
 Cells run round by round, corpus by corpus, variants interleaved within each, so drift hits every variant alike.
+With a load gate, a cell starts once the machine is quiet, and competing load is sampled while it runs (`load.tsv` in
+the cell); a cell whose mean competing load exceeds `maxCores` is run again.
 
 Why `jvmArgs` goes to every variant: JMH's `-jvmArgsAppend` on the command line replaces the `@Fork(jvmArgsAppend)` of
 the benchmark rather than adding to it, so a variant given only its flags silently loses the benchmark's heap
@@ -104,6 +106,28 @@ def wait_until_quiet(spec):
                         str(g.get("maxCores", 1.5)), str(g.get("quietSecs", 30))], check=True)
 
 
+MAX_ATTEMPTS = 10
+
+
+def start_load_sampler(spec, path):
+    """`loadgate.py sample` in the background: competing load every 5 s while a cell runs, into `path`."""
+    if os.path.exists(path):
+        os.unlink(path)
+    pid = sbt_server_pid() if spec.loadgate else None
+    if pid is None:
+        return None
+    return subprocess.Popen([sys.executable, "-I", os.path.join(SCRIPTS, "loadgate.py"), "sample", str(pid), path])
+
+
+def mean_load(path):
+    """Mean competing load in cores over a cell's samples (0 without samples)."""
+    try:
+        xs = [float(l.split("\t")[1]) for l in open(path) if l.strip()]
+    except FileNotFoundError:
+        return 0.0
+    return sum(xs) / len(xs) if xs else 0.0
+
+
 def check(spec, prof, started, flags):
     """The run produced fresh results, with the JVM arguments the spec asked for."""
     res = os.path.join(prof, "result.json")
@@ -112,6 +136,8 @@ def check(spec, prof, started, flags):
     rs = json.load(open(res))
     if not rs:
         return "empty result.json"
+    if "xctrace" in spec.profile and not any(k.startswith("xctrace.") for k in rs[0]["secondaryMetrics"]):
+        return "no xctrace counters in result.json (see jmh.log)"
     if spec.jvm and os.path.realpath(rs[0]["jvm"]) != os.path.realpath(spec.jvm):
         return f"ran on {rs[0]['jvm']}, not {spec.jvm}"
     args = rs[0]["jvmArgs"]
@@ -152,22 +178,36 @@ def run(spec, dry):
             print(f"{dest}:\n  sbt --client '{cmd}'")
             continue
         prof = spec.profile_dir(tag)
-        while True:
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             wait_until_quiet(spec)
             if "xctrace" in spec.profile and os.path.isdir(prof):
                 shutil.rmtree(prof)  # shared between runs: start clean so nothing stale is picked up
             os.makedirs(dest, exist_ok=True)
-            log(f"round {r} {corpus} {variant}")
+            log(f"round {r} {corpus} {variant}" + (f" (attempt {attempt})" if attempt > 1 else ""))
             started = time.time()
-            with open(os.path.join(dest, "sbt.log"), "w") as out:
-                # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
-                rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+            load_tsv = os.path.join(dest, "load.tsv")
+            sampler = start_load_sampler(spec, load_tsv)
+            try:
+                with open(os.path.join(dest, "sbt.log"), "w") as out:
+                    # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
+                    rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+            finally:
+                if sampler:
+                    sampler.terminate()
+                    sampler.wait()
             # another JMH run took the lock between wait_until_quiet and our JMH starting: JMH exits before logging
             jmh_log = os.path.join(prof, "jmh.log")
             if rc and jmh_lock_held() and (not os.path.exists(jmh_log) or os.path.getsize(jmh_log) == 0):
                 log("  JMH did not start, another run holds the JMH lock; retrying")
                 continue
+            # the load gate only holds a cell until the machine is quiet; other work can start during it
+            load = mean_load(load_tsv)
+            if not rc and spec.loadgate and load > spec.loadgate.get("maxCores", 1.5):
+                log(f"  other load averaged {load:.1f} cores during the run; rerunning")
+                continue
             break
+        else:
+            sys.exit(f"{dest}: no clean run in {MAX_ATTEMPTS} attempts")
         problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags)
         if not problem and "async" in spec.profile and spec.profile["async"].startswith("cycles"):
             problem = check_samples(spec, prof, dest)
@@ -181,7 +221,8 @@ def run(spec, dry):
             with open(os.path.join(dest, "profile-dir"), "w") as f:
                 f.write(prof)
         s = summary(json.load(open(os.path.join(dest, "result.json")))[0])
-        log(f"  {s['ms']:.0f} ± {s['err']:.0f} ms/op" + (f", {s['cyc'] / 1e9:.2f}G cycles/op" if s.get("cyc") else ""))
+        log(f"  {s['ms']:.0f} ± {s['err']:.0f} ms/op" + (f", {s['cyc'] / 1e9:.2f}G cycles/op" if s.get("cyc") else "")
+            + (f", other load {load:.2f} cores" if spec.loadgate else ""))
 
 
 def summary(r):
