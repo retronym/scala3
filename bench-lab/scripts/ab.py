@@ -151,16 +151,23 @@ def run(spec, dry):
         if dry:
             print(f"{dest}:\n  sbt --client '{cmd}'")
             continue
-        wait_until_quiet(spec)
         prof = spec.profile_dir(tag)
-        if "xctrace" in spec.profile and os.path.isdir(prof):
-            shutil.rmtree(prof)  # shared between runs: start clean so nothing stale is picked up
-        os.makedirs(dest, exist_ok=True)
-        log(f"round {r} {corpus} {variant}")
-        started = time.time()
-        with open(os.path.join(dest, "sbt.log"), "w") as out:
-            # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
-            rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+        while True:
+            wait_until_quiet(spec)
+            if "xctrace" in spec.profile and os.path.isdir(prof):
+                shutil.rmtree(prof)  # shared between runs: start clean so nothing stale is picked up
+            os.makedirs(dest, exist_ok=True)
+            log(f"round {r} {corpus} {variant}")
+            started = time.time()
+            with open(os.path.join(dest, "sbt.log"), "w") as out:
+                # the sbt server reads SCALA3_BENCHMARKS when it starts, not from this client
+                rc = subprocess.run(["sbt", "--client", cmd], cwd=REPO, stdout=out, stderr=subprocess.STDOUT).returncode
+            # another JMH run took the lock between wait_until_quiet and our JMH starting: JMH exits before logging
+            jmh_log = os.path.join(prof, "jmh.log")
+            if rc and jmh_lock_held() and (not os.path.exists(jmh_log) or os.path.getsize(jmh_log) == 0):
+                log("  JMH did not start, another run holds the JMH lock; retrying")
+                continue
+            break
         problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags)
         if not problem and "async" in spec.profile and spec.profile["async"].startswith("cycles"):
             problem = check_samples(spec, prof, dest)
