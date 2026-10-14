@@ -34,15 +34,17 @@ Useful options (global ones go *before* the subcommand):
 - `update --refresh-days N` — recent days are always re-fetched (default 14) because re-runs mutate existing runs.
 - `reparse` — re-extract signatures from the cached logs after editing the patterns in `flaky_ci.py`; no network.
 - `--keywords file.json` — `{label: regex}` replacing the default comment keywords.
+- `report --source-url https://github.com/…` — link the dashboard header to where this script lives (PR or repo).
 
 ## Agent: writing the summaries
 
-The dashboard has time-range chips — `1d 1w 1m 3m 6m 1y`, each relative to the report's generation time — and shows the summary for the selected range. A chip with a dot has a summary. To produce them:
+The dashboard has time-range chips — `1d 1w 1m 3m 6m 1y`, each relative to the report's generation time — and shows the summary for the selected range — the repo's own summary when the Repo filter is set, else the all-repos one. A chip with a dot has a summary for the current selection. To produce them:
 
 1. Refresh the data: `python3 project/scripts/flaky-ci/flaky_ci.py update`
 2. For each range `R` in `1d 1w 1m 3m 6m 1y`:
    - `python3 project/scripts/flaky-ci/flaky_ci.py digest --range R` prints a Markdown digest of that window compared with the preceding window of the same length: totals and flake rate per repo, top clusters (count now vs before, PRs, first/last seen, jobs, error detail, example log link), clusters new in this window, clusters that went quiet, failure kinds, every failure (for short windows), and matching comments.
-   - Read it, investigate where useful (below), and write `local/flaky-ci/summary-R.md`.
+   - Read it, investigate where useful (below), and write `local/flaky-ci/summary-R.md` (all repos).
+   - For each repo `O/N`: `python3 project/scripts/flaky-ci/flaky_ci.py --repo O/N digest --range R`, then write `local/flaky-ci/summary-R--O__N.md` (e.g. `summary-1m--sbt__zinc.md`). The digest's first line names the file to write.
 3. `python3 project/scripts/flaky-ci/flaky_ci.py report` — picks up every `summary-*.md` next to the database (or `--summary-dir`).
 
 Generate the digest and the report from the same `update`, so the windows line up. A summary older than the report data is flagged as stale in the dashboard.
@@ -57,6 +59,8 @@ The reader is a busy compiler maintainer deciding what to fix. Lead with conclus
 - **Possibly fixed**: clusters that went quiet; name the fixing PR if you found one.
 - **Caveats**: expired logs, partial data coverage (the digest says when the window predates the cache), signal you distrust.
 
+The all-repos summary must give **every repo its own section**, even if it is one line ("quiet: 1 flake, Windows timing test"). scala/scala3 has most of the volume and will otherwise crowd out the others; compare repos by *rate*, not count. Per-repo summaries go deeper on that repo only.
+
 Scale the depth to the range: `1d`/`1w` are a short triage note (often "nothing new"); `3m`/`6m`/`1y` are about trends and the chronic offenders. Don't restate the dashboard's tables; interpret them.
 
 Supported Markdown: headings, paragraphs, `-`/`1.` lists, pipe tables, `**bold**`, `*italic*`, `` `code` ``, `[text](https://…)`, bare URLs, and `owner/repo#123` (linked to the PR). Raw HTML is shown as text.
@@ -64,6 +68,7 @@ Supported Markdown: headings, paragraphs, `-`/`1.` lists, pipe tables, `**bold**
 ### Digging deeper
 
 - Cached logs: `local/flaky-ci/logs/<owner>__<repo>/<job-id>.log.gz` (`gzip -dc … | grep -n '\[error\]'`; macOS `zcat` does not read `.gz`). The job id is the last path segment of the log link.
+- Jenkins (scala/scala `validate-main`) logs are cached the same way under `scala__scala/`, keyed by build URL.
 - SQLite: `local/flaky-ci/flaky.sqlite` — tables `flaky_events`, `flaky_units` (failed jobs), `signatures`, `runs`, `comments`.
 - To check whether a cluster was fixed, search merged PRs: `gh search prs --repo scala/scala3 --merged "<test name>"`.
 

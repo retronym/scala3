@@ -95,7 +95,7 @@ button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); bord
 <body>
 <main>
   <h1>Flaky CI</h1>
-  <p class="sub" id="subtitle"></p>
+  <p class="sub"><span id="subtitle"></span><span id="source"></span></p>
 
   <div class="filters">
     <div class="chips" id="f-range" role="group" aria-label="Time range"></div>
@@ -195,9 +195,10 @@ addEventListener("scroll", () => tip.style.display = "none", {passive: true});
 // filters
 const F = {range: "1m", repo: "", source: "", kind: "", q: ""};
 try { const r = localStorage.getItem("flaky-ci-range"); if (r in RANGES) F.range = r; } catch {}
+const hasSummary = r => F.repo ? !!DATA.repo_summaries[F.repo]?.[r] : !!DATA.summaries[r];
 function drawChips() {
   $("#f-range").innerHTML = Object.keys(RANGES).map(r =>
-    `<button aria-pressed="${r === F.range}" data-r="${r}" title="${DATA.summaries[r] ? "agent summary available" : "no agent summary for this range"}">${r}${DATA.summaries[r] ? '<span class="dot"></span>' : ""}</button>`).join("");
+    `<button aria-pressed="${r === F.range}" data-r="${r}" title="${hasSummary(r) ? "agent summary available" : "no agent summary for this selection"}">${r}${hasSummary(r) ? '<span class="dot"></span>' : ""}</button>`).join("");
   $("#f-range").querySelectorAll("button").forEach(b => b.onclick = () => {
     F.range = b.dataset.r; try { localStorage.setItem("flaky-ci-range", F.range); } catch {}
     limits = {...LIMITS0}; drawChips(); draw();
@@ -206,7 +207,7 @@ function drawChips() {
 $("#f-repo").innerHTML = `<option value="">all (${DATA.repos.length})</option>` + DATA.repos.map(r => `<option>${esc(r)}</option>`).join("");
 $("#f-kind").innerHTML += Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
 for (const [id, k] of [["#f-repo", "repo"], ["#f-source", "source"], ["#f-kind", "kind"], ["#f-q", "q"]])
-  $(id).addEventListener("input", e => { F[k] = e.target.value.trim(); limits = {...LIMITS0}; draw(); });
+  $(id).addEventListener("input", e => { F[k] = e.target.value.trim(); limits = {...LIMITS0}; drawChips(); draw(); });
 
 const LIMITS0 = {clusters: 40, events: 40, comments: 40};
 let limits = {...LIMITS0};
@@ -406,7 +407,7 @@ function draw() {
     [runs ? (ghaEvents.length / runs * 100).toFixed(2) + "%" : "–", `of ${runs.toLocaleString()} Actions runs`],
     [prs.toLocaleString(), "PRs affected"],
     [tests.toLocaleString(), "distinct flaky tests/suites"],
-    [hours.toFixed(0) + " h", "runner time in failed jobs"],
+    [hours.toFixed(hours < 10 ? 1 : 0) + " h", "runner time in failed jobs"],
     [comments.length.toLocaleString(), "flakiness comments"],
   ].map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
 
@@ -502,18 +503,24 @@ function md(src) {
   return out.join("\n");
 }
 function renderSummary() {
-  const el = $("#summary"), sm = DATA.summaries[F.range];
+  const el = $("#summary"), own = F.repo && DATA.repo_summaries[F.repo]?.[F.range];
+  const sm = own || DATA.summaries[F.range];
+  const scope = own ? F.repo : "all repos";
+  const file = F.repo ? `summary-${F.range}--${F.repo.replace("/", "__")}.md` : `summary-${F.range}.md`;
   if (!sm) {
-    el.innerHTML = `<h2>Summary · ${esc(F.range)}</h2><p class="note">No agent summary for this range. See <code>project/scripts/flaky-ci/README.md</code>: ` +
-      `<code>flaky_ci.py digest --range ${esc(F.range)}</code>, write <code>summary-${esc(F.range)}.md</code>, re-run <code>report</code>.</p>`;
+    el.innerHTML = `<h2>Summary · ${esc(F.range)} · ${esc(F.repo || "all repos")}</h2><p class="note">No agent summary for this selection. See <code>project/scripts/flaky-ci/README.md</code>: ` +
+      `<code>flaky_ci.py ${F.repo ? `--repo ${esc(F.repo)} ` : ""}digest --range ${esc(F.range)}</code>, write <code>${esc(file)}</code>, re-run <code>report</code>.</p>`;
     return;
   }
   const lagDays = (new Date(DATA.generated) - new Date(sm.written)) / 864e5;
-  el.innerHTML = `<div class="meta"><h2>Summary · ${esc(F.range)}</h2><span class="note">agent-written ${esc(sm.written.slice(0, 10))}` +
+  el.innerHTML = `<div class="meta"><h2>Summary · ${esc(F.range)} · ${esc(scope)}</h2><span class="note">agent-written ${esc(sm.written.slice(0, 10))}` +
+    (F.repo && !own ? ` · no ${esc(F.repo)}-specific summary, showing all repos` : "") +
     `${lagDays > 1 ? ` · <span class="stale">${Math.floor(lagDays)} days older than the data below</span>` : ""}</span></div>` +
     `<div class="md">${md(sm.markdown)}</div>`;
 }
 
+if (/^https:\/\/github\.com\//.test(DATA.source_url || ""))
+  $("#source").innerHTML = ` · <a href="${esc(DATA.source_url)}">source &amp; methodology</a>`;
 $("#subtitle").textContent = `${DATA.repos.join(", ")} · data from ${DATA.coverage} · generated ${DATA.generated.replace("T", " ").slice(0, 16)} UTC`;
 drawChips();
 draw();
