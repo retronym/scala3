@@ -74,6 +74,9 @@ import scala.compiletime.uninitialized
  */
 object Denotations {
 
+  /** DO NOT MERGE: -Ddotty.goBackLap, goBack gives up after one lap of the ring instead of MaxPossiblePhaseId steps */
+  final val GoBackLap: Boolean = java.lang.Boolean.getBoolean("dotty.goBackLap")
+
   implicit def eqDenotation: CanEqual[Denotation, Denotation] = CanEqual.derived
 
   /** A PreDenotation represents a group of single denotations or a single multi-denotation
@@ -888,7 +891,8 @@ object Denotations {
           // performance: Test setup: Compile everything in dotc and immediate subdirectories
           // 10 times. Best out of 10: 18154ms with `prev` field, 17777ms without.
           cnt += 1
-          if cnt > MaxPossiblePhaseId then
+          if (GoBackLap && (cur eq this)) || cnt > MaxPossiblePhaseId then
+            // went round the ring (or, defensively, too far): no version covers the period
             return atPhase(coveredInterval.firstPhaseId)(current)
         cur
       end goBack
