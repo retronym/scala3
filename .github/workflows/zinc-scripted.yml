@@ -43,7 +43,9 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Publish Scala 3 locally
-        # Just the bridge and what Zinc's scalaInstance needs; skips Scala.js and generates no API docs.
+        env:
+          SKIP_DOCS: 'yes'
+        # Just the bridge and what Zinc's scalaInstance needs; skips Scala.js.
         run: |
           # project/scripts/sbt runs only its first argument, so this is one `;`-separated command.
           ./project/scripts/sbt ";scala3-sbt-bridge-bootstrapped/publishLocal; \
