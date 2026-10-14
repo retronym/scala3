@@ -46,7 +46,7 @@ jobs:
         # Just the bridge and what Zinc's scalaInstance needs; skips scaladoc, Scala.js and friends, and the doc jars.
         run: |
           # project/scripts/sbt runs only its first argument, so this is one `;`-separated command.
-          ./project/scripts/sbt "set every Compile / packageDoc / publishArtifact := false; \
+          ./project/scripts/sbt ";set every Compile / packageDoc / publishArtifact := false; \
             scala3-sbt-bridge-bootstrapped/publishLocal; \
             scala3-interfaces/publishLocal; \
             scala3-compiler-bootstrapped/publishLocal; \
