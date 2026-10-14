@@ -1,3 +1,20 @@
+diff --git a/build.sbt b/build.sbt
+index c3c1b37cf..0233828f8 100644
+--- a/build.sbt
++++ b/build.sbt
+@@ -247,7 +247,11 @@ lazy val zinc = (projectMatrix in (zincRootPath / "zinc"))
+         mapBuildInfoKey(
+           compilerBridgeScala3Bin / Compile / externalDependencyClasspath,
+           "compilerBridge3Bin"
+-        )(bin => converter.toPath(bin.toList.head.data).toFile),
++        )(bin =>
++          converter
++            .toPath(bin.map(_.data).find(_.name.startsWith("scala3-sbt-bridge")).get)
++            .toFile
++        ),
+         mapBuildInfoKey(compilerInterface.jvm(false) / Compile / packageBin, "compilerInterface")(
+           converter.toPath(_).toFile
+         ),
 diff --git a/project/Dependencies.scala b/project/Dependencies.scala
 index 7b2f72a4d..c821b5bc6 100644
 --- a/project/Dependencies.scala
