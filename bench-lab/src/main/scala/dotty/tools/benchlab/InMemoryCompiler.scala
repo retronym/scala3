@@ -19,7 +19,10 @@ import dotty.tools.io.AbstractFile
  *  retains every earlier `Run` through state on the root context and in phases, so the heap grows with each compilation.
  */
 final class InMemoryCompiler(val corpus: Corpus, extraOptions: List[String] = Nil, shared: Boolean = false,
-    classpath: InMemoryClasspath = InMemoryClasspath.default) extends Driver:
+    classpath: InMemoryClasspath | Null = null) extends Driver:
+
+  /** The classpath snapshot this compiler reads. */
+  val classpathSnapshot: InMemoryClasspath = if classpath != null then classpath else InMemoryClasspath.forCorpus(corpus)
 
   /** The output of the latest compilation. */
   var output: AbstractFile = dotty.tools.io.virtualDirectory("<bench-lab output>")
@@ -31,7 +34,7 @@ final class InMemoryCompiler(val corpus: Corpus, extraOptions: List[String] = Ni
   override protected def initCtx: Context =
     val base = new ContextBase:
       override protected def newPlatform(using Context): Platform = new JavaPlatform:
-        private val cp = classpath.classPath
+        private val cp = classpathSnapshot.classPath(corpus.sourcePath)
         override def classPath(using Context): ClassPath = cp
     base.initialCtx
 

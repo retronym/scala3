@@ -2417,6 +2417,20 @@ object Build {
         val f = (ThisBuild / baseDirectory).value / ".jvmopts"
         if (f.exists) IO.readLines(f).map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")) else Nil
       },
+      // The scalaLibrary corpus: this checkout's library sources, with the options the build compiles them with, minus
+      // -Werror, the optimizer (benchmarked without it) and -sourcepath (the corpus is its own in-memory sourcepath)
+      Jmh / run / javaOptions ++= {
+        val opts = (`scala-library-bootstrapped` / Compile / compile / scalacOptions).value
+        val kept = opts.zipWithIndex.collect {
+          case (o, i) if o != "-Werror" && !o.startsWith("-opt") && o != "-sourcepath" && (i == 0 || opts(i - 1) != "-sourcepath") => o
+        }
+        val f = target.value / "scala-library-options.txt"
+        IO.writeLines(f, kept)
+        Seq(
+          s"-Dbenchlab.scalaLibraryOptions=$f",
+          s"-Dbenchlab.scalaLibrarySources=${(`scala-library-bootstrapped` / Compile / unmanagedSourceDirectories).value.mkString(File.pathSeparator)}",
+        )
+      },
       Jmh / run / javaOptions ++= Seq(
         s"-Dbenchlab.scalaLibrary=${(`scala-library-bootstrapped` / Compile / packageBin).value}",
         s"-Dbenchlab.corpora=${sys.env.getOrElse("SCALA3_BENCHMARKS", ((ThisBuild / baseDirectory).value / ".." / "scala3-benchmarks").getCanonicalPath)}/bench-sources",
