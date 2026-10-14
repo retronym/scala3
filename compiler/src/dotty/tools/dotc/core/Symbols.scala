@@ -37,6 +37,9 @@ import dotty.tools.tasty.TastyVersion
 import scala.reflect.ClassTag
 
 object Symbols extends SymUtils {
+  /** DO NOT MERGE: -Ddotty.denotPrev, Symbol caches the version it used before `lastDenot` too */
+  final val denotPrev: Boolean = java.lang.Boolean.getBoolean("dotty.denotPrev")
+
 
   implicit def eqSymbol: CanEqual[Symbol, Symbol] = CanEqual.derived
 
@@ -93,6 +96,8 @@ object Symbols extends SymUtils {
     /** The last denotation of this symbol */
     private var lastDenot: SymDenotation = uninitialized
     private var checkedPeriod: Period = Nowhere
+    /** DO NOT MERGE (-Ddotty.denotPrev): the denotation `lastDenot` replaced, if it was a different version */
+    private var prevDenot: SymDenotation | Null = null
 
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
 
@@ -124,8 +129,15 @@ object Symbols extends SymUtils {
     /** Overridden in NoSymbol */
     protected def recomputeDenot(lastd: SymDenotation)(using Context): SymDenotation = {
       util.Stats.record("Symbol.recomputeDenot")
+      val prev = prevDenot
+      if Symbols.denotPrev && prev != null && prev.validFor.contains(ctx.period) then
+        // the version used before the last one: swap them (a version's validFor shows if it was replaced)
+        prevDenot = lastd
+        lastDenot = prev
+        return prev
       val newd = lastd.current.asInstanceOf[SymDenotation]
       if newd.exists || lastd.initial.validFor.firstPhaseId <= ctx.phaseId then
+        if Symbols.denotPrev && (newd ne lastd) then prevDenot = lastd
         lastDenot = newd
       else
         // We are trying to bring forward a symbol that is defined only at a later phase
