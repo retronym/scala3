@@ -18,7 +18,9 @@ A spec (paths relative to the repository root):
     "variants": {"base": "", "U": "-Ddotty.uncacheMethodParamRefs"},   # the first is the baseline of the report
     "variantJmhArgs": {"U": "-p scalacOptions=-Yno-check-positions"},  # optional: extra JMH arguments per variant
     "loadgate": {"maxCores": 1.5, "quietSecs": 30},   # optional, see loadgate.py
-    "historical": "<why>"                             # optional: the spec is kept for its results; `run` refuses it
+    "historical": "<why>",                            # optional: the spec is kept for its results; `run` refuses it
+    "paired": {"base": "-Yno-prime-spans", "prime": ""}  # optional, instead of variants: scalacOptions per variant,
+                                                      # alternating by iteration within each fork (doc/paired-ab.md)
   }
 
 Cells run round by round, corpus by corpus, variants interleaved within each, so drift hits every variant alike.
@@ -50,8 +52,16 @@ class Spec:
         self.jvm = s.get("jvm") or self.profile.get("jvm")
         self.rounds = s.get("rounds", 2)
         self.corpora = s["corpora"]
-        self.variants = s["variants"]
+        # "paired": {"<variant>": "<scalacOptions>", ...}: the variants alternate by iteration within each fork
+        # (CompileBenchmark's `variants`), so each cell is one fork running all of them; see doc/paired-ab.md
+        self.paired = s.get("paired")
+        self.variants = {"paired": ""} if self.paired else s["variants"]
         self.variant_jmh_args = s.get("variantJmhArgs", {})
+        if self.paired:
+            spec = "|".join(f"{n}={o}" for n, o in self.paired.items())
+            if "," in spec:
+                sys.exit("paired: JMH splits parameter values at commas; options cannot contain one")
+            self.variant_jmh_args = {"paired": f'-p "variants={spec}"'}
         self.loadgate = s.get("loadgate")
         self.historical = s.get("historical")  # why the spec no longer measures what its names say; report only
         self.out = os.path.join(REPO, "out", "ab", self.name)
@@ -252,7 +262,42 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def report_paired(spec):
+    """One row per corpus and variant: its mean per fork, and the paired difference against the first variant (the
+    mean within each fork, then the mean and spread of those over forks)."""
+    names = list(spec.paired)
+    print(f"### {spec.name} (paired within forks: {', '.join(names)})\n")
+    metrics = [("time", "paired.{}", 1, "{:.1f}"), ("instructions/op", "xctrace.INST_ALL.{}", 1e9, "{:.3f}G"),
+               ("cycles/op", "xctrace.CORE_ACTIVE_CYCLE.{}", 1e9, "{:.3f}G")]
+    print("| corpus | variant | forks | " + " | ".join(f"{m} | Δ (paired) | Δ per fork" for m, *_ in metrics) + " |")
+    print("|---|---|---|" + "---|---|---|" * len(metrics))
+    for corpus in spec.corpora:
+        cells = []
+        for r in range(1, spec.rounds + 1):
+            f = os.path.join(spec.cell_dir(corpus, "paired", r), "result.json")
+            if os.path.exists(f):
+                cells.append(json.load(open(f))[0].get("secondaryMetrics", {}))
+        if not cells:
+            continue
+        for v in names:
+            tds = []
+            for _, key, scale, fmt in metrics:
+                vals = [c[key.format(v)]["score"] for c in cells if key.format(v) in c]
+                ds = [c[key.format(v) + ".delta%"]["score"] for c in cells if key.format(v) + ".delta%" in c]
+                m = mean(vals)
+                tds.append(fmt.format(m / scale) if m is not None else "–")
+                if ds:
+                    d = mean(ds)
+                    sd = (sum((x - d) ** 2 for x in ds) / (len(ds) - 1)) ** 0.5 if len(ds) > 1 else 0.0
+                    tds += [f"{d:+.2f}% ± {sd:.2f}", " ".join(f"{x:+.2f}" for x in ds)]
+                else:
+                    tds += ["", ""]
+            print(f"| {corpus} | {v} | {len(cells)} | " + " | ".join(tds) + " |")
+
+
 def report(spec):
+    if spec.paired:
+        return report_paired(spec)
     print(f"### {spec.name}\n")
     print("| corpus | variant | ms/op (per round) | mean | Δ | instructions/op (per round) | Δ | cycles/op | Δ | IPC | alloc/op | GC time |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")
