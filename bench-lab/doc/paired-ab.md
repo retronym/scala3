@@ -4,6 +4,17 @@
 
 `ab.py` compares variants across forks. Each fork compiles the compiler's hot code differently: forks of one variant differ by 0.5–1% in instructions per op, and one in five re2s forks was 3% off. A change worth 0.5% needs many rounds to show through that, although the variants differ only in a compiler setting that could be switched within one JVM.
 
+In `positioned-serial` (re2s, instructions/op in G, one fork per variant per round):
+
+| variant | rounds 1–5 |
+|---|---|
+| base | 4.869 4.897 4.904 4.920 4.760 |
+| prime | 4.800 4.829 4.857 4.854 4.880 |
+| nocheck | 4.875 4.852 4.851 4.849 4.873 |
+| both | 4.807 4.798 4.784 4.828 4.718 |
+
+One fork per variant lands about 3% off. Whether the mean or the median is used moves the verdicts on prime and nocheck by 0.4–0.7 points, and only both separates clearly from base (−1.7% to −2.0%).
+
 ## Key decisions
 
 1. **Variants alternate by iteration within one fork.** A, B, C, A, B, C… through warmup and measurement, so every variant runs on the same compiled code and the fork's JIT luck cancels in their difference. Several forks still run, to sample the JIT's variation; the statistic is the spread of the paired differences across forks, not of absolute values.
