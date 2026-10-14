@@ -43,11 +43,13 @@ object InMemoryClasspath:
     protected def isMatchingFile(f: AbstractFile): Boolean = !f.isDirectory && FileUtils.endsSourceExtension(f.name)
     override def sources(inPackage: String): Iterable[SourceFileEntry] = files(inPackage)
 
-  /** The snapshot for a corpus: `default`, or `jdk` if the corpus has no scala-library on its classpath. */
-  def forCorpus(corpus: Corpus): InMemoryClasspath = if corpus.withScalaLibrary then default else jdk
+  /** The snapshot for a corpus: `default`, or `jdkForLibrary` if the corpus has no scala-library on its classpath. */
+  def forCorpus(corpus: Corpus): InMemoryClasspath = if corpus.withScalaLibrary then default else jdkForLibrary
 
-  /** The JDK modules in `benchlab.jdkModules` alone, for the standard library itself. */
-  lazy val jdk: InMemoryClasspath = load(Nil, jdkModules)
+  /** The JDK modules alone, for the standard library itself: those in `benchlab.jdkModules` and `jdk.unsupported`
+   *  (`sun.misc.Unsafe`, for `LazyVals`).
+   */
+  lazy val jdkForLibrary: InMemoryClasspath = load(Nil, (jdkModules :+ "jdk.unsupported").distinct)
 
   private def jdkModules: List[String] =
     sys.props.getOrElse("benchlab.jdkModules", "java.base").nn.split(",").toList.map(_.nn.trim.nn).filter(_.nonEmpty)
