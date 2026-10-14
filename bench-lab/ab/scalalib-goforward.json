@@ -1,0 +1,15 @@
+{
+  "name": "scalalib-goforward",
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {"xctrace": "ipc"},
+  "jvmArgs": "-Xms8G -Xmx8G -Xss2M",
+  "rounds": 2,
+  "corpora": {
+    "scalaLibrary": "-bm ss -wi 6 -i 6 -f 1",
+    "scalaz": "-wi 10 -i 10 -w 10 -r 10 -f 1",
+    "tastyQuery": "-wi 15 -i 10 -w 5 -r 5 -f 1"
+  },
+  "trees": {"base": "../perf-int-A", "loop": "../perf-int-B"},
+  "loadgate": {"maxCores": 1.5, "quietSecs": 30}
+}
