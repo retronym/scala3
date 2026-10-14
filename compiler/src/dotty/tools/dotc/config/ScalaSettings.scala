@@ -499,6 +499,7 @@ private sealed trait YSettings:
   val Yhelp: Setting[Boolean] = BooleanSetting(ForkSetting, "Y", "Print a synopsis of private options.")
   val Ycheck: Setting[List[String]] = PhasesSetting(ForkSetting, "Ycheck", "Check the tree at the end of")
   val YcheckMods: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-mods", "Check that symbols and their defining trees have modifiers in sync.")
+  val YnoParallelPickling: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-parallel-pickling", "Pickle on the compiler thread, not on a separate thread.")
   val YnoCheckPositions: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-check-positions", "Skip the position checks after parsing and in typer.")
   val Ydebug: Setting[Boolean] = BooleanSetting(ForkSetting, "Ydebug", "Increase the quantity of debugging output.")
   val YdebugTrace: Setting[Boolean] = BooleanSetting(ForkSetting, "Ydebug-trace", "Trace core operations.")
