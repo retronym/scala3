@@ -73,6 +73,22 @@ button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); bord
   color: var(--text-primary); cursor: pointer; }
 #tip { position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; z-index: 20; max-width: 360px; }
+.summary { border-left: 3px solid var(--series-1); }
+.summary .md { max-width: 90ch; }
+.summary .md h1, .summary .md h2, .summary .md h3, .summary .md h4 { font-size: 15px; margin: 14px 0 4px; }
+.summary .md > :first-child { margin-top: 0; }
+.summary .md p, .summary .md ul, .summary .md ol { margin: 6px 0; }
+.summary .md ul, .summary .md ol { padding-left: 22px; }
+.summary .md li { margin: 2px 0; }
+.summary .md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--chip); border-radius: 3px; padding: 0 3px; word-break: break-word; }
+.summary .md table { width: auto; margin: 6px 0; }
+.summary .meta { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.summary .stale { color: var(--series-2); font-size: 12px; }
+.chips { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.chips button { border: 0; border-radius: 0; padding: 4px 10px; background: var(--surface-1); color: var(--text-secondary); }
+.chips button + button { border-left: 1px solid var(--border); }
+.chips button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+.chips button .dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-left: 4px; vertical-align: 2px; opacity: .7; }
 .empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
 </style>
 </head>
@@ -82,6 +98,8 @@ button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); bord
   <p class="sub" id="subtitle"></p>
 
   <div class="filters">
+    <div class="chips" id="f-range" role="group" aria-label="Time range"></div>
+    <span class="note" id="asof" style="margin:0"></span>
     <label>Repo <select id="f-repo"></select></label>
     <label>Signal <select id="f-source">
       <option value="">all</option><option value="rerun">re-run attempt</option>
@@ -93,16 +111,18 @@ button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); bord
 
   <div class="tiles" id="tiles"></div>
 
+  <div class="card summary" id="summary"></div>
+
   <div class="grid2">
-    <div class="card"><h2>Flaky failures per week</h2>
+    <div class="card"><h2>Flaky failures per <span class="bu"></span></h2>
       <p class="note">A failed run/attempt/build that later went green on the same commit.</p>
       <div class="legend" id="lg-events"></div><div id="ch-events"></div></div>
-    <div class="card"><h2>Flake rate per week</h2>
+    <div class="card"><h2>Flake rate per <span class="bu"></span></h2>
       <p class="note">Flaky failures ÷ completed GitHub Actions runs (excludes commit-status CI).</p>
       <div class="legend" id="lg-rate"></div><div id="ch-rate"></div></div>
   </div>
   <div class="grid2">
-    <div class="card"><h2>Flakiness comments per week</h2>
+    <div class="card"><h2>Flakiness comments per <span class="bu"></span></h2>
       <p class="note">PR/issue comments matching flaky/re-run keywords (bots excluded).</p>
       <div class="legend" id="lg-comments"></div><div id="ch-comments"></div></div>
     <div class="card"><h2>Failure kinds</h2>
@@ -116,7 +136,7 @@ button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); bord
     <div class="scroll"><table id="t-clusters"></table></div>
     <div class="more"><button id="more-clusters">show more</button></div></div>
 
-  <div class="card"><h2>Jobs × week</h2>
+  <div class="card"><h2>Jobs × <span class="bu"></span></h2>
     <p class="note">Flaky failures per CI job (top 25 jobs).</p>
     <div class="scroll" id="ch-heat"></div></div>
 
@@ -136,7 +156,25 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
 const repoColor = r => SERIES[DATA.repos.indexOf(r) % SERIES.length];
-const fmtWeek = w => new Date(w + "T00:00:00Z").toLocaleDateString(undefined, {month: "short", day: "numeric", timeZone: "UTC"});
+const fmtDay = d => new Date(d + "T00:00:00Z").toLocaleDateString(undefined, {month: "short", day: "numeric", timeZone: "UTC"});
+const NOW = new Date(DATA.generated);
+const RANGES = DATA.ranges;  // {"1d": 1, "1w": 7, ...} days
+// Time buckets for the active range: hours for 1d, days up to a month, ISO weeks beyond.
+let BK;
+function buckets(days) {
+  const start = new Date(NOW - days * 864e5), keys = [];
+  if (days <= 1) {
+    for (let t = new Date(start); t <= NOW; t = new Date(+t + 36e5)) keys.push(t.toISOString().slice(0, 13));
+    return {start, keys, unit: "hour", of: ts => ts.slice(0, 13), label: k => k.slice(11, 13) + ":00", tip: k => `${fmtDay(k.slice(0, 10))} ${k.slice(11, 13)}:00 UTC`};
+  }
+  if (days <= 31) {
+    for (let t = new Date(start); t <= NOW; t = new Date(+t + 864e5)) keys.push(t.toISOString().slice(0, 10));
+    return {start, keys, unit: "day", of: ts => ts.slice(0, 10), label: fmtDay, tip: fmtDay};
+  }
+  const monday = ts => { const d = new Date(ts.slice(0, 10) + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return d.toISOString().slice(0, 10); };
+  for (let t = new Date(monday(start.toISOString())); t <= NOW; t = new Date(+t + 7 * 864e5)) keys.push(t.toISOString().slice(0, 10));
+  return {start, keys, unit: "week", of: monday, label: fmtDay, tip: k => "Week of " + fmtDay(k)};
+}
 const ghUrl = (repo, n) => `https://github.com/${repo}/pull/${n}`;
 const KIND_LABEL = {junit: "JUnit", munit: "munit", vulpix: "vulpix", partest: "partest", scalatest: "scalatest", scripted: "scripted", "sbt-task": "sbt task",
   suite: "suite", infra: "infra", job: "job › step"};
@@ -155,7 +193,16 @@ document.addEventListener("mousemove", e => {
 addEventListener("scroll", () => tip.style.display = "none", {passive: true});
 
 // filters
-const F = {repo: "", source: "", kind: "", q: ""};
+const F = {range: "1m", repo: "", source: "", kind: "", q: ""};
+try { const r = localStorage.getItem("flaky-ci-range"); if (r in RANGES) F.range = r; } catch {}
+function drawChips() {
+  $("#f-range").innerHTML = Object.keys(RANGES).map(r =>
+    `<button aria-pressed="${r === F.range}" data-r="${r}" title="${DATA.summaries[r] ? "agent summary available" : "no agent summary for this range"}">${r}${DATA.summaries[r] ? '<span class="dot"></span>' : ""}</button>`).join("");
+  $("#f-range").querySelectorAll("button").forEach(b => b.onclick = () => {
+    F.range = b.dataset.r; try { localStorage.setItem("flaky-ci-range", F.range); } catch {}
+    limits = {...LIMITS0}; drawChips(); draw();
+  });
+}
 $("#f-repo").innerHTML = `<option value="">all (${DATA.repos.length})</option>` + DATA.repos.map(r => `<option>${esc(r)}</option>`).join("");
 $("#f-kind").innerHTML += Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
 for (const [id, k] of [["#f-repo", "repo"], ["#f-source", "source"], ["#f-kind", "kind"], ["#f-q", "q"]])
@@ -167,6 +214,7 @@ for (const k of Object.keys(LIMITS0)) $(`#more-${k}`).onclick = () => { limits[k
 
 const textOf = e => [e.workflow, e.sha, ...e.prs.map(p => "#" + p), ...e.units.flatMap(u => [u.name, u.step, ...u.sigs])].join(" ").toLowerCase();
 function eventOk(e) {
+  if (new Date(e.failed_at) < BK.start) return false;
   if (F.repo && e.repo !== F.repo) return false;
   if (F.source && e.source !== F.source) return false;
   if (F.kind && !e.units.some(u => u.sigs.some(s => s.startsWith(F.kind + ":")))) return false;
@@ -178,7 +226,7 @@ const visibleRepos = () => F.repo ? [F.repo] : DATA.repos;
 // charts -----------------------------------------------------------------------------------
 const W = 560, H = 220, M = {l: 40, r: 10, t: 10, b: 26};
 function axes(maxY, fmtY = v => v) {
-  const weeks = DATA.weeks, iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const weeks = BK.keys, iw = W - M.l - M.r, ih = H - M.t - M.b;
   const nice = niceMax(maxY), ticks = [0, nice / 2, nice];
   let s = ticks.map(t => {
     const y = M.t + ih - t / nice * ih;
@@ -187,7 +235,7 @@ function axes(maxY, fmtY = v => v) {
   }).join("");
   const step = Math.max(1, Math.ceil(weeks.length / 8));
   weeks.forEach((w, i) => { if (i % step === 0)
-    s += `<text x="${M.l + (i + .5) * iw / weeks.length}" y="${H - 8}" text-anchor="middle">${fmtWeek(w)}</text>`; });
+    s += `<text x="${M.l + (i + .5) * iw / weeks.length}" y="${H - 8}" text-anchor="middle">${BK.label(w)}</text>`; });
   return {s, iw, ih, nice, x: i => M.l + i * iw / weeks.length, bw: iw / weeks.length, y: v => M.t + ih - v / nice * ih};
 }
 function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; }
@@ -199,10 +247,10 @@ function legend(el, repos) {
 function stackedBars(el, lgEl, countsByRepo, unit) {
   const repos = visibleRepos();
   legend(lgEl, repos);
-  const tot = DATA.weeks.map(w => repos.reduce((a, r) => a + (countsByRepo[r]?.[w] || 0), 0));
+  const tot = BK.keys.map(w => repos.reduce((a, r) => a + (countsByRepo[r]?.[w] || 0), 0));
   const A = axes(Math.max(...tot, 1));
   let bars = "";
-  DATA.weeks.forEach((w, i) => {
+  BK.keys.forEach((w, i) => {
     let acc = 0; const bw = Math.max(1, A.bw - 2), x = A.x(i) + 1;
     const segs = repos.map(r => [r, countsByRepo[r]?.[w] || 0]).filter(([, v]) => v);
     segs.forEach(([r, v], j) => {
@@ -212,7 +260,7 @@ function stackedBars(el, lgEl, countsByRepo, unit) {
         `<rect x="${x}" y="${y1}" width="${bw}" height="${h}" fill="${repoColor(r)}"/>`;
       acc += v;
     });
-    const t = `<b>Week of ${fmtWeek(w)}</b><br>` + (segs.map(([r, v]) => `${esc(r)}: ${v}`).join("<br>") || `0 ${unit}`);
+    const t = `<b>${BK.tip(w)}</b><br>` + (segs.map(([r, v]) => `${esc(r)}: ${v}`).join("<br>") || `0 ${unit}`);
     bars += `<rect x="${A.x(i)}" y="${M.t}" width="${A.bw}" height="${A.ih}" fill="transparent" data-tip="${esc(t)}"/>`;
   });
   $(el).innerHTML = svg(A.s + bars);
@@ -225,15 +273,16 @@ function roundTop(x, y, w, h) {
 function lines(el, lgEl, seriesByRepo) {
   const repos = visibleRepos().filter(r => seriesByRepo[r]);
   legend(lgEl, repos);
-  const all = repos.flatMap(r => DATA.weeks.map(w => seriesByRepo[r][w] ?? 0));
-  const A = axes(Math.max(...all, 0.001), v => (v * 100).toFixed(v < 0.05 ? 1 : 0) + "%");
+  const all = repos.flatMap(r => BK.keys.map(w => seriesByRepo[r][w] ?? 0));
+  const maxV = Math.max(...all, 0.001), dec = Math.max(0, 1 - Math.floor(Math.log10(niceMax(maxV) * 100 / 2)));
+  const A = axes(maxV, v => (v * 100).toFixed(dec) + "%");
   let s = "";
   for (const r of repos) {
-    const pts = DATA.weeks.map((w, i) => [A.x(i) + A.bw / 2, A.y(seriesByRepo[r][w] ?? 0), seriesByRepo[r][w]]);
+    const pts = BK.keys.map((w, i) => [A.x(i) + A.bw / 2, A.y(seriesByRepo[r][w] ?? 0), seriesByRepo[r][w]]);
     s += `<polyline fill="none" stroke="${repoColor(r)}" stroke-width="2" stroke-linejoin="round" points="${pts.filter(p => p[2] != null).map(p => p[0] + "," + p[1]).join(" ")}"/>`;
   }
-  DATA.weeks.forEach((w, i) => {
-    const t = `<b>Week of ${fmtWeek(w)}</b><br>` + repos.map(r => {
+  BK.keys.forEach((w, i) => {
+    const t = `<b>${BK.tip(w)}</b><br>` + repos.map(r => {
       const v = seriesByRepo[r][w]; return `${esc(r)}: ${v == null ? "no runs" : (v * 100).toFixed(1) + "%"} <span style="color:var(--text-muted)">(${seriesByRepo[r].__n?.[w] || 0}/${seriesByRepo[r].__d?.[w] || 0})</span>`;
     }).join("<br>");
     s += `<rect x="${A.x(i)}" y="${M.t}" width="${A.bw}" height="${A.ih}" fill="transparent" data-tip="${esc(t)}"/>`;
@@ -258,7 +307,7 @@ function hbars(el, counts) {
 function heatmap(el, events) {
   const per = {};
   for (const e of events) for (const u of e.units) {
-    const k = `${e.repo}  ${u.name}`; (per[k] ??= {total: 0, w: {}}); per[k].total++; per[k].w[e.week] = (per[k].w[e.week] || 0) + 1;
+    const k = `${e.repo}  ${u.name}`; (per[k] ??= {total: 0, w: {}}); per[k].total++; const b = BK.of(e.failed_at); per[k].w[b] = (per[k].w[b] || 0) + 1;
   }
   const rows = Object.entries(per).sort((a, b) => b[1].total - a[1].total).slice(0, 25);
   if (!rows.length) { $(el).innerHTML = `<div class="empty">No data</div>`; return; }
@@ -266,30 +315,30 @@ function heatmap(el, events) {
   const labels = rows.map(([k]) => { const [repo, name] = k.split("  "); const l = (multi ? repo.split("/")[1] + ": " : "") + name; return l.length > 60 ? l.slice(0, 59) + "…" : l; });
   const ctx = document.createElement("canvas").getContext("2d");
   ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
-  const max = Math.max(...rows.flatMap(([, r]) => Object.values(r.w))), cw = 16, ch = 18;
+  const max = Math.max(...rows.flatMap(([, r]) => Object.values(r.w))), cw = BK.keys.length > 60 ? 10 : 16, ch = 18;
   const lw = Math.ceil(Math.max(...labels.map(l => ctx.measureText(l).width))) + 16;
-  const wW = lw + DATA.weeks.length * cw + 50, hH = rows.length * ch + 24;
+  const wW = lw + BK.keys.length * cw + 50, hH = rows.length * ch + 24;
   const lvl = v => v ? Math.min(6, 1 + Math.floor((v - 1) / max * 6)) : 0;
   let s = "";
   rows.forEach(([k, r], i) => {
     const label = labels[i];
     s += `<text x="${lw - 8}" y="${i * ch + 13}" text-anchor="end" style="fill:var(--text-secondary)">${esc(label)}</text>`;
-    DATA.weeks.forEach((w, j) => {
+    BK.keys.forEach((w, j) => {
       const v = r.w[w] || 0;
-      s += `<rect x="${lw + j * cw}" y="${i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="var(--seq-${lvl(v)})" data-tip="${esc(`<b>${label}</b><br>Week of ${fmtWeek(w)}: ${v}`)}"/>`;
+      s += `<rect x="${lw + j * cw}" y="${i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="var(--seq-${lvl(v)})" data-tip="${esc(`<b>${label}</b><br>${BK.tip(w)}: ${v}`)}"/>`;
     });
-    s += `<text x="${lw + DATA.weeks.length * cw + 6}" y="${i * ch + 13}">${r.total}</text>`;
+    s += `<text x="${lw + BK.keys.length * cw + 6}" y="${i * ch + 13}">${r.total}</text>`;
   });
   // one date label per ~56px so they never collide; ticks mark the labelled columns
   const step = Math.ceil(56 / cw);
-  DATA.weeks.forEach((w, j) => { if (j % step === 0)
+  BK.keys.forEach((w, j) => { if (j % step === 0)
     s += `<line x1="${lw + j * cw + 1}" x2="${lw + j * cw + 1}" y1="${rows.length * ch}" y2="${rows.length * ch + 4}" stroke="var(--text-muted)"/>` +
-         `<text x="${lw + j * cw}" y="${hH - 6}">${fmtWeek(w)}</text>`; });
+         `<text x="${lw + j * cw}" y="${hH - 6}">${BK.label(w)}</text>`; });
   $(el).innerHTML = `<svg viewBox="0 0 ${wW} ${hH}" width="${wW}" style="max-width:none">${s}</svg>`;
 }
 
 function spark(weeks) {
-  const vals = DATA.weeks.map(w => weeks[w] || 0), max = Math.max(...vals, 1), w = 3, h = 20;
+  const vals = BK.keys.map(w => weeks[w] || 0), max = Math.max(...vals, 1), w = Math.max(2, Math.min(6, Math.floor(120 / vals.length))), h = 20;
   return `<svg width="${vals.length * w}" height="${h}" style="vertical-align:middle">` + vals.map((v, i) =>
     v ? `<rect x="${i * w}" y="${h - v / max * h}" width="${w - 1}" height="${v / max * h}" fill="var(--series-1)"/>` : "").join("") + "</svg>";
 }
@@ -314,6 +363,12 @@ const date = s => s ? s.slice(0, 10) : "";
 
 // main draw --------------------------------------------------------------------------------
 function draw() {
+  BK = buckets(RANGES[F.range]);
+  const fmtTs = d => d.toISOString().replace("T", " ").slice(0, 16);
+  $("#asof").textContent = `${fmtTs(BK.start)} → ${fmtTs(NOW)} UTC (relative to report generation)` +
+    (BK.start.toISOString().slice(0, 10) < DATA.coverage ? ` · data only from ${DATA.coverage}` : "");
+  document.querySelectorAll(".bu").forEach(e => e.textContent = BK.unit);
+  renderSummary();
   const events = DATA.events.filter(eventOk);
   const repos = visibleRepos();
 
@@ -325,18 +380,24 @@ function draw() {
     const key = `${e.repo}|${s}`, m = meta[key];
     if (!m) continue;
     const c = cl[key] ??= {...m, count: 0, prs: new Set(), weeks: {}, jobs: {}, examples: [], wasted: 0, corroborated: 0, first: e.failed_at, last: e.failed_at};
-    c.count++; e.prs.forEach(p => c.prs.add(p)); c.weeks[e.week] = (c.weeks[e.week] || 0) + 1;
+    c.count++; e.prs.forEach(p => c.prs.add(p)); const b = BK.of(e.failed_at); c.weeks[b] = (c.weeks[b] || 0) + 1;
     c.jobs[u.name] = (c.jobs[u.name] || 0) + 1; c.examples.push(u.url); c.wasted += u.dur; c.corroborated += e.corroborated; c.last = e.failed_at;
   }
   let clusters = Object.values(cl);
   clusters.sort((a, b) => b.count - a.count || b.last.localeCompare(a.last));
 
-  const comments = DATA.comments.filter(c => (!F.repo || c.repo === F.repo) &&
+  const comments = DATA.comments.filter(c => new Date(c.created_at) >= BK.start && (!F.repo || c.repo === F.repo) &&
     (!F.q || (c.snippet + " " + c.user + " #" + c.number + " " + c.tests.join(" ")).toLowerCase().includes(F.q.toLowerCase())));
 
   // tiles
   const ghaEvents = events.filter(e => e.source !== "status");
-  const runs = repos.reduce((a, r) => a + Object.values(DATA.runs_per_week[r] || {}).reduce((x, y) => x + y, 0), 0);
+  // completed Actions runs per bucket (hourly counts for the 1d range, daily otherwise)
+  const runsB = {}, hourly = BK.unit === "hour";
+  const startKey = BK.start.toISOString().slice(0, hourly ? 13 : 10);
+  for (const r of repos) for (const [d, n] of Object.entries((hourly ? DATA.runs_per_hour : DATA.runs_per_day)[r] || {})) if (d >= startKey) {
+    const b = hourly ? d : BK.of(d); (runsB[r] ??= {}); runsB[r][b] = (runsB[r][b] || 0) + n; runsB[r].__total = (runsB[r].__total || 0) + n;
+  }
+  const runs = repos.reduce((a, r) => a + (runsB[r]?.__total || 0), 0);
   const hours = events.reduce((a, e) => a + e.units.reduce((x, u) => x + u.dur, 0), 0) / 3600;
   const tests = clusters.filter(c => !["infra", "job", "sbt-task"].includes(c.kind)).length;
   const prs = new Set(events.flatMap(e => e.prs.map(p => e.repo + p))).size;
@@ -351,15 +412,15 @@ function draw() {
 
   // charts
   const evByRepo = {}, rate = {};
-  for (const e of events) { (evByRepo[e.repo] ??= {})[e.week] = (evByRepo[e.repo][e.week] || 0) + 1; }
+  for (const e of events) { const b = BK.of(e.failed_at); (evByRepo[e.repo] ??= {})[b] = (evByRepo[e.repo][b] || 0) + 1; }
   stackedBars("#ch-events", "#lg-events", evByRepo, "flaky failures");
   for (const r of repos) {
-    const d = DATA.runs_per_week[r] || {}; if (!Object.keys(d).length) continue;
-    const n = {}; for (const e of ghaEvents) if (e.repo === r) n[e.week] = (n[e.week] || 0) + 1;
-    rate[r] = {__n: n, __d: d}; for (const w of DATA.weeks) if (d[w]) rate[r][w] = (n[w] || 0) / d[w];
+    const d = runsB[r] || {}; if (!d.__total) continue;
+    const n = {}; for (const e of ghaEvents) if (e.repo === r) { const b = BK.of(e.failed_at); n[b] = (n[b] || 0) + 1; }
+    rate[r] = {__n: n, __d: d}; for (const w of BK.keys) if (d[w]) rate[r][w] = (n[w] || 0) / d[w];
   }
   lines("#ch-rate", "#lg-rate", rate);
-  const cByRepo = {}; for (const c of comments) (cByRepo[c.repo] ??= {})[c.week] = (cByRepo[c.repo][c.week] || 0) + 1;
+  const cByRepo = {}; for (const c of comments) { const b = BK.of(c.created_at); (cByRepo[c.repo] ??= {})[b] = (cByRepo[c.repo][b] || 0) + 1; }
   stackedBars("#ch-comments", "#lg-comments", cByRepo, "comments");
   const kinds = {}; for (const e of events) for (const u of e.units) { const k = (u.sigs[0] || "job:").split(":")[0]; kinds[k] = (kinds[k] || 0) + 1; }
   hbars("#ch-kinds", kinds);
@@ -402,7 +463,59 @@ function draw() {
   ], comments, "comments");
 }
 
-$("#subtitle").textContent = `${DATA.repos.join(", ")} · since ${DATA.since} · generated ${DATA.generated.replace("T", " ").slice(0, 16)} UTC`;
+// agent summary: a tiny Markdown subset. Input is HTML-escaped first, so it can never inject markup.
+function md(src) {
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2">$2</a>')
+    .replace(/(^|[\s(])([\w.-]+\/[\w.-]+)#(\d+)\b/g, '$1<a href="https://github.com/$2/pull/$3">$2#$3</a>');
+  const out = [], lines = src.replace(/\r/g, "").split("\n");
+  let list = null, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+                        if (list) { out.push(`</${list}>`); list = null; } };
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    let m;
+    if (!l.trim()) { flush(); continue; }
+    if ((m = l.match(/^(#{1,4})\s+(.*)/))) { flush(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "")) {
+      flush();
+      const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let t = `<table><thead><tr>${cells(l).map(c => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`;
+      i += 2;
+      for (; i < lines.length && /^\s*\|/.test(lines[i]); i++) t += `<tr>${cells(lines[i]).map(c => `<td>${inline(c)}</td>`).join("")}</tr>`;
+      out.push(t + "</tbody></table>"); i--; continue;
+    }
+    if ((m = l.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
+      const kind = /\d/.test(m[1]) ? "ol" : "ul";
+      if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+      if (list !== kind) { if (list) out.push(`</${list}>`); out.push(`<${kind}>`); list = kind; }
+      out.push(`<li>${inline(m[2])}</li>`); continue;
+    }
+    if (list && /^\s{2,}\S/.test(l)) { out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, " " + inline(l.trim()) + "</li>"); continue; }
+    para.push(l.trim());
+  }
+  flush();
+  return out.join("\n");
+}
+function renderSummary() {
+  const el = $("#summary"), sm = DATA.summaries[F.range];
+  if (!sm) {
+    el.innerHTML = `<h2>Summary · ${esc(F.range)}</h2><p class="note">No agent summary for this range. See <code>project/scripts/flaky-ci/README.md</code>: ` +
+      `<code>flaky_ci.py digest --range ${esc(F.range)}</code>, write <code>summary-${esc(F.range)}.md</code>, re-run <code>report</code>.</p>`;
+    return;
+  }
+  const lagDays = (new Date(DATA.generated) - new Date(sm.written)) / 864e5;
+  el.innerHTML = `<div class="meta"><h2>Summary · ${esc(F.range)}</h2><span class="note">agent-written ${esc(sm.written.slice(0, 10))}` +
+    `${lagDays > 1 ? ` · <span class="stale">${Math.floor(lagDays)} days older than the data below</span>` : ""}</span></div>` +
+    `<div class="md">${md(sm.markdown)}</div>`;
+}
+
+$("#subtitle").textContent = `${DATA.repos.join(", ")} · data from ${DATA.coverage} · generated ${DATA.generated.replace("T", " ").slice(0, 16)} UTC`;
+drawChips();
 draw();
 </script>
 </body>
