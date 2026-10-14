@@ -1279,21 +1279,20 @@ object Trees {
       /** `sourceFile(tree)`, primed so that the copy allocated next takes `tree.span` directly
        *  rather than computing the envelope of its children, only to have `finalize` replace it.
        *  Must be the last thing evaluated before the copy is allocated.
-       *
-       *  Only typed trees are primed: desugaring copies untyped trees with fresh children that
-       *  lack spans, and relies on the envelope computation to assign them.
        */
       private def copySource(tree: Tree): SourceFile =
         val src = sourceFile(tree)
-        if tree.hasType && (src ne NoSource) then src.primedSpan = tree.span
+        if Positioned.primeSpans && (src ne NoSource) then src.primedSpan = tree.span
         src
 
       protected def finalize(tree: Tree, copied: untpd.Tree): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
+        copied.positionNewChildren(tree)
         postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
 
       protected def finalize(tree: Tree, copied: untpd.MemberDef): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
+        copied.positionNewChildren(tree)
         postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
 
       def Ident(tree: Tree)(name: Name)(using Context): Ident = tree match {
