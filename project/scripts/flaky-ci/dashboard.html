@@ -152,6 +152,8 @@ document.addEventListener("mousemove", e => {
   tip.style.top = (e.clientY + 14 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 14) + "px";
 });
 
+addEventListener("scroll", () => tip.style.display = "none", {passive: true});
+
 // filters
 const F = {repo: "", source: "", kind: "", q: ""};
 $("#f-repo").innerHTML = `<option value="">all (${DATA.repos.length})</option>` + DATA.repos.map(r => `<option>${esc(r)}</option>`).join("");
@@ -260,22 +262,29 @@ function heatmap(el, events) {
   }
   const rows = Object.entries(per).sort((a, b) => b[1].total - a[1].total).slice(0, 25);
   if (!rows.length) { $(el).innerHTML = `<div class="empty">No data</div>`; return; }
-  const max = Math.max(...rows.flatMap(([, r]) => Object.values(r.w))), cw = 14, ch = 18, lw = 340;
+  const multi = visibleRepos().length > 1;
+  const labels = rows.map(([k]) => { const [repo, name] = k.split("  "); const l = (multi ? repo.split("/")[1] + ": " : "") + name; return l.length > 60 ? l.slice(0, 59) + "…" : l; });
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
+  const max = Math.max(...rows.flatMap(([, r]) => Object.values(r.w))), cw = 16, ch = 18;
+  const lw = Math.ceil(Math.max(...labels.map(l => ctx.measureText(l).width))) + 16;
   const wW = lw + DATA.weeks.length * cw + 50, hH = rows.length * ch + 24;
   const lvl = v => v ? Math.min(6, 1 + Math.floor((v - 1) / max * 6)) : 0;
   let s = "";
   rows.forEach(([k, r], i) => {
-    const [repo, name] = k.split("  ");
-    const label = (visibleRepos().length > 1 ? repo.split("/")[1] + ": " : "") + name;
-    s += `<text x="${lw - 8}" y="${i * ch + 13}" text-anchor="end" style="fill:var(--text-secondary)">${esc(label.length > 52 ? label.slice(0, 51) + "…" : label)}</text>`;
+    const label = labels[i];
+    s += `<text x="${lw - 8}" y="${i * ch + 13}" text-anchor="end" style="fill:var(--text-secondary)">${esc(label)}</text>`;
     DATA.weeks.forEach((w, j) => {
       const v = r.w[w] || 0;
       s += `<rect x="${lw + j * cw}" y="${i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="var(--seq-${lvl(v)})" data-tip="${esc(`<b>${label}</b><br>Week of ${fmtWeek(w)}: ${v}`)}"/>`;
     });
     s += `<text x="${lw + DATA.weeks.length * cw + 6}" y="${i * ch + 13}">${r.total}</text>`;
   });
-  const step = Math.max(1, Math.ceil(DATA.weeks.length / 10));
-  DATA.weeks.forEach((w, j) => { if (j % step === 0) s += `<text x="${lw + j * cw}" y="${hH - 6}">${fmtWeek(w)}</text>`; });
+  // one date label per ~56px so they never collide; ticks mark the labelled columns
+  const step = Math.ceil(56 / cw);
+  DATA.weeks.forEach((w, j) => { if (j % step === 0)
+    s += `<line x1="${lw + j * cw + 1}" x2="${lw + j * cw + 1}" y1="${rows.length * ch}" y2="${rows.length * ch + 4}" stroke="var(--text-muted)"/>` +
+         `<text x="${lw + j * cw}" y="${hH - 6}">${fmtWeek(w)}</text>`; });
   $(el).innerHTML = `<svg viewBox="0 0 ${wW} ${hH}" width="${wW}" style="max-width:none">${s}</svg>`;
 }
 

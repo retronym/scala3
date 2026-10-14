@@ -184,7 +184,7 @@ create table if not exists state (k text primary key, v text);
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, timeout=600)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
     return db
