@@ -5,11 +5,12 @@ import java.util.List;
 
 /**
  * {@code org.openjdk.jmh.Main} with bench-lab's default profilers: {@code gc} (allocation per op, GC count and time)
- * and {@link JitProfiler} (is the JIT still busy?). A default is skipped if given on the command line;
+ * {@link JitProfiler} (is the JIT still busy?) and {@link PairedProfiler} (time per variant, when variants alternate
+ * within the fork; otherwise silent). A default is skipped if given on the command line;
  * {@code -noDefaultProf} drops them all.
  */
 public class Main {
-    static final List<String> DEFAULTS = List.of("gc", JitProfiler.class.getName());
+    static final List<String> DEFAULTS = List.of("gc", JitProfiler.class.getName(), PairedProfiler.class.getName());
 
     public static void main(String[] argv) throws Exception {
         List<String> args = new ArrayList<>(List.of(argv));

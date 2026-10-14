@@ -24,6 +24,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import dotty.tools.benchlab.IterationLog;
+import dotty.tools.benchlab.PairedProfiler;
+
 /**
  * Apple PMU counters for the benchmark threads only, over the measurement iterations only.
  *
@@ -63,6 +66,10 @@ public class XctraceProfiler implements InternalProfiler {
     private Path trace;
     private int seen;
     private long ops;
+    // when variants alternate within the fork (IterationLog): each measured iteration's ops, by its log index, and the
+    // trace's start by the wall clock, to assign samples to iterations by their sample time
+    private final Map<Integer, Long> opsByIteration = new HashMap<>();
+    private long traceStartMillis = -1;
     private long sampleUs = 1000;
     private final int top;
     private PerfMap perfMap;
@@ -96,6 +103,8 @@ public class XctraceProfiler implements InternalProfiler {
     public Collection<? extends Result> afterIteration(BenchmarkParams bp, IterationParams ip, IterationResult ir) {
         if (ip.getType() != IterationType.MEASUREMENT || proc == null) return List.of();
         ops += ir.getMetadata().getMeasuredOps();
+        IterationLog.Entry last = IterationLog.last();
+        if (IterationLog.paired() && last != null) opsByIteration.put(last.index(), ir.getMetadata().getMeasuredOps());
         if (++seen < ip.getCount()) return List.of();
         try {
             stop();
@@ -154,6 +163,8 @@ public class XctraceProfiler implements InternalProfiler {
         Path toc = dir.resolve(trace.getFileName() + ".toc.xml");
         export(List.of("--toc"), toc);
         String tocXml = Files.readString(toc);
+        Matcher startDate = Pattern.compile("<start-date>([^<]+)</start-date>").matcher(tocXml);
+        if (startDate.find()) traceStartMillis = java.time.OffsetDateTime.parse(startDate.group(1)).toInstant().toEpochMilli();
         List<Result> results = new ArrayList<>();
         Matcher counters = Pattern.compile("<table[^>]*schema=\"counters-profile\"[^>]*>").matcher(tocXml);
         if (counters.find() && counters.group().contains("pmc-events=")) {
@@ -191,6 +202,9 @@ public class XctraceProfiler implements InternalProfiler {
         Map<String, Integer> samples = new TreeMap<>();
         Map<String, long[]> byLeaf = new HashMap<>();
         Map<String, long[]> byThread = new HashMap<>();
+        List<IterationLog.Entry> measured = IterationLog.paired() && traceStartMillis > 0
+            ? IterationLog.entries().stream().filter(IterationLog.Entry::measured).toList() : List.of();
+        Map<Integer, long[]> byIteration = new HashMap<>();
         rows(table, row -> {
             String[] t = row.get("thread");
             String[] m = row.get("pmc-events");
@@ -203,6 +217,14 @@ public class XctraceProfiler implements InternalProfiler {
             long[] s = sums.computeIfAbsent(g, k -> new long[events.size()]);
             for (int i = 0; i < xs.length; i++) s[i] += Long.parseLong(xs[i]);
             samples.merge(g, 1, Integer::sum);
+            if (!measured.isEmpty() && g.equals("bench")) {
+                String[] st = row.get("sample-time");
+                IterationLog.Entry it = st == null || st[1] == null ? null : iterationAt(measured, traceStartMillis + Long.parseLong(st[1].trim()) / 1_000_000);
+                if (it != null) {
+                    long[] c = byIteration.computeIfAbsent(it.index(), k -> new long[events.size()]);
+                    for (int i = 0; i < xs.length; i++) c[i] += Long.parseLong(xs[i]);
+                }
+            }
             long[] th = byThread.computeIfAbsent(threadName(t[0]), k -> new long[events.size()]);
             for (int i = 0; i < xs.length; i++) th[i] += Long.parseLong(xs[i]);
             if (perfMap != null && g.equals("bench") && bt != null) {
@@ -214,6 +236,7 @@ public class XctraceProfiler implements InternalProfiler {
         });
         if (perfMap != null) attribution(byLeaf, events);
         threads(byThread, events);
+        if (!measured.isEmpty()) out.addAll(perVariant(measured, byIteration, events));
         long[] bench = sums.getOrDefault("bench", new long[events.size()]);
         out.add(new ScalarResult("xctrace.bench.oncpu", samples.getOrDefault("bench", 0) * sampleUs / 1e6, "s", POLICY));
         int cyc = events.indexOf("CORE_ACTIVE_CYCLE"), ins = events.indexOf("INST_ALL");
@@ -240,6 +263,35 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     /** Writes, per event, the methods that were running when it counted; prints the top few to the fork's stderr. */
+    /** The measured iteration whose wall-clock span contains `millis`, or null (between iterations). */
+    static IterationLog.Entry iterationAt(List<IterationLog.Entry> measured, long millis) {
+        int lo = 0, hi = measured.size() - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            IterationLog.Entry e = measured.get(mid);
+            if (millis < e.startMillis()) hi = mid - 1;
+            else if (millis > e.endMillis()) lo = mid + 1;
+            else return e;
+        }
+        return null;
+    }
+
+    /** Each event per op on the benchmark thread, per variant, with paired differences (see PairedProfiler):
+     *  `xctrace.<event>.<variant>`, `xctrace.<event>.<variant>.delta%`. */
+    private List<Result> perVariant(List<IterationLog.Entry> measured, Map<Integer, long[]> byIteration, List<String> events) {
+        List<Result> out = new ArrayList<>();
+        for (int i = 0; i < events.size(); i++) {
+            List<PairedProfiler.Point> points = new ArrayList<>();
+            for (IterationLog.Entry e : measured) {
+                long[] c = byIteration.get(e.index());
+                Long n = opsByIteration.get(e.index());
+                if (c != null && n != null && n > 0) points.add(new PairedProfiler.Point(e, c[i] / (double) n));
+            }
+            if (!points.isEmpty()) out.addAll(PairedProfiler.results(IterationLog.variants(), points, "#/op", "xctrace." + events.get(i) + "."));
+        }
+        return out;
+    }
+
     /** A thread name with its id dropped and numbered names folded (Thread-12, GC Thread#3), so short-lived threads
      *  started per op, such as the pickler's executor, add up. */
     static String threadName(String threadFmt) {
