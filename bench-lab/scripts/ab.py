@@ -28,7 +28,7 @@ Why `jvmArgs` goes to every variant: JMH's `-jvmArgsAppend` on the command line 
 the benchmark rather than adding to it, so a variant given only its flags silently loses the benchmark's heap
 settings, while a baseline given nothing keeps them. Each run's `jvmArgs` in result.json is checked against the spec.
 """
-import glob, json, os, re, shutil, subprocess, sys, time
+import glob, json, os, re, shlex, shutil, subprocess, sys, time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
@@ -131,8 +131,8 @@ def mean_load(path):
     return sum(xs) / len(xs) if xs else 0.0
 
 
-def check(spec, prof, started, flags):
-    """The run produced fresh results, with the JVM arguments the spec asked for."""
+def check(spec, prof, started, flags, variant):
+    """The run produced fresh results, with the JVM arguments and benchmark parameters the spec asked for."""
     res = os.path.join(prof, "result.json")
     if not os.path.exists(res) or os.path.getmtime(res) < started:
         return "no fresh result.json (see sbt.log)"
@@ -147,6 +147,14 @@ def check(spec, prof, started, flags):
     for a in (spec.jvm_args + " " + flags).split():
         if a not in args:
             return f"JVM argument {a} missing from the run's jvmArgs: {args}"
+    # a variant's `-p name=value`, which a quoting slip between here, sbt --client and JMH would silently drop
+    words = shlex.split(spec.variant_jmh_args.get(variant, ""))
+    for flag, kv in zip(words, words[1:]):
+        if flag == "-p" and "=" in kv:
+            name, value = kv.split("=", 1)
+            got = rs[0].get("params", {}).get(name)
+            if got != value:
+                return f"parameter {name}: the run had {got!r}, not {value!r}"
     # a later -Xmx/-Xms/-Xss wins; make sure it is ours
     for opt in ("-Xmx", "-Xms", "-Xss"):
         ours = [a for a in spec.jvm_args.split() if a.startswith(opt)]
@@ -211,7 +219,7 @@ def run(spec, dry):
             break
         else:
             sys.exit(f"{dest}: no clean run in {MAX_ATTEMPTS} attempts")
-        problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags)
+        problem = f"sbt exited with {rc} (see {dest}/sbt.log)" if rc else check(spec, prof, started, flags, variant)
         if not problem and "async" in spec.profile and spec.profile["async"].startswith("cycles"):
             problem = check_samples(spec, prof, dest)
         if problem:
