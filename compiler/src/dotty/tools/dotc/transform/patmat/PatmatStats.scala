@@ -38,10 +38,12 @@ import scala.language.unsafeNulls
   final val Project = 18
   final val Flatten = 19
   final val DecomposeDistinct = 20
-  final val NCounters = 21
+  final val DecomposeCacheHit = 21
+  final val DecomposeProvisional = 22
+  final val NCounters = 23
   val counterNames = Array("simplify", "simp.Typ", "simp.Prod", "simp.Or", "simp.OrElems", "isSubspace", "isSub.hit",
     "isSub.comp", "decomp(Type)", "Typ.decomp.hit", "Typ.decomp.comp", "expandCC", "signature", "sig.infer", "minus",
-    "intersect", "isSubType", "covers", "project", "flatten", "decomp.distinct")
+    "intersect", "isSubType", "covers", "project", "flatten", "decomp.distinct", "decomp.cacheHit", "decomp.provis")
 
   // inclusive timers (outermost call only)
   final val TDecompose = 0

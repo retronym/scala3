@@ -51,6 +51,9 @@ import SpaceEngine.*
 /** A key to be used in a context property that caches the results of isSubspace checks */
 private val IsSubspaceCacheKey = new Property.Key[mutable.HashMap[(Space, Space), Boolean]]
 
+/** A key to be used in a context property that caches the decompositions of types during one `checkMatch` */
+private val DecomposeCacheKey = new Property.Key[util.HashMap[Type, List[Type]]]
+
 /** A key to track which case classes are currently being expanded in simplify, to prevent infinite recursion */
 private val ExpandingCaseClassesKey = new Property.Key[mutable.Set[Symbol]]
 
@@ -698,7 +701,21 @@ object SpaceEngine {
   def decompose(tp: Type)(using Context): List[Type] =
     PatmatStats.count(PatmatStats.DecomposeType)
     PatmatStats.decomposing(tp)
-    PatmatStats.timed(PatmatStats.TDecompose)(decomposeImpl(tp))
+    ctx.property(DecomposeCacheKey) match
+      // types with uninstantiated type variables may decompose differently later on
+      case Some(cache) if !tp.isProvisional =>
+        val cached = cache.lookup(tp)
+        if cached != null then
+          PatmatStats.count(PatmatStats.DecomposeCacheHit)
+          cached
+        else
+          val parts = PatmatStats.timed(PatmatStats.TDecompose)(decomposeImpl(tp))
+          cache(tp) = parts
+          parts
+      case Some(_) =>
+        PatmatStats.count(PatmatStats.DecomposeProvisional)
+        PatmatStats.timed(PatmatStats.TDecompose)(decomposeImpl(tp))
+      case _ => PatmatStats.timed(PatmatStats.TDecompose)(decomposeImpl(tp))
   private def decomposeImpl(tp: Type)(using Context): List[Type] = trace(i"decompose($tp)") {
     def rec(tp: Type, mixins: List[Type]): List[Type] = tp.dealias match
       case AndType(tp1, tp2) =>
@@ -1194,8 +1211,12 @@ object SpaceEngine {
   end checkReachability
 
   /** Returns `true` if the match is definitely exhaustive. */
+  /** DO NOT MERGE: -Ddotty.patmatDecomposeCache, memoize `decompose(Type)` per `checkMatch` */
+  private val decomposeCache = java.lang.Boolean.getBoolean("dotty.patmatDecomposeCache")
+
   def checkMatch(m: Match)(using Context): Boolean =
-    inContext(ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))) {
+    val ctx1 = ctx.withProperty(IsSubspaceCacheKey, Some(mutable.HashMap.empty))
+    inContext(if decomposeCache then ctx1.withProperty(DecomposeCacheKey, Some(util.HashMap())) else ctx1) {
       if PatmatStats.enabled then
         var isExhaustive = false
         val exh = if exhaustivityCheckable(m.selector) then PatmatStats.measure {
