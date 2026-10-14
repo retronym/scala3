@@ -43,7 +43,7 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Publish Scala 3 locally
-        # Just the bridge and what Zinc's scalaInstance needs; skips scaladoc, Scala.js and friends, and the doc jars.
+        # Just the bridge and what Zinc's scalaInstance needs; skips Scala.js and the doc jars.
         run: |
           # project/scripts/sbt runs only its first argument, so this is one `;`-separated command.
           ./project/scripts/sbt ";set every Compile / packageDoc / publishArtifact := false; \
@@ -54,7 +54,10 @@ jobs:
             scala-library-bootstrapped/publishLocal; \
             tasty-core-bootstrapped/publishLocal; \
             scala3-directives-parser-bootstrapped/publishLocal; \
-            scala3-repl/publishLocal"
+            scala3-repl/publishLocal; \
+            scala3-staging/publishLocal; \
+            scala3-tasty-inspector/publishLocal; \
+            scaladoc/publishLocal"
 
       - name: Checkout zinc
         uses: actions/checkout@v4
