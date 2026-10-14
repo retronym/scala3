@@ -39,8 +39,10 @@ One fork per variant lands about 3% off. Whether the mean or the median is used 
 
 ## Plan
 
-First use: the Positioned changes, all per-Run settings since retronym/scala3 1a64cdb214. With `-Yno-parallel-pickling` throughout: base adds `-Yno-prime-spans`; prime adds nothing; nocheck adds `-Yno-prime-spans -Yno-check-positions`; both adds `-Yno-check-positions`.
+- DONE 1. `variants` in `CompileBenchmark` (each cycle of iterations runs every variant once, the order reversed every other cycle), `IterationLog`, `PairedProfiler` (time per variant and paired differences).
+- DONE 2. Per-variant counters in `XctraceProfiler`, samples assigned to iterations by sample time.
+- DONE 3. `ab.py` specs with `"paired"`, and `ab.py report`'s paired table (each variant's mean, and the paired difference: mean, spread and per-fork values).
 
-- TODO 1. `variants` in `CompileBenchmark`, timing per variant from JMH's iteration results; check on two identical variants that the paired difference is near zero and its spread smaller than across forks.
-- TODO 2. Per-variant counters in `XctraceProfiler`.
-- TODO 3. Paired summaries in `ab.py report` and `abindex.py`.
+A/A check (`ab/paired-aa.json`: dottyUtil, two identical variants, 3 forks of 12 × 3 s, before the order reversal): instructions/op paired difference +0.18% ± 0.51 over forks (−0.19, +0.76, −0.04), against about 1% between the forks' own means; within a quiet fork the per-cycle spread was 0.6–0.7%, in a fork with a core of other load 7%. Cycles/op came out −0.12% to −0.31% for the second variant in every fork: an order effect, hence the reversal every other cycle.
+
+- TODO 4. `abindex.py`: paired campaigns in the summary table.

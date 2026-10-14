@@ -26,7 +26,8 @@ class CompileBenchmark:
   var context: String = compiletime.uninitialized
 
   /** Variants compared within the fork, `<name>=<scalacOptions>|<name>=<scalacOptions>...`, the first the baseline
-   *  (see `doc/paired-ab.md`). Each iteration, warmup included, runs the next variant in turn, so the variants share
+   *  (see `doc/paired-ab.md`). Each iteration, warmup included, runs the next variant in turn (reversing the order
+   *  every other cycle), so the variants share
    *  the fork's compiled code; `PairedProfiler` and `XctraceProfiler` report per variant. The options add to
    *  `scalacOptions`, and must be settings the compiler reads per run. JMH splits parameter values at commas: none here.
    */
@@ -62,7 +63,11 @@ class CompileBenchmark:
   @Setup(Level.Iteration)
   def nextVariant(ip: IterationParams): Unit =
     if alternatives.nonEmpty then
-      val (name, c) = alternatives(iteration % alternatives.length)
+      // ABBA: every other cycle runs the variants in reverse, so each holds each position in a cycle equally often
+      // (in an A/A check the second of two identical variants ran 0.1-0.3% fewer cycles)
+      val n = alternatives.length
+      val pos = iteration % n
+      val (name, c) = alternatives(if (iteration / n) % 2 == 0 then pos else n - 1 - pos)
       compiler = c
       iteration += 1
       IterationLog.begin(name, ip.getType == IterationType.MEASUREMENT)
