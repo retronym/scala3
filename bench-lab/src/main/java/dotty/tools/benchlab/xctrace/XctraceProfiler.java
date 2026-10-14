@@ -115,10 +115,15 @@ public class XctraceProfiler implements InternalProfiler {
             pb.redirectErrorStream(true);
             proc = pb.start();
             CountDownLatch started = new CountDownLatch(1);
+            // xctrace's output also goes to <trace>.log: the fork's stderr does not reach JMH's -o log, and when xctrace
+            // dies mid-recording its last words are the only clue
+            Path log = dir.resolve(trace.getFileName() + ".log");
             Thread pump = new Thread(() -> {
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+                     java.io.PrintWriter w = new java.io.PrintWriter(Files.newBufferedWriter(log), true)) {
                     String line;
                     while ((line = r.readLine()) != null) {
+                        w.println(line);
                         System.err.println("[xctrace] " + line);
                         if (line.contains("Ctrl-C to stop")) started.countDown();
                     }
@@ -136,6 +141,9 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     private void stop() throws IOException, InterruptedException {
+        if (!proc.isAlive())
+            throw new IllegalStateException("xctrace exited with status " + proc.exitValue() + " while recording; its output: "
+                    + dir.resolve(trace.getFileName() + ".log"));
         if (top > 0) perfMap = PerfMap.dump();
         // xctrace saves the trace on SIGINT (as for Ctrl-C); Process.destroy would send SIGTERM.
         run(List.of("kill", "-INT", Long.toString(proc.pid())));
