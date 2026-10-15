@@ -1,0 +1,26 @@
+{
+  "name": "goforward-small",
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "xctrace": "ipc"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 2,
+  "corpora": {
+    "scalaz": "-wi 10 -i 10 -w 10 -r 10",
+    "tastyQuery": "-wi 15 -i 10 -w 5 -r 5"
+  },
+  "trees": {
+    "base": "../goforward-base",
+    "small": ".",
+    "smallNoInline": "."
+  },
+  "loadgate": {
+    "maxCores": 1.5,
+    "quietSecs": 30
+  },
+  "variants": {
+    "smallNoInline": "-XX:CompileCommand=quiet -XX:CompileCommand=dontinline,dotty.tools.dotc.core.Denotations$SingleDenotation::goForward$1"
+  }
+}

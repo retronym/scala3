@@ -1,0 +1,30 @@
+{
+  "name": "positioned-serial",
+  "historical": "-Ddotty.primeSpans was replaced by the per-Run -Yno-prime-spans (retronym/scala3 1a64cdb214): rerun against a later build, \"base\" would measure priming on. Kept for the results under out/ab.",
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "xctrace": "ipc"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
+  "rounds": 5,
+  "corpora": {
+    "re2s": "-wi 15 -i 8 -w 5 -r 5"
+  },
+  "variants": {
+    "base": "-Ddotty.primeSpans=false",
+    "prime": "",
+    "nocheck": "-Ddotty.primeSpans=false",
+    "both": ""
+  },
+  "variantJmhArgs": {
+    "base": "-p scalacOptions=-Yno-parallel-pickling",
+    "prime": "-p scalacOptions=-Yno-parallel-pickling",
+    "nocheck": "-p \"scalacOptions=-Yno-parallel-pickling -Yno-check-positions\"",
+    "both": "-p \"scalacOptions=-Yno-parallel-pickling -Yno-check-positions\""
+  },
+  "loadgate": {
+    "maxCores": 1.5,
+    "quietSecs": 30
+  }
+}
