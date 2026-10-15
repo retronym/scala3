@@ -33,7 +33,7 @@ class CompactableTastyBufferTest:
     val len = buf.reserveRef(relative = true)
     buf.writeByte(8)
     buf.writeRef(start)
-    buf.fillRef(len, buf.currentAddr, relative = true)
+    buf.fillRef(len, relative = true)
     val scratch = new ScratchData
     val before = buf.length
     buf.compactify(scratch)
@@ -48,7 +48,7 @@ class CompactableTastyBufferTest:
     val buf = new CompactableTastyBuffer
     val fwd = buf.reserveRef(relative = false)
     buf.writeByte(1)
-    buf.fillRef(fwd, buf.currentAddr, relative = false)
+    buf.fillRef(fwd, relative = false)
     buf.writeByte(2)
     buf.compactify(new ScratchData)
     assertEquals(Seq(0x82, 1, 2), bytesOf(buf))
@@ -59,11 +59,23 @@ class CompactableTastyBufferTest:
     val mark = buf.currentAddr
     val len = buf.reserveRef(relative = true)
     buf.writeRef(Addr(0))
-    buf.fillRef(len, buf.currentAddr, relative = true)
+    buf.fillRef(len, relative = true)
     buf.truncate(mark)
     buf.writeByte(2)
     buf.compactify(new ScratchData)
     assertEquals(Seq(1, 2), bytesOf(buf))
+
+  /** A length field left open by an exception is dropped with the bytes it was reserved in */
+  @Test def truncateDropsOpenLengths(): Unit =
+    val buf = new CompactableTastyBuffer
+    val outer = buf.reserveRef(relative = true)
+    val mark = buf.currentAddr
+    buf.reserveRef(relative = true) // never filled: an exception
+    buf.writeByte(1)
+    buf.truncate(mark)
+    buf.writeByte(2)
+    buf.fillRef(outer, relative = true) // fills the outer field, not the dropped one
+    assertEquals("CompactableTastyBuffer(length = 5, refs = [0L -> 0], open lengths = [])", buf.toString)
 
   /** The model of a program, by hand */
   @Test def modelOfAProgram(): Unit =
@@ -183,8 +195,7 @@ object CompactableTastyBufferTest:
 
   class RealBuffer extends RefBuffer:
     val buf = new CompactableTastyBuffer
-    export buf.{currentAddr, writeByte, reserveRef, writeRef, truncate}
-    def fillRef(at: Addr, relative: Boolean) = buf.fillRef(at, buf.currentAddr, relative)
+    export buf.{currentAddr, writeByte, reserveRef, writeRef, fillRef, truncate}
     def decoded = decode(buf)
 
   /** The slow and simple implementation: the items, each at a known address */
