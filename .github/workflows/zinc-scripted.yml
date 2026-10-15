@@ -1,0 +1,126 @@
+name: Zinc scripted tests vs. scala3-sbt-bridge
+
+on:
+  push:
+    branches: ['ci/zinc-scripted-vs-scala3-bridge']
+  workflow_dispatch:
+    inputs:
+      zinc_ref:
+        description: 'sbt/zinc ref (tag, SHA or branch) to test; overrides the pinned SHA. Use "develop" to track the tip.'
+        required: false
+  schedule:
+    - cron: '0 5 * * 1'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+env:
+  # Move this forward periodically. The patch in .github/zinc must apply to it.
+  ZINC_PINNED_SHA: b6c94565e5bee6ad01eacd1e350a1c6d252b248e
+
+jobs:
+  zinc_scripted:
+    name: Zinc scripted (label 3.x)
+    runs-on: ubuntu-latest
+    # Only meaningful on the fork this was written for.
+    if: github.repository != 'scala/scala3'
+    steps:
+      - name: Checkout scala3
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Publish Scala 3 locally
+        env:
+          SKIP_DOCS: 'yes'
+        # Just the bridge and what Zinc's scalaInstance needs; skips Scala.js.
+        run: |
+          # project/scripts/sbt runs only its first argument, so this is one `;`-separated command.
+          ./project/scripts/sbt ";scala3-sbt-bridge-bootstrapped/publishLocal; \
+            scala3-interfaces/publishLocal; \
+            scala3-compiler-bootstrapped/publishLocal; \
+            scala3-library-bootstrapped/publishLocal; \
+            scala-library-bootstrapped/publishLocal; \
+            tasty-core-bootstrapped/publishLocal; \
+            scala3-directives-parser-bootstrapped/publishLocal; \
+            scala3-repl/publishLocal; \
+            scala3-staging/publishLocal; \
+            scala3-tasty-inspector/publishLocal; \
+            scaladoc/publishLocal"
+
+      - name: Checkout zinc
+        uses: actions/checkout@v4
+        with:
+          repository: sbt/zinc
+          ref: ${{ inputs.zinc_ref || env.ZINC_PINNED_SHA }}
+          path: zinc
+
+      - name: Patch zinc
+        working-directory: zinc
+        run: git apply ../.github/zinc/zinc-scala3-bridge.patch
+
+      - name: Skip known failures
+        working-directory: zinc
+        run: |
+          # Scenario, then why it is skipped. The default label is 3.x, so label-less scenarios
+          # that were written for Scala 2 land here too. Delete a line once the scenario passes.
+          while IFS='|' read -r scenario reason; do
+            scenario=$(echo "$scenario" | xargs)
+            [ -z "$scenario" ] && continue
+            rm -r "zinc/src/sbt-test/$scenario"
+          done <<'EOF'
+          source-dependencies/constructors-unrelated-2 | Scala 3 bridge gap (zinc#1324): a third compilation round, A is recompiled after B's secondary constructor with default argument changes
+          source-dependencies/module-inheritance-extra-hash | Scala 3 bridge gap (zinc#1807): D is not recompiled when trait A's private member changes, same symptom as scala2-sbt-bridge
+          source-dependencies/empty-package | Scala 3 bridge gap: dependency a.Use -> pkgName.Test is not recorded (checkDependencies got an empty set)
+          source-dependencies/malformed-class-name-with-dollar | Scala 3 bridge gap: "Can't find source file for B.C" while compiling
+          apiinfo/main-discovery | Scala 3 bridge gap: nested main class is reported as MainScala$.StaticInner, the scenario expects MainScala.StaticInner
+          source-dependencies/compound-type-member-inheritance | Scala 2 only scenario (zinc#1803): `A with B` in a type is rejected by Scala 3, needs an `&` port
+          source-dependencies/expanded-type-projection | Scala 2 only scenario: `with` in a type
+          source-dependencies/case-classes-no-companion | Scala 2 only scenario: mixed tabs and spaces in indentation
+          source-dependencies/struct | Scala 2 only scenario: structural type Object{def x: Int} does not conform in Scala 3
+          source-dependencies/struct-usage | Scala 2 only scenario: structural type Object{def q: Int}
+          source-dependencies/remove-test-b | Scala 2 only scenario: expects Scala 2 name resolution
+          source-dependencies/compactify-nested | Scala 2 only scenario: -Xmax-classfile-name only exists in 2.12
+          reporter/warnings-reported | Scala 2 only scenario: checks the Scala 2 "fruitless type test" warning text
+          source-dependencies/binary | Scala 2 only scenario: expects a compile error scalac 2 gives and Scala 3 does not
+          source-dependencies/empty-a | Scala 2 only scenario: expects a compile error scalac 2 gives and Scala 3 does not
+          source-dependencies/import-class | Scala 2 only scenario: expects a compile error scalac 2 gives and Scala 3 does not
+          source-dependencies/naha-synthetic | Scala 2 only scenario: expects a compile error scalac 2 gives and Scala 3 does not
+          source-dependencies/implicit-params | Scala 2 only scenario: expects a compile error scalac 2 gives and Scala 3 does not
+          source-dependencies/nested-type-params | Pending in Zinc, passes on Scala 3 (scripted reports an unexpected pass)
+          source-dependencies/no-type-annotation | Pending in Zinc, passes on Scala 3 (scripted reports an unexpected pass)
+          source-dependencies/default-arguments-separate-compilation | Not triaged (zinc#1324 scenario): `run` finds no main class, so the fix is not exercised
+          general/classpath-filter | Not triaged: `run` finds no main class
+          source-dependencies/trait-private-val | Not triaged: `run` finds no main class
+          source-dependencies/trait-private-val-local-inheritance | Not triaged: `run` finds no main class
+          source-dependencies/value-class | Not triaged: `run` finds no main class
+          source-dependencies/implicit-search | Not triaged: `run` throws InvocationTargetException
+          source-dependencies/less-inter-inv | Not triaged: checkErrors
+          source-dependencies/scalac-options | Not triaged: compilation fails
+          source-dependencies/sealed | Not triaged: compilation fails
+          source-dependencies/sealed-extends-sealed | Not triaged: compilation fails
+          source-dependencies/subproject-dependency | Not triaged: checkIterations
+          source-dependencies/trait-private-val-member-ref | Not triaged: compilation fails
+          source-dependencies/typeref-only | Not triaged: compilation fails
+          source-dependencies/value-class-underlying | Not triaged: checkInvalidationLog
+          EOF
+
+      - name: Run zinc scripted tests
+        working-directory: zinc
+        run: |
+          # The version Scala 3 publishes locally, e.g. 3.10.1-RC1-bin-SNAPSHOT
+          SCALA_VERSION=$(ls ~/.ivy2/local/org.scala-lang/scala3-sbt-bridge/ | head -n1)
+          echo "Testing zinc $(git rev-parse HEAD) against Scala $SCALA_VERSION"
+          ZINC_SCRIPTED_DEFAULT_LABEL=3.x sbt -Dzinc.scala3ForBridge=$SCALA_VERSION scripted 2>&1 | tee ../scripted.log
