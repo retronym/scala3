@@ -1,0 +1,18 @@
+# integration/scala3-main, built 2026-10-15T22:37:48Z by build-integration from manifest.toml
+
+base	upstream/main	d168df2a76cf4d3a74085332da0c014cbfa2f4ac
+
+scala3#27264	refs/pull/27264/head	bd72f609bb66af5f10c3c18e8edbdf1bcfbe8a2e	clean
+scala3#27290	refs/pull/27290/head	5e9e5984ea80aeb44491014ea3e295229fc4a9fd	clean
+scala3#27297	refs/pull/27297/head	907dae7763c8c1fb8a24c8b28f2cf97dbc86ff41	clean
+rz-scala3#11	refs/pull/11/head	54abb61c21d581a241dd0aaca84bb59e01355769	clean
+
+# excluded
+rz-scala3#6	duplicate of scala3#27275
+rz-scala3#1	nestmates; conflicts in the backend, unrelated
+rz-scala3#2	performance draft
+rz-scala3#3	performance draft
+rz-scala3#4	performance draft
+rz-scala3#9	Scaladoc performance, unrelated
+rz-scala3#5	Merkle; see integration/scala3-merkle
+rz-scala3#10	Merkle; see integration/scala3-merkle
