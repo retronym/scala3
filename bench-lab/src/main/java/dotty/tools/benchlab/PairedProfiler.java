@@ -12,11 +12,13 @@ import org.openjdk.jmh.runner.IterationType;
 import java.util.*;
 
 /**
- * Time per variant for a benchmark that alternates variants within one fork ({@link IterationLog}); nothing otherwise.
+ * Time per variant for a benchmark that alternates variants within one fork ({@link IterationLog}); with
+ * {@code -Dbenchlab.cell=<dir>}, also each iteration's span and score in {@code <dir>/iterations.tsv} as it finishes.
  * JMH's own score mixes the variants. Reports, over the measurement iterations: each variant's mean score
  * ({@code paired.<variant>}, in the benchmark's unit), and for each variant but the baseline the paired difference, the
  * mean and standard deviation over cycles of {@code 100 * (variant / baseline - 1)}, where a cycle is the consecutive
- * iterations in which each variant ran once ({@code paired.<variant>.delta%}, {@code .delta%.sd}).
+ * iterations in which each variant ran once ({@code paired.<variant>.delta%}, {@code .delta%.sd}). The same again with
+ * each iteration's GC time taken out ({@code paired.gcFree.<variant>}).
  */
 public class PairedProfiler implements InternalProfiler {
     // Each result is emitted once per fork, after the last measurement iteration. Not MAX, which floors at zero and
@@ -27,6 +29,7 @@ public class PairedProfiler implements InternalProfiler {
     public record Point(IterationLog.Entry entry, double score) {}
 
     private final List<Point> points = new ArrayList<>();
+    private final List<Point> gcFree = new ArrayList<>();
     private String unit = "";
     private int seen;
 
@@ -35,19 +38,51 @@ public class PairedProfiler implements InternalProfiler {
         return "Time per variant, and paired differences, when variants alternate by iteration within the fork";
     }
 
+    // -Dbenchlab.cell=<dir> (ab.py gives it): each iteration is appended to <dir>/iterations.tsv as it finishes, warmup
+    // included, for the live timeline in ab.py's index.html (scripts/timeline.js)
+    private static final String CELL = System.getProperty("benchlab.cell");
+    private long iterationStart;
+    private int iterations;
+
     @Override
-    public void beforeIteration(BenchmarkParams bp, IterationParams ip) {}
+    public void beforeIteration(BenchmarkParams bp, IterationParams ip) { iterationStart = System.currentTimeMillis(); }
+
+    private void logIteration(IterationParams ip, IterationResult ir) {
+        if (CELL == null) return;
+        try {
+            java.nio.file.Path f = java.nio.file.Path.of(CELL, "iterations.tsv");
+            java.nio.file.Files.createDirectories(f.getParent());
+            if (iterations == 0) java.nio.file.Files.writeString(f, "index\tkind\tvariant\tstart_ms\tend_ms\tscore\tops\tgc_ms\n");
+            IterationLog.Entry e = IterationLog.paired() ? IterationLog.last() : null;
+            String row = String.join("\t", Integer.toString(iterations), ip.getType() == IterationType.MEASUREMENT ? "measure" : "warmup",
+                e == null ? "" : e.variant(), Long.toString(iterationStart), Long.toString(System.currentTimeMillis()),
+                String.format(Locale.ROOT, "%.4f", ir.getPrimaryResult().getScore()), Long.toString(ir.getMetadata().getMeasuredOps()),
+                e == null ? "" : Long.toString(e.gcMillis())) + "\n";
+            java.nio.file.Files.writeString(f, row, java.nio.file.StandardOpenOption.APPEND);
+        } catch (java.io.IOException ex) {
+            System.err.println("[bench-lab] cannot write iterations.tsv: " + ex);
+        }
+        iterations++;
+    }
 
     @Override
     public Collection<? extends Result> afterIteration(BenchmarkParams bp, IterationParams ip, IterationResult ir) {
+        logIteration(ip, ir);
         if (!IterationLog.paired()) return List.of();
         IterationLog.Entry e = IterationLog.last();
         if (e != null && ip.getType() == IterationType.MEASUREMENT) {
-            points.add(new Point(e, ir.getPrimaryResult().getScore()));
+            double score = ir.getPrimaryResult().getScore();
+            points.add(new Point(e, score));
+            // the same time per op with the iteration's GC time taken out, pro rata: separates "this variant's code is
+            // slower" from "a collection landed in this variant's iteration"
+            long span = e.endMillis() - e.startMillis();
+            if (span > 0) gcFree.add(new Point(e, score * Math.max(0, 1 - e.gcMillis() / (double) span)));
             unit = ir.getPrimaryResult().getScoreUnit();
         }
         if (ip.getType() != IterationType.MEASUREMENT || ++seen < ip.getCount()) return List.of();
-        return results(IterationLog.variants(), points, unit, "paired.");
+        List<Result> out = new ArrayList<>(results(IterationLog.variants(), points, unit, "paired."));
+        out.addAll(results(IterationLog.variants(), gcFree, unit, "paired.gcFree."));
+        return out;
     }
 
     /** Mean per variant, and paired differences against the first variant, from per-iteration values. */
@@ -75,7 +110,13 @@ public class PairedProfiler implements InternalProfiler {
             double d = mean(deltas), sd = sd(deltas, d);
             out.add(new ScalarResult(prefix + v + ".delta%", d, "%", POLICY));
             out.add(new ScalarResult(prefix + v + ".delta%.sd", sd, "%", POLICY));
-            log.append(String.format(" (%+.2f%% ± %.2f, %d pairs)", d, sd, deltas.size()));
+            // the median shrugs off a few disturbed cycles (a preempted iteration loses up to 10% of its sampled counts)
+            List<Double> sorted = new ArrayList<>(deltas);
+            Collections.sort(sorted);
+            int m = sorted.size();
+            double median = m % 2 == 1 ? sorted.get(m / 2) : (sorted.get(m / 2 - 1) + sorted.get(m / 2)) / 2;
+            out.add(new ScalarResult(prefix + v + ".delta%.median", median, "%", POLICY));
+            log.append(String.format(" (%+.2f%% ± %.2f, median %+.2f%%, %d pairs)", d, sd, median, deltas.size()));
         }
         System.out.println(log);
         return out;
