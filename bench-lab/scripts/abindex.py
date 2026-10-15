@@ -28,6 +28,7 @@ def cell_row(spec, corpus, variant, cell):
     m = r.get("secondaryMetrics", {})
     cyc = m.get("xctrace.CORE_ACTIVE_CYCLE", {}).get("score")
     ins = m.get("xctrace.INST_ALL", {}).get("score")
+    alloc = m.get("gc.alloc.rate.norm", {}).get("score")
     scalac = r.get("params", {}).get("scalacOptions", "")
     flags = " ".join([a for a in r["jvmArgs"] if a.startswith("-Ddotty.")] + ([scalac] if scalac else []))
     graphs = ""
@@ -48,13 +49,13 @@ def cell_row(spec, corpus, variant, cell):
     html_row = (f'<tr data-corpus="{esc(corpus)}" data-profiled="{1 if graphs else 0}">'
                 f"<td>{esc(corpus)}</td><td>{esc(variant)} #{esc(os.path.basename(cell))}</td>"
                 f"<td>{p['score']:.0f} ± {p['scoreError']:.0f}</td><td>{f'{cyc / 1e9:.2f}G' if cyc else ''}</td>"
-                f"<td>{f'{ins / 1e9:.3f}G' if ins else ''}</td>"
+                f"<td>{f'{ins / 1e9:.3f}G' if ins else ''}</td><td>{f'{alloc / 1e6:.2f} MB' if alloc else ''}</td>"
                 f"<td><code>{esc(flags) or '(none)'}</code></td><td class=\"when\">{stamp(when)}</td><td>{graphs}</td></tr>")
-    return html_row, when, corpus, (variant, p["score"], cyc, ins)
+    return html_row, when, corpus, (variant, p["score"], cyc, ins, alloc)
 
 
 def summary(name, cells):
-    """Per corpus and variant: mean ms/op, cycles/op and instructions/op over rounds, each against the spec's first
+    """Per corpus and variant: mean ms/op, cycles/op, instructions/op and allocation/op over rounds, each against the spec's first
     variant (spec variant order if bench-lab/ab/<name>.json exists, else alphabetical)."""
     spec_f = os.path.join(REPO, "bench-lab", "ab", f"{name}.json")
     order = list(json.load(open(spec_f)).get("variants", {})) if os.path.exists(spec_f) else []
@@ -69,11 +70,12 @@ def summary(name, cells):
             mean = sum(xs) / len(xs)
             sd = (sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5 if len(xs) > 1 else 0.0
             return mean, sd
-        base = {k: stats([c[i] for c in vs[names[0]]])[0] for i, k in ((1, "ms"), (2, "cyc"), (3, "ins"))}
+        base = {k: stats([c[i] for c in vs[names[0]]])[0] for i, k in ((1, "ms"), (2, "cyc"), (3, "ins"), (4, "alloc"))}
         for v in names:
             cs = vs[v]
             tds = [f"<td>{esc(corpus)}</td><td>{esc(v)}</td><td>{len(cs)}</td>"]
-            for i, k, fmt in ((1, "ms", lambda x: f"{x:.0f}"), (2, "cyc", lambda x: f"{x / 1e9:.3f}G"), (3, "ins", lambda x: f"{x / 1e9:.3f}G")):
+            for i, k, fmt in ((1, "ms", lambda x: f"{x:.0f}" if x >= 100 else f"{x:.1f}"), (2, "cyc", lambda x: f"{x / 1e9:.3f}G"),
+                              (3, "ins", lambda x: f"{x / 1e9:.3f}G"), (4, "alloc", lambda x: f"{x / 1e6:.2f} MB")):
                 mean, sd = stats([c[i] for c in cs])
                 if mean is None:
                     tds.append("<td></td><td></td>"); continue
@@ -82,7 +84,7 @@ def summary(name, cells):
                 tds.append(f"<td>{fmt(mean)}{rel_sd}</td><td>{d}</td>")
             out.append("<tr>" + "".join(tds) + "</tr>")
     return ("<table class=\"summary\"><tr><th>corpus</th><th>variant</th><th>n</th><th>ms/op</th><th>Δ</th><th>cycles/op</th><th>Δ</th>"
-            "<th>instructions/op</th><th>Δ</th></tr>" + "".join(out) + "</table>") if out else ""
+            "<th>instructions/op</th><th>Δ</th><th>alloc/op</th><th>Δ</th></tr>" + "".join(out) + "</table>") if out else ""
 
 
 def stamp(t):
@@ -147,7 +149,7 @@ for spec_dir in glob.glob(os.path.join(root, "*/")):
     span = f"{stamp(min(whens))} – {stamp(last)}" if whens else stamp(last)
     has_notes = os.path.exists(os.path.join(spec_dir, "NOTES.md"))
     sections.append((last, f"""<section data-last="{last:.0f}" data-notes="{1 if has_notes else 0}"><h2>{esc(name)} <span class="when">{span}</span></h2>{notes(os.path.join(spec_dir, "NOTES.md"))}{diff_html}{summary(name, cells)}
-<table><tr><th>corpus</th><th>variant</th><th>ms/op</th><th>cycles/op (xctrace)</th><th>instructions/op</th><th>flags</th><th>finished</th><th>flame graphs</th></tr>{''.join(rows)}</table></section>"""))
+<table><tr><th>corpus</th><th>variant</th><th>ms/op</th><th>cycles/op (xctrace)</th><th>instructions/op</th><th>alloc/op</th><th>flags</th><th>finished</th><th>flame graphs</th></tr>{''.join(rows)}</table></section>"""))
 sections = [h for _, h in sorted(sections, key=lambda x: -x[0])]
 options = "".join(f'<option value="{esc(v)}">{esc(l)}</option>' for _, v, l in sorted(timeline_cells, reverse=True))
 chips = "".join(f'<button class="chip" data-corpus="{esc(c)}">{esc(c)}</button>' for c in sorted(all_corpora))

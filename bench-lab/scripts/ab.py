@@ -277,6 +277,7 @@ def run(spec, dry):
                 f.write(prof)
         s = summary(json.load(open(os.path.join(dest, "result.json")))[0])
         log(f"  {s['ms']:.0f} ± {s['err']:.0f} ms/op" + (f", {s['cyc'] / 1e9:.2f}G cycles/op" if s.get("cyc") else "")
+            + (f", {s['alloc'] / 1e6:.2f} MB/op" if s.get("alloc") else "")
             + (f", other load {load:.2f} cores" if spec.loadgate else ""))
 
 
