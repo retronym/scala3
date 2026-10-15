@@ -123,6 +123,7 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     private void start(BenchmarkParams bp) {
+        benchThread = nativeName(bp.getBenchmark() + "-jmh-worker-");
         String name = bp.getBenchmark().replaceAll(".*\\.", "") + "-" + ProcessHandle.current().pid();
         trace = dir.resolve(name + ".trace");
         try {
@@ -196,9 +197,21 @@ public class XctraceProfiler implements InternalProfiler {
         return results;
     }
 
+    // the native name of this benchmark's JMH workers as the trace shows it: "Java: <benchmark>-jmh-worker-", cut to
+    // macOS's 63-byte limit, which can drop the "-jmh-worker" suffix of a long benchmark name
+    static volatile String benchThread;
+
+    static String nativeName(String javaName) {
+        byte[] b = ("Java: " + javaName).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int n = Math.min(b.length, 63);
+        while (n > 0 && n < b.length && (b[n] & 0xC0) == 0x80) n--;   // don't split a UTF-8 sequence
+        return new String(b, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     static String group(String threadFmt) {
         String t = threadFmt == null ? "" : threadFmt;
-        if (t.contains("jmh-worker")) return "bench";
+        String bench = benchThread;
+        if (t.contains("jmh-worker") || bench != null && t.contains(bench)) return "bench";
         if (t.contains("CompilerThread")) return "jit";
         if (t.contains("GC Thread") || t.contains("G1 ") || t.contains("GC ")) return "gc";
         return "other";
