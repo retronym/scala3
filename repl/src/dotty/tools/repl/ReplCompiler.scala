@@ -137,7 +137,7 @@ class ReplCompiler extends Compiler:
                 .info.member(wrapperName).symbol
               if wrapperSym.exists then
                 val fields = wrapperSym.info.fields
-                  .filterNot(_.symbol.isOneOf(ParamAccessor | Private | Synthetic | Artifact | Module))
+                  .filterNot(_.symbol.isOneOf((ParamAccessor | Private | Synthetic | Artifact | Module).toTermFlags))
                   .filter(_.symbol.name.is(SimpleNameKind))
                 fields.lastOption match
                   case Some(field) => Right(field.symbol.info.widen.show)

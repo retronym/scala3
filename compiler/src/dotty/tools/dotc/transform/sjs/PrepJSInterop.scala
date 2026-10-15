@@ -959,7 +959,7 @@ class PrepJSInterop extends MacroTransform with IdentityDenotTransformer { thisP
         }
       } else { // enclosingOwner isnt OwnerKind.JSNonNative
         // Check that the rhs is valid
-        if (sym.isPrimaryConstructor || sym.isOneOf(Param | ParamAccessor | Deferred | Synthetic)
+        if (sym.isPrimaryConstructor || sym.isOneOf((Param | ParamAccessor | Deferred | Synthetic).toTermFlags)
             || sym.name.is(DefaultGetterName) || sym.isSetter) {
           /* Ignore, i.e., allow:
            * - primary constructor

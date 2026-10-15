@@ -182,7 +182,7 @@ class CheckRealizable(using Context) {
   private def memberRealizability(tp: Type) = {
     def checkField(sofar: Realizability, fld: SingleDenotation): Realizability =
       sofar andAlso {
-        if (checkedFields.contains(fld.symbol) || fld.symbol.isOneOf(Private | Mutable | Lazy))
+        if (checkedFields.contains(fld.symbol) || fld.symbol.isOneOf((Private | Mutable | Lazy).toTermFlags))
           // if field is private it cannot be part of a visible path
           // if field is mutable it cannot be part of a path
           // if field is lazy or erased it does not need to be initialized when the owning object is

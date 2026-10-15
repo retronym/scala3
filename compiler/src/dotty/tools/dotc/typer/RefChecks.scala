@@ -130,7 +130,7 @@ object RefChecks {
       checkSelfAgainstParents(cls.asClass, psyms)
 
       def isClassExtendingJavaEnum =
-        !cls.isOneOf(Enum | Trait) && psyms.contains(defn.JavaEnumClass)
+        !cls.isOneOf((Enum | Trait).toTypeFlags) && psyms.contains(defn.JavaEnumClass)
 
       // Prevent wrong `extends` of java.lang.Enum
       if isClassExtendingJavaEnum then
@@ -904,12 +904,12 @@ object RefChecks {
           if (!seenClasses.contains(cls)) {
             seenClasses += cls
             for (mbr <- cls.info.decls)
-              if (mbr.isTerm && !mbr.isOneOf(Synthetic | Bridge) && mbr.memberCanMatchInheritedSymbols &&
+              if (mbr.isTerm && !mbr.isOneOf((Synthetic | Bridge).toTermFlags) && mbr.memberCanMatchInheritedSymbols &&
                   !membersToCheck.contains(mbr.name))
                 membersToCheck += mbr.name
             cls.info.parents.map(_.classSymbol)
               .filter(_.isOneOf(AbstractOrTrait))
-              .dropWhile(_.isOneOf(JavaDefined | Scala2x))
+              .dropWhile(_.isOneOf((JavaDefined | Scala2x).toTypeFlags))
               .foreach(addDecls)
           }
         addDecls(clazz)
@@ -1240,7 +1240,7 @@ object RefChecks {
         && sym.exists && sym.owner.isClass
         && !sym.owner.isAnonymousClass
         && !sym.owner.name.isReplWrapperName
-        && !sym.isOneOf(JavaOrPrivateOrSynthetic | InlineProxy | Param | Exported) then
+        && !sym.isOneOf((JavaOrPrivateOrSynthetic | InlineProxy | Param | Exported).toTermFlags) then
       val resTp = sym.info.finalResultType
       if resTp.existsPart(FlexibleType.isInstance(_), StopAt.Static) then
         report.warning(
