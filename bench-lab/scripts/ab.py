@@ -19,6 +19,7 @@ A spec (paths relative to the repository root):
     "variantJmhArgs": {"U": "-p scalacOptions=-Yno-check-positions"},  # optional: extra JMH arguments per variant
     "loadgate": {"maxCores": 1.5, "quietSecs": 30},   # optional, see loadgate.py
     "historical": "<why>",                            # optional: the spec is kept for its results; `run` refuses it
+    "gcLog": true,                                    # optional: gc.log per cell, shown in its timeline.html
     "paired": {"base": "-Yno-prime-spans", "prime": ""}  # optional, instead of variants: scalacOptions per variant,
                                                       # alternating by iteration within each fork (doc/paired-ab.md)
   }
@@ -31,7 +32,7 @@ Why `jvmArgs` goes to every variant: JMH's `-jvmArgsAppend` on the command line 
 the benchmark rather than adding to it, so a variant given only its flags silently loses the benchmark's heap
 settings, while a baseline given nothing keeps them. Each run's `jvmArgs` in result.json is checked against the spec.
 """
-import glob, json, os, re, shlex, shutil, subprocess, sys, time
+import atexit, glob, json, os, re, shlex, shutil, subprocess, sys, time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +64,7 @@ class Spec:
                 sys.exit("paired: JMH splits parameter values at commas; options cannot contain one")
             self.variant_jmh_args = {"paired": f'-p "variants={spec}"'}
         self.loadgate = s.get("loadgate")
+        self.gc_log = s.get("gcLog", False)  # -Xlog:gc to <cell>/gc.log, wall-clock stamped, for the cell's timeline
         self.historical = s.get("historical")  # why the spec no longer measures what its names say; report only
         self.out = os.path.join(REPO, "out", "ab", self.name)
 
@@ -82,8 +84,11 @@ class Spec:
             return os.path.join(REPO, "out", "bench-lab", p["xctrace"])
         return os.path.join(REPO, "out", "bench-lab", f"async-{p['async']}({tag})")
 
-    def command(self, corpus, iters, variant, flags, tag):
-        jvm_args = " ".join(x for x in [self.jvm_args, flags] if x)
+    def command(self, corpus, iters, variant, flags, tag, dest=None):
+        gc = f"-Xlog:gc:file={dest}/gc.log:time,uptime" if self.gc_log and dest else ""
+        # the fork appends its iterations to <dest>/iterations.tsv as they finish (PairedProfiler), for the live timeline
+        cell = f"-Dbenchlab.cell={dest}" if dest else ""
+        jvm_args = " ".join(x for x in [self.jvm_args, flags, gc, cell] if x)
         jvm = f"-jvm {self.jvm} " if self.jvm else ""
         extra = self.variant_jmh_args.get(variant, "")
         jmh = f'{jvm}-p corpus={corpus} {iters} {extra + " " if extra else ""}-jvmArgsAppend "{jvm_args}" {self.benchmark}'
@@ -106,6 +111,22 @@ def sbt_server_pid():
         return None
     out = subprocess.run(["lsof", "-t", uri.removeprefix("local://")], capture_output=True, text=True).stdout.split()
     return int(out[0]) if out else None
+
+
+RUNNING = os.path.join(REPO, "out", "ab", "running.json")
+
+
+def set_running(spec, dest):
+    """out/ab/running.json names the cell being run (index.html's timeline follows it); then index.html is rebuilt, so
+    the page picks up new cells and results without anyone rerunning abindex.py."""
+    if dest:
+        os.makedirs(os.path.dirname(RUNNING), exist_ok=True)
+        json.dump({"campaign": spec.name, "cell": os.path.relpath(dest, os.path.dirname(RUNNING)), "started": time.time()},
+                  open(RUNNING, "w"))
+        atexit.register(lambda: set_running(spec, None))
+    elif os.path.exists(RUNNING):
+        os.unlink(RUNNING)
+    subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "abindex.py")], capture_output=True)
 
 
 def wait_until_quiet(spec):
@@ -197,8 +218,8 @@ def run(spec, dry):
     log(f"{spec.name}: {len(cells)} cells, {len(todo)} to run")
     for r, corpus, iters, variant, flags in todo:
         tag = f"{spec.name}-{corpus}-{variant}-{r}"
-        cmd = spec.command(corpus, iters, variant, flags, tag)
         dest = spec.cell_dir(corpus, variant, r)
+        cmd = spec.command(corpus, iters, variant, flags, tag, dest)
         if dry:
             print(f"{dest}:\n  sbt --client '{cmd}'")
             continue
@@ -209,6 +230,7 @@ def run(spec, dry):
                 shutil.rmtree(prof)  # shared between runs: start clean so nothing stale is picked up
             os.makedirs(dest, exist_ok=True)
             log(f"round {r} {corpus} {variant}" + (f" (attempt {attempt})" if attempt > 1 else ""))
+            set_running(spec, dest)
             started = time.time()
             load_tsv = os.path.join(dest, "load.tsv")
             sampler = start_load_sampler(spec, load_tsv)
@@ -240,8 +262,16 @@ def run(spec, dry):
             sys.exit(f"{dest}: {problem}")
         # keep the small files with the cell; async profiles (JFR, flame graphs) stay where bench-lab's indexes expect them
         for f in glob.glob(os.path.join(prof, "*")):
-            if f.endswith((".json", ".log", ".methods.txt")):
+            if f.endswith((".json", ".log", ".methods.txt", ".threads.txt", ".tsv")):
                 shutil.copy(f, dest)
+        for f in glob.glob(os.path.join(dest, "*.timeline.tsv")):
+            shutil.copy(f, os.path.join(dest, "timeline.tsv"))
+        if not os.path.exists(os.path.join(dest, "iterations.tsv")):
+            for f in glob.glob(os.path.join(dest, "*.iterations.tsv")):
+                shutil.copy(f, os.path.join(dest, "iterations.tsv"))
+        if os.path.exists(os.path.join(dest, "iterations.tsv")):
+            subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "timeline.py"), dest], capture_output=True)
+        set_running(spec, None)
         if "async" in spec.profile:
             with open(os.path.join(dest, "profile-dir"), "w") as f:
                 f.write(prof)
@@ -267,9 +297,10 @@ def report_paired(spec):
     mean within each fork, then the mean and spread of those over forks)."""
     names = list(spec.paired)
     print(f"### {spec.name} (paired within forks: {', '.join(names)})\n")
-    metrics = [("time", "paired.{}", 1, "{:.1f}"), ("instructions/op", "xctrace.INST_ALL.{}", 1e9, "{:.3f}G"),
+    metrics = [("time", "paired.{}", 1, "{:.1f}"), ("time excl. GC", "paired.gcFree.{}", 1, "{:.1f}"),
+               ("instructions/op", "xctrace.INST_ALL.{}", 1e9, "{:.3f}G"),
                ("cycles/op", "xctrace.CORE_ACTIVE_CYCLE.{}", 1e9, "{:.3f}G")]
-    print("| corpus | variant | forks | " + " | ".join(f"{m} | Δ (paired) | Δ per fork" for m, *_ in metrics) + " |")
+    print("| corpus | variant | forks | " + " | ".join(f"{m} | Δ (paired) | Δ per fork (median)" for m, *_ in metrics) + " |")
     print("|---|---|---|" + "---|---|---|" * len(metrics))
     for corpus in spec.corpora:
         cells = []
@@ -284,12 +315,14 @@ def report_paired(spec):
             for _, key, scale, fmt in metrics:
                 vals = [c[key.format(v)]["score"] for c in cells if key.format(v) in c]
                 ds = [c[key.format(v) + ".delta%"]["score"] for c in cells if key.format(v) + ".delta%" in c]
+                meds = [c[key.format(v) + ".delta%.median"]["score"] for c in cells if key.format(v) + ".delta%.median" in c]
                 m = mean(vals)
                 tds.append(fmt.format(m / scale) if m is not None else "–")
                 if ds:
                     d = mean(ds)
                     sd = (sum((x - d) ** 2 for x in ds) / (len(ds) - 1)) ** 0.5 if len(ds) > 1 else 0.0
-                    tds += [f"{d:+.2f}% ± {sd:.2f}", " ".join(f"{x:+.2f}" for x in ds)]
+                    per = " ".join(f"{x:+.2f}" + (f" ({md:+.2f})" if len(meds) == len(ds) else "") for x, md in zip(ds, meds or ds))
+                    tds += [f"{d:+.2f}% ± {sd:.2f}", per]
                 else:
                     tds += ["", ""]
             print(f"| {corpus} | {v} | {len(cells)} | " + " | ".join(tds) + " |")

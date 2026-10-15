@@ -41,6 +41,9 @@ def cell_row(spec, corpus, variant, cell):
                 ks = " · ".join(link(regraph.graph_path(jfr, label, k), k) for k in regraph.KINDS)
                 parts.append(f"<b>{esc(label.removeprefix('hw-'))}</b>: {ks}")
             graphs = "<br>".join(parts)
+    tl = os.path.join(cell, "timeline.html")
+    if os.path.exists(tl):
+        graphs = link(tl, "timeline") + ("<br>" + graphs if graphs else "")
     when = os.path.getmtime(res_f)
     html_row = (f'<tr data-corpus="{esc(corpus)}" data-profiled="{1 if graphs else 0}">'
                 f"<td>{esc(corpus)}</td><td>{esc(variant)} #{esc(os.path.basename(cell))}</td>"
@@ -111,8 +114,11 @@ def notes(path):
     return f'<div class="notes">{md(open(path).read())}</div>' if os.path.exists(path) else ""
 
 
+import timeline
+
 sections = []
 all_corpora = set()
+timeline_cells = []  # (mtime, value, label) of cells with an iterations.tsv, for the timeline panel
 for spec_dir in glob.glob(os.path.join(root, "*/")):
     name = os.path.basename(spec_dir.rstrip("/"))
     rows, whens, corpora, cells = [], [], set(), {}
@@ -124,6 +130,9 @@ for spec_dir in glob.glob(os.path.join(root, "*/")):
             variant = os.path.basename(variant_dir.rstrip("/"))
             for cell in sorted(glob.glob(os.path.join(variant_dir, "*"))):
                 if os.path.isdir(cell) and os.path.basename(cell).isdigit():
+                    if os.path.exists(os.path.join(cell, "iterations.tsv")):
+                        timeline_cells.append((os.path.getmtime(os.path.join(cell, "iterations.tsv")), os.path.relpath(cell, root) + "/",
+                                               f"{name} · {corpus} · {variant} #{os.path.basename(cell)}"))
                     row = cell_row(name, corpus, variant, cell)
                     if row:
                         rows.append(row[0]); whens.append(row[1]); corpora.add(row[2])
@@ -140,6 +149,7 @@ for spec_dir in glob.glob(os.path.join(root, "*/")):
     sections.append((last, f"""<section data-last="{last:.0f}" data-notes="{1 if has_notes else 0}"><h2>{esc(name)} <span class="when">{span}</span></h2>{notes(os.path.join(spec_dir, "NOTES.md"))}{diff_html}{summary(name, cells)}
 <table><tr><th>corpus</th><th>variant</th><th>ms/op</th><th>cycles/op (xctrace)</th><th>instructions/op</th><th>flags</th><th>finished</th><th>flame graphs</th></tr>{''.join(rows)}</table></section>"""))
 sections = [h for _, h in sorted(sections, key=lambda x: -x[0])]
+options = "".join(f'<option value="{esc(v)}">{esc(l)}</option>' for _, v, l in sorted(timeline_cells, reverse=True))
 chips = "".join(f'<button class="chip" data-corpus="{esc(c)}">{esc(c)}</button>' for c in sorted(all_corpora))
 
 extra = [p for p in (os.path.join(REPO, "out", "bench-lab", "uniques-corpora.html"), os.path.join(REPO, "out", "bench-lab", "index.html")) if os.path.exists(p)]
@@ -157,7 +167,9 @@ table{{border-collapse:collapse}} td,th{{border:1px solid var(--line);padding:4p
 .chip{{border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:14px;padding:3px 10px;font:inherit;cursor:pointer}}
 .chip.on{{background:var(--link);color:var(--bg);border-color:var(--link)}} .sep{{width:1px;height:18px;background:var(--line);margin:0 4px}}
 #q{{border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:6px;padding:4px 8px;font:inherit;min-width:200px}}
-.hidden{{display:none}}</style>
+.hidden{{display:none}}
+#tl{{margin:0 0 16px}} #tl h2{{font-size:14px;margin:0 0 6px}} #tl select{{font:inherit;max-width:100%}} #tl .k{{color:var(--muted);font-size:12px}}
+{timeline.CSS}</style>
 
 <header class="bar"><h1>bench-lab campaigns</h1><span class="sep"></span><span>corpus:</span>{chips}<span class="sep"></span>
 <button class="chip" data-kind="profiled">profiled</button><button class="chip" data-kind="timing">timing only</button>
@@ -167,8 +179,15 @@ table{{border-collapse:collapse}} td,th{{border:1px solid var(--line);padding:4p
 <p>Newest first. bench: benchmark threads · reverse: by leaf · threads: all threads · classify: all threads by category ·
 bench-/reverse-classify: benchmark threads with --classify. Grey links are not rendered yet; reload after
 <code>regraph.py</code> finishes. Also: {" · ".join(link(p, os.path.relpath(p, os.path.join(REPO, "out"))) for p in extra)}</p>
-{notes(os.path.join(root, "FINDINGS.md"))}
-{''.join(sections)}
+<section id="tl"><h2>Fork timeline</h2>
+<div><select id="tl-cell">{options}</select> <label class="k"><input type="checkbox" id="tl-follow" checked> follow the running fork</label>
+<span class="k" id="tl-status"></span></div>
+<div class="tl-legend" id="tl-legend"></div><svg class="timeline" id="tl-chart"></svg>
+<p class="k">Iterations appear as they finish; counter lanes once the fork has finished (xctrace export). Wheel to zoom, drag to pan, double-click to reset.</p></section>
+<div class="tl-tip" id="tl-tip"></div>
+<div id="campaigns">{notes(os.path.join(root, "FINDINGS.md"))}
+{''.join(sections)}</div>
+<script>{timeline.script()}</script>
 <script>
 const chips = [...document.querySelectorAll('.chip')];
 chips.forEach(c => c.onclick = () => {{ c.classList.toggle('on'); apply(); }});
@@ -192,6 +211,39 @@ function apply() {{
     sec.classList.toggle('hidden', !show);
   }}
 }}
+// live: the timeline follows the running fork (out/ab/running.json, written by ab.py) and polls its files; the
+// campaign tables are refetched from this page, which ab.py rebuilds around every cell
+const tl = BenchTimeline.mount(document.getElementById('tl-chart'), document.getElementById('tl-legend'), document.getElementById('tl-tip'));
+const sel = document.getElementById('tl-cell'), follow = document.getElementById('tl-follow'), status = document.getElementById('tl-status');
+let shown = null, running = null;
+sel.onchange = () => {{ follow.checked = false; tick(); }};
+async function tick() {{
+  try {{ const r = await fetch('running.json', {{cache: 'no-store'}}); running = r.ok ? await r.json() : null; }} catch (e) {{ running = null; }}
+  if (follow.checked && running) {{
+    const v = running.cell.replace(/\\/?$/, '/');
+    if (![...sel.options].some(o => o.value === v)) sel.add(new Option('running: ' + running.cell, v), 0);
+    sel.value = v;
+  }}
+  if (!sel.value) return;
+  if (sel.value !== shown) {{ tl.reset(); shown = sel.value; }}
+  tl.set(await BenchTimeline.fetchCell(sel.value));
+  status.textContent = running && running.cell.replace(/\\/?$/, '/') === sel.value
+    ? `running since ${{new Date(running.started * 1000).toLocaleTimeString()}}` : (running ? `running: ${{running.cell}}` : 'nothing running');
+}}
+async function refreshTables() {{
+  try {{
+    const r = await fetch(location.pathname.endsWith('/') ? 'index.html' : location.pathname, {{cache: 'no-store'}});
+    if (!r.ok) return;
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    document.getElementById('campaigns').innerHTML = doc.getElementById('campaigns').innerHTML;
+    const keep = sel.value;
+    sel.innerHTML = doc.getElementById('tl-cell').innerHTML;
+    if (keep && ![...sel.options].some(o => o.value === keep)) sel.add(new Option(keep, keep), 0);
+    sel.value = keep;
+    apply();
+  }} catch (e) {{}}
+}}
+tick(); setInterval(tick, 5000); setInterval(refreshTables, 20000);
 </script>"""
 out = os.path.join(root, "index.html")
 open(out, "w").write(page)

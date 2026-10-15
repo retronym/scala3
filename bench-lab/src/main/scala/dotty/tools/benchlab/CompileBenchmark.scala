@@ -26,13 +26,18 @@ class CompileBenchmark:
   var context: String = compiletime.uninitialized
 
   /** Variants compared within the fork, `<name>=<scalacOptions>|<name>=<scalacOptions>...`, the first the baseline
-   *  (see `doc/paired-ab.md`). Each iteration, warmup included, runs the next variant in turn (reversing the order
-   *  every other cycle), so the variants share
+   *  (see `doc/paired-ab.md`). Each iteration, warmup included, runs the next variant in turn, the order changing
+   *  from cycle to cycle (`CompileBenchmark.order`), so the variants share
    *  the fork's compiled code; `PairedProfiler` and `XctraceProfiler` report per variant. The options add to
    *  `scalacOptions`, and must be settings the compiler reads per run. JMH splits parameter values at commas: none here.
    */
   @Param(Array(""))
   var variants: String = compiletime.uninitialized
+
+  /** With `variants`: a full collection before each iteration (outside the measured region), so each starts from a
+   *  similar heap and fewer collections land in one variant's iterations by where it sits in a cycle. */
+  @Param(Array("false"))
+  var gcBetweenIterations: Boolean = false
 
   private var compiler: InMemoryCompiler = compiletime.uninitialized
   private var alternatives: Array[(String, InMemoryCompiler)] = Array()
@@ -63,11 +68,9 @@ class CompileBenchmark:
   @Setup(Level.Iteration)
   def nextVariant(ip: IterationParams): Unit =
     if alternatives.nonEmpty then
-      // ABBA: every other cycle runs the variants in reverse, so each holds each position in a cycle equally often
-      // (in an A/A check the second of two identical variants ran 0.1-0.3% fewer cycles)
       val n = alternatives.length
-      val pos = iteration % n
-      val (name, c) = alternatives(if (iteration / n) % 2 == 0 then pos else n - 1 - pos)
+      val (name, c) = alternatives(CompileBenchmark.order(n, iteration / n)(iteration % n))
+      if gcBetweenIterations then System.gc()
       compiler = c
       iteration += 1
       IterationLog.begin(name, ip.getType == IterationType.MEASUREMENT)
@@ -77,6 +80,21 @@ class CompileBenchmark:
 
   @Benchmark
   def compile(): Unit = compiler.compile()
+
+object CompileBenchmark:
+  /** The order of `n` variants in cycle `k`: the rows of a Williams design, so over a whole number of its rows (`n`
+   *  for even `n`, `2n` for odd) each variant runs in each position equally often, and right after each other variant
+   *  equally often. A fixed order put one variant always after the same one and always at the same point in the heap's
+   *  fill, where collections land (a 4-variant run measured 2% for a variant whose instructions fell 2.4%); A B, B A
+   *  for two variants.
+   */
+  def order(n: Int, k: Int): IndexedSeq[Int] =
+    // first row 0, 1, n-1, 2, n-2, ...; row r adds r; for odd n, the reversed rows too
+    val first = (0 until n).map(i => if i == 0 then 0 else if i % 2 == 1 then (i + 1) / 2 else n - i / 2)
+    val rows = if n % 2 == 0 then n else 2 * n
+    val r = k % rows
+    val row = first.map(x => (x + r % n) % n)
+    if r >= n then row.reverse else row
 
 /** Compiles a corpus repeatedly outside JMH, printing each run's time, e.g. to attach a profiler or Instruments. */
 object CompileLoop:

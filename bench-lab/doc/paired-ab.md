@@ -45,4 +45,7 @@ One fork per variant lands about 3% off. Whether the mean or the median is used 
 
 A/A check (`ab/paired-aa.json`: dottyUtil, two identical variants, 3 forks of 12 × 3 s, before the order reversal): instructions/op paired difference +0.18% ± 0.51 over forks (−0.19, +0.76, −0.04), against about 1% between the forks' own means; within a quiet fork the per-cycle spread was 0.6–0.7%, in a fork with a core of other load 7%. Cycles/op came out −0.12% to −0.31% for the second variant in every fork: an order effect, hence the reversal every other cycle.
 
+Second A/A check, with the order reversed every other cycle: instructions/op +0.08, +0.77 and +4.07% per fork. The third fork ran with about a core of other load, and its slow iterations (160–173 ms/op against 140) counted 1.60–1.63G instructions/op against 1.73–1.80G: xctrace credits each core's counter delta since its last sample to the thread running at the sample, so a preempted benchmark thread loses part of its counts to whoever replaced it. Pairing removes the fork's JIT luck, not the machine's noise: paired counters need a quiet machine (a load gate below one core), and the median of the per-cycle differences (`.delta%.median`) is reported beside the mean. Exact per-thread counting (the kperf helper's per-thread deltas) would remove this attribution error.
+
 - TODO 4. `abindex.py`: paired campaigns in the summary table.
+- TODO 5. Exact per-thread counts per iteration (kperf `-t`), instead of xctrace's sampled attribution.

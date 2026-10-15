@@ -69,6 +69,9 @@ public class XctraceProfiler implements InternalProfiler {
     // when variants alternate within the fork (IterationLog): each measured iteration's ops, by its log index, and the
     // trace's start by the wall clock, to assign samples to iterations by their sample time
     private final Map<Integer, Long> opsByIteration = new HashMap<>();
+    // every iteration, warmup included, for <trace>.iterations.tsv: the timeline's iteration lane
+    private final List<String> iterationRows = new ArrayList<>();
+    private long iterationStart;
     private long traceStartMillis = -1;
     private long sampleUs = 1000;
     private final int top;
@@ -96,14 +99,19 @@ public class XctraceProfiler implements InternalProfiler {
 
     @Override
     public void beforeIteration(BenchmarkParams bp, IterationParams ip) {
+        iterationStart = System.currentTimeMillis();
         if (ip.getType() == IterationType.MEASUREMENT && proc == null) start(bp);
     }
 
     @Override
     public Collection<? extends Result> afterIteration(BenchmarkParams bp, IterationParams ip, IterationResult ir) {
+        IterationLog.Entry last = IterationLog.last();
+        iterationRows.add(String.join("\t", Integer.toString(iterationRows.size()), ip.getType() == IterationType.MEASUREMENT ? "measure" : "warmup",
+                last != null && IterationLog.paired() ? last.variant() : "", Long.toString(iterationStart), Long.toString(System.currentTimeMillis()),
+                String.format(Locale.ROOT, "%.4f", ir.getPrimaryResult().getScore()), Long.toString(ir.getMetadata().getMeasuredOps()),
+                last != null && IterationLog.paired() ? Long.toString(last.gcMillis()) : ""));
         if (ip.getType() != IterationType.MEASUREMENT || proc == null) return List.of();
         ops += ir.getMetadata().getMeasuredOps();
-        IterationLog.Entry last = IterationLog.last();
         if (IterationLog.paired() && last != null) opsByIteration.put(last.index(), ir.getMetadata().getMeasuredOps());
         if (++seen < ip.getCount()) return List.of();
         try {
@@ -205,20 +213,30 @@ public class XctraceProfiler implements InternalProfiler {
         List<IterationLog.Entry> measured = IterationLog.paired() && traceStartMillis > 0
             ? IterationLog.entries().stream().filter(IterationLog.Entry::measured).toList() : List.of();
         Map<Integer, long[]> byIteration = new HashMap<>();
+        int cycIdx = events.indexOf("CORE_ACTIVE_CYCLE"), insIdx = events.indexOf("INST_ALL");
+        TreeMap<Long, long[]> timeline = new TreeMap<>();  // bin start (wall ms) -> cycles, instructions per lane
         rows(table, row -> {
             String[] t = row.get("thread");
             String[] m = row.get("pmc-events");
             String[] bt = row.containsKey("tagged-backtrace") ? row.get("tagged-backtrace") : row.get("backtrace");
-            if (t == null || m == null || m[1] == null) return;
-            if (t[0] == null || !t[0].contains(SELF)) return;
+            if (t == null || m == null || m[1] == null || t[0] == null) return;
             String[] xs = m[1].trim().split("\\s+");
             if (xs.length != events.size()) return;
+            boolean ours = t[0].contains(SELF);
+            String[] st = row.get("sample-time");
+            if (traceStartMillis > 0 && cycIdx >= 0 && st != null && st[1] != null) {
+                long wall = traceStartMillis + Long.parseLong(st[1].trim()) / 1_000_000;
+                int lane = ours ? LANES.indexOf(group(t[0])) : LANES.size() - 1;
+                long[] b = timeline.computeIfAbsent(wall / BIN_MS * BIN_MS, k -> new long[2 * LANES.size()]);
+                b[2 * lane] += Long.parseLong(xs[cycIdx]);
+                if (insIdx >= 0) b[2 * lane + 1] += Long.parseLong(xs[insIdx]);
+            }
+            if (!ours) return;
             String g = group(t[0]);
             long[] s = sums.computeIfAbsent(g, k -> new long[events.size()]);
             for (int i = 0; i < xs.length; i++) s[i] += Long.parseLong(xs[i]);
             samples.merge(g, 1, Integer::sum);
             if (!measured.isEmpty() && g.equals("bench")) {
-                String[] st = row.get("sample-time");
                 IterationLog.Entry it = st == null || st[1] == null ? null : iterationAt(measured, traceStartMillis + Long.parseLong(st[1].trim()) / 1_000_000);
                 if (it != null) {
                     long[] c = byIteration.computeIfAbsent(it.index(), k -> new long[events.size()]);
@@ -236,6 +254,7 @@ public class XctraceProfiler implements InternalProfiler {
         });
         if (perfMap != null) attribution(byLeaf, events);
         threads(byThread, events);
+        writeTimeline(timeline);
         if (!measured.isEmpty()) out.addAll(perVariant(measured, byIteration, events));
         long[] bench = sums.getOrDefault("bench", new long[events.size()]);
         out.add(new ScalarResult("xctrace.bench.oncpu", samples.getOrDefault("bench", 0) * sampleUs / 1e6, "s", POLICY));
@@ -263,6 +282,27 @@ public class XctraceProfiler implements InternalProfiler {
     }
 
     /** Writes, per event, the methods that were running when it counted; prints the top few to the fork's stderr. */
+    // the timeline's lanes: this JVM's thread groups, then every other process in the trace
+    static final List<String> LANES = List.of("bench", "jit", "gc", "other", "processes");
+    static final long BIN_MS = 50;
+
+    /** `<trace>.iterations.tsv` (every iteration: index, kind, variant, start and end by the wall clock in ms, score,
+     *  ops, GC pause ms) and `<trace>.timeline.tsv` (per 50 ms bin by the wall clock: cycles and instructions of each
+     *  lane), for scripts/timeline.py. */
+    private void writeTimeline(TreeMap<Long, long[]> timeline) throws IOException {
+        Files.writeString(dir.resolve(trace.getFileName() + ".iterations.tsv"),
+            "index\tkind\tvariant\tstart_ms\tend_ms\tscore\tops\tgc_ms\n" + String.join("\n", iterationRows) + "\n");
+        StringBuilder sb = new StringBuilder("bin_ms");
+        for (String l : LANES) sb.append('\t').append(l).append("_cycles\t").append(l).append("_inst");
+        sb.append('\n');
+        for (Map.Entry<Long, long[]> e : timeline.entrySet()) {
+            sb.append(e.getKey());
+            for (long v : e.getValue()) sb.append('\t').append(v);
+            sb.append('\n');
+        }
+        Files.writeString(dir.resolve(trace.getFileName() + ".timeline.tsv"), sb);
+    }
+
     /** The measured iteration whose wall-clock span contains `millis`, or null (between iterations). */
     static IterationLog.Entry iterationAt(List<IterationLog.Entry> measured, long millis) {
         int lo = 0, hi = measured.size() - 1;
