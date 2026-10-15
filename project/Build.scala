@@ -813,7 +813,7 @@ object Build {
         ),
       // Packaging configuration of `scala3-sbt-bridge`
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -846,7 +846,7 @@ object Build {
       Test    / unmanagedSourceDirectories := Seq(baseDirectory.value / "test"),
       // Packaging configuration of `scala3-staging`
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -876,7 +876,7 @@ object Build {
       // Make sure that the produced artifacts have the minimum JVM version in the bytecode
       // Packaging configuration of `scala3-staging`
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -925,7 +925,7 @@ object Build {
       scalaVersion  := dottyNonBootstrappedVersion,
       // Packaging configuration of `scala3-repl`
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -1366,7 +1366,7 @@ object Build {
       ),
       // Packaging configuration of the stdlib
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -1427,7 +1427,7 @@ object Build {
         Dependencies.sbtJunitInterface % Test,
       ),
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       Test    / publishArtifact := false,
       publish / skip := false,
@@ -1613,7 +1613,7 @@ object Build {
       packageOptions += ManifestAttributes(("Git-Hash", VersionUtil.gitHash)), // Used by the REPL
       // Packaging configuration of the stdlib
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -1749,7 +1749,7 @@ object Build {
       Compile / scalacOptions += "-experimental",
       // Packaging configuration of the stdlib
       Compile / packageBin / publishArtifact := true,
-      Compile / packageDoc / publishArtifact := true,
+      Compile / packageDoc / publishArtifact := !Versions.skipDocs,
       Compile / packageSrc / publishArtifact := true,
       // Only publish compilation artifacts, no test artifacts
       Test    / publishArtifact := false,
@@ -2571,6 +2571,9 @@ object Build {
         url = url(homepageUrl)
       )
     ),
+  ) ++ (
+    // Projects that publish all Compile artifacts (`Compile / publishArtifact := true`) would otherwise still build and publish docs.
+    if (Versions.skipDocs) Seq(Compile / packageDoc / publishArtifact := false) else Nil
   )
 
   lazy val commonDistSettings = Seq(
