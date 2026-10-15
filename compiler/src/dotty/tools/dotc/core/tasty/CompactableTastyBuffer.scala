@@ -102,11 +102,8 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
       val original = getAddr(at)
       if (isRelative(i)) {
         val start = skipNat(at)
-        val len1 = original + scratch.delta(i) - deltaAt(original + start.index, scratch)
-        val len2 = adjusted(original + start.index, scratch) - adjusted(start, scratch).index
-        assert(len1 == len2,
-            s"adjusting offset #$i: $at, original = $original, len1 = $len1, len2 = $len2")
-        len1
+        // `start` lies between offsets(i) and offsets(i + 1), so `deltaAt(start) == delta(i)`
+        original + scratch.delta(i) - deltaAt(original + start.index, scratch)
       }
       else adjusted(original, scratch)
     }
