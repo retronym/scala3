@@ -131,13 +131,52 @@ class HtmlRenderer(rootPackage: Member, members: Map[DRI, Member])(using ctx: Do
         case None => ""
     )
 
+  private def visibleChildren(nav: Page): Seq[Page] = nav.children.filterNot(_.hidden)
+
+  /** For each DRI, the navigation entries on the path from a root down to an entry for that DRI (inclusive). */
+  private lazy val navPaths: Map[DRI, java.util.Set[Page]] =
+    val paths = collection.mutable.HashMap[DRI, java.util.Set[Page]]()
+    def visit(nav: Page, ancestors: List[Page]): Unit =
+      val path = nav :: ancestors
+      val set = paths.getOrElseUpdate(nav.link.dri, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap()))
+      path.foreach(set.add)
+      visibleChildren(nav).foreach(visit(_, path))
+    (rootApiPage ++ rootDocsPage).foreach(root => visibleChildren(root).foreach(visit(_, Nil)))
+    paths.toMap
+
+  /** Rendered navigation subtrees that contain no selected entry, by the directory of the page they were rendered for.
+   *
+   *  Such a subtree depends on the page only through the relative links, which depend only on the page's directory.
+   *  Rendering the whole navigation tree for every page made the cost (pages x navigation entries), which dominated
+   *  the run time for large APIs. Pages are rendered depth first, so a few directories are live at once.
+   */
+  private val navCache = new java.util.LinkedHashMap[Seq[String], java.util.IdentityHashMap[Page, AppliedTag]](16, 0.75f, true):
+    override def removeEldestEntry(e: java.util.Map.Entry[Seq[String], java.util.IdentityHashMap[Page, AppliedTag]]) = size > 16
+
   private def buildNavigation(pageLink: Link): (Option[(Boolean, Seq[AppliedTag])], Option[(Boolean, Seq[AppliedTag])]) =
+    val onPath = navPaths.getOrElse(pageLink.dri, java.util.Collections.emptySet[Page]())
+    val unselectedSubtrees = navCache.computeIfAbsent(rawLocation(pageLink.dri).dropRight(1), _ => new java.util.IdentityHashMap())
+
     def navigationIcon(member: Member) = member match {
       case m if m.needsOwnPage => Seq(span(cls := s"micon ${member.kind.name.take(2)}"))
       case _ => Nil
     }
 
+    // Entries on the path to the selected page are rendered afresh; each subtree hanging off that path is cached whole.
     def renderNested(nav: Page, nestLevel: Int, prefix: String = ""): (Boolean, AppliedTag) =
+      if onPath.contains(nav) then renderEntry(nav, nestLevel, prefix, renderNested)
+      else
+        val cached = unselectedSubtrees.get(nav)
+        if cached != null then (false, cached)
+        else
+          val rendered = raw(renderUnselected(nav, nestLevel, prefix)._2.toString)
+          unselectedSubtrees.put(nav, rendered)
+          (false, rendered)
+
+    def renderUnselected(nav: Page, nestLevel: Int, prefix: String): (Boolean, AppliedTag) =
+      renderEntry(nav, nestLevel, prefix, renderUnselected)
+
+    def renderEntry(nav: Page, nestLevel: Int, prefix: String, renderChild: (Page, Int, String) => (Boolean, AppliedTag)): (Boolean, AppliedTag) =
       val isApi = nav.content.isInstanceOf[Member]
       val isSelected = nav.link.dri == pageLink.dri
       val isTopElement = nestLevel == 0
@@ -166,10 +205,10 @@ class HtmlRenderer(rootPackage: Member, members: Map[DRI, Member])(using ctx: Do
           )
         )
 
-      nav.children.filterNot(_.hidden) match
+      visibleChildren(nav) match
         case Nil => isSelected -> div(cls := s"ni n$nestLevel ${if isSelected then "expanded" else ""}")(linkHtml())
         case children =>
-          val nested = children.map(renderNested(_, nestLevel + 1, newPrefix))
+          val nested = children.map(renderChild(_, nestLevel + 1, newPrefix))
           val expanded = nested.exists(_._1)
           val attr =
             if expanded || isSelected then Seq(cls := s"ni n$nestLevel expanded") else Seq(cls := s"ni n$nestLevel")
