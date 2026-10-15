@@ -4,6 +4,9 @@
 # envelope as called by the Positioned constructor and by withSpan, split by whether a TreeCopier is on the stack
 count envelope.ctor     at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#<init>  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
 count envelope.withSpan at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#withSpan  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
+# envelope as called by the position pickler, to decide whether a span needs pickling (on the pickler's thread unless
+# -Yno-parallel-pickling)
+count envelope.pickler  at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.core.tasty.PositionPickler$#traverse$1
 # a fill: envelope on a span-less child, from `include`
 count fill              at=dotty.tools.dotc.ast.Positioned#envelope  from=dotty.tools.dotc.ast.Positioned#include$1  onStack=copier:dotty.tools.dotc.ast.Trees$Instance$TreeCopier
 
