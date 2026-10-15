@@ -12,6 +12,7 @@ import core.Denotations.*
 import core.DenotTransformers.*
 import core.Symbols.*
 import core.Contexts.*
+import core.Phases.*
 import core.Types.*
 import core.Flags.*
 import core.Decorators.*
@@ -337,15 +338,18 @@ class ExplicitJSClasses extends MiniPhase with InfoTransformer { thisPhase =>
 
   override def transformInfo(tp: Type, sym: Symbol)(using Context): Type = tp match {
     case tp @ ClassInfo(_, cls, _, decls, _) if !cls.is(JavaDefined) && mayNeedJSClassOrJSObjectFields(cls) =>
-      decls.foreach(sym =>
-        if cls.toString == "class HashMapIterator" && sym.toString == "method next" then
-          val _ = sym.denot // updates the symbol's checkedPeriod / lastDenot and makes it work, but why?)
-      )
-      val innerJSClasses = decls.filter(isJSClass)
-
-      val innerObjectsForAdHocExposed =
-        if (!cls.isStaticOwner) Nil // those already have a module accessor
-        else decls.filter(isExposedModule)
+      // Inspect the nested symbols at pickler, where their flags and `@JSType` annotations
+      // are already final. Doing so at this phase would bring every nested class through
+      // the preceding denotation transformers (e.g. ExtensionMethods, which computes base
+      // classes) while we may be in the middle of computing the base classes of a class
+      // that refers to `cls`, leading to spurious CyclicReferences.
+      val (innerJSClasses, innerObjectsForAdHocExposed) = atPhase(picklerPhase) {
+        val innerJSClasses = decls.filter(isJSClass)
+        val innerObjectsForAdHocExposed =
+          if (!cls.isStaticOwner) Nil // those already have a module accessor
+          else decls.filter(isExposedModule)
+        (innerJSClasses, innerObjectsForAdHocExposed)
+      }
 
       if (innerJSClasses.isEmpty && innerObjectsForAdHocExposed.isEmpty) {
         tp
@@ -401,7 +405,7 @@ class ExplicitJSClasses extends MiniPhase with InfoTransformer { thisPhase =>
         val isJSType = ref1.hasAnnotation(jsdefn.JSTypeAnnot)
         if (ref1.is(NoInits)) {
           // If one of the decls is a JS class, there is now some initialization code to create the JS class
-          if (!isJSType && ref1.info.decls.exists(isJSClass))
+          if (!isJSType && atPhase(picklerPhase)(ref1.info.decls.exists(isJSClass)))
             ref1.copySymDenotation(initFlags = ref1.flags &~ NoInits)
           else
             ref1
