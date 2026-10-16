@@ -31,6 +31,7 @@ A stack of frames (`profile/DefCosts.scala`) is kept in step with the profiler's
 | load | `SymbolLoader.complete` | the symbol |
 | transform | a member's subtree in `MegaPhase.transformTree`, `MacroTransform`, `Inlining` (new hooks) | the symbol |
 | implicit, inline | `inferImplicit`, `inlineCall` | the innermost frame's key |
+| rehash | `WeakHashSet.resize` in the hash-consing tables (`Uniques`, `AppliedUniques`, `NamedTypeUniques`) | the table's name |
 
 A frame's self time is its time minus that of the frames nested in it, so `b`'s typed-ahead body, being the `complete` frame of `b`, is charged to `b`. Only class members and top-level definitions get frames; local definitions are part of their owner. Per-phase kinds (unit, retype, transform, implicit, inline) take the phase of the innermost unit frame: inside a MegaPhase, `ctx.phase` is not the MegaPhase. This is Scala 2's stackable timers (`Statistics.pushTimer`, exclusive time per tree class) per definition, with completions as frames.
 
@@ -50,12 +51,12 @@ async-profiler's Span API ([#1755](https://github.com/async-profiler/async-profi
 ## Results so far
 
 - Overhead (scalaz, paired within forks, xctrace): the cost stack with a listener and no recording, +3.5% ± 0.9 time and +3.1% ± 1.6 instructions; writing the table each op, +14%. `bench-lab/ab/def-costs-overhead-5.json`. The hooks' cost with profiling off is not yet measured (needs an A/B across builds, `abtrees.py`).
-- On scalaz the top definitions are dominated by `Uniques` table growth (`WeakHashSet.resize`), which lands on whichever definition triggers it, the same one in every op since each op compiles in the same order.
+- On scalaz the top definitions were dominated by `Uniques` table growth (`WeakHashSet.resize`), which landed on whichever definition's lookup crossed the threshold, the same one in every op since each op compiles in the same order. Growth is amortized over every lookup, so it is now a `rehash` frame keyed by the table, outside the definition. Per scalaz op: 14 resizes, 89 ms, 42 MB (Uniques 32K → 1M buckets in 5 resizes, 16 ms; AppliedUniques 64K → 4M in 6, 62 ms; NamedTypeUniques 128K → 1M in 3, 12 ms). The last AppliedUniques doublings come in the first MegaPhase, 47 ms of it, and were most of `MaybeT$.monadTell`'s and `Bind.product`'s self time there.
 
 ## Future work
 
 - Measure the hooks with profiling off against `bench-lab-harness`.
-- Flag costs dominated by one amortized operation (table growth, GC) rather than charging them to a definition.
+- Flag costs dominated by other amortized operations (GC, the name table's growth) rather than charging them to a definition.
 - Overloads share a full name in the table; add the signature when it can be read without forcing completion.
 - Propose `Span.hasSamplesSince` (or a lazy tag) upstream.
 - A span lane in async-profiler's heatmap: phases and units over time, and a definition's time slices.
