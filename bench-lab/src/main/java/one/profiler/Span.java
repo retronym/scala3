@@ -52,6 +52,16 @@ public class Span {
     }
 
     /**
+     * Whether a profiling sample was taken on this thread since {@code startTime} (a {@link Recording#timestamp()}),
+     * so a caller can skip building a tag for a span that {@link #emitIfProfiled} would drop.
+     * <p>
+     * bench-lab's addition to the vendored class: upstream has this check privately ({@code hasProfileSamples}).
+     */
+    public static boolean hasSamplesSince(long startTime) {
+        return Recording.state == Recording.RUNNING && (isVirtualThread() || hasProfileSamples(startTime));
+    }
+
+    /**
      * Marks the start of a span on the current thread.
      *
      * @return a start timestamp to pass to {@link #end} / {@link #endIfProfiled},

@@ -13,9 +13,10 @@ import scala.jdk.CollectionConverters.*
 class RecordingCostListener extends CostListener:
   def enter(frame: CostFrame): Unit =
     val parent = frame.parent
-    RecordingCostListener.events += s"enter ${frame.label}" + (if parent == null then "" else s" in ${parent.label}")
+    RecordingCostListener.events += s"enter ${name(frame)}" + (if parent == null then "" else s" in ${name(parent)}")
   def exit(frame: CostFrame): Unit =
-    RecordingCostListener.events += s"exit ${frame.label}"
+    RecordingCostListener.events += s"exit ${name(frame)}"
+  private def name(f: CostFrame) = s"${f.kind.label}:${f.label}"
 
 object RecordingCostListener:
   val events = collection.mutable.ArrayBuffer[String]()
@@ -42,11 +43,11 @@ class DefCostsTest extends DottyTest {
         |""".stripMargin)
     val events = RecordingCostListener.events
     // b's result type is inferred while typing a: its completion is a frame of its own, nested in a's
-    assertTrue(events.mkString("\n"), events.contains("enter complete:T$.b in def:T$.a"))
+    assertTrue(events.mkString("\n"), events.contains("enter complete:b in def:a"))
     // frames are left in the reverse order they were entered
     val stack = collection.mutable.Stack[String]()
     for e <- events do
-      if e.startsWith("enter ") then stack.push(e.stripPrefix("enter ").takeWhile(_ != ' '))
+      if e.startsWith("enter ") then stack.push(e.stripPrefix("enter ").split(" in ")(0))
       else assertEquals(stack.pop(), e.stripPrefix("exit "))
     assertTrue(stack.isEmpty)
 
@@ -58,7 +59,7 @@ class DefCostsTest extends DottyTest {
     assertEquals("2", row("def", "T$.a")(4))   // line
     assertTrue(rows.exists(r => r(0) == "unit" && r(1) == "typer" && r(2) == "test.scala"))
     // the unit is the parent of the definitions typed in it
-    assertTrue(events.mkString("\n"), events.exists(e => e.startsWith("enter def:T$ in unit@typer:test.scala")))
+    assertTrue(events.mkString("\n"), events.exists(e => e.startsWith("enter def:T$ in unit:test.scala")))
   }
 
   @Test def megaPhasesHaveAFramePerDefinition(): Unit = {
@@ -67,10 +68,11 @@ class DefCostsTest extends DottyTest {
         |  def a(xs: List[Int]): Int = xs.map(_ + 1).sum
         |""".stripMargin, until = "erasure")
     val events = RecordingCostListener.events
-    val transforms = events.filter(_.startsWith("enter transform@"))
-    assertTrue(events.mkString("\n"), transforms.exists(_.contains(":M$.a in transform@")))
-    // each MegaPhase's work on the unit is a unit frame of that phase
-    assertTrue(events.mkString("\n"), transforms.exists(e => e.matches("enter transform@(.*):M\\$ in unit@\\1:test.scala")))
+    val transforms = events.filter(_.startsWith("enter transform:"))
+    assertTrue(events.mkString("\n"), transforms.exists(_ == "enter transform:a in transform:M$"))
+    // each MegaPhase's work on the unit is a unit frame, inside the phase's frame
+    assertTrue(events.mkString("\n"), transforms.exists(_ == "enter transform:M$ in unit:test.scala"))
+    assertTrue(events.mkString("\n"), events.exists(e => e.startsWith("enter unit:test.scala in phase:MegaPhase{")))
   }
 
   @Test def localDefinitionsArePartOfTheirOwner(): Unit = {
@@ -81,8 +83,8 @@ class DefCostsTest extends DottyTest {
         |    def y = x + 1
         |    y
         |""".stripMargin)
-    assertFalse(RecordingCostListener.events.exists(e => e.contains(".x") || e.contains(".y")))
-    assertTrue(RecordingCostListener.events.contains("enter def:L$.m in def:L$"))
+    assertFalse(RecordingCostListener.events.exists(e => e.contains(":x") || e.contains(":y")))
+    assertTrue(RecordingCostListener.events.contains("enter def:m in def:L$"))
   }
 }
 

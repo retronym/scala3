@@ -14,6 +14,8 @@ import util.Spans.Span
 
 /** What a frame on the cost stack measures. */
 enum CostKind(val label: String, val perPhase: Boolean):
+  /** A phase, outside its units */
+  case Phase extends CostKind("phase", true)
   /** A compilation unit in one phase: the work on it outside the frames below */
   case Unit extends CostKind("unit", true)
   /** Type checking a definition (`typedValDef`, `typedDefDef`, `typedTypeDef`, `typedClassDef`) in the typer */
@@ -41,20 +43,23 @@ final class CostAcc(val kind: CostKind, val key: AnyRef, val phase: Phase):
   var maxSelfNs: Long = 0L
   /** The size of the definition's tree in characters, when known */
   var chars: Int = 0
-  /** `<kind>:<name>`, or `<kind>@<phase>:<name>` for the kinds that are per phase; set when a listener is present */
+  /** A short name for listeners (see `CostFrame.label`), kept once asked for */
   var label: String | Null = null
 
 /** A region on the cost stack: from entering a hooked operation to leaving it. */
-final class CostFrame(val acc: CostAcc, val parent: CostFrame | Null, val startNs: Long, val startAlloc: Long):
+final class CostFrame(costs: DefCosts, val acc: CostAcc, val parent: CostFrame | Null, val startNs: Long, val startAlloc: Long):
   var childNs: Long = 0L
   var childAlloc: Long = 0L
   /** For a listener's own use, e.g. when the frame's current span segment started */
   var listenerData: Long = 0L
   def kind: CostKind = acc.kind
-  /** A `Symbol`, or a `CompilationUnit` for `CostKind.Unit` */
+  /** A `Symbol`, a `CompilationUnit` for `CostKind.Unit`, a `Phase` for `CostKind.Phase` */
   def key: AnyRef = acc.key
-  /** `<kind>:<name>` or `<kind>@<phase>:<name>`, built once per key; only available to listeners */
-  def label: String = acc.label.nn
+  /** A short name that needs no new string: the phase's name, the unit's source path, the symbol's (unqualified)
+   *  name, or "implicit" / "inline". The frames enclosing it say what it is part of. */
+  def label: String =
+    val l = acc.label
+    if l != null then l else costs.labelOf(acc)
 
 /** Notified as frames are entered and left, on the compiling thread: e.g. to record each frame's exclusive
  *  intervals as async-profiler spans. Named by `-Yprofile-defs-listener`; needs a public no-argument constructor.
@@ -91,7 +96,7 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
       case CostKind.Implicit | CostKind.Inline =>
         val t = top
         if t == null then NoSymbol else t.key
-      case CostKind.Unit => key
+      case CostKind.Unit | CostKind.Phase => key
       case _ =>
         key match
           case sym: Symbol if sym.exists && isTracked(sym) => sym
@@ -99,7 +104,7 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
     // The phase of the innermost unit frame: inside a MegaPhase, `ctx.phase` is not the MegaPhase
     val ph =
       if !kind.perPhase then NoPhase
-      else if kind == CostKind.Unit then phase
+      else if kind == CostKind.Unit || kind == CostKind.Phase then phase
       else unitPhase(phase)
     val byPhase = accs(kind.ordinal)
     val byKey0 = byPhase.get(ph)
@@ -114,11 +119,10 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
       if known != null then known
       else
         val a = CostAcc(kind, k, ph)
-        if listener != null then a.label = labelOf(a)
         byKey.put(k, a)
         a
     if span.exists then acc.chars = math.max(acc.chars, span.end - span.start)
-    val frame = CostFrame(acc, top, System.nanoTime(), allocated())
+    val frame = CostFrame(this, acc, top, System.nanoTime(), allocated())
     top = frame
     if listener != null then listener.enter(frame)
     frame
@@ -167,11 +171,19 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
       val suffix = if ictx.runId > core.Periods.InitialRunId + 1 then s".${ictx.runId - 1}" else ""
       write(path + suffix)
 
-  private def labelOf(acc: CostAcc): String =
-    if acc.kind.perPhase then s"${acc.kind.label}@${phaseName(acc.phase)}:${nameOf(acc.key)}"
-    else s"${acc.kind.label}:${nameOf(acc.key)}"
+  private[profile] def labelOf(acc: CostAcc): String =
+    val l = acc.kind match
+      case CostKind.Implicit | CostKind.Inline => acc.kind.label
+      case _ => acc.key match
+        case phase: Phase => phase.phaseName
+        case unit: CompilationUnit => unit.source.path
+        case sym: Symbol => if sym.exists then sym.name.toString else "<outside a definition>"  // cached in the name
+        case other => String.valueOf(other)
+    acc.label = l
+    l
 
   private def where(key: AnyRef): (String, String) = key match
+    case _: Phase => ("", "")
     case unit: CompilationUnit => (unit.source.path, "")
     case sym: Symbol if sym.exists && sym.span.exists =>
       val pos = sym.sourcePos(using ictx)
@@ -192,6 +204,7 @@ object DefCosts:
 
   private def nameOf(key: AnyRef)(using Context): String = key match
     case unit: CompilationUnit => unit.source.path
+    case phase: Phase => phase.phaseName
     case sym: Symbol => if !sym.exists then "<outside a definition>" else sym.fullName.toString
     case other => String.valueOf(other)
 

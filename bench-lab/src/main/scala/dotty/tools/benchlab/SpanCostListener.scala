@@ -3,41 +3,25 @@ package dotty.tools.benchlab
 import dotty.tools.dotc.profile.{CostFrame, CostListener}
 import one.profiler.{Recording, Span}
 
-/** Records the compiler's cost frames as async-profiler spans, so a sample taken while compiling lies in exactly one
- *  span: the innermost frame's. Spans nest by time only, so a span per frame would put the completion of `b`
- *  triggered while typing `a` inside `a`'s span too; instead each frame is recorded as segments, interrupted while
- *  nested frames run.
+/** Records the compiler's cost frames as nested async-profiler spans, one per frame (a phase, a unit, a class, a
+ *  member, a completion, an implicit search, ...), tagged with a short name the compiler already has as a string:
+ *  the phase's name, the source path, the symbol's name, "implicit". A frame's span is recorded only if a sample was
+ *  taken during it, and costs no new string.
  *
- *  A segment's tag is the path of frames from the outermost, separated by ` > `, e.g.
- *  `unit@typer:scalaz/Foldable.scala > def:scalaz.Foldable.foldMap > complete:scalaz.Foldable.foldRight`.
- *  `jfrconv --spans` adds it as a leaf of each sample, for the flame graph's span panel; `jfrconv --tag '.*:\Qscalaz.Foldable.foldMap\E'` keeps
- *  the samples of one definition's own frames (the path ends with the innermost frame).
+ *  `jfrconv --spans` rebuilds the path of each sample from the spans enclosing it (`typer > Foo.scala > Foo > bar >
+ *  implicit`) and adds it as a leaf, for the flame graph's span panel; the innermost span owns the sample, so the
+ *  completion of `b` triggered while typing `a` is `... > a > b`, and grouping by definition charges it to `b`.
  *
  *    -p scalacOptions=-Yprofile-defs-listener:dotty.tools.benchlab.SpanCostListener
  *
- *  with an async-profiler that has the Span API recording JFR. Without a recording, a frame costs a string
- *  concatenation and a check of a static field.
+ *  with an async-profiler that has the Span API recording JFR; without a recording, each frame costs a check of a
+ *  static field.
  */
 final class SpanCostListener extends CostListener:
-  // the path of each open frame, innermost last
-  private val paths = java.util.ArrayDeque[String]()
 
   def enter(frame: CostFrame): Unit =
-    val parentPath = paths.peekLast()
-    paths.addLast(if parentPath == null then frame.label else parentPath + " > " + frame.label)
-    if Recording.state() == Recording.RUNNING then
-      val now = Recording.timestamp()
-      val parent = frame.parent
-      if parent != null && parent.listenerData != 0 && parentPath != null then
-        Span.emitIfProfiled(parent.listenerData, now, parentPath)
-      frame.listenerData = now
+    frame.listenerData = if Recording.state() == Recording.RUNNING then Recording.timestamp() else 0
 
   def exit(frame: CostFrame): Unit =
-    val path = paths.pollLast()
-    if Recording.state() == Recording.RUNNING then
-      val now = Recording.timestamp()
-      if frame.listenerData != 0 && path != null then Span.emitIfProfiled(frame.listenerData, now, path)
-      val parent = frame.parent
-      if parent != null then parent.listenerData = now
-
-  override def finished(): Unit = paths.clear()
+    val start = frame.listenerData
+    if start != 0 && Span.hasSamplesSince(start) then Span.emit(start, Recording.timestamp(), frame.label)

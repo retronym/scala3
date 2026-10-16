@@ -98,7 +98,7 @@ sealed trait Profiler {
     try body
     finally if frame != null then costs.nn.exit(frame)
 
-  inline def onPhase[T](phase: Phase)(inline body: T): T =
+  inline def onPhase[T](phase: Phase)(inline body: T): T = costed(CostKind.Phase, phase, NoSpan, phase):
     val (event, snapshot) = beforePhase(phase)
     try body
     finally afterPhase(event, phase, snapshot)
