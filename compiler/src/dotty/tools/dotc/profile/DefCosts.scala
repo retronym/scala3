@@ -149,10 +149,11 @@ final class DefCosts(listener: CostListener | Null, path: String)(using ictx: Co
     depth += 1
     top = frame
     if listener != null then
-      try listener.enter(frame)
-      catch case ex: Throwable =>
-        pop(frame)  // the caller's finally never sees this frame
-        throw ex
+      var entered = false
+      try
+        listener.enter(frame)
+        entered = true
+      finally if !entered then pop(frame)  // the caller's finally never sees this frame
     frame
 
   private def accFor(kind: CostKind, k: AnyRef, ph: Phase): CostAcc =
