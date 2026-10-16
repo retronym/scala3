@@ -168,7 +168,7 @@ object BenchLab {
     // the graphs of one recording, for the index: (kind label, variant, file)
     val graphs = for (jfr <- jfrs) yield {
       val base = jfr.getPath.stripSuffix(".jfr")
-      val bench = benchLabel(jfr)
+      val bench = benchTitle(jfr)
       jfr -> (for (kind <- kinds; (variant, extra) <- variants) yield {
         // hw:<event>: one event of a multi-event hardware counter session
         val (kindArgs, label) =
@@ -187,9 +187,10 @@ object BenchLab {
   }
 
   // The benchmark threads, by name (JMH's stub frame is missing from kernel-walked kperf stacks); the rest are JIT, GC
-  // and JMH itself. Then all threads, split by thread and by category (GC, JIT compilation, interpreter, ...).
+  // and JMH itself, with the span panel (--spans: the cost frames recorded by SpanCostListener, if any). Then all
+  // threads, split by thread and by category (GC, JIT compilation, interpreter, ...).
   private val variants = List(
-    "bench" -> Seq("--threads", "-I", ".*jmh-worker.*"),
+    "bench" -> Seq("--threads", "-I", ".*jmh-worker.*", "--spans"),
     "reverse" -> Seq("--threads", "-I", ".*jmh-worker.*", "--reverse"),
     "threads" -> Seq("--threads"),
     "classify" -> Seq("--classify"))
@@ -199,6 +200,18 @@ object BenchLab {
     val name = jfr.getParentFile.getName.stripPrefix("dotty.tools.benchlab.")
     name.split("-", -1).toList match {
       case bench :: _ :: params => (bench :: params.grouped(2).map(_.mkString("=")).toList).mkString(" ")
+      case _ => name
+    }
+  }
+
+  /** `ParserBenchmark.parse scalaz` from JMH's per-benchmark directory `<class>.<method>-<mode>-<param>-<value>...`: the
+   *  benchmark and its corpus, short enough for a graph's title (the other parameters are in the directory's name) */
+  private def benchTitle(jfr: File): String = {
+    val name = jfr.getParentFile.getName.stripPrefix("dotty.tools.benchlab.")
+    name.split("-", -1).toList match {
+      case bench :: _ :: params =>
+        val corpus = params.grouped(2).collectFirst { case List("corpus", v) => v }
+        (bench :: corpus.toList).mkString(" ")
       case _ => name
     }
   }
