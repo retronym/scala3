@@ -555,16 +555,18 @@ abstract class Recheck extends Phase, SymTransformer:
             if tree.isEmpty then NoType
             else
               sym.ensureCompleted()
-              if !skipRecheck(sym) then recheckDef(tree, sym)
+              if !skipRecheck(sym) then ctx.profiler.onTypedDef(sym, tree.span)(recheckDef(tree, sym))
               sym.termRef
           case tree: TypeDef =>
             if !skipRecheck(sym) then
               // TODO: Should we allow for completers as for ValDefs or DefDefs?
               tree.rhs match
                 case impl: Template =>
-                  recheckClassDef(tree, impl, sym.asClass)(using ctx.localContext(tree, sym))
+                  ctx.profiler.onTypedDef(sym, tree.span):
+                    recheckClassDef(tree, impl, sym.asClass)(using ctx.localContext(tree, sym))
                 case _ =>
-                  recheckTypeDef(tree, sym)(using ctx.localContext(tree, sym))
+                  ctx.profiler.onTypedDef(sym, tree.span):
+                    recheckTypeDef(tree, sym)(using ctx.localContext(tree, sym))
             sym.typeRef
           case tree: Labeled => recheckLabeled(tree, pt)
 

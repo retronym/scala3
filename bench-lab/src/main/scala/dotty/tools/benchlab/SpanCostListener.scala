@@ -20,7 +20,7 @@ import one.profiler.{Recording, Span}
 final class SpanCostListener extends CostListener:
 
   def enter(frame: CostFrame): Unit =
-    frame.listenerData = if Recording.state() == Recording.RUNNING then Recording.timestamp() else 0
+    frame.listenerData = Span.start()  // 0 unless a recording is running
 
   def exit(frame: CostFrame): Unit =
     val start = frame.listenerData

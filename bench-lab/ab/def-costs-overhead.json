@@ -1,11 +1,16 @@
 {
   "name": "def-costs-overhead",
+  "historical": "measured before cost frames were pooled and the per-key accumulators made table-only; def-costs-overhead-5 measures the current version (3 rounds, load gate)",
   "benchmark": "CompileBenchmark",
   "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
-  "profile": {"xctrace": "ipc"},
+  "profile": {
+    "xctrace": "ipc"
+  },
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
   "rounds": 2,
-  "corpora": {"scalaz": "-wi 9 -i 12 -w 3 -r 3"},
+  "corpora": {
+    "scalaz": "-wi 9 -i 12 -w 3 -r 3"
+  },
   "paired": {
     "off": "",
     "stack": "-Yprofile-defs-listener:dotty.tools.benchlab.SpanCostListener",

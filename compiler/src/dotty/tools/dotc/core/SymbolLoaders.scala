@@ -410,7 +410,7 @@ abstract class SymbolLoader extends LazyType { self =>
     def associatedFileName = root.symbol.associatedFile match
       case file: AbstractFile => Some(file.name)
       case null => None
-    ctx.profiler.onCompletion(sym, associatedFileName)(body)
+    ctx.profiler.onCompletion(sym, associatedFileName, profile.CostKind.Load)(body)
   }
 
   override def complete(root: SymDenotation)(using Context): Unit = profileCompletion(root) {

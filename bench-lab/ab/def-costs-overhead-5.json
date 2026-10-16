@@ -1,14 +1,22 @@
 {
-  "name": "def-costs-overhead-2",
+  "name": "def-costs-overhead-5",
   "benchmark": "CompileBenchmark",
   "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
-  "profile": {"xctrace": "ipc"},
+  "profile": {
+    "xctrace": "ipc"
+  },
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M",
-  "rounds": 2,
-  "corpora": {"scalaz": "-wi 9 -i 12 -w 3 -r 3"},
+  "rounds": 3,
+  "corpora": {
+    "scalaz": "-wi 9 -i 12 -w 3 -r 3"
+  },
   "paired": {
     "off": "",
     "stack": "-Yprofile-defs-listener:dotty.tools.benchlab.SpanCostListener",
     "table": "-Yprofile-defs:/dev/null"
+  },
+  "loadgate": {
+    "maxCores": 1.5,
+    "quietSecs": 30
   }
 }
