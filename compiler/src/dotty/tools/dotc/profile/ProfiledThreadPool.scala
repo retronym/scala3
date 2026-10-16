@@ -9,7 +9,7 @@ import java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy
 object ProfiledThreadPool {
   def newExecutor(phase: Phase, profiler: Profiler, nThreads: Int, maxQueueSize: Int, shortId: String): ThreadPoolExecutor = {
     val factory = profiler match {
-      case NoOpProfiler => new ThreadPoolFactory(phase)
+      case NoOpProfiler | _: CostProfiler => new ThreadPoolFactory(phase)
       case r: RealProfiler => new ProfilingThreadPoolFactory(phase, r)
     }
     factory.newBoundedQueueFixedThreadPool(nThreads, maxQueueSize, shortId)

@@ -15,6 +15,7 @@ import dotty.tools.dotc.CompilationUnit
 import dotty.tools.dotc.core.Types.Type
 import dotty.tools.dotc.core.Symbols.{Symbol, NoSymbol}
 import dotty.tools.dotc.core.Flags
+import dotty.tools.dotc.util.Spans.{Span, NoSpan}
 import dotty.tools.io.AbstractFile
 import annotation.internal.sharable
 import dotty.tools.dotc.core.Periods.InitialRunId
@@ -23,12 +24,14 @@ import scala.jdk.CollectionConverters.*
 
 object Profiler {
   def apply()(using Context): Profiler =
-    if (!ctx.settings.YprofileEnabled.value) NoOpProfiler
+    val costs = DefCosts()
+    if (!ctx.settings.YprofileEnabled.value)
+      if costs == null then NoOpProfiler else new CostProfiler(costs)
     else {
       val reporter = if (ctx.settings.YprofileDestination.value != "")
         new StreamProfileReporter(new PrintWriter(new FileWriter(ctx.settings.YprofileDestination.value, true)))
       else ConsoleProfileReporter
-      new RealProfiler(reporter)
+      new RealProfiler(reporter, costs)
     }
 
   final def NoOp: Profiler = NoOpProfiler
@@ -86,6 +89,15 @@ sealed trait Profiler {
 
   def finished(): Unit
 
+  /** Exclusive cost per definition (`-Yprofile-defs`, `-Yprofile-defs-listener`), or null */
+  protected def defCosts: DefCosts | Null = null
+
+  private inline def costed[T](kind: CostKind, sym: Symbol, span: Span)(inline body: T): T =
+    val costs = defCosts
+    val frame = if costs == null then null else costs.enter(kind, sym, span)
+    try body
+    finally if frame != null then costs.nn.exit(frame)
+
   inline def onPhase[T](phase: Phase)(inline body: T): T =
     val (event, snapshot) = beforePhase(phase)
     try body
@@ -101,37 +113,46 @@ sealed trait Profiler {
   protected def beforeUnit(phase: Phase, unit: CompilationUnit): TracedEventId = TracedEventId.Empty
   protected def afterUnit(event: TracedEventId): Unit = ()
 
-  inline def onTypedDef[T](sym: Symbol)(inline body: T): T =
-    val event = beforeTypedDef(sym)
-    try body
-    finally afterTypedDef(event)
+  inline def onTypedDef[T](sym: Symbol, span: Span = NoSpan)(inline body: T)(using Context): T =
+    costed(if ctx.phase.isTyper then CostKind.TypedDef else CostKind.Retype, sym, span):
+      val event = beforeTypedDef(sym)
+      try body
+      finally afterTypedDef(event)
    protected def beforeTypedDef(sym: Symbol): TracedEventId = TracedEventId.Empty
    protected def afterTypedDef(token: TracedEventId): Unit = ()
 
-  inline def onImplicitSearch[T](pt: Type)(inline body: T): T =
+  inline def onImplicitSearch[T](pt: Type)(inline body: T): T = costed(CostKind.Implicit, NoSymbol, NoSpan):
     val event = beforeImplicitSearch(pt)
     try body
     finally afterImplicitSearch(event)
   protected def beforeImplicitSearch(pt: Type): TracedEventId  = TracedEventId.Empty
   protected def afterImplicitSearch(event: TracedEventId): Unit = ()
 
-  inline def onInlineCall[T](inlineSym: Symbol)(inline body: T): T =
+  inline def onInlineCall[T](inlineSym: Symbol)(inline body: T): T = costed(CostKind.Inline, NoSymbol, NoSpan):
     val event = beforeInlineCall(inlineSym)
     try body
     finally afterInlineCall(event)
   protected def beforeInlineCall(inlineSym: Symbol): TracedEventId = TracedEventId.Empty
   protected def afterInlineCall(event: TracedEventId): Unit = ()
 
-  inline def onCompletion[T](root: Symbol, associatedFileName: => Option[String])(inline body: T): T =
-    val (event, completionName) = beforeCompletion(root, associatedFileName)
-    try body
-    finally afterCompletion(event, completionName)
+  /** Completing `root`: from a classfile or TASTy (`CostKind.Load`), or from source (`CostKind.Completion`) */
+  inline def onCompletion[T](root: Symbol, associatedFileName: => Option[String], kind: CostKind = CostKind.Load)(inline body: T): T =
+    costed(kind, root, NoSpan):
+      val (event, completionName) = beforeCompletion(root, associatedFileName)
+      try body
+      finally afterCompletion(event, completionName)
   protected final val EmptyCompletionEvent = (TracedEventId.Empty, "")
   protected def beforeCompletion(root: Symbol, associatedFileName: => Option[String]): (TracedEventId, String) = EmptyCompletionEvent
   protected def afterCompletion(event: TracedEventId, completionName: String): Unit = ()
 }
 private [profile] object NoOpProfiler extends Profiler {
   override def finished(): Unit = ()
+}
+
+/** Only the cost per definition, without the rest of `-Yprofile-enabled` */
+private [profile] class CostProfiler(costs: DefCosts) extends Profiler {
+  override protected def defCosts: DefCosts | Null = costs
+  override def finished(): Unit = costs.finished()
 }
 
 private [profile] object RealProfiler {
@@ -164,7 +185,8 @@ private [profile] object RealProfiler {
   private def readHeapUsage() = RealProfiler.memoryMx.getHeapMemoryUsage.getUsed
 }
 
-private [profile] class RealProfiler(reporter : ProfileReporter)(using Context) extends Profiler with NotificationListener {
+private [profile] class RealProfiler(reporter : ProfileReporter, costs: DefCosts | Null = null)(using Context) extends Profiler with NotificationListener {
+  override protected def defCosts: DefCosts | Null = costs
   val id: Int = RealProfiler.idGen.incrementAndGet()
   private val mainThread = Thread.currentThread()
   private val gcEvents = UnrolledBuffer[GcEventData]()
@@ -209,6 +231,7 @@ private [profile] class RealProfiler(reporter : ProfileReporter)(using Context) 
   reporter.header(this)
 
   override def finished(): Unit = {
+    if costs != null then costs.finished()
     //we may miss a GC event if gc is occurring as we call this
     RealProfiler.gcMx foreach {
       case emitter: NotificationEmitter => emitter.removeNotificationListener(this)

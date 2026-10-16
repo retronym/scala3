@@ -3131,7 +3131,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       case _ =>
         typed(rhs)
 
-  def typedValDef(vdef: untpd.ValDef, sym: Symbol)(using Context): Tree = ctx.profiler.onTypedDef(sym) {
+  def typedValDef(vdef: untpd.ValDef, sym: Symbol)(using Context): Tree = ctx.profiler.onTypedDef(sym, vdef.span) {
     val ValDef(name, tpt, _) = vdef
     checkNonRootName(vdef.name, vdef.nameSpan)
     completeAnnotations(vdef, sym)
@@ -3170,7 +3170,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     sym.owner.info.decls.openForMutations.unlink(sym)
     EmptyTree
 
-  def typedDefDef(ddef: untpd.DefDef, sym: Symbol)(using Context): Tree = if !sym.info.exists then retractDefDef(sym) else ctx.profiler.onTypedDef(sym) {
+  def typedDefDef(ddef: untpd.DefDef, sym: Symbol)(using Context): Tree = if !sym.info.exists then retractDefDef(sym) else ctx.profiler.onTypedDef(sym, ddef.span) {
     val DefDef(name, paramss, tpt, _) = ddef
     checkNonRootName(ddef.name, ddef.nameSpan)
     completeAnnotations(ddef, sym)
@@ -3305,7 +3305,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     if (!ctx.isAfterInlining) mdef.setDefTree
     else mdef
 
-  def typedTypeDef(tdef: untpd.TypeDef, sym: Symbol)(using Context): Tree = ctx.profiler.onTypedDef(sym) {
+  def typedTypeDef(tdef: untpd.TypeDef, sym: Symbol)(using Context): Tree = ctx.profiler.onTypedDef(sym, tdef.span) {
     val TypeDef(name, rhs) = tdef
     completeAnnotations(tdef, sym)
     val rhs1 = tdef.rhs match
@@ -3338,7 +3338,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     res
   }
 
-  def typedClassDef(cdef: untpd.TypeDef, cls: ClassSymbol)(using Context): Tree = ctx.profiler.onTypedDef(cls) {
+  def typedClassDef(cdef: untpd.TypeDef, cls: ClassSymbol)(using Context): Tree = ctx.profiler.onTypedDef(cls, cdef.span) {
     if (!cls.info.isInstanceOf[ClassInfo]) return EmptyTree.assertingErrorsReported
 
     val TypeDef(name, impl @ Template(constr, _, self, _)) = cdef: @unchecked
