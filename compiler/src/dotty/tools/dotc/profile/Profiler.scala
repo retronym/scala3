@@ -25,6 +25,7 @@ import scala.jdk.CollectionConverters.*
 object Profiler {
   def apply()(using Context): Profiler =
     val costs = DefCosts()
+    ctx.base.costUniques(costs)
     if (!ctx.settings.YprofileEnabled.value)
       if costs == null then NoOpProfiler else new CostProfiler(costs)
     else {

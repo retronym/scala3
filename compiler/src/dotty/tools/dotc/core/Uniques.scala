@@ -7,11 +7,13 @@ import Symbols.Symbol
 import Decorators.*
 import util.{WeakHashSet, Stats}
 import WeakHashSet.Entry
+import profile.DefCosts
 import scala.annotation.tailrec
 
-class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
+class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity) with Uniques.CostedResize:
   override def hash(x: Type): Int = x.hash
   override def isEqual(x: Type, y: Type) = x.equals(y)
+  protected def tableName = "Uniques"
 
 /** Defines operation `unique` for hash-consing types.
  *  Also defines specialized hash sets for hash consing uniques of a specific type.
@@ -19,6 +21,19 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
  *  with the given parts exists already and creates a new one if not.
  */
 object Uniques:
+
+  /** A table whose growth is a cost frame of its own (`CostKind.Rehash`) with the cost per definition on, rather
+   *  than part of whichever definition's lookup happened to cross the threshold. */
+  trait CostedResize extends WeakHashSet[?]:
+    /** The run's cost tracker, or null; set when the run starts */
+    private[dotc] var costs: DefCosts | Null = null
+    /** The frame's key and label: a constant, so a resize needs no new string */
+    protected def tableName: String
+    override protected def resize(): Unit =
+      val cs = costs
+      val frame = if cs == null then null else cs.enterRehash(tableName)
+      try super.resize()
+      finally if frame != null then cs.nn.exit(frame)
 
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
   private inline def recordCaching(h: Int, clazz: Class[?]): Unit =
@@ -35,8 +50,9 @@ object Uniques:
     if tp.hash == NotCached then tp
     else ctx.uniques.put(tp).asInstanceOf[T]
 
-  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
+  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable with CostedResize:
     override def hash(x: NamedType): Int = x.hash
+    protected def tableName = "NamedTypeUniques"
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
       val h = doHash(null, designator, prefix)
@@ -76,8 +92,9 @@ object Uniques:
 
   end NamedTypeUniques
 
-  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
+  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable with CostedResize:
     override def hash(x: AppliedType): Int = x.hash
+    protected def tableName = "AppliedUniques"
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
       val h = doHash(null, tycon, args)

@@ -11,7 +11,7 @@ import core.Contexts.*
 import core.Symbols.*
 import core.Phases.{Phase, NoPhase}
 import core.Flags
-import util.Spans.Span
+import util.Spans.{Span, NoSpan}
 
 /** What a frame on the cost stack measures. */
 enum CostKind(val label: String, val perPhase: Boolean):
@@ -33,6 +33,9 @@ enum CostKind(val label: String, val perPhase: Boolean):
   case Implicit extends CostKind("implicit", true)
   /** An inline expansion, charged to the innermost definition (or unit) */
   case Inline extends CostKind("inline", true)
+  /** Growing a hash-consing table (`Uniques`), keyed by the table: amortized over every lookup, so not charged to
+   *  the definition whose lookup crossed the threshold */
+  case Rehash extends CostKind("rehash", true)
 
 /** The cost of one kind of work for one key (a symbol, a compilation unit or a phase) in one phase (`NoPhase` for the
  *  kinds that are not per phase), summed over its frames. Only with `-Yprofile-defs`. */
@@ -131,6 +134,9 @@ final class DefCosts(listener: CostListener | Null, path: String)(using ictx: Co
       if !kind.perPhase then NoPhase
       else if kind == CostKind.Unit || kind == CostKind.Phase then phase
       else unitPhase(ctx.phase)
+    push(kind, k, ph, span)
+
+  private def push(kind: CostKind, k: AnyRef, ph: Phase, span: Span): CostFrame =
     if depth == pool.length then pool = java.util.Arrays.copyOf(pool, depth * 2).asInstanceOf[Array[CostFrame | Null]]
     val pooled = pool(depth)
     val frame =
@@ -155,6 +161,14 @@ final class DefCosts(listener: CostListener | Null, path: String)(using ictx: Co
         entered = true
       finally if !entered then pop(frame)  // the caller's finally never sees this frame
     frame
+
+  /** The frame for growing the hash-consing table `table`, or null on another thread. Needs no context: the table
+   *  does not have one. The phase is the innermost unit's, else the innermost phase's. */
+  def enterRehash(table: String): CostFrame | Null =
+    if Thread.currentThread() ne thread then return null
+    var f = top
+    while f != null && f.kind != CostKind.Unit && f.kind != CostKind.Phase do f = f.parent
+    push(CostKind.Rehash, table, if f == null then NoPhase else f.phase, NoSpan)
 
   private def accFor(kind: CostKind, k: AnyRef, ph: Phase): CostAcc =
     val byPhase = accs.nn(kind.ordinal)

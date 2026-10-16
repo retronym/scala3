@@ -1086,6 +1086,12 @@ object Contexts {
     /** A table for hash consing unique named types */
     private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
 
+    /** Charge the growth of the hash-consing tables to `costs` (a cost frame per resize), or to nothing if null */
+    private[dotc] def costUniques(costs: profile.DefCosts | Null): Unit =
+      uniques.costs = costs
+      uniqueAppliedTypes.costs = costs
+      uniqueNamedTypes.costs = costs
+
     var emptyTypeBounds: TypeBounds | Null = null
     var emptyWildcardBounds: WildcardType | Null = null
 
