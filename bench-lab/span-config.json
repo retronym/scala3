@@ -1,0 +1,10 @@
+{
+  "markers": ["implicit", "inline"],
+  "groups": [
+    {"label": "definition, with owners", "by": "path", "from": 2, "skipMarkers": true},
+    {"label": "definition", "by": "innermost", "skipMarkers": true},
+    {"label": "innermost span", "by": "innermost"},
+    {"label": "phase", "by": "level", "level": 0},
+    {"label": "unit", "by": "level", "level": 1}
+  ]
+}

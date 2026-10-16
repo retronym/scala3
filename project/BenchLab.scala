@@ -165,6 +165,8 @@ object BenchLab {
     val jfrs = (dir ** "*.jfr").get.sortBy(_.getPath)
     if (jfrs.isEmpty) s.log.warn(s"no JFR files under $dir")
     val kinds = kindsArg.split(",").toList.filter(_.nonEmpty)
+    // the span panel's groupings for the compiler's spans (phase > unit > class > member > ...), the first the default
+    val spanConfig = Project.extract(s).get(ThisBuild / Keys.baseDirectory) / "bench-lab" / "span-config.json"
     // the graphs of one recording, for the index: (kind label, variant, file)
     val graphs = for (jfr <- jfrs) yield {
       val base = jfr.getPath.stripSuffix(".jfr")
@@ -175,7 +177,8 @@ object BenchLab {
           if (kind.startsWith("hw:")) (Seq("--hw", kind.drop(3)), "hw-" + kind.drop(3)) else (Seq(s"--$kind"), kind)
         val out = file(s"$base-$label${if (variant == "bench") "" else "-" + variant}.html")
         val title = s"$bench: ${label.stripPrefix("hw-")}, $variant$tag"
-        val cmd = Seq(jfrconv) ++ kindArgs ++ Seq("--minwidth", "0.2", "--title", title) ++ extra ++ Seq(jfr.getPath, out.getPath)
+        val spanArgs = if (extra.contains("--spans")) Seq("--span-config", spanConfig.getPath) else Nil
+        val cmd = Seq(jfrconv) ++ kindArgs ++ Seq("--minwidth", "0.2", "--title", title) ++ extra ++ spanArgs ++ Seq(jfr.getPath, out.getPath)
         if (SysProcess(cmd).!(ProcessLogger(_ => ())) != 0) s.log.warn(s"failed: ${cmd.mkString(" ")}")
         (label.stripPrefix("hw-"), variant, out)
       })
