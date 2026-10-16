@@ -135,9 +135,11 @@ sealed trait Profiler {
   protected def beforeInlineCall(inlineSym: Symbol): TracedEventId = TracedEventId.Empty
   protected def afterInlineCall(event: TracedEventId): Unit = ()
 
-  /** A definition's subtree in a MegaPhase (for the cost per definition only) */
-  inline def onTransform[T](sym: Symbol, span: Span)(using Context)(inline body: T): T =
-    costed(CostKind.Transform, sym, span, ctx.phase)(body)
+  /** A definition's subtree in a MegaPhase (for the cost per definition only). `sym` is by name: local definitions
+   *  (the enclosing owner is not a class) are part of their owner, so they skip the symbol lookup entirely. */
+  inline def onTransform[T](sym: => Symbol, span: Span)(using Context)(inline body: T): T =
+    if defCosts == null || !ctx.owner.isClass then body
+    else costed(CostKind.Transform, sym, span, ctx.phase)(body)
 
   /** Completing `root`: from a classfile or TASTy (`CostKind.Load`), or from source (`CostKind.Completion`) */
   inline def onCompletion[T](root: Symbol, associatedFileName: => Option[String], kind: CostKind = CostKind.Load)(inline body: T): T =
