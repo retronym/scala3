@@ -110,8 +110,24 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
    */
   protected def resize(): Unit = {
     Stats.record(statsItem("resize"))
+    resizeTo(table.size * 2)
+  }
+
+  /** The number of buckets */
+  def capacity: Int = table.size
+
+  /**
+   * Grow the table, if need be, so that it holds `n` elements without resizing
+   */
+  def ensureCapacity(n: Int): Unit = {
+    var capacity = table.size
+    while (n > (capacity * loadFactor).ceil.toInt) capacity *= 2
+    if (capacity > table.size) resizeTo(capacity)
+  }
+
+  private def resizeTo(capacity: Int): Unit = {
     val oldTable = table
-    table = new Array[Entry[A] | Null](oldTable.size * 2)
+    table = new Array[Entry[A] | Null](capacity)
     threshold = computeThreshold
 
     @tailrec

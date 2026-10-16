@@ -9,6 +9,7 @@ import util.{WeakHashSet, Stats}
 import WeakHashSet.Entry
 import profile.DefCosts
 import scala.annotation.tailrec
+import scala.annotation.internal.sharable
 
 class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity) with Uniques.CostedResize:
   override def hash(x: Type): Int = x.hash
@@ -21,6 +22,10 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity) with Uniq
  *  with the given parts exists already and creates a new one if not.
  */
 object Uniques:
+
+  /** The capacity of each table (`Uniques`, `AppliedUniques`, `NamedTypeUniques`) at the end of the last run in
+   *  this JVM, for `-Yuniques-presize`. Racy between concurrent compilers, which is harmless: it is a size hint. */
+  @sharable private[dotc] val lastCapacity: Array[Int] = new Array[Int](3)
 
   /** A table whose growth is a cost frame of its own (`CostKind.Rehash`) with the cost per definition on, rather
    *  than part of whichever definition's lookup happened to cross the threshold. */

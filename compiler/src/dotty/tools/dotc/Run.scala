@@ -384,6 +384,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
     val runCtx = ctx.fresh
     runCtx.setProfiler(Profiler())
+    if ctx.settings.YuniquesPresize.value then ctx.base.presizeUniques()
 
     val pluginPlan = ctx.base.addPluginPhases(ctx.base.phasePlan)
     val phases = ctx.base.fusePhases(pluginPlan,
@@ -447,6 +448,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
         if matchesStopAfter(phase) then stopped = true
         i += 1
       end while
+      ctx.base.recordUniquesCapacity()
       profiler.finished()
     }
 

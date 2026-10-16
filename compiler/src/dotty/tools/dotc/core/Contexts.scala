@@ -1092,6 +1092,17 @@ object Contexts {
       uniqueAppliedTypes.costs = costs
       uniqueNamedTypes.costs = costs
 
+    /** Grow the hash-consing tables to the capacity the last run in this JVM left them at (`-Yuniques-presize`) */
+    private[dotc] def presizeUniques(): Unit =
+      uniques.ensureCapacity(Uniques.lastCapacity(0) / 2)
+      uniqueAppliedTypes.ensureCapacity(Uniques.lastCapacity(1) / 2)
+      uniqueNamedTypes.ensureCapacity(Uniques.lastCapacity(2) / 2)
+
+    private[dotc] def recordUniquesCapacity(): Unit =
+      Uniques.lastCapacity(0) = uniques.capacity
+      Uniques.lastCapacity(1) = uniqueAppliedTypes.capacity
+      Uniques.lastCapacity(2) = uniqueNamedTypes.capacity
+
     var emptyTypeBounds: TypeBounds | Null = null
     var emptyWildcardBounds: WildcardType | Null = null
 
