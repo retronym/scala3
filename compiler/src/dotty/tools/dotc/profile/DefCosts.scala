@@ -43,23 +43,36 @@ final class CostAcc(val kind: CostKind, val key: AnyRef, val phase: Phase):
   var maxSelfNs: Long = 0L
   /** The size of the definition's tree in characters, when known */
   var chars: Int = 0
-  /** A short name for listeners (see `CostFrame.label`), kept once asked for */
-  var label: String | Null = null
 
-/** A region on the cost stack: from entering a hooked operation to leaving it. */
-final class CostFrame(costs: DefCosts, val acc: CostAcc, val parent: CostFrame | Null, val startNs: Long, val startAlloc: Long):
-  var childNs: Long = 0L
-  var childAlloc: Long = 0L
-  /** For a listener's own use, e.g. when the frame's current span segment started */
+/** A region on the cost stack: from entering a hooked operation to leaving it. Frames are reused once left, so a
+ *  listener must not keep one after `exit`. */
+final class CostFrame private[profile] (costs: DefCosts):
+  private var myKind: CostKind = CostKind.Phase
+  private var myKey: AnyRef = NoSymbol
+  private var myPhase: Phase = NoPhase
+  private var myParent: CostFrame | Null = null
+  // with -Yprofile-defs only: the accumulator, and the clocks
+  private[profile] var acc: CostAcc | Null = null
+  private[profile] var startNs: Long = 0L
+  private[profile] var startAlloc: Long = 0L
+  private[profile] var childNs: Long = 0L
+  private[profile] var childAlloc: Long = 0L
+  /** For a listener's own use, e.g. when the frame's span started */
   var listenerData: Long = 0L
-  def kind: CostKind = acc.kind
+
+  private[profile] def init(kind: CostKind, key: AnyRef, phase: Phase, parent: CostFrame | Null): Unit =
+    myKind = kind; myKey = key; myPhase = phase; myParent = parent
+    acc = null; childNs = 0L; childAlloc = 0L; listenerData = 0L
+
+  def kind: CostKind = myKind
   /** A `Symbol`, a `CompilationUnit` for `CostKind.Unit`, a `Phase` for `CostKind.Phase` */
-  def key: AnyRef = acc.key
+  def key: AnyRef = myKey
+  /** The phase, for the kinds that are per phase; else `NoPhase` */
+  def phase: Phase = myPhase
+  def parent: CostFrame | Null = myParent
   /** A short name that needs no new string: the phase's name, the unit's source path, the symbol's (unqualified)
    *  name, or "implicit" / "inline". The frames enclosing it say what it is part of. */
-  def label: String =
-    val l = acc.label
-    if l != null then l else costs.labelOf(acc)
+  def label: String = costs.labelOf(myKind, myKey)
 
 /** Notified as frames are entered and left, on the compiling thread: e.g. to record each frame's exclusive
  *  intervals as async-profiler spans. Named by `-Yprofile-defs-listener`; needs a public no-argument constructor.
@@ -84,9 +97,14 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
   import DefCosts.*
 
   private val thread = Thread.currentThread()
+  // The table (-Yprofile-defs) needs clocks and an accumulator per key; a listener alone needs only the frames
+  private val table = ictx.settings.YprofileDefs.value.nonEmpty
   // per kind, per phase (NoPhase for kinds not per phase), per key
   private val accs = Array.fill(CostKind.values.length)(new IdentityHashMap[Phase, IdentityHashMap[AnyRef, CostAcc]]())
   private var top: CostFrame | Null = null
+  // frames by depth, reused
+  private var pool = new Array[CostFrame | Null](64)
+  private var depth = 0
 
   /** The frame for `kind` and `key` in `phase`, or null if this operation gets no frame of its own. For implicit
    *  searches and inline expansions the key is the innermost frame's. */
@@ -106,6 +124,27 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
       if !kind.perPhase then NoPhase
       else if kind == CostKind.Unit || kind == CostKind.Phase then phase
       else unitPhase(phase)
+    if depth == pool.length then pool = java.util.Arrays.copyOf(pool, depth * 2).asInstanceOf[Array[CostFrame | Null]]
+    val pooled = pool(depth)
+    val frame =
+      if pooled != null then pooled
+      else
+        val f = CostFrame(this)
+        pool(depth) = f
+        f
+    depth += 1
+    frame.init(kind, k, ph, top)
+    if table then
+      val acc = accFor(kind, k, ph)
+      if span.exists then acc.chars = math.max(acc.chars, span.end - span.start)
+      frame.acc = acc
+      frame.startNs = System.nanoTime()
+      frame.startAlloc = allocated()
+    top = frame
+    if listener != null then listener.enter(frame)
+    frame
+
+  private def accFor(kind: CostKind, k: AnyRef, ph: Phase): CostAcc =
     val byPhase = accs(kind.ordinal)
     val byKey0 = byPhase.get(ph)
     val byKey =
@@ -115,39 +154,35 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
         byPhase.put(ph, m)
         m
     val known = byKey.get(k)
-    val acc =
-      if known != null then known
-      else
-        val a = CostAcc(kind, k, ph)
-        byKey.put(k, a)
-        a
-    if span.exists then acc.chars = math.max(acc.chars, span.end - span.start)
-    val frame = CostFrame(this, acc, top, System.nanoTime(), allocated())
-    top = frame
-    if listener != null then listener.enter(frame)
-    frame
+    if known != null then known
+    else
+      val a = CostAcc(kind, k, ph)
+      byKey.put(k, a)
+      a
 
   private def unitPhase(default: Phase): Phase =
     var f = top
     while f != null && f.kind != CostKind.Unit do f = f.parent
-    if f == null then default else f.acc.phase
+    if f == null then default else f.phase
 
   def exit(frame: CostFrame): Unit =
     if listener != null then listener.exit(frame)
-    val total = System.nanoTime() - frame.startNs
-    val alloc = allocated() - frame.startAlloc
-    val self = total - frame.childNs
     val acc = frame.acc
-    acc.calls += 1
-    acc.selfNs += self
-    acc.selfAlloc += alloc - frame.childAlloc
-    acc.totalNs += total
-    if self > acc.maxSelfNs then acc.maxSelfNs = self
-    val parent = frame.parent
-    if parent != null then
-      parent.childNs += total
-      parent.childAlloc += alloc
-    top = parent
+    if acc != null then
+      val total = System.nanoTime() - frame.startNs
+      val alloc = allocated() - frame.startAlloc
+      val self = total - frame.childNs
+      acc.calls += 1
+      acc.selfNs += self
+      acc.selfAlloc += alloc - frame.childAlloc
+      acc.totalNs += total
+      if self > acc.maxSelfNs then acc.maxSelfNs = self
+      val parent = frame.parent
+      if parent != null then
+        parent.childNs += total
+        parent.childAlloc += alloc
+    top = frame.parent
+    depth -= 1
 
   /** One row per kind, phase and key, tab-separated: kind, phase (empty for kinds not per phase), name (a symbol's
    *  full name, or a unit's source path), file, line, chars, calls, self and total time in µs, the longest single self
@@ -171,16 +206,13 @@ final class DefCosts(listener: CostListener | Null)(using ictx: Context):
       val suffix = if ictx.runId > core.Periods.InitialRunId + 1 then s".${ictx.runId - 1}" else ""
       write(path + suffix)
 
-  private[profile] def labelOf(acc: CostAcc): String =
-    val l = acc.kind match
-      case CostKind.Implicit | CostKind.Inline => acc.kind.label
-      case _ => acc.key match
-        case phase: Phase => phase.phaseName
-        case unit: CompilationUnit => unit.source.path
-        case sym: Symbol => if sym.exists then sym.name.toString else "<outside a definition>"  // cached in the name
-        case other => String.valueOf(other)
-    acc.label = l
-    l
+  private[profile] def labelOf(kind: CostKind, key: AnyRef): String = kind match
+    case CostKind.Implicit | CostKind.Inline => kind.label
+    case _ => key match
+      case phase: Phase => phase.phaseName
+      case unit: CompilationUnit => unit.source.path
+      case sym: Symbol => if sym.exists then sym.name.toString else "<outside a definition>"  // a field of the name
+      case other => String.valueOf(other)
 
   private def where(key: AnyRef): (String, String) = key match
     case _: Phase => ("", "")
