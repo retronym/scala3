@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.management.openmbean.CompositeData
 import javax.management.{Notification, NotificationEmitter, NotificationListener}
 
-import dotty.tools.dotc.core.Phases.Phase
+import dotty.tools.dotc.core.Phases.{Phase, NoPhase}
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.CompilationUnit
 import dotty.tools.dotc.core.Types.Type
@@ -92,9 +92,9 @@ sealed trait Profiler {
   /** Exclusive cost per definition (`-Yprofile-defs`, `-Yprofile-defs-listener`), or null */
   protected def defCosts: DefCosts | Null = null
 
-  private inline def costed[T](kind: CostKind, sym: Symbol, span: Span)(inline body: T): T =
+  private inline def costed[T](kind: CostKind, key: AnyRef, span: Span, phase: Phase)(inline body: T): T =
     val costs = defCosts
-    val frame = if costs == null then null else costs.enter(kind, sym, span)
+    val frame = if costs == null then null else costs.enter(kind, key, span, phase)
     try body
     finally if frame != null then costs.nn.exit(frame)
 
@@ -106,7 +106,7 @@ sealed trait Profiler {
   protected def beforePhase(phase: Phase): (TracedEventId, ProfileSnap) = EmptyPhaseEvent
   protected def afterPhase(event: TracedEventId, phase: Phase, profileBefore: ProfileSnap): Unit = ()
 
-  inline def onUnit[T](phase: Phase, unit: CompilationUnit)(inline body: T): T =
+  inline def onUnit[T](phase: Phase, unit: CompilationUnit)(inline body: T): T = costed(CostKind.Unit, unit, NoSpan, phase):
     val event = beforeUnit(phase, unit)
     try body
     finally afterUnit(event)
@@ -114,30 +114,34 @@ sealed trait Profiler {
   protected def afterUnit(event: TracedEventId): Unit = ()
 
   inline def onTypedDef[T](sym: Symbol, span: Span = NoSpan)(inline body: T)(using Context): T =
-    costed(if ctx.phase.isTyper then CostKind.TypedDef else CostKind.Retype, sym, span):
+    costed(if ctx.phase.isTyper then CostKind.TypedDef else CostKind.Retype, sym, span, ctx.phase):
       val event = beforeTypedDef(sym)
       try body
       finally afterTypedDef(event)
    protected def beforeTypedDef(sym: Symbol): TracedEventId = TracedEventId.Empty
    protected def afterTypedDef(token: TracedEventId): Unit = ()
 
-  inline def onImplicitSearch[T](pt: Type)(inline body: T): T = costed(CostKind.Implicit, NoSymbol, NoSpan):
+  inline def onImplicitSearch[T](pt: Type)(inline body: T): T = costed(CostKind.Implicit, NoSymbol, NoSpan, NoPhase):
     val event = beforeImplicitSearch(pt)
     try body
     finally afterImplicitSearch(event)
   protected def beforeImplicitSearch(pt: Type): TracedEventId  = TracedEventId.Empty
   protected def afterImplicitSearch(event: TracedEventId): Unit = ()
 
-  inline def onInlineCall[T](inlineSym: Symbol)(inline body: T): T = costed(CostKind.Inline, NoSymbol, NoSpan):
+  inline def onInlineCall[T](inlineSym: Symbol)(inline body: T): T = costed(CostKind.Inline, NoSymbol, NoSpan, NoPhase):
     val event = beforeInlineCall(inlineSym)
     try body
     finally afterInlineCall(event)
   protected def beforeInlineCall(inlineSym: Symbol): TracedEventId = TracedEventId.Empty
   protected def afterInlineCall(event: TracedEventId): Unit = ()
 
+  /** A definition's subtree in a MegaPhase (for the cost per definition only) */
+  inline def onTransform[T](sym: Symbol, span: Span)(using Context)(inline body: T): T =
+    costed(CostKind.Transform, sym, span, ctx.phase)(body)
+
   /** Completing `root`: from a classfile or TASTy (`CostKind.Load`), or from source (`CostKind.Completion`) */
   inline def onCompletion[T](root: Symbol, associatedFileName: => Option[String], kind: CostKind = CostKind.Load)(inline body: T): T =
-    costed(kind, root, NoSpan):
+    costed(kind, root, NoSpan, NoPhase):
       val (event, completionName) = beforeCompletion(root, associatedFileName)
       try body
       finally afterCompletion(event, completionName)

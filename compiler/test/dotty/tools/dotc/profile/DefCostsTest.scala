@@ -27,9 +27,9 @@ class DefCostsTest extends DottyTest {
     fc.setSetting(fc.settings.YprofileDefsListener, classOf[RecordingCostListener].getName.nn)
   }
 
-  private def compile(code: String): Unit =
+  private def compile(code: String, until: String = "typer"): Unit =
     RecordingCostListener.events.clear()
-    val c = compilerWithChecker("typer") { (_, _) => () }
+    val c = compilerWithChecker(until) { (_, _) => () }
     val run = c.newRun
     run.compileSources(List(SourceFile.virtual("test.scala", code)))
     assert(!run.runContext.reporter.hasErrors, "compilation failed")
@@ -51,11 +51,26 @@ class DefCostsTest extends DottyTest {
     assertTrue(stack.isEmpty)
 
     val rows = Files.readAllLines(DefCostsTest.table).nn.asScala.map(_.split('\t').toList)
-    assertEquals(List("kind", "symbol", "file", "line", "chars", "calls", "self_us", "total_us", "max_self_us", "self_alloc"), rows.head)
-    def row(kind: String, sym: String) = rows.find(r => r(0) == kind && r(1) == sym).getOrElse(throw AssertionError(s"no $kind row for $sym in $rows"))
-    assertEquals("1", row("complete", "T$.b")(5))
-    assertEquals("1", row("def", "T$.a")(5))
-    assertEquals("2", row("def", "T$.a")(3))   // line
+    assertEquals(List("kind", "phase", "symbol", "file", "line", "chars", "calls", "self_us", "total_us", "max_self_us", "self_alloc"), rows.head)
+    def row(kind: String, sym: String) = rows.find(r => r(0) == kind && r(2) == sym).getOrElse(throw AssertionError(s"no $kind row for $sym in $rows"))
+    assertEquals("1", row("complete", "T$.b")(6))
+    assertEquals("1", row("def", "T$.a")(6))
+    assertEquals("2", row("def", "T$.a")(4))   // line
+    assertTrue(rows.exists(r => r(0) == "unit" && r(1) == "typer" && r(2) == "test.scala"))
+    // the unit is the parent of the definitions typed in it
+    assertTrue(events.mkString("\n"), events.exists(e => e.startsWith("enter def:T$ in unit@typer:test.scala")))
+  }
+
+  @Test def megaPhasesHaveAFramePerDefinition(): Unit = {
+    compile(
+      """object M:
+        |  def a(xs: List[Int]): Int = xs.map(_ + 1).sum
+        |""".stripMargin, until = "erasure")
+    val events = RecordingCostListener.events
+    val transforms = events.filter(_.startsWith("enter transform@"))
+    assertTrue(events.mkString("\n"), transforms.exists(_.contains(":M$.a in transform@")))
+    // each MegaPhase's work on the unit is a unit frame of that phase
+    assertTrue(events.mkString("\n"), transforms.exists(e => e.matches("enter transform@(.*):M\\$ in unit@\\1:test.scala")))
   }
 
   @Test def localDefinitionsArePartOfTheirOwner(): Unit = {
