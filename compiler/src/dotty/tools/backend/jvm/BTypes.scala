@@ -557,10 +557,13 @@ sealed trait RefBType extends BType {
  *
  * @param nestedInfo    If this describes a nested class, information for the InnerClass table.
  * @param inlineInfo    Inlining information for this class, if requested and available.
+ * @param nestHost      The host of the JVM nest (JEP 181) of this class: classes with the same
+ *                      nest host can access each other's private members. A class that is not
+ *                      known to be part of a nest is its own host.
  */
 final case class ClassInfo(superClass: Option[ClassBType], interfaces: List[ClassBType], flags: Int,
                            nestedClasses: List[ClassBType], nestedInfo: Option[NestedInfo],
-                           inlineInfo: InlineInfo)
+                           inlineInfo: InlineInfo, nestHost: InternalName)
 
 /**
  * Information required to add a class to an InnerClass table.

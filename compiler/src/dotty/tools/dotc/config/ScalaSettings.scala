@@ -577,6 +577,8 @@ private sealed trait YSettings:
   val YccVerbose: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycc-verbose", "Print root capabilities with more details")
   val YccPrintSetup: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycc-print-setup", "Used in conjunction with captureChecking language import, print trees after cc.Setup phase")
 
+  val YnoNestmates: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-nestmates", "Do not keep private members private when accessed from another class of their nest (a class, its companion and their nested classes), which relies on JVM nestmates (JEP 181); make them public with expanded names instead.")
+
   /** Area-specific debug output */
   val YexplainLowlevel: Setting[Boolean] = BooleanSetting(ForkSetting, "Yexplain-lowlevel", "When explaining type errors, show types at a lower level.")
   val YnoDoubleBindings: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-double-bindings", "Assert no namedtype is bound twice (should be enabled only if program is error-free).")
