@@ -337,4 +337,27 @@ class NestMateTests extends DottyBytecodeTest {
       assertTrue("Inner must point to SoloObject$ as host", innerCls.nestHostClass == "SoloObject$")
     }
   }
+
+  /** A private member of the companion class that is accessed from the object keeps its name, but
+   *  must not suppress the static forwarder of a same-named object method, as long as the
+   *  descriptors differ (javac cannot see private members).
+   */
+  @Test def nestmates_privateMemberDoesNotSuppressForwarder(): Unit = {
+    val source =
+      """class Fwd:
+        |  private var flag: Boolean = false
+        |  private def same(x: Int): Int = x
+        |object Fwd:
+        |  def flag(x: Int): Boolean = new Fwd().flag
+        |  def same(x: Int): Int = new Fwd().same(x)
+        |""".stripMargin
+    checkBCode(source) { dir =>
+      val fwdCls = loadClassNode(dir.lookupName("Fwd.class", directory = false).input)
+      def static(name: String) = fwdCls.methods.asScala.filter(m => m.name == name && (m.access & Opcodes.ACC_STATIC) != 0)
+      assertEquals("forwarder for flag(Int)", List("(I)Z"), static("flag").map(_.desc).toList)
+      // `same(I)I` would clash with the private instance method of the same descriptor
+      assertTrue("no forwarder for same(Int)", static("same").isEmpty)
+      assertTrue("private same(I)I", methodNamed(fwdCls, "same").exists(m => (m.access & ACC_PRIVATE) != 0))
+    }
+  }
 }
