@@ -18,9 +18,11 @@ import ValueClasses.*
 /** Make private term members that are accessed from another class
  *  non-private by resetting the Private flag and expanding their name.
  *
- *  On the JVM, accesses from a class in the same nest (see `ExpandPrivate.nestHost`)
- *  are left alone: the backend emits `NestHost`/`NestMembers` attributes, which
- *  let the JVM grant such accesses to private members directly (JEP 181).
+ *  Accesses from a class in the same nest (see `ExpandPrivate.nestHost`) are left alone.
+ *  On the JVM, the backend emits `NestHost`/`NestMembers` attributes, which let the
+ *  JVM grant such accesses to private members directly (JEP 181). The Scala.js IR
+ *  has no access control between classes, so a private method can be called
+ *  statically from another class.
  *
  *  Make private accessor in value class not-private. This is necessary to unbox
  *  the value class when accessing it from separate compilation units
@@ -136,9 +138,9 @@ object ExpandPrivate:
   val name: String = "expandPrivate"
   val description: String = "widen private definitions accessed from nested classes"
 
-  /** Should private accesses within a nest rely on JVM nestmate access control (JEP 181)? */
+  /** Should private members accessed only from their nest stay private? */
   def useNestMates(using Context): Boolean =
-    !ctx.settings.YnoNestmates.value && !ctx.settings.scalajs.value
+    !ctx.settings.YnoNestmates.value
 
   /** The host of the JVM nest of class `cls`: the top-level class lexically enclosing `cls`,
    *  where a top-level module class counts as nested in its companion class, if any.
