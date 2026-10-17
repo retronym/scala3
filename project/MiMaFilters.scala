@@ -208,14 +208,22 @@ object MiMaFilters {
       ),
     )
 
+    // Private methods of value classes, accessed from the value class, used to be public with an
+    // expanded name. With nestmates (JEP 181) they stay private. They were never part of the API.
+    private val NestmatePrivateExtensionMethods = Seq(
+      ProblemFilters.exclude[DirectMissingMethodProblem]("scala.collection.StringOps.scala$collection$StringOps$$$*"),
+      ProblemFilters.exclude[DirectMissingMethodProblem]("scala.runtime.Tuple2Zipped.scala$runtime$Tuple2Zipped$$$*"),
+      ProblemFilters.exclude[DirectMissingMethodProblem]("scala.runtime.Tuple3Zipped.scala$runtime$Tuple3Zipped$$$*"),
+    )
+
     val BackwardsBreakingChanges: Map[String, Seq[ProblemFilter]] = Map(
       // In general we should never have backwards incompatible changes in the library.
       // Only exceptional cases should be added here.
 
-      Versions.mimaPreviousVersion -> Seq.empty,
+      Versions.mimaPreviousVersion -> NestmatePrivateExtensionMethods,
 
       // Breaking changes since last LTS
-      Versions.mimaPreviousLTSVersion -> Seq(
+      Versions.mimaPreviousLTSVersion -> (NestmatePrivateExtensionMethods ++ Seq(
 
         // scala/scala3#26100
         ProblemFilters.exclude[MissingTypesProblem]("scala.collection.immutable.LazyList"),
@@ -668,7 +676,7 @@ object MiMaFilters {
         ProblemFilters.exclude[MissingFieldProblem]("scala.util.control.TailCalls.Cont"),
         ProblemFilters.exclude[MissingFieldProblem]("scala.util.matching.Regex.Match"),
         ProblemFilters.exclude[MissingFieldProblem]("scala.util.matching.Regex.Groups"),
-      ),
+      )),
     )
   }
 
