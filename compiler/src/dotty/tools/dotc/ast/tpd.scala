@@ -853,11 +853,15 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
       tree match
         case tree: TypeApply
         if (tree1 ne tree) && (tree.fun eq fun) && (tree.args eq args)
-           && ((tree1.tpe eq tree.tpe) || tree1.tpe =:= tree.tpe) => tree
+           && ((tree1.tpe eq tree.tpe) || tree1.tpe == tree.tpe && tree1.tpe =:= tree.tpe) => tree
         case _ => tree1
       // Same remark as for Apply. Instantiating a polymorphic method type yields a fresh
-      // MethodType each time, so without the `=:=` check an unchanged TypeApply, and with it
-      // every enclosing tree, would be copied in each MegaPhase.
+      // MethodType each time, so without the equality check an unchanged TypeApply, and with it
+      // every enclosing tree, would be copied in each MegaPhase. `=:=` alone is not enough:
+      // an equivalent type with a different form (e.g. `Int *: (Int, Int)` vs `(Int, Int, Int)`)
+      // must still be replaced (structural `==`), or the tree's type differs from what unpickling recomputes
+      // (tests/run/i15302b.scala). `=:=` as well, because structurally equal types can fail it
+      // and keeping the tree then breaks -Ycheck (tests/run/i1284.scala).
 
     override def Closure(tree: Tree)(env: List[Tree], meth: Tree, tpt: Tree)(using Context): Closure =
             ta.assignType(untpdCpy.Closure(tree)(env, meth, tpt), meth, tpt)
