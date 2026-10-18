@@ -7,7 +7,7 @@ Written with LLM assistance (Claude), see `LLM_POLICY.md`. Branch `claude/replay
 Two commits on top of Track B's branch. Relative to `main` (`ae374e9583`), `compiler/src` changes by +148 −12 over 11 files: 99 lines are the new `typer/TyperObserver.scala`, 12 are the Name/NameKind content hashes from Track B, and the rest are hook sites and the copier fix.
 
 - `6a1308b7e6` replaces Track B's concrete `Recorder` with a `TyperObserver` trait. It has no-op default methods: phase begin/end, typed/adapt/complete/implicit search/candidate enter+exit, report, and copied. Its companion has `inline` helpers, so a hook allocates no closure. The patch deletes `dotc/replay/` and `-Yreplay-record`.
-- `9298f36556` changes `tpd.TimeTravellingTreeCopier.TypeApply` (`ast/tpd.scala:837`) to keep the tree when `fun`/`args` are unchanged and the recomputed type is `eq` or `=:=` the old one.
+- `9298f36556` changes `tpd.TimeTravellingTreeCopier.TypeApply` (`ast/tpd.scala:837`) to keep the tree when `fun`/`args` are unchanged and the recomputed type equals the old one. The commit first used `eq || =:=`; a follow-up commit narrows it to `eq || (== && =:=)` (see "testCompilation" below).
 
 Hook sites. Each is a field read plus a null test.
 
@@ -25,7 +25,7 @@ Hook sites. Each is a field read plus a null test.
 
 The observer goes in `typer/` because most of its events are typer events. The copier and phase hooks don't really belong there, so `core/` would also be a reasonable home.
 
-`testCompilation` was run once and 2 of 22 suites failed in `CompilationTests` (`local/replay/testCompilation.log`). I haven't looked at these failures yet, so they are not attributed to either commit.
+`testCompilation` results and how each failure is attributed are in the "testCompilation" section below.
 
 ## Plugin
 
@@ -98,8 +98,22 @@ Wall clock on `util`, cold, one JVM, JDK 21, machine not quiet: plain compile 3.
 
 ## Known gaps
 
-- The 2 failing `testCompilation` suites.
 - The arena is a strong identity map for the whole run.
 - `LazyTree` children forced after a node was interned (TASTy-loaded bodies) would make the node's `children` stale. This was not seen on the corpus.
 - Fused `mixin..capturedVars` is one version.
 - No bench-lab numbers for the disabled hooks or for the TypeApply fix.
+
+## testCompilation
+
+There were three full runs, with sbt on JDK 21. Logs: `local/replay/testCompilation{,-2,-3}.log`.
+
+**Run 1, with the TypeApply check `eq || =:=`: 2 of 22 test methods failed.**
+
+1. `pickling` on `tests/run/i15302b.scala`. The TypeApply change caused this. `-Ytest-pickler` compares tree printouts before pickling and after unpickling. A later phase kept the TypeApply of `tup3.asInstanceOf[Int *: ((Int *: Int *: EmptyTuple) & (Int, Int))]` with its old type `(Int, Int, Int)`. Unpickling recomputes `Int *: (Int, Int)`. The two types are `=:=`, but they print differently, so the comparison failed. The compiler built without the change (`local/replay/classes-nofix`) passes.
+2. `genericJavaSignatures` on `tests/generic-java-signatures/i24553.scala`. This branch did not cause it; the result depends on the JDK. The check file expects `public final native void java.lang.Object.wait(long)`, but that method is no longer `native` from JDK 19 on. I compiled the test once and ran it on two JVMs. Its output matches the check file on JDK 17.0.20, which is what CI uses (`.github/workflows/ci.yaml`, `java-version: 17`). It differs on JDK 21.0.12, the JVM this sbt server runs.
+
+**Run 2, with the check narrowed to `eq || ==`: `i15302b` passed, but `tests/run/i1284.scala` now failed (`run` and `pickling`).** It was a `-Ycheck` type mismatch at `Array(A, B).toList`. The case: `wrapRefArray[A | B]`, where the old and recomputed `MethodType`s are structurally identical (same `toString`) and `==` holds, yet `=:=` is false under the checker. Keeping the tree in that case makes the checker fail later, on an enclosing `reflectiveSelectable…` application. I did not find out why `=:=` fails on two structurally equal method types there. Run 1 passed this test only because `=:=` happened to reject it.
+
+**Final check: `(tree1.tpe eq tree.tpe) || tree1.tpe == tree.tpe && tree1.tpe =:= tree.tpe`.** Both `i15302b` (`-Ytest-pickler`) and `i1284` (`-Ycheck:all`) pass when compiled directly. The corpus arena and printed-version numbers above are unchanged. On `util` the arena is 133,798 nodes instead of 133,759: those 39 nodes are the `==`-but-not-`=:=` cases, which are now copied again.
+
+Run 3, full `testCompilation` with the final check: 21 of 22 test methods pass and 87 of 88 Vulpix suites pass. The only failure is `i24553`, which depends on the JDK as explained above.
