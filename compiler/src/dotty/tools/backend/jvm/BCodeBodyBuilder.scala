@@ -1057,16 +1057,16 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
         var indirectBlocks: List[(asm.Label, Tree | Null)] = Nil
 
 
-        // Cases grouped by their hashCode
-        val casesByHash = SortedMap.empty[Int, List[(String, Either[asm.Label, Tree])]]
+        // Cases grouped by their hashCode, with the pattern literal of each string
+        val casesByHash = SortedMap.empty[Int, List[(Literal, Either[asm.Label, Tree])]]
 
         for (caze @ CaseDef(pat, guard, body) <- cases) {
           assert(guard == tpd.EmptyTree, guard)
           pat match {
-            case Literal(value) =>
+            case lit @ Literal(value) =>
               val strValue = value.stringValue
               casesByHash.updateWith(strValue.##) { existingCasesOpt =>
-                val newCase = (strValue, Right(body))
+                val newCase = (lit, Right(body))
                 Some(newCase :: existingCasesOpt.getOrElse(Nil))
               }
             case Ident(nme.WILDCARD) =>
@@ -1078,10 +1078,10 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
               val indirectCaseGroupLabel = new asm.Label
               indirectBlocks ::= (indirectCaseGroupLabel, body)
               alts foreach {
-                case Literal(value) =>
+                case lit @ Literal(value) =>
                   val strValue = value.stringValue
                   casesByHash.updateWith(strValue.##) { existingCasesOpt =>
-                    val newCase = (strValue, Left(indirectCaseGroupLabel))
+                    val newCase = (lit, Left(indirectCaseGroupLabel))
                     Some(newCase :: existingCasesOpt.getOrElse(Nil))
                   }
                 case _ =>
@@ -1095,7 +1095,7 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
 
         // Organize the hashCode options into switch cases
         var flatKeysAndTargets: List[(Int, asm.Label)]       = Nil
-        var hashBlocks: List[(asm.Label, List[(String, Either[asm.Label, Tree])])] = Nil
+        var hashBlocks: List[(asm.Label, List[(Literal, Either[asm.Label, Tree])])] = Nil
         for ((hashValue, hashCases) <- casesByHash) {
           val switchBlockPoint = new asm.Label
           hashBlocks ::= (switchBlockPoint, hashCases)
@@ -1122,9 +1122,13 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
         // emit blocks for each hash case
         for ((hashLabel, caseAlternatives) <- hashBlocks.reverse) {
           markProgramPoint(hashLabel)
-          for ((caseString, indirectLblOrBody) <- caseAlternatives) {
-            val comparison = if (caseString == null) defn.Any_== else defn.Any_equals
-            val condp = Literal(Constant(caseString)).select(defn.Any_==).appliedTo(tree.selector)
+          for ((caseLit, indirectLblOrBody) <- caseAlternatives) {
+            // Position the test at its pattern, as for a test that is not part of a switch,
+            // rather than at the selector, which is where the switch on the hashCode is
+            val selector = tree.selector match
+              case sel: Ident if caseLit.span.exists => sel.withSpan(caseLit.span)
+              case sel => sel
+            val condp = caseLit.select(defn.Any_==).appliedTo(selector)
             val keepGoing = new asm.Label
             indirectLblOrBody match {
               case Left(jump) =>
