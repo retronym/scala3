@@ -39,10 +39,15 @@ class DropOuterAccessors extends MiniPhase with IdentityDenotTransformer:
       .asInstanceOf[CountOuterAccesses]
       .outerAccessCount
 
+    // When fused, this runs at the period after its whole group, where Flatten has already
+    // made lifted local classes toplevel, so `mightBeDropped` must look at owners as of this phase.
+    def droppable(sym: Symbol) = atPhase(thisPhase)(mightBeDropped(sym))
+
     def dropOuterAccessor(stat: Tree): Boolean = stat match
       case stat: DefDef
       if stat.symbol.is(OuterAccessor)
-          && mightBeDropped(stat.symbol)
+          && !stat.symbol.is(Deferred) // the abstract outer accessor of a local trait
+          && droppable(stat.symbol)
           && outerAccessCount(stat.symbol) == 0 =>
         assert(stat.rhs.isInstanceOf[RefTree], stat)
         assert(outerAccessCount(stat.rhs.symbol) > 0)
@@ -57,7 +62,7 @@ class DropOuterAccessors extends MiniPhase with IdentityDenotTransformer:
     def dropOuterParamAccessor(stat: Tree): Boolean = stat match
       case stat: ValDef
       if stat.symbol.isOuterParamAccessor
-          && mightBeDropped(stat.symbol)
+          && droppable(stat.symbol)
           && outerAccessCount(stat.symbol) == 1 =>
         droppedParamAccessors += stat.symbol
         stat.symbol.dropAfter(thisPhase)
