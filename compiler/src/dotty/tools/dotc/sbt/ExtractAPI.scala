@@ -791,13 +791,7 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
         case NullTag =>
           // No value to hash, the tag is enough.
         case ClazzTag =>
-          // Go through `apiType` to get a value with a stable hash, it'd
-          // be better to use Murmur here too instead of relying on
-          // `hashCode`, but that would essentially mean duplicating
-          // https://github.com/sbt/zinc/blob/develop/internal/zinc-apiinfo/src/main/scala/xsbt/api/HashAPI.scala
-          // and at that point we might as well do type hashing on our own
-          // representation.
-          h = MurmurHash3.mix(h, apiType(c.typeValue).hashCode)
+          h = APIHash.tpe(apiType(c.typeValue), h)
         case _ =>
           h = MurmurHash3.mix(h, java.util.Objects.hashCode(c.value))
       h
@@ -825,7 +819,7 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
               // A, so a change to B will cause a change to A directly, so we can skip this, and if 
               // an inline method accesses a parameter of an inline trait it doesn't care about the definition
               // of the trait.
-              h = MurmurHash3.mix(h, apiDefinition(sym, inlineOrigin).hashCode)
+              h = APIHash.definition(apiDefinition(sym, inlineOrigin), h)
           case _ =>
 
       // FIXME: If `p` is a tree we should probably take its type into account
@@ -870,7 +864,7 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol])
       var h = initHash
       var elems = tparams
       while elems.nonEmpty do
-        h = MurmurHash3.mix(h, elems.head.hashCode)
+        h = APIHash.typeParameter(elems.head, h)
         elems = elems.tail
       h
 
