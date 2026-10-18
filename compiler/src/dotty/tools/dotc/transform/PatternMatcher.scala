@@ -1005,7 +1005,13 @@ object PatternMatcher {
         CaseDef(pat, EmptyTree, emit(ons))
       }
 
-      Match(primScrutinee, caseDefs)
+      // Attribute the dispatch to the binding of the scrutinee (for the top-level scrutinee,
+      // the selector). Left spanless, the scrutinee would take the position of the first
+      // case's pattern, and stepping would stop on that case's line whichever case matches.
+      val scrutSpan = scrutinee match
+        case id: Ident if isPatmatGenerated(id.symbol) => id.symbol.span.focus
+        case _ => NoSpan
+      Match(if scrutSpan.exists then primScrutinee.withSpan(scrutSpan) else primScrutinee, caseDefs)
     }
 
     /** If selfCheck is `true`, used to check whether a tree gets generated twice */
