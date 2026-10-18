@@ -16,3 +16,8 @@ next 25
 break Test$ 29
 next 32
 
+// A constant body on its own line keeps its line
+break Test$ 36
+next 37
+next 39
+next 40

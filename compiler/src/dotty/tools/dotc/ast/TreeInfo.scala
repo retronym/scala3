@@ -11,6 +11,7 @@ import typer.ConstFold
 import reporting.trace
 import config.Feature
 import util.SrcPos
+import util.Spans.Span
 
 import Decorators.*
 import Constants.Constant
@@ -830,7 +831,12 @@ trait TypedTreeInfo extends TreeInfo[Type] { self: Trees.Instance[Type] =>
           then isIdempotentExpr(tree1)
           else isPureExpr(tree1)
 
-        if countsAsPure then Literal(value).withSpan(tree.span)
+        // A pure block folds to its result: position the literal there, not at the block,
+        // whose span may start elsewhere (a case body's block starts at the `=>`).
+        def resultSpan(t: Tree): Span = t match
+          case Block(_, expr) if expr.span.exists => resultSpan(expr)
+          case _ => t.span
+        if countsAsPure then Literal(value).withSpan(resultSpan(tree))
         else
           val pre = dropOp(tree1)
           if pre eq tree1 then tree1
