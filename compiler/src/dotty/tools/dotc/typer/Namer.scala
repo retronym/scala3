@@ -937,7 +937,7 @@ class Namer { typer: Typer =>
         denot.info = UnspecifiedErrorType
       else
         try
-          replay.Recorder.complete(denot)(completeInCreationContext(denot))
+          TyperObserver.complete(denot)(completeInCreationContext(denot))
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
         catch
           case ex: CompilationUnit.SuspendException =>

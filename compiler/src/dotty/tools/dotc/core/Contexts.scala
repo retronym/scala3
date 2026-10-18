@@ -1130,8 +1130,8 @@ object Contexts {
     /** Flag to suppress inlining, set after overflow */
     private[dotc] var stopInlining: Boolean = false
 
-    /** Replay recorder, installed by -Yreplay-record; null when disabled */
-    var recorder: replay.Recorder | Null = null
+    /** Observer of typer events and the phase loop, installed by tools (e.g. a plugin); usually null */
+    var observer: typer.TyperObserver | Null = null
 
     /** Cached -Yno-double-bindings setting. This is accessed from `setDenot`, which
      *  is fairly hot, so we don't want to lookup the setting each time it is called.

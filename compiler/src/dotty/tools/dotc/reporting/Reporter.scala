@@ -238,8 +238,8 @@ abstract class Reporter extends interfaces.ReporterResult {
   end issueIfNotSuppressed
 
   def report(dia: Diagnostic)(using Context): Unit =
-    val rec = ctx.base.recorder
-    if rec != null then rec.report(dia, this)
+    val obs = ctx.base.observer
+    if obs != null then obs.report(dia, this)
     issueIfNotSuppressed(dia)
 
   def incomplete(dia: Diagnostic)(using Context): Unit =

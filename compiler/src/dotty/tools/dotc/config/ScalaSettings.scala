@@ -552,7 +552,6 @@ private sealed trait YSettings:
   val YcheckAllPatmat: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-all-patmat", "Check exhaustivity and redundancy of all pattern matching (used for testing the algorithm).")
   val YcheckConstraintDeps: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-constraint-deps", "Check dependency tracking in constraints (used for testing the algorithm).")
   val YretainTrees: Setting[Boolean] = BooleanSetting(ForkSetting, "Yretain-trees", "Retain trees for top-level classes, accessible from ClassSymbol#tree")
-  val YreplayRecord: Setting[String] = StringSetting(ForkSetting, "Yreplay-record", "file", "Record typer events and lineage as replay JSONL to file (experimental).", "")
   val YshowTreeIds: Setting[Boolean] = BooleanSetting(ForkSetting, "Yshow-tree-ids", "Uniquely tag all tree nodes in debugging output.")
   val YfromTastyIgnoreList: Setting[List[String]] = MultiStringSetting(ForkSetting, "Yfrom-tasty-ignore-list", "file", "List of `tasty` files in jar files that will not be loaded when using -from-tasty.")
   val YlegacyLazyVals: Setting[Boolean] = BooleanSetting(ForkSetting, "Ylegacy-lazy-vals", "Use legacy (pre 3.3.0) implementation of lazy vals.")

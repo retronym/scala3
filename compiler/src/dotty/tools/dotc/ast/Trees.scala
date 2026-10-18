@@ -1279,15 +1279,15 @@ object Trees {
       protected def finalize(tree: Tree, copied: untpd.Tree)(using Context): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
         val res = postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
-        val rec = ctx.base.recorder
-        if rec != null then rec.derive(tree, res)
+        val obs = ctx.base.observer
+        if obs != null then obs.copied(tree, res)
         res
 
       protected def finalize(tree: Tree, copied: untpd.MemberDef)(using Context): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
         val res = postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
-        val rec = ctx.base.recorder
-        if rec != null then rec.derive(tree, res)
+        val obs = ctx.base.observer
+        if obs != null then obs.copied(tree, res)
         res
 
       def Ident(tree: Tree)(name: Name)(using Context): Ident = tree match {
