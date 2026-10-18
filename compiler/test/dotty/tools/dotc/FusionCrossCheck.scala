@@ -20,7 +20,10 @@ import dotty.tools.vulpix.TestConfiguration
  *  Usage (from sbt):
  *
  *    scala3-compiler-nonbootstrapped/Test/runMain dotty.tools.dotc.FusionCrossCheck
- *      [--out <dir>] [--jobs <n>] [--filter <regex>] [--ycheck] [--run] [--keep] tests/pos tests/run ...
+ *      [--out <dir>] [--jobs <n>] [--filter <regex>] [--ycheck] [--run] [--keep] [--self] tests/pos tests/run ...
+ *
+ *  `--self` compiles both sides normally instead, which finds output that is not reproducible
+ *  from one compile to the next in the same JVM, independently of fusion.
  *
  *  `--ycheck` adds `-Ycheck:all` to the fused compile, and to the unfused one for every phase
  *  except those between `flatten` and `restoreScopes`, whose intermediate trees are not expected
@@ -32,7 +35,7 @@ object FusionCrossCheck:
   final case class Conf(
     categories: List[Path] = Nil, out: Path = repoRoot.resolve("out/fusion-crosscheck"), jobs: Int = 4,
     filter: Option[String] = None, ycheck: Boolean = false, run: Boolean = false, keep: Boolean = false,
-    timeoutSec: Int = 600)
+    self: Boolean = false, timeoutSec: Int = 600)
 
   final case class Group(files: List[Path], options: List[String])
   final case class Test(category: String, name: String, root: Path, groups: List[Group])
@@ -62,8 +65,10 @@ object FusionCrossCheck:
     Files.createDirectories(conf.out)
     val phaseNames = (new Compiler).phases.flatten.map(_.phaseName).distinct
     val fusedOpts = if conf.ycheck then List("-Ycheck:all") else Nil
-    val unfusedOpts = "-Yno-fuse-phases" ::
-      (if conf.ycheck then List(phaseNames.filterNot(notCheckableUnfused).mkString("-Ycheck:", ",", "")) else Nil)
+    val unfusedOpts =
+      if conf.self then fusedOpts
+      else "-Yno-fuse-phases" ::
+        (if conf.ycheck then List(phaseNames.filterNot(notCheckableUnfused).mkString("-Ycheck:", ",", "")) else Nil)
     println(s"[fusion-crosscheck] ${tests.length} tests, ${conf.jobs} jobs, results in ${conf.out.toAbsolutePath}/results.tsv")
 
     val pool = Executors.newFixedThreadPool(conf.jobs)
@@ -205,5 +210,6 @@ object FusionCrossCheck:
     case "--ycheck" :: rest => parse(rest, c.copy(ycheck = true))
     case "--run" :: rest => parse(rest, c.copy(run = true))
     case "--keep" :: rest => parse(rest, c.copy(keep = true))
+    case "--self" :: rest => parse(rest, c.copy(self = true))
     case dir :: rest => parse(rest, c.copy(categories = c.categories :+ repoRoot.resolve(dir)))
 end FusionCrossCheck
