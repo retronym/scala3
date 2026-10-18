@@ -26,6 +26,8 @@ final class Recorder(path: String):
   // > 0 while the recorder itself is printing; hooks fired by printing are counted, not recorded
   private var suspended = 0
   var perturbations = 0
+  // Experiment: skip printing types, to measure how much printing perturbs the stream
+  private val noTypeText = System.getenv("REPLAY_NO_TYPE_TEXT") != null
 
   private val nodeIds = IdentityHashMap[Positioned, Integer]()
   private val symIds = IdentityHashMap[Symbol, Integer]()
@@ -113,9 +115,23 @@ final class Recorder(path: String):
       else
         val n = typeIds.size
         typeIds.put(tp, n)
-        val text = quietly(try tp.show catch case ex: Throwable => s"<${ex.getClass.getSimpleName}>")
-        line(s"""{"t":"type","id":$n,"text":${str(text)}}""")
+        pendingTypes += tp
         n
+
+  // Printing a type can force completions; doing it at the hook would interleave (and, since
+  // hooks are suspended while printing, swallow) events. So types are printed at phase end.
+  private val pendingTypes = mutable.ArrayBuffer[Type]()
+  private var printedTypes = 0
+
+  private def flushTypes(phase: Phase)(using Context): Unit =
+    val printCtx = if phase.exists && phase.next.exists then ctx.withPhase(phase.next) else ctx
+    for tp <- pendingTypes do
+      val text =
+        if noTypeText then ""
+        else quietly(try tp.show(using printCtx) catch case ex: Throwable => s"<${ex.getClass.getSimpleName}>")
+      line(s"""{"t":"type","id":$printedTypes,"text":${str(text)}}""")
+      printedTypes += 1
+    pendingTypes.clear()
 
   // The phase (group) the Run is executing. Not `ctx.phase`: completers run at the symbol's
   // creation phase and denotation transformers at `phase.next`.
@@ -241,6 +257,7 @@ final class Recorder(path: String):
    *  for them, versus Track A's span-equality heuristic. Emits a `lineageStats` line.
    */
   def afterPhase(phase: Phase, units: List[CompilationUnit])(using Context): Unit =
+    flushTypes(phase)
     val cur = IdentityHashMap[Positioned, Positioned]()
     val curSpans = mutable.HashMap[Long, Int]()
     var total, fresh, byCopier, byTyped, byHeuristic, ambiguous, both = 0
@@ -274,7 +291,8 @@ final class Recorder(path: String):
   def noteRetyped(res: Positioned)(using Context): Unit =
     if !running.isTyper then derivedNew.put(res, "typed")
 
-  def close(): Unit =
+  def close()(using Context): Unit =
+    flushTypes(running)
     line(s"""{"t":"stats","events":$nextSeq,"nodes":${nodeIds.size},"syms":${symIds.size},"types":${typeIds.size},"perturbations":$perturbations}""")
     out.close()
 
