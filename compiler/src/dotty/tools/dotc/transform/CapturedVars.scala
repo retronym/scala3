@@ -9,7 +9,7 @@ import core.Flags.*
 import core.Decorators.*
 import core.StdNames.nme
 import core.Names.*
-import core.NameKinds.TempResultName
+import core.NameKinds.{TailLocalName, TempResultName}
 import core.Constants.*
 import util.Store
 import dotty.tools.initialize
@@ -113,7 +113,9 @@ object CapturedVars:
     def traverse(tree: Tree)(using Context) = tree match
       case id: Ident =>
         val sym = id.symbol
-        if sym.isMutableVar && sym.owner.isTerm then
+        // TailRec's replacement vars stand for the parameters of one iteration: a closure
+        // must capture their value at that point, not a reference to the var.
+        if sym.isMutableVar && sym.owner.isTerm && !sym.name.is(TailLocalName) then
           val enclMeth = ctx.owner.enclosingMethod
           if sym.enclosingMethod != enclMeth then
             report.log(i"capturing $sym in ${sym.enclosingMethod}, referenced from $enclMeth")
