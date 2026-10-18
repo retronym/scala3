@@ -4154,7 +4154,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
       else if ctx.run.nn.isCancelled then
         tree.withType(WildcardType)
-      else adapt(typedUnadapted(tree, pt, locked), pt, locked)
+      else replay.Recorder.typed(tree, pt)(adapt(typedUnadapted(tree, pt, locked), pt, locked))
     }
   }
 
@@ -4538,7 +4538,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     try
       trace(i"adapting $tree to $pt", typr, show = true) {
         record("adapt")
-        adapt1(tree, pt, locked)
+        replay.Recorder.adapt(tree, pt)(adapt1(tree, pt, locked))
       }
     catch case ex: TypeError => errorTree(tree, ex, tree.srcPos.focus)
 

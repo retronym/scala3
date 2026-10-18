@@ -259,6 +259,10 @@ object Names {
   /** A simple name is essentially an interned string */
   final class SimpleName private[Names](private val value: String) extends TermName {
 
+    // Names are interned and compared by identity; a content hash keeps hash-ordered
+    // collections of names in a run-independent order (identity hashes depend on JVM state)
+    override def hashCode: Int = value.hashCode
+
     override def length: Int = value.length
 
     /** The n-th character */
@@ -337,6 +341,8 @@ object Names {
 
   final class TypeName private[Names](val toTermName: TermName) extends Name {
 
+    override def hashCode: Int = ~toTermName.hashCode
+
     type ThisName = TypeName
 
     override def isTypeName: Boolean = true
@@ -378,6 +384,8 @@ object Names {
    */
   final class DerivedName private[Names](override val underlying: TermName, override val info: NameInfo)
   extends TermName {
+
+    override def hashCode: Int = underlying.hashCode * 31 + info.hashCode
 
     override def asSimpleName: Nothing = throw new UnsupportedOperationException(s"$debugString is not a simple name")
 

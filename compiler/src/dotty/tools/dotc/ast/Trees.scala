@@ -1276,13 +1276,19 @@ object Trees {
       /** Source of the copied tree */
       protected def sourceFile(tree: Tree): SourceFile = tree.source
 
-      protected def finalize(tree: Tree, copied: untpd.Tree): copied.ThisTree[T] =
+      protected def finalize(tree: Tree, copied: untpd.Tree)(using Context): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
-        postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
+        val res = postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
+        val rec = ctx.base.recorder
+        if rec != null then rec.derive(tree, res)
+        res
 
-      protected def finalize(tree: Tree, copied: untpd.MemberDef): copied.ThisTree[T] =
+      protected def finalize(tree: Tree, copied: untpd.MemberDef)(using Context): copied.ThisTree[T] =
         Stats.record(s"TreeCopier.finalize/${tree.getClass == copied.getClass}")
-        postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
+        val res = postProcess(tree, copied.withSpan(tree.span).withAttachmentsFrom(tree))
+        val rec = ctx.base.recorder
+        if rec != null then rec.derive(tree, res)
+        res
 
       def Ident(tree: Tree)(name: Name)(using Context): Ident = tree match {
         case tree: Ident if name == tree.name => tree

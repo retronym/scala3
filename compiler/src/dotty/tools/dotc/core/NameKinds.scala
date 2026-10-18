@@ -32,6 +32,9 @@ object NameKinds {
   /** An abstract base class of classes that define the kind of a derived name info */
   abstract class NameKind(val tag: Int) { self =>
 
+    // Deterministic, so that hash-ordered collections of names iterate the same way in every run
+    override def hashCode: Int = tag
+
     /** The info class defined by this kind */
     type ThisInfo <: Info
 
@@ -40,6 +43,7 @@ object NameKinds {
       def kind: NameKind = self
       def mkString(underlying: TermName): String = self.mkString(underlying, this)
       override def toString: String = infoString
+      override def hashCode: Int = kind.hashCode
     }
 
     /** Does this kind define logically a new name (respectively qualified name)?

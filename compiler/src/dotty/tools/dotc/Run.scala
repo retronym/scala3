@@ -418,8 +418,11 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
           Stats.trackTime(s"phase time ms/$phase") {
             val start = System.currentTimeMillis
             profiler.onPhase(phase):
+              val rec = ctx.base.recorder
+              if rec != null then rec.beforePhase(phase)
               try units = phase.runOn(units)
               catch case _: InterruptedException => cancelInterrupted()
+              if rec != null then rec.afterPhase(phase, units)
             if (ctx.settings.Vprint.value.containsPhase(phase))
               for (unit <- units)
                 def printCtx(unit: CompilationUnit) = phase.printingContext(
@@ -460,7 +463,14 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
         initializeAsyncTasty()
       else () => {}
 
-    showProgress(runPhases(allPhases = fusedPhases)(using runCtx))
+    if !ctx.settings.YreplayRecord.isDefault then
+      ctx.base.recorder = replay.Recorder.start(ctx.settings.YreplayRecord.value)
+    try showProgress(runPhases(allPhases = fusedPhases)(using runCtx))
+    finally
+      val rec = ctx.base.recorder
+      if rec != null then
+        rec.close()
+        ctx.base.recorder = null
     cancelAsyncTasty()
     syncAsyncTasty()
 

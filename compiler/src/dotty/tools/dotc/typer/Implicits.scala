@@ -1097,7 +1097,10 @@ trait Implicits:
    *                         it should be applied, EmptyTree otherwise.
    *  @param span            The position where errors should be reported.
    */
-  def inferImplicit(pt: Type, argument: Tree, span: Span, ignored: Set[Symbol] = Set.empty)(using Context): SearchResult = ctx.profiler.onImplicitSearch(pt):
+  def inferImplicit(pt: Type, argument: Tree, span: Span, ignored: Set[Symbol] = Set.empty)(using Context): SearchResult =
+    replay.Recorder.implicitSearch(pt, argument, span)(inferImplicit0(pt, argument, span, ignored))
+
+  private def inferImplicit0(pt: Type, argument: Tree, span: Span, ignored: Set[Symbol])(using Context): SearchResult = ctx.profiler.onImplicitSearch(pt):
     trace(s"search implicit ${pt.show}, arg = ${argument.show}: ${argument.tpe.show}", implicits, show = true) {
       record("inferImplicit")
       assert(ctx.phase.allowsImplicitSearch,
@@ -1306,7 +1309,7 @@ trait Implicits:
         val typingCtx =
           searchContext().setNewTyperState().setFreshGADTBounds.setSearchHistory(history)
         val alreadyStoppedInlining = ctx.base.stopInlining
-        val result = typedImplicit(cand, pt, argument, span)(using typingCtx)
+        val result = replay.Recorder.candidate(cand.ref, span)(typedImplicit(cand, pt, argument, span)(using typingCtx))
         result match
           case res: SearchSuccess =>
             ctx.searchHistory.defineBynameImplicit(wideProto, res)
