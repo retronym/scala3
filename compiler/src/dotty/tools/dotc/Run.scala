@@ -388,7 +388,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     runCtx.setProfiler(Profiler())
 
     val pluginPlan = ctx.base.addPluginPhases(ctx.base.phasePlan)
-    val phases = ctx.base.fusePhases(pluginPlan,
+    val plan = if ctx.settings.YnoFusePhases.value then pluginPlan.flatMap(_.map(List(_))) else pluginPlan
+    val phases = ctx.base.fusePhases(plan,
       ctx.settings.Yskip.value, ctx.settings.YstopBefore.value, ctx.settings.Ycheck.value)
     ctx.base.usePhases(phases, runCtx)
 
