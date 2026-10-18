@@ -1524,7 +1524,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
          */
         def rememberNonLocalAssignToPrivate(sym: Symbol) = lhs1 match
           case Select(qual, _)
-          if sym.is(Private, butNot = Local) && !sym.isAccessPrivilegedThisType(qual.tpe) =>
+          if sym.is(Private, butNot = Local) && !sym.isAccessPrivilegedThisType(qual.tpe)
+              && !ctx.isAfterTyper => // re-typing (TreeChecker, Inliner) would add it again after it was removed
             sym.addAnnotation(Annotation(defn.AssignedNonLocallyAnnot, lhs1.span))
           case _ =>
 
