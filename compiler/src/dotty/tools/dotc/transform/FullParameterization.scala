@@ -248,7 +248,9 @@ trait FullParameterization {
             ref(param.symbol).ensureConforms(paramType)
           }))
        })
-    fwd.withSpan(originalDef.rhs.span)
+    // Not `originalDef.rhs.span`: in a MegaPhase the rhs has already been transformed by the
+    // rest of the group (e.g. PatternMatcher), so its span depends on what it was rewritten to.
+    fwd.withSpan(originalDef.span)
   }
 }
 
