@@ -849,8 +849,15 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
       // that pure functions yielding a constant will not change in later phases.
 
     override def TypeApply(tree: Tree)(fun: Tree, args: List[Tree])(using Context): TypeApply =
-      ta.assignType(untpdCpy.TypeApply(tree)(fun, args), fun, args)
-      // Same remark as for Apply
+      val tree1 = ta.assignType(untpdCpy.TypeApply(tree)(fun, args), fun, args)
+      tree match
+        case tree: TypeApply
+        if (tree1 ne tree) && (tree.fun eq fun) && (tree.args eq args)
+           && ((tree1.tpe eq tree.tpe) || tree1.tpe =:= tree.tpe) => tree
+        case _ => tree1
+      // Same remark as for Apply. Instantiating a polymorphic method type yields a fresh
+      // MethodType each time, so without the `=:=` check an unchanged TypeApply, and with it
+      // every enclosing tree, would be copied in each MegaPhase.
 
     override def Closure(tree: Tree)(env: List[Tree], meth: Tree, tpt: Tree)(using Context): Closure =
             ta.assignType(untpdCpy.Closure(tree)(env, meth, tpt), meth, tpt)
