@@ -525,6 +525,7 @@ private sealed trait YSettings:
   val Yimports: Setting[List[String]] = MultiStringSetting(ForkSetting, "Yimports", helpArg="", "Custom root imports. If set, none of scala.*, java.lang.*, or Predef.* will be imported unless explicitly included.")
   val YnoPredef: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-predef", "Compile without importing Predef.")
   val Yskip: Setting[List[String]] = PhasesSetting(ForkSetting, "Yskip", "Skip")
+  val YnoFusePhases: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-fuse-phases", "Run each mini-phase in a tree traversal of its own instead of fusing groups of them into a MegaPhase. Fusion is an optimization only, so this should not change the output.")
   val YbackendParallelism: Setting[Int] = IntChoiceSetting(ForkSetting, "Ybackend-parallelism", "parallelism level", "maximum worker threads for backend", 1 to 16, 1)
   val YbackendWorkerQueue: Setting[Int] = IntChoiceSetting(ForkSetting, "Ybackend-worker-queue", "queue size", "backend threads worker queue size", 0 to 1000, 0)
   val YstopAfter: Setting[List[String]] = PhasesSetting(ForkSetting, "Ystop-after", "Stop after the phase group containing the named phase. Mini-phases fused into a MegaPhase share a group, so the rest of that group still runs.", aliases = List("-stop")) // backward compat
