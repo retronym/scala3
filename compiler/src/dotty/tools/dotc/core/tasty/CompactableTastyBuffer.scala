@@ -64,8 +64,9 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
     fillAddr(reserveAddr(), target)
   }
 
-  /** Drop everything written from `addr` on. The addresses handed out since must not be used again. A length
-   *  field reserved there and still open, by an exception while writing its contents, is dropped with it.
+  /** Drop everything written from `addr` on. The addresses handed out since must not be used again: no
+   *  field reserved before may have been filled in the dropped range. A length field reserved there and
+   *  still open, by an exception while writing its contents, is dropped with it.
    */
   def truncate(addr: Addr): Unit =
     length = addr.index
