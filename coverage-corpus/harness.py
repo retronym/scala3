@@ -233,7 +233,9 @@ def make_case(path: Path, id: str, pool_opts=()):
         files = [path]
         stages = [files]
     else:
-        files = sorted(p for p in path.rglob("*") if p.is_file() and p.suffix in SOURCE_EXTS)
+        # files under a `_sourcepath` dir are not passed to the compiler (cases use them with `-sourcepath {case}/_sourcepath`)
+        files = sorted(p for p in path.rglob("*") if p.is_file() and p.suffix in SOURCE_EXTS
+                       and "_sourcepath" not in p.relative_to(path).parts)
         if not files:
             return None
         groups = {}
@@ -341,7 +343,7 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
             dest = str(jars[i])
             cp = ":".join(libcp + [str(classes)] + [str(j) for j in jars[:i]])
         args = ["-d", dest, "-classpath", cp, "-color:never", "-Wconf:any:s" if variant != "lint" else "-Wconf:any:w"]
-        args += subst(v["opts"], tmp) + list(extra_opts) + [o.replace("{classes}", str(classes)) for o in sopts] + scala
+        args += subst(v["opts"], tmp) + list(extra_opts) + [expand_case_opt(o, classes, tmp, case, libcp) for o in sopts] + scala
         steps.append(("scalac", args))
         if java:
             steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8"] +
@@ -356,6 +358,11 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
                  and f.suffix not in (".check", ".flags")] if case.path.is_dir() else []
     job.prepare = lambda: prepare(job, tmp, classes, mapping if v.get("copy_sources") else None, resources)
     return job
+
+
+def expand_case_opt(o, classes, tmp, case, libcp):
+    return (o.replace("{classes}", str(classes)).replace("{tmp}", str(tmp)).replace("{libcp}", ":".join(libcp))
+             .replace("{case}", str(case.path)))
 
 
 def prepare(job, tmp, classes, mapping, resources=()):
@@ -410,11 +417,11 @@ def run_jobs(tc, jobs, exec_dir=None, workers=8, chunk=1000, timeout=180, heap="
     """Run jobs across `workers` JVMs, each processing chunks of jobs. A stalled JVM is killed and its remaining jobs
     resumed in a fresh one."""
     cp = ":".join(tc.compiler_cp + [driver_classes()])
-    jvm = [java_bin(), f"-Xmx{heap}", "-Xss16m", "-XX:+UseParallelGC", "-cp", cp]
+    jvm = ["nice", "-n", "10", java_bin(), f"-Xmx{heap}", "-Xss16m", "-XX:+UseParallelGC", "-cp", cp]
     if exec_dir:
         exec_dir.mkdir(parents=True, exist_ok=True)
         agent = jacoco_jars()["agent"]
-        jvm.insert(1, f"-javaagent:{agent}=output=none,includes=dotty.*:scala.quoted.runtime.impl.*,inclnolocationclasses=false")
+        jvm.insert(4, f"-javaagent:{agent}=output=none,includes=dotty.*:scala.quoted.runtime.impl.*,inclnolocationclasses=false")
     lock = threading.Lock()
     results = []
     chunks = [jobs[i:i + chunk] for i in range(0, len(jobs), chunk)]
@@ -1071,7 +1078,7 @@ def cmd_serve(a):
         except (ProcessLookupError, ValueError):
             pass
     cp = ":".join(tc.compiler_cp + [driver_classes()])
-    p = subprocess.Popen([java_bin(), "-Xmx4g", "-Xss16m", "-cp", cp, "CoverageDriver", "--serve", str(SERVE)],
+    p = subprocess.Popen(["nice", "-n", "10", java_bin(), "-Xmx4g", "-Xss16m", "-cp", cp, "CoverageDriver", "--serve", str(SERVE)],
                          stdout=open(SERVE / "server.log", "a"), stderr=subprocess.STDOUT, start_new_session=True)
     pidf.write_text(str(p.pid))
     log(f"serving from pid {p.pid}; `harness.py try <case>`; stop with `kill {p.pid}`")
@@ -1150,7 +1157,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common_run(p):
-        p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 4))
+        p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1), help="worker JVMs (niced); default leaves a core free")
         p.add_argument("--chunk", type=int, default=1000, help="jobs per JVM before restarting it")
 
     p = sub.add_parser("measure"); common_run(p)
