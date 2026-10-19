@@ -1180,7 +1180,9 @@ class TreeUnpickler(reader: TastyReader,
       val lazyStats = readLater(end, rdr => {
         val stats = rdr.readIndexedStats(localDummy, end)
         tparams ++ vparams ++ stats
-      })
+      })(using
+        // The stats of an inline trait are inlined (see below), so they need positions, as for inline method bodies
+        if cls.isInlineTrait then sourceChangeContext(Addr(0))(using ctx.addMode(Mode.ReadPositions)) else ctx)
       NamerOps.addConstructorProxies(cls)
       NamerOps.addContextBoundCompanions(cls)
 
