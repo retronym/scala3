@@ -1,0 +1,24 @@
+# Vulpix test dirs whose cases compile successfully, with the options CompilationTests uses for them.
+# Syntax: <dir relative to repo root>[=<scalac options for every case in it>]
+tests/pos=-Wsafe-init
+tests/pos-macros=-Xcheck-macros
+tests/run=-Wsafe-init
+tests/run-macros=-Xcheck-macros
+tests/pos-deep-subtype
+tests/run-deep-subtype
+tests/pos-scala2=-source 3.0-migration
+tests/pos-custom-args/captures=-language:experimental.captureChecking -language:experimental.separationChecking
+tests/run-custom-args/captures=-language:experimental.captureChecking -language:experimental.separationChecking
+tests/pos-java-interop
+tests/pos-java-interop-separate
+tests/warn
+tests/patmat
+tests/generic-java-signatures
+tests/explicit-nulls/pos=-Yexplicit-nulls
+tests/explicit-nulls/run=-Yexplicit-nulls
+tests/explicit-nulls/warn=-Yexplicit-nulls
+tests/explicit-nulls/flexible-types-common=-Yexplicit-nulls
+tests/init/pos=-Wsafe-init
+tests/init/warn=-Wsafe-init
+tests/init-global/pos=-Ysafe-init-global
+tests/init-global/warn=-Ysafe-init-global
