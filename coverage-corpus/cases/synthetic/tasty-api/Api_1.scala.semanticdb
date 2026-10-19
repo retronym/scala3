@@ -1,0 +1,5333 @@
+
+≤“ÖUsers/jzaugg-virtus/code/.worktrees/scala3/scala-compiler-coverage-tests-1f3db1/coverage-corpus/cases/synthetic/tasty-api/Api_1.scalaƒX// Stage 1 of a separate-compilation case: a broad API surface whose TASTy is unpickled by stage 2.
+package api
+
+import scala.annotation.{tailrec, targetName, nowarn, unchecked, static, implicitNotFound}
+import scala.compiletime.{erasedValue, constValue, summonInline, error, codeOf}
+import scala.deriving.Mirror
+import scala.quoted.*
+import scala.language.implicitConversions
+
+// --- annotations ----------------------------------------------------------------------------------
+class myAnnot(val x: Int, val ys: String*) extends scala.annotation.StaticAnnotation
+final class refining extends scala.annotation.RefiningAnnotation
+@deprecated("use other", "1.0") def old(): Int = 1
+
+// --- opaque types ---------------------------------------------------------------------------------
+object Opaques:
+  opaque type Meters <: Double = Double
+  object Meters:
+    def apply(d: Double): Meters = d
+    extension (m: Meters) def +(o: Meters): Meters = (m: Double) + o
+  opaque type Id[+A] = A
+  def id[A](a: A): Id[A] = a
+  opaque type Flags = Int
+  object Flags:
+    val Empty: Flags = 0
+    inline def apply(bits: Int): Flags = bits
+    extension (f: Flags)
+      inline def |(o: Flags): Flags = f | o
+      def has(o: Flags): Boolean = (f & o) != 0
+
+// --- enums ----------------------------------------------------------------------------------------
+enum Color(val rgb: Int) derives CanEqual:
+  case Red extends Color(0xFF0000)
+  case Green extends Color(0x00FF00)
+  case Blue extends Color(0x0000FF)
+  def hex: String = f"#$rgb%06x"
+object Color:
+  def parse(s: String): Option[Color] = values.find(_.toString == s)
+
+enum Tree[+A]:
+  case Leaf(value: A)
+  case Node(left: Tree[A], right: Tree[A])
+  case Empty
+  def size: Int = this match
+    case Leaf(_) => 1
+    case Node(l, r) => l.size + r.size
+    case Empty => 0
+
+enum JEnum extends java.lang.Enum[JEnum]:
+  case A, B
+
+// --- GADTs, sealed hierarchies --------------------------------------------------------------------
+sealed trait Exp[T]
+final case class IntLit(i: Int) extends Exp[Int]
+final case class BoolLit(b: Boolean) extends Exp[Boolean]
+final case class If[T](c: Exp[Boolean], t: Exp[T], e: Exp[T]) extends Exp[T]
+final case class Pair[A, B](a: Exp[A], b: Exp[B]) extends Exp[(A, B)]
+def eval[T](e: Exp[T]): T = e match
+  case IntLit(i) => i
+  case BoolLit(b) => b
+  case If(c, t, e) => if eval(c) then eval(t) else eval(e)
+  case Pair(a, b) => (eval(a), eval(b))
+
+// --- type classes, givens, derivation -------------------------------------------------------------
+@implicitNotFound("No Show for ${T}")
+trait Show[T]:
+  def show(t: T): String
+  extension (t: T) def shown: String = show(t)
+
+object Show:
+  given Show[Int] = _.toString
+  given Show[String] with
+    def show(t: String) = "\"" + t + "\""
+  given [T: Show] => Show[List[T]] = l => l.map(summon[Show[T]].show).mkString("[", ",", "]")
+  given optShow: [T] => (s: Show[T]) => Show[Option[T]]:
+    def show(t: Option[T]) = t.fold("None")(x => s"Some(${s.show(x)})")
+
+  inline def summonAll[T <: Tuple]: List[Show[?]] = inline erasedValue[T] match
+    case _: EmptyTuple => Nil
+    case _: (t *: ts) => summonInline[Show[t]] :: summonAll[ts]
+
+  inline def derived[T](using m: Mirror.Of[T]): Show[T] =
+    val elems = summonAll[m.MirroredElemTypes]
+    val label = constValue[m.MirroredLabel]
+    inline m match
+      case s: Mirror.SumOf[T] => (t: T) => label + "." + elems(s.ordinal(t)).asInstanceOf[Show[T]].show(t)
+      case p: Mirror.ProductOf[T] => (t: T) =>
+        label + t.asInstanceOf[Product].productIterator.zip(elems).map((x, s) => s.asInstanceOf[Show[Any]].show(x)).mkString("(", ",", ")")
+
+case class Person(name: String, age: Int) derives Show
+sealed trait Shape derives Show
+case class Circle(r: Int) extends Shape derives Show
+case class Square(s: Int) extends Shape derives Show
+
+// --- higher-kinded, type lambdas, match types, dependent types -----------------------------------
+trait Functor[F[_]]:
+  extension [A](fa: F[A]) def map[B](f: A => B): F[B]
+trait Monad[F[_]] extends Functor[F]:
+  def pure[A](a: A): F[A]
+  extension [A](fa: F[A]) def flatMap[B](f: A => F[B]): F[B]
+  extension [A](fa: F[A]) def map[B](f: A => B): F[B] = fa.flatMap(a => pure(f(a)))
+
+given Monad[List] with
+  def pure[A](a: A) = List(a)
+  extension [A](fa: List[A]) def flatMap[B](f: A => List[B]) = fa.flatMap(f)
+
+type EitherT[L] = [R] =>> Either[L, R]
+given [L] => Monad[EitherT[L]]:
+  def pure[A](a: A) = Right(a)
+  extension [A](fa: Either[L, A]) def flatMap[B](f: A => Either[L, B]) = fa.flatMap(f)
+
+type Elem[X] = X match
+  case String => Char
+  case Array[t] => Elem[t]
+  case Iterable[t] => Elem[t]
+  case AnyVal => X
+
+type Concat[X <: Tuple, Y <: Tuple] <: Tuple = X match
+  case EmptyTuple => Y
+  case x *: xs => x *: Concat[xs, Y]
+
+def firstElem[X](x: X): Elem[X] = x match
+  case x: String => x.charAt(0)
+  case x: Array[t] => firstElem(x(0))
+  case x: Iterable[t] => firstElem(x.head)
+  case x: AnyVal => x
+
+trait Entry:
+  type Key
+  type Value
+  def key: Key
+  def value: Value
+def keyOf(e: Entry): e.Key = e.key
+def depFun: (e: Entry) => e.Key = e => e.key
+val polyFun: [T] => T => List[T] = [T] => (t: T) => List(t)
+type Rec = { def name: String; val age: Int }
+
+// --- variance, bounds, F-bounds, self types, intersection/union -----------------------------------
+trait Ord[-T] { def cmp(a: T, b: T): Int }
+abstract class Animal[Self <: Animal[Self]] { self: Self =>
+  def compareTo(o: Self): Int
+}
+trait HasName { def name: String }
+trait HasAge { def age: Int }
+def describe(x: HasName & HasAge): String = s"${x.name}/${x.age}"
+def widen(x: Int | String): String = x match
+  case i: Int => i.toString
+  case s: String => s
+
+// --- classes with every kind of member ------------------------------------------------------------
+trait Base(val tag: String):
+  def abstractDef: Int
+  val abstractVal: String
+  var concreteVar: Int = 0
+  lazy val lz: String = tag.concat(tag)
+  protected def prot = 1
+  private[api] def pkgPrivate = 2
+  def overloaded(x: Int): Int = x
+  def overloaded(x: String): String = x
+  def defaults(a: Int = 1, b: String = "b")(c: Boolean = a > 0): String = s"$a$b$c"
+  def varargs(xs: Int*): Int = xs.sum
+  def byName(x: => Int): Int = x + x
+  def ctxFun(using s: Show[Int]): Int => String = s.show
+  def poly[A, B <: A, C >: B](b: B): C = b
+  @targetName("plusplus") def ++(o: Base): String = tag + o.tag
+  type Abstract
+  type Bounded >: Null <: AnyRef
+  type Alias = List[Int]
+
+class Impl(t: String) extends Base(t), Serializable:
+  def abstractDef = 3
+  val abstractVal = "v"
+  type Abstract = Int
+  type Bounded = String
+  override protected def prot = 5
+  inline def inl(inline x: Int): Int = x + 1
+  transparent inline def tinl(x: Int): Any = x
+  @tailrec final def loop(n: Int, acc: Int = 0): Int = if n == 0 then acc else loop(n - 1, acc + n)
+  object Inner:
+    def x = t
+  class InnerClass(val y: Int):
+    def outer = Impl.this
+  def local =
+    def helper(i: Int) = i * 2
+    class Local { def h = helper(3) }
+    new Local().h
+  def anon: Runnable = new Runnable { def run() = () }
+  def sam: Runnable = () => ()
+
+object Impl:
+  @static val staticField: Int = 42
+  def apply(): Impl = new Impl("x")
+  def unapply(i: Impl): Some[String] = Some(i.tag)
+
+class ValueClass(val underlying: Int) extends AnyVal:
+  def double: ValueClass = new ValueClass(underlying * 2)
+
+case class CC[+A](a: A, rest: List[A] = Nil)(val extra: Int = 0)
+
+abstract class WithInit:
+  val x: Int
+  println(x)
+
+// --- implicit conversions, Scala 2-style implicits ------------------------------------------------
+implicit class RichInt(val i: Int) extends AnyVal:
+  def squared: Int = i * i
+implicit def strToInt(s: String): Int = s.length
+given Conversion[Boolean, Int] = b => if b then 1 else 0
+
+// --- extension methods, exports ----------------------------------------------------------------------
+object Exts:
+  extension (s: String)
+    def words: List[String] = s.split(" ").toList
+    def word(i: Int): String = words(i)
+  extension [T](xs: List[T])(using Ord[T])
+    def sortedWith: List[T] = xs.sortWith((a, b) => summon[Ord[T]].cmp(a, b) < 0)
+
+class Printer:
+  def print(s: String): Unit = ()
+  def flush(): Unit = ()
+class Scanner:
+  def scan(): String = ""
+class Copier:
+  private val printer = Printer()
+  private val scanner = Scanner()
+  export printer.{print, flush as flushIt}
+  export scanner.*
+
+// --- inline / compiletime -------------------------------------------------------------------------
+inline def power(x: Double, inline n: Int): Double =
+  inline if n == 0 then 1.0
+  else inline if n % 2 == 0 then
+    val y = power(x, n / 2)
+    y * y
+  else x * power(x, n - 1)
+
+inline def typeName[T]: String = inline erasedValue[T] match
+  case _: Int => "Int"
+  case _: String => "String"
+  case _ => "other"
+
+transparent inline def choose(inline b: Boolean): Any = inline if b then 1 else "one"
+
+inline def assertPositive(inline x: Int): Int =
+  inline if x < 0 then error("negative") else x
+
+// --- macros (used from stage 2) --------------------------------------------------------------------
+inline def showExpr(inline x: Any): String = ${ showExprImpl('x) }
+def showExprImpl(x: Expr[Any])(using Quotes): Expr[String] = Expr(x.show)
+
+inline def fieldNames[T]: List[String] = ${ fieldNamesImpl[T] }
+def fieldNamesImpl[T: Type](using q: Quotes): Expr[List[String]] =
+  import q.reflect.*
+  val sym = TypeRepr.of[T].typeSymbol
+  Expr(sym.caseFields.map(_.name))
+
+inline def unrolledSum(inline xs: Int*): Int = ${ unrolledSumImpl('xs) }
+def unrolledSumImpl(xs: Expr[Seq[Int]])(using Quotes): Expr[Int] = xs match
+  case Varargs(es) => es.foldLeft('{ 0 })((acc, e) => '{ $acc + $e })
+  case _ => '{ $xs.sum }
+
+// --- named tuples, tuples ---------------------------------------------------------------------------
+type NT = (name: String, age: Int)
+def nt: NT = (name = "a", age = 1)
+def bigTuple = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+
+// --- context functions, by-name, function types of many arities -----------------------------------
+type Ctx[T] = Show[Int] ?=> T
+def withCtx[T](f: Ctx[T]): T = f(using Show.given_Show_Int)
+def f22: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) => Int =
+  (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w) => a + w
+
+// --- erased-ish / phantom, singleton types ---------------------------------------------------------
+def singleton(x: 42): 42 = x
+val lit: "lit" = "lit"
+def valueOf3 = valueOf[3]
+
+// --- traits with init order, super calls, linearization -------------------------------------------
+trait A1 { def m: String = "A1" }
+trait B1 extends A1 { override def m: String = "B1" + super.m }
+trait C1 extends A1 { override def m: String = "C1" + super.m }
+class D1 extends B1 with C1 { override def m: String = "D1" + super[B1].m + super.m }
+
+// --- Java interop surface --------------------------------------------------------------------------
+class JavaLike extends java.util.AbstractList[String] with java.lang.Comparable[JavaLike]:
+  def get(i: Int): String = i.toString
+  def size(): Int = 3
+  def compareTo(o: JavaLike): Int = 0
+  @throws[java.io.IOException] def io(): Unit = ()
+  @volatile var v: Int = 0
+  @transient var t: Int = 0
+  @native def nat(): Int
+*5
+api/myAnnot#x. Ä*xÄä"
+
+scala/Int#í: *E
+api/myAnnot#ys. Ä*ysÄä "
+r
+scala/Predef.String#í: *<
+api/myAnnot#`<init>`().(x) Ä*xÄä"
+
+scala/Int#*L
+api/myAnnot#`<init>`().(ys) Ä*ysÄä "
+r
+scala/Predef.String#*Ä
+api/myAnnot#`<init>`(). Ä@*<init>ÄäOM9
+api/myAnnot#`<init>`().(x)
+api/myAnnot#`<init>`().(ys)api/myAnnot#í: *¿
+api/myAnnot#*myAnnotÄäõ
+ò scala/annotation/Annotation#&$"scala/annotation/StaticAnnotation#api/myAnnot#":
+api/myAnnot#x.
+api/myAnnot#ys.
+api/myAnnot#`<init>`().í: *I
+api/refining#`<init>`(). Ä@*<init>Ää api/refining#í: *•
+api/refining# *refiningÄä}
+{ scala/annotation/Annotation#(&$scala/annotation/RefiningAnnotation#api/refining#"
+api/refining#`<init>`().í: *X
+api/Opaques.Meters# ÄÄÄ*MetersÄä)'scala/Nothing#scala/Double#í: *@
+api/Opaques.Meters.apply().(d)*dÄä"
+scala/Double#*n
+api/Opaques.Meters.apply().*applyÄä=; 
+api/Opaques.Meters.apply().(d)api/Opaques.Meters#í: *D
+api/Opaques.Meters.`+`().(m)*mÄä"
+api/Opaques.Meters#*D
+api/Opaques.Meters.`+`().(o)*oÄä"
+api/Opaques.Meters#*Ü
+api/Opaques.Meters.`+`().*+Ää[Y
+api/Opaques.Meters.`+`().(m)
+api/Opaques.Meters.`+`().(o)api/Opaques.Meters#í: *ª
+api/Opaques.Meters.
+ *MetersÄäé
+ãjava/lang/Object#¢api/Opaques.Meters."X
+api/Opaques.Meters.`<init>`().
+api/Opaques.Meters.apply().
+api/Opaques.Meters.`+`().í: *H
+api/Opaques.Id#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#*c
+api/Opaques.Id# ÄÄÄ*IdÄä<:
+
+api/Opaques.Id#[A]scala/Nothing#
+scala/Any#í: *G
+api/Opaques.id().[A]	*AÄä&$scala/Nothing#
+scala/Any#*=
+api/Opaques.id().(a)*aÄä"
+api/Opaques.id().[A]*Ö
+api/Opaques.id().*idÄäa_
+
+api/Opaques.id().[A]
+api/Opaques.id().(a)-+api/Opaques.Id#api/Opaques.id().[A]í: *S
+api/Opaques.Flags# ÄÄÄ*FlagsÄä&$scala/Nothing#
+scala/Any#í: *K
+api/Opaques.Flags.Empty. Ä*EmptyÄä"
+api/Opaques.Flags#í: *B
+ api/Opaques.Flags.apply().(bits)*bitsÄä"
+
+scala/Int#*r
+api/Opaques.Flags.apply(). ÄÄ*applyÄä><"
+ api/Opaques.Flags.apply().(bits)api/Opaques.Flags#í: *B
+api/Opaques.Flags.`|`().(f)*fÄä"
+api/Opaques.Flags#*B
+api/Opaques.Flags.`|`().(o)*oÄä"
+api/Opaques.Flags#*Ü
+api/Opaques.Flags.`|`(). ÄÄ*|ÄäXV
+api/Opaques.Flags.`|`().(f)
+api/Opaques.Flags.`|`().(o)api/Opaques.Flags#í: *B
+api/Opaques.Flags.has().(f)*fÄä"
+api/Opaques.Flags#*B
+api/Opaques.Flags.has().(o)*oÄä"
+api/Opaques.Flags#*Ä
+api/Opaques.Flags.has().*hasÄäTR
+api/Opaques.Flags.has().(f)
+api/Opaques.Flags.has().(o)scala/Boolean#í: *Í
+api/Opaques.Flags.
+ *FlagsÄäø
+ºjava/lang/Object#¢api/Opaques.Flags."â
+api/Opaques.Flags.`<init>`().
+api/Opaques.Flags.Empty.
+api/Opaques.Flags.apply().
+api/Opaques.Flags.`|`().
+api/Opaques.Flags.has().í: *Ë
+api/Opaques.
+ *OpaquesÄä¡
+æjava/lang/Object#È:Ê"ä
+¢api/Opaques.*ÀS
+api/Opaques.Flags# ÄÄÄ*FlagsÄä&$scala/Nothing#
+scala/Any#í: ô
+api/Opaques.Id# ÄÄÄ*IdÄärp
+JH
+api/Opaques.Id#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#scala/Nothing#
+scala/Any#í: X
+api/Opaques.Meters# ÄÄÄ*MetersÄä)'scala/Nothing#scala/Double#í: "∏
+api/Opaques.`<init>`().
+api/Opaques.Meters#
+api/Opaques.Meters.
+api/Opaques.Meters.
+api/Opaques.Id#
+api/Opaques.id().
+api/Opaques.Flags#
+api/Opaques.Flags.
+api/Opaques.Flags.í: *7
+api/Color#rgb. Ä*rgbÄä"
+
+scala/Int#í: *D
+api/Color#hex().*hexÄä "
+j
+scala/Predef.String#í: *>
+api/Color#`<init>`().(rgb) Ä*rgbÄä"
+
+scala/Int#*_
+api/Color#`<init>`(). Ä@*<init>Ää0.
+api/Color#`<init>`().(rgb)
+api/Color#í: *°
+
+api/Color# îÄ*ColorÄä}
+{java/lang/Object#scala/reflect/Enum#
+api/Color#"9
+api/Color#rgb.
+api/Color#`<init>`().
+api/Color#hex().í: *8
+api/Color.Red. Ä©*RedÄä"
+
+api/Color#í: *<
+api/Color.Green. Ä©*GreenÄä"
+
+api/Color#í: *:
+api/Color.Blue. Ä©*BlueÄä"
+
+api/Color#í: *Q
+api/Color.$values. Ä*$valuesÄä$""
+ scala/Array#
+api/Color#í *R
+api/Color.values().*valuesÄä("&
+$j"
+ scala/Array#
+api/Color#í: *E
+api/Color.valueOf().($name)*$nameÄä"
+java/lang/String#*]
+api/Color.valueOf().*valueOfÄä1/
+api/Color.valueOf().($name)
+api/Color#í: *F
+!api/Color.fromOrdinal().(ordinal)*ordinalÄä"
+
+scala/Int#*k
+api/Color.fromOrdinal().*fromOrdinalÄä75#
+!api/Color.fromOrdinal().(ordinal)
+api/Color#í: *>
+api/Color.parse().(s)*sÄä"
+scala/Predef.String#*f
+api/Color.parse().*parseÄä><
+api/Color.parse().(s)!scala/Option#
+api/Color#í: *w
+api/Color.derived$CanEqual. ‡à*derived$CanEqualÄä7"5
+31scala/CanEqual#
+api/Color#
+api/Color#í: *•
+
+api/Color.
+ *ColorÄäÇ
+ˇjava/lang/Object#¢
+api/Color."‘
+api/Color.`<init>`().
+api/Color.Red.
+api/Color.Green.
+api/Color.Blue.
+api/Color.$values.
+api/Color.values().
+api/Color.valueOf().
+api/Color.fromOrdinal().
+api/Color.parse().
+api/Color.derived$CanEqual.í: *B
+api/Tree#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#*9
+local0 Ä*lÄä#"!
+	api/Tree#api/Tree#[A]*9
+local1 Ä*rÄä#"!
+	api/Tree#api/Tree#[A]*;
+api/Tree#size().*sizeÄä"
+j
+
+scala/Int#í: *c
+api/Tree#`<init>`(). Ä@*<init>Ää53
+
+api/Tree#[A] 	api/Tree#api/Tree#[A]í: *ø
+	api/Tree# îÄ*TreeÄäú
+ô
+
+api/Tree#[A]java/lang/Object#scala/reflect/Enum#	api/Tree#api/Tree#[A]"6
+api/Tree#[A]
+api/Tree#`<init>`().
+api/Tree#size().í: *G
+api/Tree.Leaf#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#*F
+api/Tree.Leaf#value. Ä*valueÄä"
+api/Tree.Leaf#[A]í: *K
+api/Tree.Leaf#copy().[A]	*AÄä&$scala/Nothing#
+scala/Any#*M
+api/Tree.Leaf#copy().(value)*valueÄä "
+api/Tree.Leaf#copy().[A]*å
+api/Tree.Leaf#copy().*copyÄäb`
+
+api/Tree.Leaf#[A]
+api/Tree.Leaf#copy().(value))'api/Tree.Leaf#api/Tree.Leaf#[A]í: *U
+"api/Tree.Leaf#copy$default$1().[A]	*AÄä&$scala/Nothing#
+scala/Any#*l
+api/Tree.Leaf#copy$default$1().*copy$default$1Ää.,
+
+api/Tree.Leaf#[A]api/Tree.Leaf#[A]í: *f
+api/Tree.Leaf#ordinal().*ordinalÄä"
+j
+
+scala/Int#í: öscala/reflect/Enum#ordinal().*C
+api/Tree.Leaf#_1().*_1Ää"
+j
+api/Tree.Leaf#[A]í: *X
+ api/Tree.Leaf#`<init>`().(value) Ä*valueÄä$""
+ api/Tree.Leaf#`<init>`().[A]*ô
+api/Tree.Leaf#`<init>`(). Ä@*<init>Ääfd
+
+api/Tree.Leaf#[A]"
+ api/Tree.Leaf#`<init>`().(value))'api/Tree.Leaf#api/Tree.Leaf#[A]í: *ø
+api/Tree.Leaf# àÅ*LeafÄäó
+î
+
+api/Tree.Leaf#[A]$"	api/Tree#api/Tree.Leaf#[A])'api/Tree.Leaf#api/Tree.Leaf#[A]"´
+api/Tree.Leaf#[A]
+api/Tree.Leaf#value.
+api/Tree.Leaf#`<init>`().
+api/Tree.Leaf#copy().
+api/Tree.Leaf#copy$default$1().
+api/Tree.Leaf#ordinal().
+api/Tree.Leaf#_1().í: *L
+api/Tree.Leaf.apply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*O
+api/Tree.Leaf.apply().(value)*valueÄä!"
+api/Tree.Leaf.apply().[A]*ü
+api/Tree.Leaf.apply().*applyÄäsq
+
+api/Tree.Leaf.apply().[A]
+api/Tree.Leaf.apply().(value)1/api/Tree.Leaf#api/Tree.Leaf.apply().[A]í: *N
+api/Tree.Leaf.unapply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*c
+api/Tree.Leaf.unapply().(x$1)*x$1Ää7"5
+31api/Tree.Leaf#api/Tree.Leaf.unapply().[A]*ß
+api/Tree.Leaf.unapply().*unapplyÄäwu
+
+api/Tree.Leaf.unapply().[A]
+api/Tree.Leaf.unapply().(x$1)31api/Tree.Leaf#api/Tree.Leaf.unapply().[A]í: *g
+api/Tree.Leaf.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*ø
+api/Tree.Leaf.
+ *LeafÄäô
+ñjava/lang/Object#¢api/Tree.Leaf."h
+api/Tree.Leaf.`<init>`().
+api/Tree.Leaf.apply().
+api/Tree.Leaf.unapply().
+api/Tree.Leaf.toString().í: *G
+api/Tree.Node#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#*S
+api/Tree.Node#left. Ä*leftÄä("&
+$"	api/Tree#api/Tree.Node#[A]í: *U
+api/Tree.Node#right. Ä*rightÄä("&
+$"	api/Tree#api/Tree.Node#[A]í: *K
+api/Tree.Node#copy().[A]	*AÄä&$scala/Nothing#
+scala/Any#*Z
+api/Tree.Node#copy().(left)*leftÄä/"-
++)	api/Tree#api/Tree.Node#copy().[A]*\
+api/Tree.Node#copy().(right)*rightÄä/"-
++)	api/Tree#api/Tree.Node#copy().[A]*©
+api/Tree.Node#copy().*copyÄä}
+
+api/Tree.Node#[A];
+api/Tree.Node#copy().(left)
+api/Tree.Node#copy().(right))'api/Tree.Node#api/Tree.Node#[A]í: *U
+"api/Tree.Node#copy$default$1().[A]	*AÄä&$scala/Nothing#
+scala/Any#*{
+api/Tree.Node#copy$default$1().*copy$default$1Ää=;
+
+api/Tree.Node#[A]$"	api/Tree#api/Tree.Node#[A]í: *U
+"api/Tree.Node#copy$default$2().[A]	*AÄä&$scala/Nothing#
+scala/Any#*{
+api/Tree.Node#copy$default$2().*copy$default$2Ää=;
+
+api/Tree.Node#[A]$"	api/Tree#api/Tree.Node#[A]í: *f
+api/Tree.Node#ordinal().*ordinalÄä"
+j
+
+scala/Int#í: öscala/reflect/Enum#ordinal().*R
+api/Tree.Node#_1().*_1Ää,"*
+(j&
+$"	api/Tree#api/Tree.Node#[A]í: *R
+api/Tree.Node#_2().*_2Ää,"*
+(j&
+$"	api/Tree#api/Tree.Node#[A]í: *e
+api/Tree.Node#`<init>`().(left) Ä*leftÄä3"1
+/-	api/Tree# api/Tree.Node#`<init>`().[A]*g
+ api/Tree.Node#`<init>`().(right) Ä*rightÄä3"1
+/-	api/Tree# api/Tree.Node#`<init>`().[A]*º
+api/Tree.Node#`<init>`(). Ä@*<init>ÄäàÖ
+
+api/Tree.Node#[A]C
+api/Tree.Node#`<init>`().(left)
+ api/Tree.Node#`<init>`().(right))'api/Tree.Node#api/Tree.Node#[A]í: *ä
+api/Tree.Node# àÅ*NodeÄä‚
+ﬂ
+
+api/Tree.Node#[A]$"	api/Tree#api/Tree.Node#[A])'api/Tree.Node#api/Tree.Node#[A]"ˆ
+api/Tree.Node#[A]
+api/Tree.Node#left.
+api/Tree.Node#right.
+api/Tree.Node#`<init>`().
+api/Tree.Node#copy().
+api/Tree.Node#copy$default$1().
+api/Tree.Node#copy$default$2().
+api/Tree.Node#ordinal().
+api/Tree.Node#_1().
+api/Tree.Node#_2().í: *L
+api/Tree.Node.apply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*\
+api/Tree.Node.apply().(left)*leftÄä0".
+,*	api/Tree#api/Tree.Node.apply().[A]*^
+api/Tree.Node.apply().(right)*rightÄä0".
+,*	api/Tree#api/Tree.Node.apply().[A]*ø
+api/Tree.Node.apply().*applyÄäíè
+
+api/Tree.Node.apply().[A]=
+api/Tree.Node.apply().(left)
+api/Tree.Node.apply().(right)1/api/Tree.Node#api/Tree.Node.apply().[A]í: *N
+api/Tree.Node.unapply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*c
+api/Tree.Node.unapply().(x$1)*x$1Ää7"5
+31api/Tree.Node#api/Tree.Node.unapply().[A]*ß
+api/Tree.Node.unapply().*unapplyÄäwu
+
+api/Tree.Node.unapply().[A]
+api/Tree.Node.unapply().(x$1)31api/Tree.Node#api/Tree.Node.unapply().[A]í: *g
+api/Tree.Node.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*ø
+api/Tree.Node.
+ *NodeÄäô
+ñjava/lang/Object#¢api/Tree.Node."h
+api/Tree.Node.`<init>`().
+api/Tree.Node.apply().
+api/Tree.Node.unapply().
+api/Tree.Node.toString().í: *N
+api/Tree.Empty. Ä©*EmptyÄä%"#
+!	api/Tree#scala/Nothing#í: *E
+ api/Tree.fromOrdinal().(ordinal)*ordinalÄä"
+
+scala/Int#*·
+api/Tree.fromOrdinal().*fromOrdinalÄä≠™"
+ api/Tree.fromOrdinal().(ordinal)ÉJÄ
+-+	api/Tree#api/Tree.fromOrdinal().[_]OM
+api/Tree.fromOrdinal().[_]*_Ää&$scala/Nothing#
+scala/Any#í: *Ó
+	api/Tree.
+ *TreeÄäÕ
+ java/lang/Object#¢	api/Tree."†
+api/Tree.`<init>`().
+api/Tree.Leaf#
+api/Tree.Leaf.
+api/Tree.Leaf.
+api/Tree.Node#
+api/Tree.Node.
+api/Tree.Node.
+api/Tree.Empty.
+api/Tree.fromOrdinal().í: *C
+api/JEnum#`<init>`(). Ä@*<init>Ää 
+api/JEnum#í: *ç
+
+api/JEnum# îÄ*JEnumÄäi
+g#!java/lang/Enum#
+api/JEnum#scala/reflect/Enum#
+api/JEnum#"
+api/JEnum#`<init>`().í: *4
+api/JEnum.A. Ä©*AÄä"
+
+api/JEnum#í: *4
+api/JEnum.B. Ä©*BÄä"
+
+api/JEnum#í: *Q
+api/JEnum.$values. Ä*$valuesÄä$""
+ scala/Array#
+api/JEnum#í *R
+api/JEnum.values().*valuesÄä("&
+$j"
+ scala/Array#
+api/JEnum#í: *E
+api/JEnum.valueOf().($name)*$nameÄä"
+java/lang/String#*]
+api/JEnum.valueOf().*valueOfÄä1/
+api/JEnum.valueOf().($name)
+api/JEnum#í: *C
+api/JEnum.$new().(_$ordinal)*	_$ordinalÄä"
+
+scala/Int#*B
+api/JEnum.$new().($name)*$nameÄä"
+java/lang/String#*r
+api/JEnum.$new().*$newÄäLJ8
+api/JEnum.$new().(_$ordinal)
+api/JEnum.$new().($name)
+api/JEnum#í *F
+!api/JEnum.fromOrdinal().(ordinal)*ordinalÄä"
+
+scala/Int#*k
+api/JEnum.fromOrdinal().*fromOrdinalÄä75#
+!api/JEnum.fromOrdinal().(ordinal)
+api/JEnum#í: *
+
+api/JEnum.
+ *JEnumÄäÕ
+ java/lang/Object#¢
+api/JEnum."ü
+api/JEnum.`<init>`().
+api/JEnum.A.
+api/JEnum.B.
+api/JEnum.$values.
+api/JEnum.values().
+api/JEnum.valueOf().
+api/JEnum.$new().
+api/JEnum.fromOrdinal().í: *>
+api/Exp#[T]	*TÄä&$scala/Nothing#
+scala/Any#*_
+api/Exp#`<init>`(). Ä@*<init>Ää20
+
+api/Exp#[T] api/Exp#api/Exp#[T]í: *â
+api/Exp# *ExpÄäk
+i
+
+api/Exp#[T]java/lang/Object#api/Exp#api/Exp#[T]""
+api/Exp#[T]
+api/Exp#`<init>`().í: *4
+api/IntLit#i. Ä*iÄä"
+
+scala/Int#í: *4
+api/IntLit#copy().(i)*iÄä"
+
+scala/Int#*S
+api/IntLit#copy().*copyÄä,*
+api/IntLit#copy().(i)api/IntLit#í: *ä
+api/IntLit#copy$default$1().*copy$default$1ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *9
+api/IntLit#_1().*_1Ää"
+j
+
+scala/Int#í: *;
+api/IntLit#`<init>`().(i) Ä*iÄä"
+
+scala/Int#*`
+api/IntLit#`<init>`(). Ä@*<init>Ää0.
+api/IntLit#`<init>`().(i)api/IntLit#í: *ã
+api/IntLit# à*IntLitÄäÂ
+‚java/lang/Object#api/Exp#
+scala/Int#scala/Product#java/io/Serializable#api/IntLit#"k
+api/IntLit#i.
+api/IntLit#`<init>`().
+api/IntLit#copy().
+api/IntLit#copy$default$1().
+api/IntLit#_1().í: *5
+api/IntLit.apply().(i)*iÄä"
+
+scala/Int#*V
+api/IntLit.apply().*applyÄä-+
+api/IntLit.apply().(i)api/IntLit#í: *<
+api/IntLit.unapply().(x$1)*x$1Ää"
+api/IntLit#*^
+api/IntLit.unapply().*unapplyÄä1/
+api/IntLit.unapply().(x$1)api/IntLit#í: *d
+api/IntLit.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*Ø
+api/IntLit.
+ *IntLitÄää
+ájava/lang/Object#¢api/IntLit."\
+api/IntLit.`<init>`().
+api/IntLit.apply().
+api/IntLit.unapply().
+api/IntLit.toString().í: *9
+api/BoolLit#b. Ä*bÄä"
+scala/Boolean#í: *9
+api/BoolLit#copy().(b)*bÄä"
+scala/Boolean#*V
+api/BoolLit#copy().*copyÄä.,
+api/BoolLit#copy().(b)api/BoolLit#í: *è
+api/BoolLit#copy$default$1().*copy$default$1ÄäS"Q
+OjM
+KBI
+scala/Boolean#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *>
+api/BoolLit#_1().*_1Ää"
+j
+scala/Boolean#í: *@
+api/BoolLit#`<init>`().(b) Ä*bÄä"
+scala/Boolean#*c
+api/BoolLit#`<init>`(). Ä@*<init>Ää20
+api/BoolLit#`<init>`().(b)api/BoolLit#í: *ó
+api/BoolLit# à*BoolLitÄäÔ
+Ïjava/lang/Object# api/Exp#scala/Boolean#scala/Product#java/io/Serializable#api/BoolLit#"p
+api/BoolLit#b.
+api/BoolLit#`<init>`().
+api/BoolLit#copy().
+api/BoolLit#copy$default$1().
+api/BoolLit#_1().í: *:
+api/BoolLit.apply().(b)*bÄä"
+scala/Boolean#*Y
+api/BoolLit.apply().*applyÄä/-
+api/BoolLit.apply().(b)api/BoolLit#í: *>
+api/BoolLit.unapply().(x$1)*x$1Ää"
+api/BoolLit#*a
+api/BoolLit.unapply().*unapplyÄä31
+api/BoolLit.unapply().(x$1)api/BoolLit#í: *e
+api/BoolLit.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*∂
+api/BoolLit.
+ *BoolLitÄäè
+åjava/lang/Object#¢api/BoolLit."`
+api/BoolLit.`<init>`().
+api/BoolLit.apply().
+api/BoolLit.unapply().
+api/BoolLit.toString().í: *=
+
+api/If#[T]	*TÄä&$scala/Nothing#
+scala/Any#*B
+	api/If#c. Ä*cÄä$""
+ api/Exp#scala/Boolean#í: *>
+	api/If#t. Ä*tÄä "
+api/Exp#
+api/If#[T]í: *>
+	api/If#e. Ä*eÄä "
+api/Exp#
+api/If#[T]í: *D
+api/If#copy().[T]	*TÄä&$scala/Nothing#
+scala/Any#*B
+api/If#copy().(c)*cÄä$""
+ api/Exp#scala/Boolean#*E
+api/If#copy().(t)*tÄä'"%
+#!api/Exp#api/If#copy().[T]*E
+api/If#copy().(e)*eÄä'"%
+#!api/Exp#api/If#copy().[T]*ã
+api/If#copy().*copyÄähf
+
+
+api/If#[T]9
+api/If#copy().(c)
+api/If#copy().(t)
+api/If#copy().(e)api/If#
+api/If#[T]í: *N
+api/If#copy$default$1().[T]	*TÄä&$scala/Nothing#
+scala/Any#*¢
+api/If#copy$default$1().*copy$default$1Ääki
+
+
+api/If#[T]YBW
+ api/Exp#scala/Boolean#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *N
+api/If#copy$default$2().[T]	*TÄä&$scala/Nothing#
+scala/Any#*e
+api/If#copy$default$2().*copy$default$2Ää.,
+
+
+api/If#[T]api/Exp#
+api/If#[T]í: *N
+api/If#copy$default$3().[T]	*TÄä&$scala/Nothing#
+scala/Any#*e
+api/If#copy$default$3().*copy$default$3Ää.,
+
+
+api/If#[T]api/Exp#
+api/If#[T]í: *G
+api/If#_1().*_1Ää("&
+$j"
+ api/Exp#scala/Boolean#í: *C
+api/If#_2().*_2Ää$""
+ j
+api/Exp#
+api/If#[T]í: *C
+api/If#_3().*_3Ää$""
+ j
+api/Exp#
+api/If#[T]í: *I
+api/If#`<init>`().(c) Ä*cÄä$""
+ api/Exp#scala/Boolean#*P
+api/If#`<init>`().(t) Ä*tÄä+")
+'%api/Exp#api/If#`<init>`().[T]*P
+api/If#`<init>`().(e) Ä*eÄä+")
+'%api/Exp#api/If#`<init>`().[T]*†
+api/If#`<init>`(). Ä@*<init>Äätr
+
+
+api/If#[T]E
+api/If#`<init>`().(c)
+api/If#`<init>`().(t)
+api/If#`<init>`().(e)api/If#
+api/If#[T]í: *¸
+api/If# à*IfÄäﬁ
+€
+
+
+api/If#[T]java/lang/Object#api/Exp#
+api/If#[T]scala/Product#java/io/Serializable#api/If#
+api/If#[T]"…
+
+api/If#[T]
+	api/If#c.
+	api/If#t.
+	api/If#e.
+api/If#`<init>`().
+api/If#copy().
+api/If#copy$default$1().
+api/If#copy$default$2().
+api/If#copy$default$3().
+api/If#_1().
+api/If#_2().
+api/If#_3().í: *E
+api/If.apply().[T]	*TÄä&$scala/Nothing#
+scala/Any#*C
+api/If.apply().(c)*cÄä$""
+ api/Exp#scala/Boolean#*G
+api/If.apply().(t)*tÄä("&
+$"api/Exp#api/If.apply().[T]*G
+api/If.apply().(e)*eÄä("&
+$"api/Exp#api/If.apply().[T]*†
+api/If.apply().*applyÄä{y
+
+api/If.apply().[T]<
+api/If.apply().(c)
+api/If.apply().(t)
+api/If.apply().(e)#!api/If#api/If.apply().[T]í: *G
+api/If.unapply().[T]	*TÄä&$scala/Nothing#
+scala/Any#*N
+api/If.unapply().(x$1)*x$1Ää)"'
+%#api/If#api/If.unapply().[T]*Ñ
+api/If.unapply().*unapplyÄä[Y
+
+api/If.unapply().[T]
+api/If.unapply().(x$1)%#api/If#api/If.unapply().[T]í: *`
+api/If.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*ë
+api/If.
+ *IfÄäu
+sjava/lang/Object#¢	api/If."L
+api/If.`<init>`().
+api/If.apply().
+api/If.unapply().
+api/If.toString().í: *?
+api/Pair#[A]	*AÄä&$scala/Nothing#
+scala/Any#*?
+api/Pair#[B]	*BÄä&$scala/Nothing#
+scala/Any#*B
+api/Pair#a. Ä*aÄä"" 
+api/Exp#api/Pair#[A]í: *B
+api/Pair#b. Ä*bÄä"" 
+api/Exp#api/Pair#[B]í: *F
+api/Pair#copy().[A]	*AÄä&$scala/Nothing#
+scala/Any#*F
+api/Pair#copy().[B]	*BÄä&$scala/Nothing#
+scala/Any#*I
+api/Pair#copy().(a)*aÄä)"'
+%#api/Exp#api/Pair#copy().[A]*I
+api/Pair#copy().(b)*bÄä)"'
+%#api/Exp#api/Pair#copy().[B]*§
+api/Pair#copy().*copyÄä}
+
+api/Pair#[A]
+api/Pair#[B]*
+api/Pair#copy().(a)
+api/Pair#copy().(b)1/	api/Pair#api/Pair#[A]api/Pair#[B]í: *P
+api/Pair#copy$default$1().[A]	*AÄä&$scala/Nothing#
+scala/Any#*P
+api/Pair#copy$default$1().[B]	*BÄä&$scala/Nothing#
+scala/Any#*y
+api/Pair#copy$default$1().*copy$default$1Ää@>
+
+api/Pair#[A]
+api/Pair#[B]api/Exp#api/Pair#[A]í: *P
+api/Pair#copy$default$2().[A]	*AÄä&$scala/Nothing#
+scala/Any#*P
+api/Pair#copy$default$2().[B]	*BÄä&$scala/Nothing#
+scala/Any#*y
+api/Pair#copy$default$2().*copy$default$2Ää@>
+
+api/Pair#[A]
+api/Pair#[B]api/Exp#api/Pair#[B]í: *G
+api/Pair#_1().*_1Ää&"$
+"j 
+api/Exp#api/Pair#[A]í: *G
+api/Pair#_2().*_2Ää&"$
+"j 
+api/Exp#api/Pair#[B]í: *T
+api/Pair#`<init>`().(a) Ä*aÄä-"+
+)'api/Exp#api/Pair#`<init>`().[A]*T
+api/Pair#`<init>`().(b) Ä*bÄä-"+
+)'api/Exp#api/Pair#`<init>`().[B]*∑
+api/Pair#`<init>`(). Ä@*<init>ÄäàÖ
+
+api/Pair#[A]
+api/Pair#[B]2
+api/Pair#`<init>`().(a)
+api/Pair#`<init>`().(b)1/	api/Pair#api/Pair#[A]api/Pair#[B]í: *∫
+	api/Pair# à*PairÄäò
+ï
+
+api/Pair#[A]
+api/Pair#[B]java/lang/Object#CAapi/Exp#53scala/Tuple2#api/Pair#[A]api/Pair#[B]scala/Product#java/io/Serializable#1/	api/Pair#api/Pair#[A]api/Pair#[B]"∂
+api/Pair#[A]
+api/Pair#[B]
+api/Pair#a.
+api/Pair#b.
+api/Pair#`<init>`().
+api/Pair#copy().
+api/Pair#copy$default$1().
+api/Pair#copy$default$2().
+api/Pair#_1().
+api/Pair#_2().í: *G
+api/Pair.apply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*G
+api/Pair.apply().[B]	*BÄä&$scala/Nothing#
+scala/Any#*K
+api/Pair.apply().(a)*aÄä*"(
+&$api/Exp#api/Pair.apply().[A]*K
+api/Pair.apply().(b)*bÄä*"(
+&$api/Exp#api/Pair.apply().[B]* 
+api/Pair.apply().*applyÄä¢ü
+,
+api/Pair.apply().[A]
+api/Pair.apply().[B],
+api/Pair.apply().(a)
+api/Pair.apply().(b)A?	api/Pair#api/Pair.apply().[A]api/Pair.apply().[B]í: *I
+api/Pair.unapply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*I
+api/Pair.unapply().[B]	*BÄä&$scala/Nothing#
+scala/Any#*p
+api/Pair.unapply().(x$1)*x$1ÄäI"G
+EC	api/Pair#api/Pair.unapply().[A]api/Pair.unapply().[B]*ƒ
+api/Pair.unapply().*unapplyÄäòï
+0
+api/Pair.unapply().[A]
+api/Pair.unapply().[B]
+api/Pair.unapply().(x$1)EC	api/Pair#api/Pair.unapply().[A]api/Pair.unapply().[B]í: *b
+api/Pair.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*ü
+	api/Pair.
+ *PairÄä
+}java/lang/Object#¢	api/Pair."T
+api/Pair.`<init>`().
+api/Pair.apply().
+api/Pair.unapply().
+api/Pair.toString().í: *?
+api/Show#[T]	*TÄä&$scala/Nothing#
+scala/Any#*4
+api/Show#show().(t)*tÄä"
+api/Show#[T]*Z
+api/Show#show(). *showÄä31
+api/Show#show().(t)scala/Predef.String#í: *5
+api/Show#shown().(t)*tÄä"
+api/Show#[T]*[
+api/Show#shown().*shownÄä42
+api/Show#shown().(t)scala/Predef.String#í: *c
+api/Show#`<init>`(). Ä@*<init>Ää53
+
+api/Show#[T] 	api/Show#api/Show#[T]í: *ﬂ
+	api/Show#*Showj(
+&$"scala/annotation/implicitNotFound#Ääñ
+ì
+
+api/Show#[T]java/lang/Object#	api/Show#api/Show#[T]"I
+api/Show#[T]
+api/Show#`<init>`().
+api/Show#show().
+api/Show#shown().í: *\
+api/Show.given_Show_Int. Ëà*given_Show_IntÄä!"
+	api/Show#
+scala/Int#í: *N
+%api/Show.given_Show_String.show().(t)*tÄä"
+scala/Predef.String#*è
+"api/Show.given_Show_String.show().*showÄäEC'
+%api/Show.given_Show_String.show().(t)scala/Predef.String#í: öapi/Show#show().*ı
+api/Show.given_Show_String.
+ ®Ä*given_Show_StringÄä≥
+∞java/lang/Object#'%	api/Show#scala/Predef.String# ¢api/Show.given_Show_String."L
+&api/Show.given_Show_String.`<init>`().
+"api/Show.given_Show_String.show().í: *Q
+api/Show.given_Show_List().[T]	*TÄä&$scala/Nothing#
+scala/Any#*v
+'api/Show.given_Show_List().(evidence$1) †Ä*
+evidence$1Ää5"3
+1/	api/Show#" api/Show.given_Show_List().[T]*_
+local2*lÄäL"J
+HF scala/collection/immutable/List#" api/Show.given_Show_List().[T]*9
+local3*tÄä&"$
+" api/Show.given_Show_List().[T]*È
+api/Show.given_Show_List(). ®Ä*given_Show_ListÄä©¶
+ 
+api/Show.given_Show_List().[T])
+'api/Show.given_Show_List().(evidence$1)WU	api/Show#HF scala/collection/immutable/List#" api/Show.given_Show_List().[T]í: *G
+api/Show.optShow#[T]	*TÄä&$scala/Nothing#
+scala/Any#*T
+api/Show.optShow#s. †à*sÄä+")
+'%	api/Show#api/Show.optShow#[T]í" *W
+api/Show.optShow#show().(t)*tÄä/"-
++)scala/Option#api/Show.optShow#[T]*/
+local4*xÄä"
+api/Show.optShow#[T]*{
+api/Show.optShow#show().*showÄä;9
+api/Show.optShow#show().(t)scala/Predef.String#í: öapi/Show#show().*f
+api/Show.optShow#`<init>`().(s) †à*sÄä6"4
+20	api/Show##!api/Show.optShow#`<init>`().[T]*¶
+api/Show.optShow#`<init>`(). Ä@*<init>Ääpn
+
+api/Show.optShow#[T]!
+api/Show.optShow#`<init>`().(s) /-api/Show.optShow#api/Show.optShow#[T]í: *≤
+api/Show.optShow# †Ä*optShowÄäÑ
+Å
+
+api/Show.optShow#[T]java/lang/Object#:8	api/Show#+)scala/Option#api/Show.optShow#[T]/-api/Show.optShow#api/Show.optShow#[T]"c
+api/Show.optShow#[T]
+api/Show.optShow#s.
+api/Show.optShow#`<init>`().
+api/Show.optShow#show().í: *I
+api/Show.optShow().[T]	*TÄä&$scala/Nothing#
+scala/Any#*T
+api/Show.optShow().(s) †Ä*sÄä-"+
+)'	api/Show#api/Show.optShow().[T]*ò
+api/Show.optShow(). ®Ä*optShowÄäig
+
+api/Show.optShow().[T]
+api/Show.optShow().(s)1/api/Show.optShow#api/Show.optShow().[T]í: *M
+api/Show.summonAll().[T]	*TÄä(&scala/Nothing#scala/Tuple#*>
+local5*tÄä&$scala/Nothing#
+scala/Any#í: *A
+local6*tsÄä(&scala/Nothing#scala/Tuple#í: *˚
+api/Show.summonAll(). ÄÄ*	summonAllÄä«ƒ
+
+api/Show.summonAll().[T]•¢ scala/collection/immutable/List#~J|
++)	api/Show#api/Show.summonAll().[_]MK
+api/Show.summonAll().[_]*_Ää&$scala/Nothing#
+scala/Any#í: *I
+api/Show.derived().[T]	*TÄä&$scala/Nothing#
+scala/Any#*d
+api/Show.derived().(m) †Ä*mÄä=";
+97scala/deriving/Mirror.Of#api/Show.derived().[T]*®
+local7 Ä*elemsÄäç"ä
+áÑ scala/collection/immutable/List#`J^
+	api/Show#	local7[_]><
+	local7[_]*_Ää&$scala/Nothing#
+scala/Any#*c
+local8 Ä*labelÄäI"G
+EC
+¢api/Show.derived().(m)$scala/deriving/Mirror#MirroredLabel#*V
+local9 Ä*sÄä@">
+<:scala/deriving/Mirror.SumOf#api/Show.derived().[T]*2
+local10*tÄä"
+api/Show.derived().[T]*[
+local11 Ä*pÄäD"B
+@> scala/deriving/Mirror.ProductOf#api/Show.derived().[T]*2
+local12*tÄä"
+api/Show.derived().[T]*£
+local13*x$1Ääå"â
+ÜÉscala/Tuple2#
+scala/Any#bJ`
+	api/Show#
+local13[_]?=
+
+local13[_]*_Ää&$scala/Nothing#
+scala/Any#*)
+local14 Ä*xÄä"
+
+scala/Any#*}
+local15 Ä*sÄäf"d
+bJ`
+	api/Show#
+local15[_]?=
+
+local15[_]*_Ää&$scala/Nothing#
+scala/Any#*ê
+api/Show.derived(). ÄÄ*derivedÄäa_
+
+api/Show.derived().[T]
+api/Show.derived().(m))'	api/Show#api/Show.derived().[T]í: *©
+	api/Show.
+ *ShowÄäà
+Öjava/lang/Object#¢	api/Show."€
+api/Show.`<init>`().
+api/Show.given_Show_Int.
+api/Show.given_Show_String.
+api/Show.given_Show_String.
+api/Show.given_Show_List().
+api/Show.optShow#
+api/Show.optShow().
+api/Show.summonAll().
+api/Show.derived().í: *D
+api/Person#name. Ä*nameÄä"
+scala/Predef.String#í: *8
+api/Person#age. Ä*ageÄä"
+
+scala/Int#í: *D
+api/Person#copy().(name)*nameÄä"
+scala/Predef.String#*8
+api/Person#copy().(age)*ageÄä"
+
+scala/Int#*o
+api/Person#copy().*copyÄäHF3
+api/Person#copy().(name)
+api/Person#copy().(age)api/Person#í: *î
+api/Person#copy$default$1().*copy$default$1ÄäY"W
+UjS
+QBO
+scala/Predef.String#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *ä
+api/Person#copy$default$2().*copy$default$2ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *C
+api/Person#_1().*_1Ää "
+j
+scala/Predef.String#í: *9
+api/Person#_2().*_2Ää"
+j
+
+scala/Int#í: *K
+api/Person#`<init>`().(name) Ä*nameÄä"
+scala/Predef.String#*?
+api/Person#`<init>`().(age) Ä*ageÄä"
+
+scala/Int#*Ä
+api/Person#`<init>`(). Ä@*<init>ÄäPN;
+api/Person#`<init>`().(name)
+api/Person#`<init>`().(age)api/Person#í: *≤
+api/Person# Ä*PersonÄäå
+âjava/lang/Object#scala/Product#java/io/Serializable#api/Person#"Ø
+api/Person#name.
+api/Person#age.
+api/Person#`<init>`().
+api/Person#copy().
+api/Person#copy$default$1().
+api/Person#copy$default$2().
+api/Person#_1().
+api/Person#_2().í: *E
+api/Person.apply().(name)*nameÄä"
+scala/Predef.String#*9
+api/Person.apply().(age)*ageÄä"
+
+scala/Int#*s
+api/Person.apply().*applyÄäJH5
+api/Person.apply().(name)
+api/Person.apply().(age)api/Person#í: *<
+api/Person.unapply().(x$1)*x$1Ää"
+api/Person#*^
+api/Person.unapply().*unapplyÄä1/
+api/Person.unapply().(x$1)api/Person#í: *d
+api/Person.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*[
+api/Person.derived$Show. ‡à*derived$ShowÄä"" 
+	api/Show#api/Person#í: *…
+api/Person.
+ *PersonÄä§
+°java/lang/Object#¢api/Person."v
+api/Person.`<init>`().
+api/Person.apply().
+api/Person.unapply().
+api/Person.toString().
+api/Person.derived$Show.í: *C
+api/Shape#`<init>`(). Ä@*<init>Ää 
+api/Shape#í: *d
+
+api/Shape# *ShapeÄäB
+@java/lang/Object#
+api/Shape#"
+api/Shape#`<init>`().í: *Y
+api/Shape.derived$Show. ‡à*derived$ShowÄä!"
+	api/Show#
+api/Shape#í: *~
+
+api/Shape.
+ *ShapeÄä\
+Zjava/lang/Object#¢
+api/Shape."0
+api/Shape.`<init>`().
+api/Shape.derived$Show.í: *4
+api/Circle#r. Ä*rÄä"
+
+scala/Int#í: *4
+api/Circle#copy().(r)*rÄä"
+
+scala/Int#*S
+api/Circle#copy().*copyÄä,*
+api/Circle#copy().(r)api/Circle#í: *ä
+api/Circle#copy$default$1().*copy$default$1ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *9
+api/Circle#_1().*_1Ää"
+j
+
+scala/Int#í: *;
+api/Circle#`<init>`().(r) Ä*rÄä"
+
+scala/Int#*`
+api/Circle#`<init>`(). Ä@*<init>Ää0.
+api/Circle#`<init>`().(r)api/Circle#í: *˝
+api/Circle# Ä*CircleÄä◊
+‘java/lang/Object#
+api/Shape#scala/Product#java/io/Serializable#api/Circle#"k
+api/Circle#r.
+api/Circle#`<init>`().
+api/Circle#copy().
+api/Circle#copy$default$1().
+api/Circle#_1().í: *5
+api/Circle.apply().(r)*rÄä"
+
+scala/Int#*V
+api/Circle.apply().*applyÄä-+
+api/Circle.apply().(r)api/Circle#í: *<
+api/Circle.unapply().(x$1)*x$1Ää"
+api/Circle#*^
+api/Circle.unapply().*unapplyÄä1/
+api/Circle.unapply().(x$1)api/Circle#í: *d
+api/Circle.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*[
+api/Circle.derived$Show. ‡à*derived$ShowÄä"" 
+	api/Show#api/Circle#í: *…
+api/Circle.
+ *CircleÄä§
+°java/lang/Object#¢api/Circle."v
+api/Circle.`<init>`().
+api/Circle.apply().
+api/Circle.unapply().
+api/Circle.toString().
+api/Circle.derived$Show.í: *4
+api/Square#s. Ä*sÄä"
+
+scala/Int#í: *4
+api/Square#copy().(s)*sÄä"
+
+scala/Int#*S
+api/Square#copy().*copyÄä,*
+api/Square#copy().(s)api/Square#í: *ä
+api/Square#copy$default$1().*copy$default$1ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *9
+api/Square#_1().*_1Ää"
+j
+
+scala/Int#í: *;
+api/Square#`<init>`().(s) Ä*sÄä"
+
+scala/Int#*`
+api/Square#`<init>`(). Ä@*<init>Ää0.
+api/Square#`<init>`().(s)api/Square#í: *˝
+api/Square# Ä*SquareÄä◊
+‘java/lang/Object#
+api/Shape#scala/Product#java/io/Serializable#api/Square#"k
+api/Square#s.
+api/Square#`<init>`().
+api/Square#copy().
+api/Square#copy$default$1().
+api/Square#_1().í: *5
+api/Square.apply().(s)*sÄä"
+
+scala/Int#*V
+api/Square.apply().*applyÄä-+
+api/Square.apply().(s)api/Square#í: *<
+api/Square.unapply().(x$1)*x$1Ää"
+api/Square#*^
+api/Square.unapply().*unapplyÄä1/
+api/Square.unapply().(x$1)api/Square#í: *d
+api/Square.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*[
+api/Square.derived$Show. ‡à*derived$ShowÄä"" 
+	api/Show#api/Square#í: *…
+api/Square.
+ *SquareÄä§
+°java/lang/Object#¢api/Square."v
+api/Square.`<init>`().
+api/Square.apply().
+api/Square.unapply().
+api/Square.toString().
+api/Square.derived$Show.í: *X
+api/Functor#[F]	*FÄä<:
+
+api/Functor#[F][_]scala/Nothing#
+scala/Any#*H
+api/Functor#map().[A]	*AÄä&$scala/Nothing#
+scala/Any#*V
+api/Functor#map().(fa)*faÄä2"0
+.,api/Functor#[F]api/Functor#map().[A]*H
+api/Functor#map().[B]	*BÄä&$scala/Nothing#
+scala/Any#*p
+api/Functor#map().(f)*fÄäN"L
+JHscala/Function1#api/Functor#map().[A]api/Functor#map().[B]*ø
+api/Functor#map(). *mapÄäñì
+.
+api/Functor#map().[A]
+api/Functor#map().[B]
+api/Functor#map().(fa)
+api/Functor#map().(f).,api/Functor#[F]api/Functor#map().[B]í: *o
+api/Functor#`<init>`(). Ä@*<init>Ää><
+
+api/Functor#[F] %#api/Functor#api/Functor#[F]í: *π
+api/Functor#*FunctorÄäî
+ë
+
+api/Functor#[F]java/lang/Object#%#api/Functor#api/Functor#[F]">
+api/Functor#[F]
+api/Functor#`<init>`().
+api/Functor#map().í: *T
+api/Monad#[F]	*FÄä:8
+
+api/Monad#[F][_]scala/Nothing#
+scala/Any#*G
+api/Monad#pure().[A]	*AÄä&$scala/Nothing#
+scala/Any#*=
+api/Monad#pure().(a)*aÄä"
+api/Monad#pure().[A]*á
+api/Monad#pure(). *pureÄä_]
+
+api/Monad#pure().[A]
+api/Monad#pure().(a)+)api/Monad#[F]api/Monad#pure().[A]í: *J
+api/Monad#flatMap().[A]	*AÄä&$scala/Nothing#
+scala/Any#*X
+api/Monad#flatMap().(fa)*faÄä2"0
+.,api/Monad#[F]api/Monad#flatMap().[A]*J
+api/Monad#flatMap().[B]	*BÄä&$scala/Nothing#
+scala/Any#*â
+api/Monad#flatMap().(f)*fÄäe"c
+a_scala/Function1#api/Monad#flatMap().[A].,api/Monad#[F]api/Monad#flatMap().[B]*Õ
+api/Monad#flatMap(). *flatMapÄäûõ
+2
+api/Monad#flatMap().[A]
+api/Monad#flatMap().[B]
+api/Monad#flatMap().(fa)
+api/Monad#flatMap().(f).,api/Monad#[F]api/Monad#flatMap().[B]í: *F
+api/Monad#map().[A]	*AÄä&$scala/Nothing#
+scala/Any#*P
+api/Monad#map().(fa)*faÄä.",
+*(api/Monad#[F]api/Monad#map().[A]*F
+api/Monad#map().[B]	*BÄä&$scala/Nothing#
+scala/Any#*j
+api/Monad#map().(f)*fÄäJ"H
+FDscala/Function1#api/Monad#map().[A]api/Monad#map().[B]*/
+local16*aÄä"
+api/Monad#map().[A]*ƒ
+api/Monad#map().*mapÄääá
+*
+api/Monad#map().[A]
+api/Monad#map().[B]
+api/Monad#map().(fa)
+api/Monad#map().(f)*(api/Monad#[F]api/Monad#map().[B]í: öapi/Functor#map().*g
+api/Monad#`<init>`(). Ä@*<init>Ää86
+
+api/Monad#[F] !
+api/Monad#api/Monad#[F]í: *˜
+
+api/Monad#*MonadÄä÷
+”
+
+api/Monad#[F]java/lang/Object##!api/Functor#api/Monad#[F]!
+api/Monad#api/Monad#[F]"a
+api/Monad#[F]
+api/Monad#`<init>`().
+api/Monad#pure().
+api/Monad#flatMap().
+api/Monad#map().í: *H
+api/Entry#Key#*KeyÄä&$scala/Nothing#
+scala/Any#í: *L
+api/Entry#Value#*ValueÄä&$scala/Nothing#
+scala/Any#í: *@
+api/Entry#key(). *keyÄä"
+j
+api/Entry#Key#í: *F
+api/Entry#value(). *valueÄä"
+j
+api/Entry#Value#í: *C
+api/Entry#`<init>`(). Ä@*<init>Ää 
+api/Entry#í: *¨
+
+api/Entry#*EntryÄäã
+àjava/lang/Object#
+api/Entry#"_
+api/Entry#`<init>`().
+api/Entry#Key#
+api/Entry#Value#
+api/Entry#key().
+api/Entry#value().í: *A
+api/Ord#[T]	 Ä*TÄä&$scala/Nothing#
+scala/Any#*1
+api/Ord#cmp().(a)*aÄä"
+api/Ord#[T]*1
+api/Ord#cmp().(b)*bÄä"
+api/Ord#[T]*^
+api/Ord#cmp(). *cmpÄä:8&
+api/Ord#cmp().(a)
+api/Ord#cmp().(b)
+scala/Int#í: *_
+api/Ord#`<init>`(). Ä@*<init>Ää20
+
+api/Ord#[T] api/Ord#api/Ord#[T]í: *ó
+api/Ord#*OrdÄä{
+y
+
+api/Ord#[T]java/lang/Object#api/Ord#api/Ord#[T]"2
+api/Ord#[T]
+api/Ord#`<init>`().
+api/Ord#cmp().í: *0
+local17*selfÄä"
+api/Animal#[Self]*_
+api/Animal#[Self]	*SelfÄä><scala/Nothing#&$api/Animal#api/Animal#[Self]*@
+api/Animal#compareTo().(o)*oÄä"
+api/Animal#[Self]*c
+api/Animal#compareTo(). *	compareToÄä0.
+api/Animal#compareTo().(o)
+scala/Int#í: *q
+api/Animal#`<init>`(). Ä@*<init>ÄäA?
+
+api/Animal#[Self] &$api/Animal#api/Animal#[Self]í: *ﬁ
+api/Animal# *AnimalÄäπ
+∂
+
+api/Animal#[Self]java/lang/Object#Bä?
+api/Animal#[Self]
+&$api/Animal#api/Animal#[Self]"D
+api/Animal#[Self]
+api/Animal#`<init>`().
+api/Animal#compareTo().í: *J
+api/HasName#name(). *nameÄä "
+j
+scala/Predef.String#í: *G
+api/HasName#`<init>`(). Ä@*<init>Ää api/HasName#í: *
+api/HasName#*HasNameÄä[
+Yjava/lang/Object#api/HasName#".
+api/HasName#`<init>`().
+api/HasName#name().í: *=
+api/HasAge#age(). *ageÄä"
+j
+
+scala/Int#í: *E
+api/HasAge#`<init>`(). Ä@*<init>Ää api/HasAge#í: *y
+api/HasAge#*HasAgeÄäW
+Ujava/lang/Object#api/HasAge#"+
+api/HasAge#`<init>`().
+api/HasAge#age().í: *@
+api/Base#tag. Ä*tagÄä"
+scala/Predef.String#í: *K
+api/Base#abstractDef(). *abstractDefÄä"
+j
+
+scala/Int#í: *P
+api/Base#abstractVal. Ñ*abstractValÄä"
+scala/Predef.String#í: *H
+api/Base#concreteVar(). Ä*concreteVarÄä"
+
+scala/Int#í: *A
+ api/Base#`concreteVar_=`().(x$1)*x$1Ää"
+
+scala/Int#*s
+api/Base#`concreteVar_=`(). Ä*concreteVar_=Ää75"
+ api/Base#`concreteVar_=`().(x$1)scala/Unit#í: *>
+api/Base#lz. ¿*lzÄä"
+scala/Predef.String#í: *;
+api/Base#prot().*protÄä"
+j
+
+scala/Int#í" *M
+api/Base#pkgPrivate().*
+pkgPrivateÄä"
+j
+
+scala/Int#í
+api/*8
+api/Base#overloaded().(x)*xÄä"
+
+scala/Int#*`
+api/Base#overloaded().*
+overloadedÄä/-
+api/Base#overloaded().(x)
+scala/Int#í: *D
+api/Base#overloaded(+1).(x)*xÄä"
+scala/Predef.String#*n
+api/Base#overloaded(+1).*
+overloadedÄä;9
+api/Base#overloaded(+1).(x)scala/Predef.String#í: *6
+api/Base#defaults().(a)*aÄä"
+
+scala/Int#*@
+api/Base#defaults().(b)*bÄä"
+scala/Predef.String#*:
+api/Base#defaults().(c)*cÄä"
+scala/Boolean#*ò
+api/Base#defaults().*defaultsÄäki2
+api/Base#defaults().(a)
+api/Base#defaults().(b)
+api/Base#defaults().(c)scala/Predef.String#í: *ê
+api/Base#defaults$default$1().*defaults$default$1ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *ö
+api/Base#defaults$default$2().*defaults$default$2ÄäY"W
+UjS
+QBO
+scala/Predef.String#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *@
+!api/Base#defaults$default$3().(a)*aÄä"
+
+scala/Int#*J
+!api/Base#defaults$default$3().(b)*bÄä"
+scala/Predef.String#*⁄
+api/Base#defaults$default$3().*defaults$default$3ÄäòïF
+!api/Base#defaults$default$3().(a)
+!api/Base#defaults$default$3().(b)KBI
+scala/Boolean#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *;
+api/Base#varargs().(xs)*xsÄä"
+r
+
+scala/Int#*X
+api/Base#varargs().*varargsÄä-+
+api/Base#varargs().(xs)
+scala/Int#í: *8
+api/Base#byName().(x)*xÄä"
+j
+
+scala/Int#*T
+api/Base#byName().*byNameÄä+)
+api/Base#byName().(x)
+scala/Int#í: *G
+api/Base#ctxFun().(s) †Ä*sÄä!"
+	api/Show#
+scala/Int#*&
+local18*tÄä"
+
+scala/Int#*Ñ
+api/Base#ctxFun().*ctxFunÄä[Y
+api/Base#ctxFun().(s)><scala/Function1#
+scala/Int#scala/Predef.String#í: *F
+api/Base#poly().[A]	*AÄä&$scala/Nothing#
+scala/Any#*O
+api/Base#poly().[B]	*BÄä/-scala/Nothing#api/Base#poly().[A]*K
+api/Base#poly().[C]	*CÄä+)api/Base#poly().[B]
+scala/Any#*;
+api/Base#poly().(b)*bÄä"
+api/Base#poly().[B]*ò
+api/Base#poly().*polyÄäsq
+?
+api/Base#poly().[A]
+api/Base#poly().[B]
+api/Base#poly().[C]
+api/Base#poly().(b)api/Base#poly().[C]í: *1
+api/Base#`++`().(o)*oÄä"
+	api/Base#*z
+api/Base#`++`().*++j"
+ scala/annotation/targetName#Ää31
+api/Base#`++`().(o)scala/Predef.String#í: *Q
+api/Base#Abstract#*AbstractÄä&$scala/Nothing#
+scala/Any#í: *O
+api/Base#Bounded#*BoundedÄä&$scala/Null#scala/AnyRef#í: *ì
+api/Base#Alias#*AliasÄänl42 scala/collection/immutable/List#
+scala/Int#42 scala/collection/immutable/List#
+scala/Int#í: *G
+api/Base#`<init>`().(tag) Ä*tagÄä"
+scala/Predef.String#*\
+api/Base#`<init>`(). Ä@*<init>Ää.,
+api/Base#`<init>`().(tag)	api/Base#í: *œ
+	api/Base#*BaseÄä∞
+≠java/lang/Object#	api/Base#"Ñ
+api/Base#tag.
+api/Base#`<init>`().
+api/Base#abstractDef().
+api/Base#abstractVal.
+api/Base#concreteVar().
+api/Base#`concreteVar_=`().
+api/Base#lz.
+api/Base#prot().
+api/Base#pkgPrivate().
+api/Base#overloaded().
+api/Base#overloaded(+1).
+api/Base#defaults().
+api/Base#defaults$default$1().
+api/Base#defaults$default$2().
+api/Base#defaults$default$3().
+api/Base#varargs().
+api/Base#byName().
+api/Base#ctxFun().
+api/Base#poly().
+api/Base#`++`().
+api/Base#Abstract#
+api/Base#Bounded#
+api/Base#Alias#í: *<
+api/Impl#t. Ä*tÄä"
+scala/Predef.String#í *c
+api/Impl#abstractDef().*abstractDefÄä"
+j
+
+scala/Int#í: öapi/Base#abstractDef().*h
+api/Impl#abstractVal. Ä*abstractValÄä"
+scala/Predef.String#í: öapi/Base#abstractVal.*b
+api/Impl#Abstract#*AbstractÄä" 
+scala/Int#
+scala/Int#í: öapi/Base#Abstract#*s
+api/Impl#Bounded#*BoundedÄä64scala/Predef.String#scala/Predef.String#í: öapi/Base#Bounded#*N
+api/Impl#prot().*protÄä"
+j
+
+scala/Int#í" öapi/Base#prot().*5
+api/Impl#inl().(x) ÄÄ*xÄä"
+
+scala/Int#*O
+api/Impl#inl(). ÄÄ*inlÄä(&
+api/Impl#inl().(x)
+scala/Int#í: *2
+api/Impl#tinl().(x)*xÄä"
+
+scala/Int#*R
+api/Impl#tinl(). ÄÄ(*tinlÄä)'
+api/Impl#tinl().(x)
+scala/Any#í: *2
+api/Impl#loop().(n)*nÄä"
+
+scala/Int#*6
+api/Impl#loop().(acc)*accÄä"
+
+scala/Int#*à
+api/Impl#loop(). *loopj
+scala/annotation/tailrec#Ää@>,
+api/Impl#loop().(n)
+api/Impl#loop().(acc)
+scala/Int#í: *à
+api/Impl#loop$default$2().*loop$default$2ÄäO"M
+KjI
+GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *E
+api/Impl#Inner.x().*xÄä "
+j
+scala/Predef.String#í: *â
+api/Impl#Inner.
+ *InnerÄäb
+`java/lang/Object#¢api/Impl#Inner."1
+api/Impl#Inner.`<init>`().
+api/Impl#Inner.x().í: *=
+api/Impl#InnerClass#y. Ä*yÄä"
+
+scala/Int#í: *G
+api/Impl#InnerClass#outer().*outerÄä"
+j
+	api/Impl#í: *D
+"api/Impl#InnerClass#`<init>`().(y) Ä*yÄä"
+
+scala/Int#*{
+api/Impl#InnerClass#`<init>`(). Ä@*<init>ÄäB@$
+"api/Impl#InnerClass#`<init>`().(y)api/Impl#InnerClass#í: *Ω
+api/Impl#InnerClass#*
+InnerClassÄäç
+äjava/lang/Object#api/Impl#InnerClass#"W
+api/Impl#InnerClass#y.
+api/Impl#InnerClass#`<init>`().
+api/Impl#InnerClass#outer().í: *&
+local19*iÄä"
+
+scala/Int#*6
+local20*helperÄä	
+local19
+scala/Int#*/
+local21*hÄä"
+j
+
+scala/Int#í: *W
+local22*LocalÄä:
+8java/lang/Object#	local22"
+local23
+local21í: *=
+api/Impl#local().*localÄä"
+j
+
+scala/Int#í: *L
+local24*runÄä scala/Unit#í: öjava/lang/Runnable#run().*r
+local25 *$anonÄäS
+Qjava/lang/Object#java/lang/Runnable#	local25"
+local26
+local24í: *D
+api/Impl#anon().*anonÄä"
+j
+java/lang/Runnable#í: *B
+api/Impl#sam().*samÄä"
+j
+java/lang/Runnable#í: *@
+api/Impl#`<init>`().(t)*tÄä"
+scala/Predef.String#*Z
+api/Impl#`<init>`(). Ä@*<init>Ää,*
+api/Impl#`<init>`().(t)	api/Impl#í: *Ï
+	api/Impl#*ImplÄäÕ
+ java/lang/Object#	api/Base#java/io/Serializable#	api/Impl#"˜
+api/Impl#t.
+api/Impl#`<init>`().
+api/Impl#abstractDef().
+api/Impl#abstractVal.
+api/Impl#Abstract#
+api/Impl#Bounded#
+api/Impl#prot().
+api/Impl#inl().
+api/Impl#tinl().
+api/Impl#loop().
+api/Impl#loop$default$2().
+api/Impl#Inner.
+api/Impl#Inner.
+api/Impl#InnerClass#
+api/Impl#local().
+api/Impl#anon().
+api/Impl#sam().
+api/Impl#InnerClass.
+api/Impl#InnerClass.í: *f
+api/Impl.staticField. Ä*staticFieldj
+scala/annotation/static#Ää"
+
+scala/Int#í: *:
+api/Impl.apply().*applyÄä 	api/Impl#í: *4
+api/Impl.unapply().(i)*iÄä"
+	api/Impl#*r
+api/Impl.unapply().*unapplyÄäGE
+api/Impl.unapply().(i))'scala/Some#scala/Predef.String#í: *°
+	api/Impl.
+ *ImplÄäÄ
+~java/lang/Object#¢	api/Impl."U
+api/Impl.`<init>`().
+api/Impl.staticField.
+api/Impl.apply().
+api/Impl.unapply().í: *J
+api/ValueClass#underlying. Ä*
+underlyingÄä"
+
+scala/Int#í: *J
+api/ValueClass#double().*doubleÄä"
+j
+api/ValueClass#í: *Q
+&api/ValueClass#`<init>`().(underlying) Ä*
+underlyingÄä"
+
+scala/Int#*u
+api/ValueClass#`<init>`(). Ä@*<init>ÄäA?(
+&api/ValueClass#`<init>`().(underlying)api/ValueClass#í: *™
+api/ValueClass# *
+ValueClassÄä~
+|scala/AnyVal#api/ValueClass#"R
+api/ValueClass#underlying.
+api/ValueClass#`<init>`().
+api/ValueClass#double().í: *í
+api/ValueClass.
+ *
+ValueClassÄäf
+djava/lang/Object#¢api/ValueClass."5
+api/ValueClass.`<init>`().
+api/ValueClass.apply().í: *@
+
+api/CC#[A]	 Ä*AÄä&$scala/Nothing#
+scala/Any#*0
+	api/CC#a. Ä*aÄä"
+
+api/CC#[A]í: *\
+api/CC#rest. Ä*restÄä8"6
+42 scala/collection/immutable/List#
+api/CC#[A]í: *8
+api/CC#extra. Ä*extraÄä"
+
+scala/Int#í: *D
+api/CC#copy().[A]	*AÄä&$scala/Nothing#
+scala/Any#*7
+api/CC#copy().(a)*aÄä"
+api/CC#copy().[A]*c
+api/CC#copy().(rest)*restÄä?"=
+;9 scala/collection/immutable/List#api/CC#copy().[A]*8
+api/CC#copy().(extra)*extraÄä"
+
+scala/Int#*î
+api/CC#copy().*copyÄäqo
+
+
+api/CC#[A])
+api/CC#copy().(a)
+api/CC#copy().(rest)
+api/CC#copy().(extra)api/CC#
+api/CC#[A]í: *N
+api/CC#copy$default$1().[A]	*AÄä&$scala/Nothing#
+scala/Any#*W
+api/CC#copy$default$1().*copy$default$1Ää 
+
+
+api/CC#[A]
+api/CC#[A]í: *N
+api/CC#copy$default$2().[A]	*AÄä&$scala/Nothing#
+scala/Any#*}
+api/CC#copy$default$2().*copy$default$2ÄäFD
+
+
+api/CC#[A]42 scala/collection/immutable/List#
+api/CC#[A]í: *5
+api/CC#_1().*_1Ää"
+j
+
+api/CC#[A]í: *[
+api/CC#_2().*_2Ää<":
+8j6
+42 scala/collection/immutable/List#
+api/CC#[A]í: *B
+api/CC#`<init>`().(a) Ä*aÄä"
+api/CC#`<init>`().[A]*n
+api/CC#`<init>`().(rest) Ä*restÄäC"A
+?= scala/collection/immutable/List#api/CC#`<init>`().[A]*?
+api/CC#`<init>`().(extra) Ä*extraÄä"
+
+scala/Int#*©
+api/CC#`<init>`(). Ä@*<init>Ää}{
+
+
+api/CC#[A]1
+api/CC#`<init>`().(a)
+api/CC#`<init>`().(rest)
+api/CC#`<init>`().(extra)api/CC#
+api/CC#[A]í: *Ω
+api/CC# Ä*CCÄäü
+ú
+
+
+api/CC#[A]java/lang/Object#scala/Product#java/io/Serializable#api/CC#
+api/CC#[A]"®
+
+api/CC#[A]
+	api/CC#a.
+api/CC#rest.
+api/CC#extra.
+api/CC#`<init>`().
+api/CC#copy().
+api/CC#copy$default$1().
+api/CC#copy$default$2().
+api/CC#_1().
+api/CC#_2().í: *E
+api/CC.apply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*9
+api/CC.apply().(a)*aÄä"
+api/CC.apply().[A]*e
+api/CC.apply().(rest)*restÄä@">
+<: scala/collection/immutable/List#api/CC.apply().[A]*9
+api/CC.apply().(extra)*extraÄä"
+
+scala/Int#*´
+api/CC.apply().*applyÄäÖÇ
+
+api/CC.apply().[A]+
+api/CC.apply().(a)
+api/CC.apply().(rest)
+api/CC.apply().(extra)#!api/CC#api/CC.apply().[A]í: *G
+api/CC.unapply().[A]	*AÄä&$scala/Nothing#
+scala/Any#*N
+api/CC.unapply().(x$1)*x$1Ää)"'
+%#api/CC#api/CC.unapply().[A]*Ñ
+api/CC.unapply().*unapplyÄä[Y
+
+api/CC.unapply().[A]
+api/CC.unapply().(x$1)%#api/CC#api/CC.unapply().[A]í: *`
+api/CC.toString().*toStringÄä"
+j
+java/lang/String#í: öscala/Any#toString().*[
+(api/CC.$lessinit$greater$default$2().[A]	*AÄä&$scala/Nothing#
+scala/Any#*•
+%api/CC.$lessinit$greater$default$2().*$lessinit$greater$default$2ÄäTR
+*
+(api/CC.$lessinit$greater$default$2().[A]$¢!scala/collection/immutable/Nil.í: *[
+(api/CC.$lessinit$greater$default$3().[A]	*AÄä&$scala/Nothing#
+scala/Any#*e
+(api/CC.$lessinit$greater$default$3().(a)*aÄä0".
+,*(api/CC.$lessinit$greater$default$3().[A]*ë
++api/CC.$lessinit$greater$default$3().(rest)*restÄäV"T
+RP scala/collection/immutable/List#,*(api/CC.$lessinit$greater$default$3().[A]*£
+%api/CC.$lessinit$greater$default$3().*$lessinit$greater$default$3Ää—Œ
+*
+(api/CC.$lessinit$greater$default$3().[A]W
+(api/CC.$lessinit$greater$default$3().(a)
++api/CC.$lessinit$greater$default$3().(rest)GBE
+
+scala/Int#3
+1/-scala/annotation/unchecked/uncheckedVariance#í: *‚
+api/CC.
+ *CCÄä≈
+¬java/lang/Object#¢	api/CC."ö
+api/CC.`<init>`().
+api/CC.apply().
+api/CC.unapply().
+api/CC.toString().
+%api/CC.$lessinit$greater$default$2().
+%api/CC.$lessinit$greater$default$3().í: *6
+api/WithInit#x. Ñ*xÄä"
+
+scala/Int#í: *I
+api/WithInit#`<init>`(). Ä@*<init>Ää api/WithInit#í: *Å
+api/WithInit# *WithInitÄäY
+Wjava/lang/Object#api/WithInit#"+
+api/WithInit#`<init>`().
+api/WithInit#x.í: *=
+api/Exts.words().(s)*sÄä"
+scala/Predef.String#*Å
+api/Exts.words().*wordsÄäZX
+api/Exts.words().(s)>< scala/collection/immutable/List#scala/Predef.String#í: *<
+api/Exts.word().(s)*sÄä"
+scala/Predef.String#*2
+api/Exts.word().(i)*iÄä"
+
+scala/Int#*o
+api/Exts.word().*wordÄäJH
+api/Exts.word().(s)
+api/Exts.word().(i)scala/Predef.String#í: *L
+api/Exts.sortedWith().[T]	*TÄä&$scala/Nothing#
+scala/Any#*o
+api/Exts.sortedWith().(xs)*xsÄäG"E
+CA scala/collection/immutable/List#api/Exts.sortedWith().[T]*]
+api/Exts.sortedWith().(x$2) †Ä*x$2Ää/"-
++)api/Ord#api/Exts.sortedWith().[T]*5
+local27*aÄä!"
+api/Exts.sortedWith().[T]*5
+local28*bÄä!"
+api/Exts.sortedWith().[T]*‘
+api/Exts.sortedWith().*
+sortedWithÄä¢ü
+
+api/Exts.sortedWith().[T]
+api/Exts.sortedWith().(xs)
+api/Exts.sortedWith().(x$2)CA scala/collection/immutable/List#api/Exts.sortedWith().[T]í: *û
+	api/Exts.
+ *ExtsÄä~
+|java/lang/Object#¢	api/Exts."S
+api/Exts.`<init>`().
+api/Exts.words().
+api/Exts.word().
+api/Exts.sortedWith().í: *@
+api/Printer#print().(s)*sÄä"
+scala/Predef.String#*X
+api/Printer#print().*printÄä.,
+api/Printer#print().(s)scala/Unit#í: *?
+api/Printer#flush().*flushÄä scala/Unit#í: *G
+api/Printer#`<init>`(). Ä@*<init>Ää api/Printer#í: *ñ
+api/Printer#*PrinterÄär
+pjava/lang/Object#api/Printer#"E
+api/Printer#`<init>`().
+api/Printer#print().
+api/Printer#flush().í: *F
+api/Scanner#scan().*scanÄä scala/Predef.String#í: *G
+api/Scanner#`<init>`(). Ä@*<init>Ää api/Scanner#í: *
+api/Scanner#*ScannerÄä[
+Yjava/lang/Object#api/Scanner#".
+api/Scanner#`<init>`().
+api/Scanner#scan().í: *B
+api/Copier#printer. Ä*printerÄä"
+api/Printer#í *B
+api/Copier#scanner. Ä*scannerÄä"
+api/Scanner#í *?
+api/Copier#print().(s)*sÄä"
+scala/Predef.String#*X
+api/Copier#print(). *printÄä-+
+api/Copier#print().(s)scala/Unit#í: *D
+api/Copier#flushIt(). *flushItÄä scala/Unit#í: *G
+api/Copier#scan(). *scanÄä scala/Predef.String#í: *E
+api/Copier#`<init>`(). Ä@*<init>Ää api/Copier#í: *”
+api/Copier#*CopierÄä∞
+≠java/lang/Object#api/Copier#"Ç
+api/Copier#`<init>`().
+api/Copier#printer.
+api/Copier#scanner.
+api/Copier#print().
+api/Copier#flushIt().
+api/Copier#scan().í: *=
+api/A1#m().*mÄä "
+j
+scala/Predef.String#í: *=
+api/A1#`<init>`(). Ä@*<init>Ää 	api/A1#í: *c
+api/A1#*A1ÄäI
+Gjava/lang/Object#	api/A1#"!
+api/A1#`<init>`().
+api/A1#m().í: *K
+api/B1#m().*mÄä "
+j
+scala/Predef.String#í: öapi/A1#m().*=
+api/B1#`<init>`(). Ä@*<init>Ää 	api/B1#í: *p
+api/B1#*B1ÄäV
+Tjava/lang/Object#	api/A1#	api/B1#"!
+api/B1#`<init>`().
+api/B1#m().í: *K
+api/C1#m().*mÄä "
+j
+scala/Predef.String#í: öapi/A1#m().*=
+api/C1#`<init>`(). Ä@*<init>Ää 	api/C1#í: *p
+api/C1#*C1ÄäV
+Tjava/lang/Object#	api/A1#	api/C1#"!
+api/C1#`<init>`().
+api/C1#m().í: *g
+api/D1#m().*mÄä "
+j
+scala/Predef.String#í: öapi/C1#m().öapi/B1#m().öapi/A1#m().*=
+api/D1#`<init>`(). Ä@*<init>Ää 	api/D1#í: *}
+api/D1#*D1Ääc
+ajava/lang/Object#	api/B1#	api/C1#	api/D1#"!
+api/D1#`<init>`().
+api/D1#m().í: *5
+api/JavaLike#get().(i)*iÄä"
+
+scala/Int#*ï
+api/JavaLike#get().*getÄä64
+api/JavaLike#get().(i)scala/Predef.String#í: öjava/util/AbstractList#get().öjava/util/List#get().*ú
+api/JavaLike#size().*sizeÄä 
+scala/Int#í: öjava/util/List#size().ö$java/util/AbstractCollection#size().öjava/util/Collection#size().*>
+api/JavaLike#compareTo().(o)*oÄä"
+api/JavaLike#*â
+api/JavaLike#compareTo().*	compareToÄä20
+api/JavaLike#compareTo().(o)
+scala/Int#í: ö!java/lang/Comparable#compareTo().*i
+api/JavaLike#io().*ioj-
++)scala/throws#java/io/IOException#Ää scala/Unit#í: *O
+api/JavaLike#v(). Ä*vj
+scala/volatile#Ää"
+
+scala/Int#í: *;
+api/JavaLike#`v_=`().(x$1)*x$1Ää"
+
+scala/Int#*t
+api/JavaLike#`v_=`(). Ä*v_=j
+scala/volatile#Ää1/
+api/JavaLike#`v_=`().(x$1)scala/Unit#í: *P
+api/JavaLike#t(). Ä*tj
+scala/transient#Ää"
+
+scala/Int#í: *;
+api/JavaLike#`t_=`().(x$1)*x$1Ää"
+
+scala/Int#*u
+api/JavaLike#`t_=`(). Ä*t_=j
+scala/transient#Ää1/
+api/JavaLike#`t_=`().(x$1)scala/Unit#í: *R
+api/JavaLike#nat(). *natj
+scala/native#Ää 
+scala/Int#í: *I
+api/JavaLike#`<init>`(). Ä@*<init>Ää api/JavaLike#í: *Ç
+api/JavaLike#*JavaLikeÄä€
+ÿ53java/util/AbstractList#scala/Predef.String#,*java/lang/Comparable#api/JavaLike#api/JavaLike#"›
+api/JavaLike#`<init>`().
+api/JavaLike#get().
+api/JavaLike#size().
+api/JavaLike#compareTo().
+api/JavaLike#io().
+api/JavaLike#v().
+api/JavaLike#`v_=`().
+api/JavaLike#t().
+api/JavaLike#`t_=`().
+api/JavaLike#nat().í: *Y
+api/Api_1$package.old().*oldj
+scala/deprecated#Ää 
+scala/Int#í: *O
+api/Api_1$package.eval().[T]	*TÄä&$scala/Nothing#
+scala/Any#*[
+api/Api_1$package.eval().(e)*eÄä2"0
+.,api/Exp# api/Api_1$package.eval().[T]*)
+local29 Ä*iÄä"
+
+scala/Int#*-
+local30 Ä*bÄä"
+scala/Boolean#*;
+local31 Ä*cÄä$""
+ api/Exp#scala/Boolean#*I
+local32 Ä*tÄä2"0
+.,api/Exp# api/Api_1$package.eval().[T]*I
+local33 Ä*eÄä2"0
+.,api/Exp# api/Api_1$package.eval().[T]*A
+local34*A$1Ää&$scala/Nothing#
+scala/Any#í: *A
+local35*B$1Ää&$scala/Nothing#
+scala/Any#í: *4
+local36 Ä*aÄä"
+api/Exp#	local34*4
+local37 Ä*bÄä"
+api/Exp#	local35*í
+api/Api_1$package.eval().*evalÄädb
+
+api/Api_1$package.eval().[T]
+api/Api_1$package.eval().(e) api/Api_1$package.eval().[T]í: *`
+-api/Api_1$package.given_Monad_List.pure().[A]	*AÄä&$scala/Nothing#
+scala/Any#*o
+-api/Api_1$package.given_Monad_List.pure().(a)*aÄä5"3
+1/-api/Api_1$package.given_Monad_List.pure().[A]*í
+*api/Api_1$package.given_Monad_List.pure().*pureÄäæª
+/
+-api/Api_1$package.given_Monad_List.pure().[A]/
+-api/Api_1$package.given_Monad_List.pure().(a)WU scala/collection/immutable/List#1/-api/Api_1$package.given_Monad_List.pure().[A]í: öapi/Monad#pure().*c
+0api/Api_1$package.given_Monad_List.flatMap().[A]	*AÄä&$scala/Nothing#
+scala/Any#*ù
+1api/Api_1$package.given_Monad_List.flatMap().(fa)*faÄä^"\
+ZX scala/collection/immutable/List#420api/Api_1$package.given_Monad_List.flatMap().[A]*c
+0api/Api_1$package.given_Monad_List.flatMap().[B]	*BÄä&$scala/Nothing#
+scala/Any#*Î
+0api/Api_1$package.given_Monad_List.flatMap().(f)*fÄä≠"™
+ß§scala/Function1#420api/Api_1$package.given_Monad_List.flatMap().[A]ZX scala/collection/immutable/List#420api/Api_1$package.given_Monad_List.flatMap().[B]*ã
+-api/Api_1$package.given_Monad_List.flatMap().*flatMapÄäÆ´
+d
+0api/Api_1$package.given_Monad_List.flatMap().[A]
+0api/Api_1$package.given_Monad_List.flatMap().[B]3
+1api/Api_1$package.given_Monad_List.flatMap().(fa)2
+0api/Api_1$package.given_Monad_List.flatMap().(f)ZX scala/collection/immutable/List#420api/Api_1$package.given_Monad_List.flatMap().[B]í: öapi/Monad#flatMap().*ƒ
+#api/Api_1$package.given_Monad_List.
+ ®Ä*given_Monad_ListÄä˚
+¯java/lang/Object#'%
+api/Monad#scala/package.List#(¢%#api/Api_1$package.given_Monad_List."ã
+.api/Api_1$package.given_Monad_List.`<init>`().
+*api/Api_1$package.given_Monad_List.pure().
+-api/Api_1$package.given_Monad_List.flatMap().í: *P
+api/Api_1$package.EitherT#[L]	*LÄä&$scala/Nothing#
+scala/Any#*P
+api/Api_1$package.EitherT#[R]	*RÄä&$scala/Nothing#
+scala/Any#*…
+api/Api_1$package.EitherT#*EitherTÄäñì
+
+api/Api_1$package.EitherT#[L]∂“≤
+RP
+api/Api_1$package.EitherT#[R]	*RÄä&$scala/Nothing#
+scala/Any#\Zscala/util/Either#!api/Api_1$package.EitherT#[L]!api/Api_1$package.EitherT#[R]∂“≤
+RP
+api/Api_1$package.EitherT#[R]	*RÄä&$scala/Nothing#
+scala/Any#\Zscala/util/Either#!api/Api_1$package.EitherT#[L]!api/Api_1$package.EitherT#[R]í: *\
+)api/Api_1$package.given_Monad_EitherT#[L]	*LÄä&$scala/Nothing#
+scala/Any#*c
+0api/Api_1$package.given_Monad_EitherT#pure().[A]	*AÄä&$scala/Nothing#
+scala/Any#*u
+0api/Api_1$package.given_Monad_EitherT#pure().(a)*aÄä8"6
+420api/Api_1$package.given_Monad_EitherT#pure().[A]*…
+-api/Api_1$package.given_Monad_EitherT#pure().*pureÄäÚÔ
+2
+0api/Api_1$package.given_Monad_EitherT#pure().[A]2
+0api/Api_1$package.given_Monad_EitherT#pure().(a)ÑÅapi/Api_1$package.EitherT#-+)api/Api_1$package.given_Monad_EitherT#[L]420api/Api_1$package.given_Monad_EitherT#pure().[A]í: öapi/Monad#pure().*f
+3api/Api_1$package.given_Monad_EitherT#flatMap().[A]	*AÄä&$scala/Nothing#
+scala/Any#*∆
+4api/Api_1$package.given_Monad_EitherT#flatMap().(fa)*faÄäÉ"Ä
+~|scala/util/Either#-+)api/Api_1$package.given_Monad_EitherT#[L]753api/Api_1$package.given_Monad_EitherT#flatMap().[A]*f
+3api/Api_1$package.given_Monad_EitherT#flatMap().[B]	*BÄä&$scala/Nothing#
+scala/Any#*ï
+3api/Api_1$package.given_Monad_EitherT#flatMap().(f)*fÄä‘"—
+ŒÀscala/Function1#753api/Api_1$package.given_Monad_EitherT#flatMap().[A]~|scala/util/Either#-+)api/Api_1$package.given_Monad_EitherT#[L]753api/Api_1$package.given_Monad_EitherT#flatMap().[B]*»
+0api/Api_1$package.given_Monad_EitherT#flatMap().*flatMapÄäËÂ
+j
+3api/Api_1$package.given_Monad_EitherT#flatMap().[A]
+3api/Api_1$package.given_Monad_EitherT#flatMap().[B]6
+4api/Api_1$package.given_Monad_EitherT#flatMap().(fa)5
+3api/Api_1$package.given_Monad_EitherT#flatMap().(f)áÑapi/Api_1$package.EitherT#-+)api/Api_1$package.given_Monad_EitherT#[L]753api/Api_1$package.given_Monad_EitherT#flatMap().[B]í: öapi/Monad#flatMap().*Ÿ
+1api/Api_1$package.given_Monad_EitherT#`<init>`(). Ä@*<init>Ääçä
++
+)api/Api_1$package.given_Monad_EitherT#[L] YW&api/Api_1$package.given_Monad_EitherT#-+)api/Api_1$package.given_Monad_EitherT#[L]í: *í
+&api/Api_1$package.given_Monad_EitherT# †Ä*given_Monad_EitherTÄä√
+¿
++
+)api/Api_1$package.given_Monad_EitherT#[L]java/lang/Object#][
+api/Monad#MKapi/Api_1$package.EitherT#-+)api/Api_1$package.given_Monad_EitherT#[L]YW&api/Api_1$package.given_Monad_EitherT#-+)api/Api_1$package.given_Monad_EitherT#[L]"ø
+)api/Api_1$package.given_Monad_EitherT#[L]
+1api/Api_1$package.given_Monad_EitherT#`<init>`().
+-api/Api_1$package.given_Monad_EitherT#pure().
+0api/Api_1$package.given_Monad_EitherT#flatMap().í: *^
++api/Api_1$package.given_Monad_EitherT().[L]	*LÄä&$scala/Nothing#
+scala/Any#*‡
+(api/Api_1$package.given_Monad_EitherT(). ®Ä*given_Monad_EitherTÄäèå
+-
++api/Api_1$package.given_Monad_EitherT().[L][Y&api/Api_1$package.given_Monad_EitherT#/-+api/Api_1$package.given_Monad_EitherT().[L]í: *M
+api/Api_1$package.Elem#[X]	*XÄä&$scala/Nothing#
+scala/Any#*?
+local38*tÄä&$scala/Nothing#
+scala/Any#í: *?
+local39*tÄä&$scala/Nothing#
+scala/Any#í: *®
+api/Api_1$package.Elem#*ElemÄä˚¯
+
+api/Api_1$package.Elem#[X]™ ¶
+api/Api_1$package.Elem#[X]+
+scala/Predef.String#scala/Char#I
+scala/Array#	local39(&api/Api_1$package.Elem#	local39W
++)scala/collection/Iterable#	local39(&api/Api_1$package.Elem#	local393
+scala/AnyVal#api/Api_1$package.Elem#[X]™ ¶
+api/Api_1$package.Elem#[X]+
+scala/Predef.String#scala/Char#I
+scala/Array#	local39(&api/Api_1$package.Elem#	local39W
++)scala/collection/Iterable#	local39(&api/Api_1$package.Elem#	local393
+scala/AnyVal#api/Api_1$package.Elem#[X]í: *Q
+api/Api_1$package.Concat#[X]	*XÄä(&scala/Nothing#scala/Tuple#*Q
+api/Api_1$package.Concat#[Y]	*YÄä(&scala/Nothing#scala/Tuple#*?
+local40*xÄä&$scala/Nothing#
+scala/Any#í: *B
+local41*xsÄä(&scala/Nothing#scala/Tuple#í: *ä
+api/Api_1$package.Concat#*ConcatÄäŸ÷
+<
+api/Api_1$package.Concat#[X]
+api/Api_1$package.Concat#[Y]â Ö
+ api/Api_1$package.Concat#[X]G
+#!scala/Tuple$package.EmptyTuple# api/Api_1$package.Concat#[Y]ó
+)'scala/`*:`#	local40	local41jhscala/`*:`#	local40LJapi/Api_1$package.Concat#	local41 api/Api_1$package.Concat#[Y]â Ö
+ api/Api_1$package.Concat#[X]G
+#!scala/Tuple$package.EmptyTuple# api/Api_1$package.Concat#[Y]ó
+)'scala/`*:`#	local40	local41jhscala/`*:`#	local40LJapi/Api_1$package.Concat#	local41 api/Api_1$package.Concat#[Y]í: *T
+!api/Api_1$package.firstElem().[X]	*XÄä&$scala/Nothing#
+scala/Any#*W
+!api/Api_1$package.firstElem().(x)*xÄä)"'
+%#!api/Api_1$package.firstElem().[X]*_
+local42 Ä*xÄäH"F
+DäA
+scala/Predef.String#
+%#!api/Api_1$package.firstElem().[X]*?
+local43*tÄä&$scala/Nothing#
+scala/Any#í: *d
+local44 Ä*xÄäM"K
+IäF
+scala/Array#	local43
+%#!api/Api_1$package.firstElem().[X]*?
+local45*tÄä&$scala/Nothing#
+scala/Any#í: *r
+local46 Ä*xÄä["Y
+WäT
++)scala/collection/Iterable#	local45
+%#!api/Api_1$package.firstElem().[X]*X
+local47 Ä*xÄäA"?
+=ä:
+scala/AnyVal#
+%#!api/Api_1$package.firstElem().[X]* 
+api/Api_1$package.firstElem().*	firstElemÄäëé
+#
+!api/Api_1$package.firstElem().[X]#
+!api/Api_1$package.firstElem().(x)B@api/Api_1$package.Elem#%#!api/Api_1$package.firstElem().[X]í: *<
+api/Api_1$package.keyOf().(e)*eÄä"
+
+api/Entry#*ã
+api/Api_1$package.keyOf().*keyOfÄä[Y
+api/Api_1$package.keyOf().(e)64
+"¢api/Api_1$package.keyOf().(e)api/Entry#Key#í: *&
+local48*eÄä"
+
+api/Entry#*N
+local49 *applyÄä/-	
+local48 
+¢	local48api/Entry#Key#í: *&
+local50*eÄä"
+
+api/Entry#*Ä
+api/Api_1$package.depFun().*depFunÄäÕ" 
+«jƒ
+¡:æ"MäJ
+HFscala/Function1#
+api/Entry#" 
+
+api/Entry#api/Entry#Key#*mk
+local49*applyÄäNL(&
+local48*eÄä"
+
+api/Entry# 
+¢	local48api/Entry#Key#í: í: *:
+local51	*TÄä&$scala/Nothing#
+scala/Any#*Ç
+local52 *applyÄäca
+	
+local51TRscala/Function1#	local511/ scala/collection/immutable/List#	local51í: *:
+local53	*TÄä&$scala/Nothing#
+scala/Any#*#
+local54*tÄä"
+	local53*ò
+api/Api_1$package.polyFun. Ä*polyFunÄä‚"ﬂ
+‹:Ÿ"ä
+scala/PolyFunction#*∏µ
+local52*applyÄäóî
+<:
+local51	*TÄä&$scala/Nothing#
+scala/Any#TRscala/Function1#	local511/ scala/collection/immutable/List#	local51í: í: *T
+api/Api_1$package.Rec#name(). *nameÄä "
+j
+scala/Predef.String#í: *C
+api/Api_1$package.Rec#age. Ñ*ageÄä"
+
+scala/Int#í: *†
+api/Api_1$package.Rec#*RecÄäıÚ∂:≥"ä
+java/lang/Object#*î>
+api/Api_1$package.Rec#age.*ageÄä"
+
+scala/Int#í: R
+api/Api_1$package.Rec#name().*nameÄä "
+j
+scala/Predef.String#í: ∂:≥"ä
+java/lang/Object#*î>
+api/Api_1$package.Rec#age.*ageÄä"
+
+scala/Int#í: R
+api/Api_1$package.Rec#name().*nameÄä "
+j
+scala/Predef.String#í: í: *W
+ api/Api_1$package.describe().(x)*xÄä*"(
+&ä#
+api/HasName#
+api/HasAge#*v
+api/Api_1$package.describe().*describeÄä@>"
+ api/Api_1$package.describe().(x)scala/Predef.String#í: *[
+api/Api_1$package.widen().(x)*xÄä1"/
+-í*
+
+scala/Int#
+scala/Predef.String#*)
+local55 Ä*iÄä"
+
+scala/Int#*3
+local56 Ä*sÄä"
+scala/Predef.String#*m
+api/Api_1$package.widen().*widenÄä=;
+api/Api_1$package.widen().(x)scala/Predef.String#í: *C
+api/Api_1$package.RichInt#i. Ä*iÄä"
+
+scala/Int#í: *R
+$api/Api_1$package.RichInt#squared().*squaredÄä"
+j
+
+scala/Int#í: *J
+(api/Api_1$package.RichInt#`<init>`().(i) Ä*iÄä"
+
+scala/Int#*ç
+%api/Api_1$package.RichInt#`<init>`(). Ä@*<init>ÄäNL*
+(api/Api_1$package.RichInt#`<init>`().(i)api/Api_1$package.RichInt#í: *ÿ
+api/Api_1$package.RichInt# (*RichIntÄä£
+†scala/AnyVal#api/Api_1$package.RichInt#"k
+api/Api_1$package.RichInt#i.
+%api/Api_1$package.RichInt#`<init>`().
+$api/Api_1$package.RichInt#squared().í: *Ω
+api/Api_1$package.RichInt.
+ *RichIntÄäà
+Öjava/lang/Object#¢api/Api_1$package.RichInt."K
+%api/Api_1$package.RichInt.`<init>`().
+"api/Api_1$package.RichInt.apply().í: *{
+api/Api_1$package.RichInt(). (*RichIntÄäEC!
+api/Api_1$package.RichInt().(i)api/Api_1$package.RichInt#í: *I
+ api/Api_1$package.strToInt().(s)*sÄä"
+scala/Predef.String#*n
+api/Api_1$package.strToInt().  *strToIntÄä64"
+ api/Api_1$package.strToInt().(s)
+scala/Int#í: **
+local57*bÄä"
+scala/Boolean#*ù
+/api/Api_1$package.given_Conversion_Boolean_Int. Ëà*given_Conversion_Boolean_IntÄä=";
+97scala/Conversion#scala/Boolean#
+scala/Int#í: *?
+api/Api_1$package.power().(x)*xÄä"
+scala/Double#*@
+api/Api_1$package.power().(n) ÄÄ*nÄä"
+
+scala/Int#*,
+local58 Ä*yÄä"
+scala/Double#*â
+api/Api_1$package.power(). ÄÄ*powerÄäUS>
+api/Api_1$package.power().(x)
+api/Api_1$package.power().(n)scala/Double#í: *S
+ api/Api_1$package.typeName().[T]	*TÄä&$scala/Nothing#
+scala/Any#*z
+api/Api_1$package.typeName(). ÄÄ*typeNameÄä@>
+"
+ api/Api_1$package.typeName().[T]scala/Predef.String#í: *E
+api/Api_1$package.choose().(b) ÄÄ*bÄä"
+scala/Boolean#*j
+api/Api_1$package.choose(). ÄÄ(*chooseÄä42 
+api/Api_1$package.choose().(b)
+scala/Any#í: *I
+&api/Api_1$package.assertPositive().(x) ÄÄ*xÄä"
+
+scala/Int#*Ç
+#api/Api_1$package.assertPositive(). ÄÄ*assertPositiveÄä<:(
+&api/Api_1$package.assertPositive().(x)
+scala/Int#í: *C
+ api/Api_1$package.showExpr().(x) ÄÄ*xÄä"
+
+scala/Any#*?
+local59 †Ä*contextual$1Ää"
+scala/quoted/Quotes#*z
+api/Api_1$package.showExpr(). ÄÄ*showExprÄä@>"
+ api/Api_1$package.showExpr().(x)scala/Predef.String#í: *[
+$api/Api_1$package.showExprImpl().(x)*xÄä*"(
+&$scala/quoted/Expr#
+scala/Any#*U
+&api/Api_1$package.showExprImpl().(x$2) †Ä*x$2Ää"
+scala/quoted/Quotes#*∆
+!api/Api_1$package.showExprImpl().*showExprImplÄäáÑ&
+$api/Api_1$package.showExprImpl().(x)(
+&api/Api_1$package.showExprImpl().(x$2)0.scala/quoted/Expr#scala/Predef.String#í: *U
+"api/Api_1$package.fieldNames().[T]	*TÄä&$scala/Nothing#
+scala/Any#*?
+local60 †Ä*contextual$2Ää"
+scala/quoted/Quotes#*¶
+api/Api_1$package.fieldNames(). ÄÄ*
+fieldNamesÄähf
+$
+"api/Api_1$package.fieldNames().[T]>< scala/collection/immutable/List#scala/Predef.String#í: *Y
+&api/Api_1$package.fieldNamesImpl().[T]	*TÄä&$scala/Nothing#
+scala/Any#*è
+/api/Api_1$package.fieldNamesImpl().(evidence$1) †Ä*
+evidence$1ÄäF"D
+B@scala/quoted/Type#*(&api/Api_1$package.fieldNamesImpl().[T]*S
+&api/Api_1$package.fieldNamesImpl().(q) †Ä*qÄä"
+scala/quoted/Quotes#*õ
+local61 Ä*symÄäÅ"
+}{
+N¢K
++¢(&api/Api_1$package.fieldNamesImpl().(q)scala/quoted/Quotes#reflect.)scala/quoted/Quotes#reflectModule#Symbol#*£
+#api/Api_1$package.fieldNamesImpl().*fieldNamesImplÄä‡›
+(
+&api/Api_1$package.fieldNamesImpl().[T]Y
+/api/Api_1$package.fieldNamesImpl().(evidence$1)
+&api/Api_1$package.fieldNamesImpl().(q)VTscala/quoted/Expr#>< scala/collection/immutable/List#scala/Predef.String#í: *L
+$api/Api_1$package.unrolledSum().(xs) ÄÄ*xsÄä"
+r
+
+scala/Int#*?
+local62 †Ä*contextual$3Ää"
+scala/quoted/Quotes#*z
+ api/Api_1$package.unrolledSum(). ÄÄ*unrolledSumÄä:8&
+$api/Api_1$package.unrolledSum().(xs)
+scala/Int#í: *Ö
+(api/Api_1$package.unrolledSumImpl().(xs)*xsÄäO"M
+KIscala/quoted/Expr#31scala/collection/immutable/Seq#
+scala/Int#*X
+)api/Api_1$package.unrolledSumImpl().(x$2) †Ä*x$2Ää"
+scala/quoted/Quotes#*g
+local63 Ä*esÄäO"M
+KIscala/collection/immutable/Seq#&$scala/quoted/Expr#
+scala/Int#*@
+local64*accÄä*"(
+&$scala/quoted/Expr#
+scala/Int#*>
+local65*eÄä*"(
+&$scala/quoted/Expr#
+scala/Int#*?
+local66 †Ä*contextual$4Ää"
+scala/quoted/Quotes#*?
+local67 †Ä*contextual$5Ää"
+scala/quoted/Quotes#*?
+local68 †Ä*contextual$6Ää"
+scala/quoted/Quotes#*…
+$api/Api_1$package.unrolledSumImpl().*unrolledSumImplÄäÑÅ*
+(api/Api_1$package.unrolledSumImpl().(xs)+
+)api/Api_1$package.unrolledSumImpl().(x$2)&$scala/quoted/Expr#
+scala/Int#í: *Œ
+api/Api_1$package.NT#*NTÄä•¢éãscala/NamedTuple.NamedTuple#.,scala/Tuple2#∫
+
+R
+name∫	
+R
+age;9scala/Tuple2#scala/Predef.String#
+scala/Int#éãscala/NamedTuple.NamedTuple#.,scala/Tuple2#∫
+
+R
+name∫	
+R
+age;9scala/Tuple2#scala/Predef.String#
+scala/Int#í: *K
+api/Api_1$package.nt().*ntÄä!"
+j
+api/Api_1$package.NT#í: *™
+api/Api_1$package.bigTuple().*bigTupleÄäÛ"
+ÌjÍ
+Á‰scala/`*:`#
+scala/Int#ƒ¡scala/`*:`#
+scala/Int#°ûscala/`*:`#
+scala/Int#˛˚scala/`*:`#
+scala/Int#€ÿscala/`*:`#
+scala/Int#∏µscala/`*:`#
+scala/Int#ïíscala/`*:`#
+scala/Int#ÚÔscala/`*:`#
+scala/Int#œÃscala/`*:`#
+scala/Int#¨©scala/`*:`#
+scala/Int#âÜscala/`*:`#
+scala/Int#Ê„scala/`*:`#
+scala/Int#√¿scala/`*:`#
+scala/Int#†ùscala/`*:`#
+scala/Int#˝˙scala/`*:`#
+scala/Int#⁄◊scala/`*:`#
+scala/Int#∑¥scala/`*:`#
+scala/Int#îëscala/`*:`#
+scala/Int#ÒÓscala/`*:`#
+scala/Int#ŒÀscala/`*:`#
+scala/Int#´®scala/`*:`#
+scala/Int#àÖscala/`*:`#
+scala/Int#fdscala/`*:`#
+scala/Int#ECscala/`*:`#
+scala/Int#$¢!scala/Tuple$package.EmptyTuple.í: *L
+api/Api_1$package.Ctx#[T]	*TÄä&$scala/Nothing#
+scala/Any#*Å
+api/Api_1$package.Ctx#*CtxÄä÷”
+
+api/Api_1$package.Ctx#[T]YWscala/ContextFunction1#	api/Show#
+scala/Int#api/Api_1$package.Ctx#[T]YWscala/ContextFunction1#	api/Show#
+scala/Int#api/Api_1$package.Ctx#[T]í: *R
+api/Api_1$package.withCtx().[T]	*TÄä&$scala/Nothing#
+scala/Any#*o
+api/Api_1$package.withCtx().(f)*fÄäC"A
+?=api/Api_1$package.Ctx##!api/Api_1$package.withCtx().[T]*°
+api/Api_1$package.withCtx().*withCtxÄämk
+!
+api/Api_1$package.withCtx().[T]!
+api/Api_1$package.withCtx().(f)#!api/Api_1$package.withCtx().[T]í: *&
+local69*aÄä"
+
+scala/Int#*&
+local70*bÄä"
+
+scala/Int#*&
+local71*cÄä"
+
+scala/Int#*&
+local72*dÄä"
+
+scala/Int#*&
+local73*eÄä"
+
+scala/Int#*&
+local74*fÄä"
+
+scala/Int#*&
+local75*gÄä"
+
+scala/Int#*&
+local76*hÄä"
+
+scala/Int#*&
+local77*iÄä"
+
+scala/Int#*&
+local78*jÄä"
+
+scala/Int#*&
+local79*kÄä"
+
+scala/Int#*&
+local80*lÄä"
+
+scala/Int#*&
+local81*mÄä"
+
+scala/Int#*&
+local82*nÄä"
+
+scala/Int#*&
+local83*oÄä"
+
+scala/Int#*&
+local84*pÄä"
+
+scala/Int#*&
+local85*qÄä"
+
+scala/Int#*&
+local86*rÄä"
+
+scala/Int#*&
+local87*sÄä"
+
+scala/Int#*&
+local88*tÄä"
+
+scala/Int#*&
+local89*uÄä"
+
+scala/Int#*&
+local90*vÄä"
+
+scala/Int#*&
+local91*wÄä"
+
+scala/Int#*œ
+api/Api_1$package.f22().*f22Ää¢"ü
+újô
+ñìscala/Function23#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#
+scala/Int#í: *;
+!api/Api_1$package.singleton().(x)*xÄä"
+	∫
+2**j
+api/Api_1$package.singleton().*	singletonÄä20#
+!api/Api_1$package.singleton().(x)	∫
+2*í: *=
+api/Api_1$package.lit. Ä*litÄä"
+∫	
+R
+lití: *L
+api/Api_1$package.valueOf3().*valueOf3Ää"
+j
+
+scala/Int#í: *Á
+
+api/Api_1$package. *apiÄä√
+
+¿
+java/lang/Object#¢api/Api_1$package."ç
+
+api/Api_1$package.`<init>`().
+api/Api_1$package.old().
+api/Api_1$package.eval().
+#api/Api_1$package.given_Monad_List.
+#api/Api_1$package.given_Monad_List.
+api/Api_1$package.EitherT#
+&api/Api_1$package.given_Monad_EitherT#
+(api/Api_1$package.given_Monad_EitherT().
+api/Api_1$package.Elem#
+api/Api_1$package.Concat#
+api/Api_1$package.firstElem().
+api/Api_1$package.keyOf().
+api/Api_1$package.depFun().
+api/Api_1$package.polyFun.
+api/Api_1$package.Rec#
+api/Api_1$package.describe().
+api/Api_1$package.widen().
+api/Api_1$package.RichInt#
+api/Api_1$package.RichInt.
+api/Api_1$package.RichInt.
+api/Api_1$package.RichInt().
+api/Api_1$package.strToInt().
+/api/Api_1$package.given_Conversion_Boolean_Int.
+api/Api_1$package.power().
+api/Api_1$package.typeName().
+api/Api_1$package.choose().
+#api/Api_1$package.assertPositive().
+api/Api_1$package.showExpr().
+!api/Api_1$package.showExprImpl().
+api/Api_1$package.fieldNames().
+#api/Api_1$package.fieldNamesImpl().
+ api/Api_1$package.unrolledSum().
+$api/Api_1$package.unrolledSumImpl().
+api/Api_1$package.NT#
+api/Api_1$package.nt().
+api/Api_1$package.bigTuple().
+api/Api_1$package.Ctx#
+api/Api_1$package.withCtx().
+api/Api_1$package.f22().
+api/Api_1$package.singleton().
+api/Api_1$package.lit.
+api/Api_1$package.valueOf3().*C
+api/Monad#[F][_]*_Ää&$scala/Nothing#
+scala/Any#*E
+api/Functor#[F][_]*_Ää&$scala/Nothing#
+scala/Any#*6
+[t]	*tÄä&$scala/Nothing#
+scala/Any#*>
+api/Api_1$package.RichInt().(i)*iÄä"
+
+scala/Int#2
+ scala/2
+ scala/annotation/2'
+  scala/annotation/tailrec#2*
+" ,scala/annotation/targetName#2&
+. 4scala/annotation/nowarn.2&
+. 4scala/annotation/nowarn#2)
+6 ?scala/annotation/unchecked/2&
+A Gscala/annotation/static#20
+I Y"scala/annotation/implicitNotFound#2
+ scala/2 
+ scala/compiletime/2>
+ %0scala/compiletime/package$package.erasedValue().2=
+' 1/scala/compiletime/package$package.constValue().2?
+3 ?1scala/compiletime/package$package.summonInline().28
+A F*scala/compiletime/package$package.error().29
+H N+scala/compiletime/package$package.codeOf().2
+ scala/2
+ scala/deriving/2$
+ scala/deriving/Mirror.2$
+ scala/deriving/Mirror#2
+ scala/2
+ scala/quoted/2
+ scala/2
+ scala/language.21
+ )#scala/language.implicitConversions.2
+
+3
+ 8scala/2
+
+9
+ Cscala/annotation/20
+
+D
+ T"scala/annotation/StaticAnnotation#2
+
+
+ 
+scala/Int#2
+
+
+ api/myAnnot#x.2
+
+
+  api/myAnnot#ys.2(
+
+
+ api/myAnnot#`<init>`().(x)2"
+
+"
+ (scala/Predef.String#2)
+
+
+  api/myAnnot#`<init>`().(ys)2%
+
+
+ api/myAnnot#`<init>`().2
+
+
+ api/myAnnot#2
+ "scala/2
+# -scala/annotation/22
+. @$scala/annotation/RefiningAnnotation#2&
+ api/refining#`<init>`().2
+ api/refining#2
+ scala/Double#2
+! 'scala/Double#2!
+ api/Opaques.Meters#2
+ scala/Double#2,
+ api/Opaques.Meters.apply().(d)2!
+  api/Opaques.Meters#2,
+# $api/Opaques.Meters.apply().(d)2)
+ api/Opaques.Meters.apply().2!
+ api/Opaques.Meters#2*
+ api/Opaques.Meters.`+`().(m)2!
+# )api/Opaques.Meters#2*
+  !api/Opaques.Meters.`+`().(o)2!
+, 2api/Opaques.Meters#2*
+6 7api/Opaques.Meters.`+`().(m)2
+9 ?scala/Double#2#
+A Bscala/Double#`+`(+7).2*
+C Dapi/Opaques.Meters.`+`().(o)2'
+ api/Opaques.Meters.`+`().2!
+	 api/Opaques.Meters.2 
+ api/Opaques.Id#[A]2 
+ api/Opaques.Id#[A]2
+ api/Opaques.Id#2"
+	 
+api/Opaques.id().[A]2"
+ api/Opaques.id().[A]2"
+ api/Opaques.id().(a)2
+ api/Opaques.Id#2"
+ api/Opaques.id().[A]2"
+ api/Opaques.id().(a)2
+ api/Opaques.id().2
+ 
+scala/Int#2 
+ api/Opaques.Flags#2 
+ api/Opaques.Flags#2&
+ api/Opaques.Flags.Empty.2
+ 
+scala/Int#2.
+  api/Opaques.Flags.apply().(bits)2 
+! &api/Opaques.Flags#2.
+) - api/Opaques.Flags.apply().(bits)2(
+ api/Opaques.Flags.apply().2 
+ api/Opaques.Flags#2)
+ api/Opaques.Flags.`|`().(f)2 
+ api/Opaques.Flags#2)
+ api/Opaques.Flags.`|`().(o)2 
+ #api/Opaques.Flags#2)
+& 'api/Opaques.Flags.`|`().(f)2 
+( )scala/Int#`|`(+3).2)
+* +api/Opaques.Flags.`|`().(o)2&
+ api/Opaques.Flags.`|`().2)
+ api/Opaques.Flags.has().(f)2 
+ api/Opaques.Flags#2)
+ api/Opaques.Flags.has().(o)2
+  scala/Boolean#2)
+$ %api/Opaques.Flags.has().(f)2 
+& 'scala/Int#`&`(+3).2)
+( )api/Opaques.Flags.has().(o)2!
++ -scala/Int#`!=`(+3).2&
+
+ api/Opaques.Flags.has().2 
+	 api/Opaques.Flags.2
+ api/Opaques.2
+ 
+scala/Int#2
+ api/Color#rgb.2"
+## scala/Predef.String#2&
+## scala/StringContext#f().2
+## api/Color#rgb.2
+## 	api/Color#hex().2(
+ api/Color#`<init>`().(rgb)2#
+
+ 
+api/Color#`<init>`().2
+ 
+
+api/Color#2
+   
+api/Color#2
+   
+api/Color.Red.2
+!! 
+api/Color#2
+!! api/Color.Green.2
+"" 
+api/Color#2
+"" api/Color.Blue.2"
+%% scala/Predef.String#2#
+%% api/Color.parse().(s)2
+%% scala/Option#2
+%% $
+api/Color#2!
+%(% .api/Color.values().2/
+%/% 3!scala/collection/ArrayOps#find().2#
+%6% >scala/Any#toString().2
+%?% Ascala/Any#`==`().2#
+%B% Capi/Color.parse().(s)2 
+%% api/Color.parse().2
+$$ 
+api/Color.2
+'' api/Tree#[A]2
+++ 
+scala/Int#2
+,	, api/Tree.Leaf.2
+-	- api/Tree.Node.2
+-- local02
+-- local12
+-- local02
+-- api/Tree#size().2 
+-- scala/Int#`+`(+4).2
+- - !local12
+-"- &api/Tree#size().2
+.	. api/Tree.Empty.2
+++ 
+api/Tree#size().2"
+'	' 	api/Tree#`<init>`().2
+'' 		api/Tree#2
+(( api/Tree.Leaf#[A]2"
+(( api/Tree.Leaf#value.2.
+((  api/Tree.Leaf#`<init>`().(value)2'
+(( api/Tree.Leaf#`<init>`().2
+(( api/Tree.Leaf#2!
+)) api/Tree.Node#left.2"
+))  api/Tree.Node#right.2
+)) 	api/Tree#2
+)) api/Tree.Node#[A]2-
+)) api/Tree.Node#`<init>`().(left)2
+)") &	api/Tree#2
+)') (api/Tree.Node#[A]2.
+))   api/Tree.Node#`<init>`().(right)2'
+)) api/Tree.Node#`<init>`().2
+)) api/Tree.Node#2
+** api/Tree.Empty.2
+00 java/2
+00 
+java/lang/2
+00 !java/lang/Enum#2
+0"0 '
+api/JEnum#2#
+00 api/JEnum#`<init>`().2
+00 
+
+api/JEnum#2
+11 api/JEnum.A.2
+1
+1 api/JEnum.B.2
+44 api/Exp#[T]2!
+44 api/Exp#`<init>`().2
+44 api/Exp#2
+5(5 +api/Exp#2
+5,5 /
+scala/Int#2
+55 
+scala/Int#2
+55 api/IntLit#i.2'
+55 api/IntLit#`<init>`().(i)2$
+55 api/IntLit#`<init>`().2
+55 api/IntLit#2
+6-6 0api/Exp#2
+616 8scala/Boolean#2
+66 #scala/Boolean#2
+66 api/BoolLit#b.2(
+66 api/BoolLit#`<init>`().(b)2%
+66 api/BoolLit#`<init>`().2
+66 api/BoolLit#2
+7F7 Iapi/Exp#2
+7J7 K
+api/If#[T]2
+77 
+api/If#[T]2
+77 	api/If#c.2
+7(7 )	api/If#t.2
+737 4	api/If#e.2
+77 api/Exp#2
+77 %scala/Boolean#2#
+77 api/If#`<init>`().(c)2
+7+7 .api/Exp#2
+7/7 0
+api/If#[T]2#
+7(7 )api/If#`<init>`().(t)2
+767 9api/Exp#2
+7:7 ;
+api/If#[T]2#
+737 4api/If#`<init>`().(e)2 
+77 api/If#`<init>`().2
+77 api/If#2
+8:8 =api/Exp#2
+8?8 @api/Pair#[A]2
+8B8 Capi/Pair#[B]2
+88 api/Pair#[A]2
+88 api/Pair#[B]2
+88 api/Pair#a.2
+8'8 (api/Pair#b.2
+88 "api/Exp#2
+8#8 $api/Pair#[A]2%
+88 api/Pair#`<init>`().(a)2
+8*8 -api/Exp#2
+8.8 /api/Pair#[B]2%
+8'8 (api/Pair#`<init>`().(b)2"
+88 api/Pair#`<init>`().2
+88 	api/Pair#20
+@@ "scala/annotation/implicitNotFound#2
+AA api/Show#[T]2
+BB api/Show#[T]2!
+BB api/Show#show().(t)2"
+BB scala/Predef.String#2
+BB 
+api/Show#show().2
+CC api/Show#[T]2"
+CC api/Show#shown().(t)2"
+CC $scala/Predef.String#2
+C'C +api/Show#show().2"
+C,C -api/Show#shown().(t)2
+CC api/Show#shown().2"
+A
+A 
+api/Show#`<init>`().2
+AA 
+	api/Show#2
+FF 	api/Show#2
+FF 
+scala/Int#2#
+FF scala/Any#toString().2
+GG 	api/Show#2"
+GG scala/Predef.String#2"
+HH scala/Predef.String#23
+HH %api/Show.given_Show_String.show().(t)2%
+HH  java/lang/String#`+`().23
+H!H "%api/Show.given_Show_String.show().(t)2%
+H#H $java/lang/String#`+`().20
+HH "api/Show.given_Show_String.show().2,
+I	I 
+api/Show.given_Show_List().[T]2
+II 	api/Show#2,
+II api/Show.given_Show_List().[T]25
+II 'api/Show.given_Show_List().(evidence$1)2
+II 	api/Show#2!
+II scala/package.List#2,
+II  api/Show.given_Show_List().[T]2
+I%I &local22
+I*I +local224
+I,I /&scala/collection/immutable/List#map().2$
+I0I 6scala/Predef.summon().2
+I7I ;	api/Show#2,
+I<I =api/Show.given_Show_List().[T]2
+I@I Dapi/Show#show().2:
+IFI N,scala/collection/IterableOnceOps#mkString().2
+J(J ,	api/Show#2
+J-J 3scala/Option#2"
+J4J 5api/Show.optShow#[T]2"
+JJ api/Show.optShow#[T]2!
+JJ api/Show.optShow#s.2
+KK scala/Option#2"
+KK api/Show.optShow#[T]2)
+KK api/Show.optShow#show().(t)2)
+KK api/Show.optShow#show().(t)2"
+KK #scala/Option#fold().2
+K,K -local42&
+K1K 2scala/StringContext#s().2!
+K:K ;api/Show.optShow#s.2
+K<K @api/Show#show().2
+KAK Blocal42&
+KK api/Show.optShow#show().2
+JJ  	api/Show#2"
+J!J "api/Show.optShow#[T]2-
+JJ api/Show.optShow#`<init>`().(s)2*
+JJ api/Show.optShow#`<init>`().2$
+J!J "api/Show.optShow().[T]2!
+JJ api/Show.optShow().2
+MM !scala/Tuple#2&
+MM api/Show.summonAll().[T]2!
+M$M (scala/package.List#2
+M)M -	api/Show#2>
+M;M F0scala/compiletime/package$package.erasedValue().2&
+MGM Hapi/Show.summonAll().[T]2-
+NN scala/Tuple$package.EmptyTuple#2 
+NN scala/package.Nil.2
+OO scala/`*:`#2
+OO local52
+OO local62?
+OO %1scala/compiletime/package$package.summonInline().2
+O&O *	api/Show#2
+O+O ,local52#
+O2O ;api/Show.summonAll().2
+O<O >local62#
+MM api/Show.summonAll().2$
+QQ api/Show.derived().[T]2$
+Q!Q 'scala/deriving/Mirror.2'
+Q(Q *scala/deriving/Mirror.Of#2$
+Q+Q ,api/Show.derived().[T]2$
+QQ api/Show.derived().(m)2
+Q0Q 4	api/Show#2$
+Q5Q 6api/Show.derived().[T]2#
+RR api/Show.summonAll().2$
+RR api/Show.derived().(m)2
+RR local72=
+SS /scala/compiletime/package$package.constValue().2$
+SS api/Show.derived().(m)22
+SS *$scala/deriving/Mirror#MirroredLabel#2
+SS local82$
+TT api/Show.derived().(m)2$
+UU scala/deriving/Mirror.2*
+UU scala/deriving/Mirror.SumOf#2$
+UU api/Show.derived().[T]2
+UU local92$
+U%U &api/Show.derived().[T]2
+U"U #local102
+U+U 0local82%
+U1U 2java/lang/String#`+`().2%
+U7U 8java/lang/String#`+`().2
+U9U >local72
+U?U @local922
+UAU H$scala/deriving/Mirror.Sum#ordinal().2
+UIU Jlocal102'
+UMU Yscala/Any#asInstanceOf().2
+UZU ^	api/Show#2$
+U_U `api/Show.derived().[T]2
+UcU gapi/Show#show().2
+UhU ilocal102$
+VV scala/deriving/Mirror.2.
+VV  scala/deriving/Mirror.ProductOf#2$
+VV  api/Show.derived().[T]2
+VV local112$
+V)V *api/Show.derived().[T]2
+V&V 'local122
+WW local82%
+WW java/lang/String#`+`().2
+WW local122'
+WW scala/Any#asInstanceOf().2
+WW &scala/Product#2.
+W(W 7 scala/Product#productIterator().2.
+W8W ; scala/collection/Iterator#zip().2
+W<W Alocal72.
+WCW F scala/collection/Iterator#map().2
+WHW Ilocal142
+WKW Llocal152
+WQW Rlocal152'
+WSW _scala/Any#asInstanceOf().2
+W`W d	api/Show#2
+WeW h
+scala/Any#2
+WkW oapi/Show#show().2
+WpW qlocal142:
+WtW |,scala/collection/IterableOnceOps#mkString().2!
+QQ api/Show.derived().2
+EE 	api/Show.2"
+YY scala/Predef.String#2
+YY api/Person#name.2
+Y%Y (
+scala/Int#2
+Y Y #api/Person#age.2*
+YY api/Person#`<init>`().(name)2)
+Y Y #api/Person#`<init>`().(age)2$
+YY api/Person#`<init>`().2
+YY api/Person#2#
+ZZ api/Shape#`<init>`().2
+ZZ 
+api/Shape#2
+["[ '
+api/Shape#2
+[[ 
+scala/Int#2
+[[ api/Circle#r.2'
+[[ api/Circle#`<init>`().(r)2$
+[[ api/Circle#`<init>`().2
+[[ api/Circle#2
+\"\ '
+api/Shape#2
+\\ 
+scala/Int#2
+\\ api/Square#s.2'
+\\ api/Square#`<init>`().(s)2$
+\\ api/Square#`<init>`().2
+\\ api/Square#2
+__ api/Functor#[F]2#
+`` api/Functor#map().[A]2
+`` api/Functor#[F]2#
+`` api/Functor#map().[A]2$
+`` api/Functor#map().(fa)2#
+`"` #api/Functor#map().[B]2#
+`(` )api/Functor#map().[A]2#
+`-` .api/Functor#map().[B]2#
+`%` &api/Functor#map().(f)2
+`1` 2api/Functor#[F]2#
+`3` 4api/Functor#map().[B]2 
+`` !api/Functor#map().2%
+__ api/Functor#`<init>`().2
+__ api/Functor#2
+aa !api/Functor#2
+a"a #api/Monad#[F]2
+aa api/Monad#[F]2"
+bb api/Monad#pure().[A]2"
+bb api/Monad#pure().[A]2"
+bb api/Monad#pure().(a)2
+bb api/Monad#[F]2"
+bb api/Monad#pure().[A]2
+bb 
+api/Monad#pure().2%
+cc api/Monad#flatMap().[A]2
+cc api/Monad#[F]2%
+cc api/Monad#flatMap().[A]2&
+cc api/Monad#flatMap().(fa)2%
+c&c 'api/Monad#flatMap().[B]2%
+c,c -api/Monad#flatMap().[A]2
+c1c 2api/Monad#[F]2%
+c3c 4api/Monad#flatMap().[B]2%
+c)c *api/Monad#flatMap().(f)2
+c8c 9api/Monad#[F]2%
+c:c ;api/Monad#flatMap().[B]2"
+cc %api/Monad#flatMap().2!
+dd api/Monad#map().[A]2
+dd api/Monad#[F]2!
+dd api/Monad#map().[A]2"
+dd api/Monad#map().(fa)2!
+d"d #api/Monad#map().[B]2!
+d(d )api/Monad#map().[A]2!
+d-d .api/Monad#map().[B]2!
+d%d &api/Monad#map().(f)2
+d1d 2api/Monad#[F]2!
+d3d 4api/Monad#map().[B]2"
+d;d Bapi/Monad#flatMap().2"
+d8d :api/Monad#map().(fa)2
+dCd Dlocal162
+dHd Lapi/Monad#pure().2!
+dMd Napi/Monad#map().(f)2
+dOd Plocal162
+dd !api/Monad#map().2#
+aa api/Monad#`<init>`().2
+aa 
+api/Monad#2
+
+ÄÄ 
+api/Entry#Key#2 
+
+ÅÅ api/Entry#Value#2
+
+ÇÇ api/Entry#Key#2 
+
+ÇÇ 	api/Entry#key().2 
+
+ÉÉ api/Entry#Value#2"
+
+ÉÉ api/Entry#value().2%
+
+ÄÄ api/Entry#`<init>`().2
+ 
+api/Entry#2
+
+ää api/Ord#[T]2
+
+ää api/Ord#[T]2!
+
+ää api/Ord#cmp().(a)2
+
+ä!ä "api/Ord#[T]2!
+
+ää api/Ord#cmp().(b)2
+
+ä%ä (
+scala/Int#2
+
+ää api/Ord#cmp().2#
+
+ä	ä 	api/Ord#`<init>`().2
+
+ää 	api/Ord#2!
+
+ã4ã 8api/Animal#[Self]2
+
+ã.ã 2local172!
+
+ãã api/Animal#[Self]2!
+
+åå api/Animal#[Self]2*
+
+åå api/Animal#compareTo().(o)2
+
+åå 
+scala/Int#2'
+
+åå api/Animal#compareTo().2
+
+ãã $api/Animal#2!
+
+ã%ã )api/Animal#[Self]2&
+
+ãã api/Animal#`<init>`().2
+
+ãã api/Animal#2$
+
+éé  scala/Predef.String#2#
+
+éé api/HasName#name().2'
+
+éé api/HasName#`<init>`().2
+
+éé api/HasName#2
+
+èè 
+scala/Int#2!
+
+èè api/HasAge#age().2&
+
+èè api/HasAge#`<init>`().2
+
+èè api/HasAge#2$
+
+ññ scala/Predef.String#2
+
+ññ api/Base#tag.2
+
+óó 
+scala/Int#2'
+
+óó api/Base#abstractDef().2$
+
+òò scala/Predef.String#2%
+
+òò api/Base#abstractVal.2
+
+ôô 
+scala/Int#2'
+
+ôô api/Base#concreteVar().2$
+
+öö scala/Predef.String#2
+
+öö api/Base#tag.2*
+
+öö "java/lang/String#concat().2
+
+ö#ö &api/Base#tag.2
+
+öö api/Base#lz.2 
+
+õõ api/Base#prot().2&
+
+úú api/Base#pkgPrivate().2
+
+ú
+ú api/2
+
+ùù 
+scala/Int#2)
+
+ùù api/Base#overloaded().(x)2
+
+ùù 
+scala/Int#2)
+
+ù ù !api/Base#overloaded().(x)2&
+
+ùù api/Base#overloaded().2$
+
+ûû scala/Predef.String#2+
+
+ûû api/Base#overloaded(+1).(x)2$
+
+ûû #scala/Predef.String#2+
+
+û&û 'api/Base#overloaded(+1).(x)2(
+
+ûû api/Base#overloaded(+1).2
+
+üü 
+scala/Int#2'
+
+üü api/Base#defaults().(a)2$
+
+üü $scala/Predef.String#2'
+
+üü api/Base#defaults().(b)2
+
+ü/ü 6scala/Boolean#2'
+
+ü,ü -api/Base#defaults().(c)2$
+
+üAü Gscala/Predef.String#2(
+
+üJü Kscala/StringContext#s().2'
+
+üMü Napi/Base#defaults().(a)2'
+
+üOü Papi/Base#defaults().(b)2'
+
+üQü Rapi/Base#defaults().(c)2$
+
+üü api/Base#defaults().21
+
+üü !api/Base#defaults$default$3().(a)21
+
+üü !api/Base#defaults$default$3().(b)21
+
+ü9ü :!api/Base#defaults$default$3().(a)2"
+
+ü;ü <scala/Int#`>`(+3).2
+
+†† 
+scala/Int#2'
+
+†† api/Base#varargs().(xs)2
+
+†† 
+scala/Int#2'
+
+†† !api/Base#varargs().(xs)27
+
+†"† %'scala/collection/IterableOnceOps#sum().2#
+
+†† api/Base#varargs().2
+
+°° 
+scala/Int#2%
+
+°° api/Base#byName().(x)2
+
+°° 
+scala/Int#2%
+
+°°  api/Base#byName().(x)2"
+
+°!° "scala/Int#`+`(+4).2%
+
+°#° $api/Base#byName().(x)2"
+
+°° api/Base#byName().2
+
+¢¢ 	api/Show#2
+
+¢¢ 
+scala/Int#2%
+
+¢¢ api/Base#ctxFun().(s)2
+
+¢"¢ %
+scala/Int#2$
+
+¢)¢ /scala/Predef.String#2%
+
+¢2¢ 3api/Base#ctxFun().(s)2 
+
+¢4¢ 8api/Show#show().2"
+
+¢¢ api/Base#ctxFun().2#
+
+££ api/Base#poly().[A]2#
+
+££ api/Base#poly().[A]2#
+
+££ api/Base#poly().[B]2#
+
+££ api/Base#poly().[B]2#
+
+££ api/Base#poly().[C]2#
+
+£!£ "api/Base#poly().[B]2#
+
+££ api/Base#poly().(b)2#
+
+£%£ &api/Base#poly().[C]2#
+
+£)£ *api/Base#poly().(b)2 
+
+££ 
+api/Base#poly().2,
+
+§§ scala/annotation/targetName#2
+
+§$§ (	api/Base#2#
+
+§!§ "api/Base#`++`().(o)2$
+
+§+§ 1scala/Predef.String#2
+
+§4§ 7api/Base#tag.2'
+
+§8§ 9java/lang/String#`+`().2#
+
+§:§ ;api/Base#`++`().(o)2
+
+§<§ ?api/Base#tag.2 
+
+§§  api/Base#`++`().2"
+
+•• api/Base#Abstract#2
+
+¶¶ scala/Null#2
+
+¶¶  scala/AnyRef#2!
+
+¶¶ api/Base#Bounded#2#
+
+ßß scala/package.List#2
+
+ßß 
+scala/Int#2
+
+ßß api/Base#Alias#2)
+
+ññ api/Base#`<init>`().(tag)2$
+
+ñ
+ñ 
+api/Base#`<init>`().2
+
+ññ 
+	api/Base#2
+
+©© "	api/Base#2
+
+©#© $api/Impl#t.2+
+
+©'© 3scala/package.Serializable#2$
+
+©© scala/Predef.String#2
+
+©© api/Impl#t.2'
+
+™™ api/Impl#abstractDef().2%
+
+´´ api/Impl#abstractVal.2
+
+¨¨ 
+scala/Int#2"
+
+¨¨ api/Impl#Abstract#2$
+
+≠≠ scala/Predef.String#2!
+
+≠≠ api/Impl#Bounded#2 
+
+ÆÆ api/Impl#prot().2
+
+ØØ 
+scala/Int#2"
+
+ØØ api/Impl#inl().(x)2
+
+Ø!Ø $
+scala/Int#2"
+
+Ø'Ø (api/Impl#inl().(x)2"
+
+Ø)Ø *scala/Int#`+`(+4).2
+
+ØØ api/Impl#inl().2#
+
+∞-∞ .api/Impl#tinl().(x)2
+
+∞!∞ $
+scala/Int#2#
+
+∞∞ api/Impl#tinl().(x)2
+
+∞'∞ *
+scala/Any#2 
+
+∞∞ api/Impl#tinl().2)
+
+±± 
+scala/annotation/tailrec#2
+
+±±  
+scala/Int#2#
+
+±± api/Impl#loop().(n)2
+
+±'± *
+scala/Int#2%
+
+±"± %api/Impl#loop().(acc)2
+
+±1± 4
+scala/Int#2#
+
+±:± ;api/Impl#loop().(n)2#
+
+±<± >scala/Int#`==`(+3).2%
+
+±F± Iapi/Impl#loop().(acc)2 
+
+±O± Sapi/Impl#loop().2#
+
+±T± Uapi/Impl#loop().(n)2"
+
+±V± Wscala/Int#`-`(+3).2%
+
+±[± ^api/Impl#loop().(acc)2"
+
+±_± `scala/Int#`+`(+4).2#
+
+±a± bapi/Impl#loop().(n)2 
+
+±± api/Impl#loop().2
+
+≥≥ api/Impl#t.2#
+
+≥≥ 	api/Impl#Inner.x().2
+
+≤	≤ api/Impl#Inner.2
+
+¥¥ 
+scala/Int#2&
+
+¥¥ api/Impl#InnerClass#y.2,
+
+µµ api/Impl#InnerClass#outer().22
+
+¥¥ "api/Impl#InnerClass#`<init>`().(y)2/
+
+¥¥ api/Impl#InnerClass#`<init>`().2$
+
+¥¥ api/Impl#InnerClass#2
+
+∑∑ 
+scala/Int#2
+
+∑∑ local192
+
+∑∑ local192"
+
+∑∑ scala/Int#`*`(+3).2
+
+∑∑ local202
+
+∏∏  local202
+
+∏∏ local212
+
+∏
+∏ local222
+
+ππ local222
+
+ππ local212!
+
+∂∂ api/Impl#local().2#
+
+∫∫ java/lang/Runnable#2#
+
+∫∫ #java/lang/Runnable#2
+
+∫*∫ -local242
+
+∫∫ local252 
+
+∫∫ 
+api/Impl#anon().2#
+
+ªª java/lang/Runnable#2
+
+ªª 	api/Impl#sam().2'
+
+©© api/Impl#`<init>`().(t)2$
+
+©
+© 
+api/Impl#`<init>`().2
+
+©© 
+	api/Impl#2(
+
+ææ 	scala/annotation/static#2
+
+ææ 
+scala/Int#2%
+
+ææ api/Impl.staticField.2
+
+øø 	api/Impl#2
+
+øø 	api/Impl#2!
+
+øø api/Impl.apply().2
+
+¿¿ 	api/Impl#2&
+
+¿¿ api/Impl.unapply().(i)2
+
+¿¿ scala/Some#2$
+
+¿¿ #scala/Predef.String#2
+
+¿'¿ +scala/Some.2&
+
+¿,¿ -api/Impl.unapply().(i)2
+
+¿.¿ 1api/Base#tag.2#
+
+¿¿ api/Impl.unapply().2
+
+ΩΩ 	api/Impl.2
+
+¬.¬ 4scala/AnyVal#2
+
+¬!¬ $
+scala/Int#2*
+
+¬¬ api/ValueClass#underlying.2
+
+√√ api/ValueClass#2
+
+√√ )api/ValueClass#2*
+
+√*√ 4api/ValueClass#underlying.2"
+
+√5√ 6scala/Int#`*`(+3).2(
+
+√√ api/ValueClass#double().26
+
+¬¬ &api/ValueClass#`<init>`().(underlying)2*
+
+¬¬ api/ValueClass#`<init>`().2
+
+¬¬ api/ValueClass#2
+
+≈≈ 
+api/CC#[A]2
+
+≈≈ 
+api/CC#[A]2
+
+≈≈ 	api/CC#a.2
+
+≈≈ api/CC#rest.2
+
+≈8≈ ;
+scala/Int#2
+
+≈1≈ 6api/CC#extra.2%
+
+≈≈ api/CC#`<init>`().(a)2#
+
+≈≈ "scala/package.List#2
+
+≈#≈ $
+api/CC#[A]2(
+
+≈≈ api/CC#`<init>`().(rest)2)
+
+≈1≈ 6api/CC#`<init>`().(extra)2"
+
+≈≈ api/CC#`<init>`().2
+
+≈≈ api/CC#28
+
+≈≈ (api/CC.$lessinit$greater$default$2().[A]2"
+
+≈(≈ +scala/package.Nil.28
+
+≈≈ (api/CC.$lessinit$greater$default$3().[A]28
+
+≈≈ (api/CC.$lessinit$greater$default$3().[A]28
+
+≈≈ (api/CC.$lessinit$greater$default$3().(a)28
+
+≈#≈ $(api/CC.$lessinit$greater$default$3().[A]2;
+
+≈≈ +api/CC.$lessinit$greater$default$3().(rest)2
+
+»	» 
+scala/Int#2
+
+»» api/WithInit#x.2)
+
+…… 	scala/Predef.println(+1).2
+
+…
+… api/WithInit#x.2(
+
+»» api/WithInit#`<init>`().2
+
+«« api/WithInit#2$
+
+”” scala/Predef.String#2$
+
+”” api/Exts.words().(s)2#
+
+‘‘ scala/package.List#2$
+
+‘‘ scala/Predef.String#2$
+
+‘‘ api/Exts.words().(s)2+
+
+‘ ‘ %java/lang/String#split(+1).2:
+
+‘+‘ 1*scala/collection/IterableOnceOps#toList().2!
+
+‘‘ api/Exts.words().2#
+
+”” api/Exts.word().(s)2
+
+’’ 
+scala/Int#2#
+
+’’ api/Exts.word().(i)2$
+
+’’ scala/Predef.String#2!
+
+’’ $api/Exts.words().2#
+
+’%’ &api/Exts.word().(i)2 
+
+’’ api/Exts.word().2)
+
+÷÷ api/Exts.sortedWith().[T]2#
+
+÷÷ scala/package.List#2)
+
+÷÷ api/Exts.sortedWith().[T]2*
+
+÷÷ api/Exts.sortedWith().(xs)2
+
+÷#÷ &api/Ord#2)
+
+÷'÷ (api/Exts.sortedWith().[T]2#
+
+◊◊ scala/package.List#2)
+
+◊◊ api/Exts.sortedWith().[T]2*
+
+◊◊  api/Exts.sortedWith().(xs)23
+
+◊!◊ )#scala/collection/SeqOps#sortWith().2
+
+◊+◊ ,local272
+
+◊.◊ /local282&
+
+◊4◊ :scala/Predef.summon().2
+
+◊;◊ >api/Ord#2)
+
+◊?◊ @api/Exts.sortedWith().[T]2
+
+◊C◊ Fapi/Ord#cmp().2
+
+◊G◊ Hlocal272
+
+◊J◊ Klocal282"
+
+◊M◊ Nscala/Int#`<`(+3).2&
+
+◊◊ api/Exts.sortedWith().2
+
+““ 	api/Exts.2$
+
+⁄⁄ scala/Predef.String#2'
+
+⁄⁄ api/Printer#print().(s)2
+
+⁄⁄ scala/Unit#2$
+
+⁄⁄ api/Printer#print().2
+
+€€ scala/Unit#2$
+
+€€ api/Printer#flush().2'
+
+⁄⁄ api/Printer#`<init>`().2
+
+ŸŸ api/Printer#2$
+
+›› scala/Predef.String#2#
+
+›› 
+api/Scanner#scan().2'
+
+›› api/Scanner#`<init>`().2
+
+‹‹ api/Scanner#2
+
+ﬂﬂ api/Printer#2#
+
+ﬂﬂ api/Copier#printer.2
+
+‡‡ api/Scanner#2#
+
+‡‡ api/Copier#scanner.2#
+
+·	· api/Copier#printer.2#
+
+·· api/Copier#print().2#
+
+‚	‚ api/Copier#scanner.2&
+
+ﬂﬂ api/Copier#`<init>`().2
+
+ﬁﬁ api/Copier#2$
+
+ññ scala/Predef.String#2
+
+ññ api/A1#m().2"
+
+ññ api/A1#`<init>`().2
+
+ññ api/A1#2
+
+óó api/A1#2$
+
+ó&ó ,scala/Predef.String#2'
+
+ó4ó 5java/lang/String#`+`().2
+
+ó<ó =api/A1#m().2
+
+ó#ó $api/B1#m().2"
+
+óó api/B1#`<init>`().2
+
+óó api/B1#2
+
+òò api/A1#2$
+
+ò&ò ,scala/Predef.String#2'
+
+ò4ò 5java/lang/String#`+`().2
+
+ò<ò =api/A1#m().2
+
+ò#ò $api/C1#m().2"
+
+òò api/C1#`<init>`().2
+
+òò api/C1#2
+
+ôô api/B1#2
+
+ôô api/C1#2$
+
+ô.ô 4scala/Predef.String#2'
+
+ô<ô =java/lang/String#`+`().2
+
+ôHô Iapi/B1#m().2'
+
+ôJô Kjava/lang/String#`+`().2
+
+ôRô Sapi/C1#m().2
+
+ô+ô ,api/D1#m().2"
+
+ôô api/D1#`<init>`().2
+
+ôô api/D1#2
+
+úú java/2
+
+úú  
+java/util/2'
+
+ú!ú -java/util/AbstractList#2$
+
+ú.ú 4scala/Predef.String#2
+
+ú;ú ?java/2
+
+ú@ú D
+java/lang/2%
+
+úEú Ojava/lang/Comparable#2
+
+úPú Xapi/JavaLike#2
+
+ùù 
+scala/Int#2&
+
+ù
+ù api/JavaLike#get().(i)2$
+
+ùù scala/Predef.String#2&
+
+ùù api/JavaLike#get().(i)2%
+
+ùù &scala/Any#toString().2#
+
+ùù 	api/JavaLike#get().2
+
+ûû 
+scala/Int#2$
+
+ûû 
+api/JavaLike#size().2
+
+üü api/JavaLike#2,
+
+üü api/JavaLike#compareTo().(o)2
+
+üü !
+scala/Int#2)
+
+üü api/JavaLike#compareTo().2
+
+†† 	scala/throws#2
+
+†
+† java/2
+
+†† java/io/2$
+
+†† java/io/IOException#2
+
+†)† -scala/Unit#2"
+
+†#† %api/JavaLike#io().2
+
+°° scala/volatile#2
+
+°° 
+scala/Int#2!
+
+°° api/JavaLike#v().2 
+
+¢¢ scala/transient#2
+
+¢¢ 
+scala/Int#2!
+
+¢¢ api/JavaLike#t().2
+
+££ 	scala/native#2
+
+££ 
+scala/Int#2#
+
+££ api/JavaLike#nat().2(
+
+úú api/JavaLike#`<init>`().2
+
+úú api/JavaLike#2
+ scala/deprecated#2
++ .
+scala/Int#2&
+$ 'api/Api_1$package.old().2*
+9	9 
+api/Api_1$package.eval().[T]2
+99 api/Exp#2*
+99 api/Api_1$package.eval().[T]2*
+99 api/Api_1$package.eval().(e)2*
+99 api/Api_1$package.eval().[T]2*
+99 api/Api_1$package.eval().(e)2
+:: api/IntLit.2
+:: local292
+:: local292
+;; api/BoolLit.2
+;; local302
+;; local302
+<< 	api/If.2
+<
+< local312
+<< local322
+<< local332'
+<< api/Api_1$package.eval().2
+<< local312'
+<&< *api/Api_1$package.eval().2
+<+< ,local322'
+<3< 7api/Api_1$package.eval().2
+<8< 9local332
+== 	api/Pair.2
+== local362
+== local372'
+== api/Api_1$package.eval().2
+== local362'
+== #api/Api_1$package.eval().2
+=$= %local372'
+99 api/Api_1$package.eval().2
+ff 
+api/Monad#2!
+ff scala/package.List#2;
+gg -api/Api_1$package.given_Monad_List.pure().[A]2;
+gg -api/Api_1$package.given_Monad_List.pure().[A]2;
+gg -api/Api_1$package.given_Monad_List.pure().(a)2!
+gg scala/package.List.2;
+gg -api/Api_1$package.given_Monad_List.pure().(a)28
+gg 
+*api/Api_1$package.given_Monad_List.pure().2>
+hh 0api/Api_1$package.given_Monad_List.flatMap().[A]2!
+hh scala/package.List#2>
+hh 0api/Api_1$package.given_Monad_List.flatMap().[A]2?
+hh 1api/Api_1$package.given_Monad_List.flatMap().(fa)2>
+h)h *0api/Api_1$package.given_Monad_List.flatMap().[B]2>
+h/h 00api/Api_1$package.given_Monad_List.flatMap().[A]2!
+h4h 8scala/package.List#2>
+h9h :0api/Api_1$package.given_Monad_List.flatMap().[B]2>
+h,h -0api/Api_1$package.given_Monad_List.flatMap().(f)2?
+h?h A1api/Api_1$package.given_Monad_List.flatMap().(fa)28
+hBh I*scala/collection/immutable/List#flatMap().2>
+hJh K0api/Api_1$package.given_Monad_List.flatMap().(f)2;
+h!h (-api/Api_1$package.given_Monad_List.flatMap().2+
+jj api/Api_1$package.EitherT#[L]2+
+jj api/Api_1$package.EitherT#[R]2#
+jj  scala/package.Either#2+
+j!j "api/Api_1$package.EitherT#[L]2+
+j$j %api/Api_1$package.EitherT#[R]2(
+jj api/Api_1$package.EitherT#2
+kk 
+api/Monad#2(
+kk api/Api_1$package.EitherT#27
+kk )api/Api_1$package.given_Monad_EitherT#[L]27
+kk )api/Api_1$package.given_Monad_EitherT#[L]2>
+ll 0api/Api_1$package.given_Monad_EitherT#pure().[A]2>
+ll 0api/Api_1$package.given_Monad_EitherT#pure().[A]2>
+ll 0api/Api_1$package.given_Monad_EitherT#pure().(a)2"
+ll scala/package.Right.2>
+ll 0api/Api_1$package.given_Monad_EitherT#pure().(a)2;
+ll 
+-api/Api_1$package.given_Monad_EitherT#pure().2A
+mm 3api/Api_1$package.given_Monad_EitherT#flatMap().[A]2#
+mm scala/package.Either#27
+mm )api/Api_1$package.given_Monad_EitherT#[L]2A
+mm 3api/Api_1$package.given_Monad_EitherT#flatMap().[A]2B
+mm 4api/Api_1$package.given_Monad_EitherT#flatMap().(fa)2A
+m.m /3api/Api_1$package.given_Monad_EitherT#flatMap().[B]2A
+m4m 53api/Api_1$package.given_Monad_EitherT#flatMap().[A]2#
+m9m ?scala/package.Either#27
+m@m A)api/Api_1$package.given_Monad_EitherT#[L]2A
+mCm D3api/Api_1$package.given_Monad_EitherT#flatMap().[B]2A
+m1m 23api/Api_1$package.given_Monad_EitherT#flatMap().(f)2B
+mIm K4api/Api_1$package.given_Monad_EitherT#flatMap().(fa)2*
+mLm Sscala/util/Either#flatMap().2A
+mTm U3api/Api_1$package.given_Monad_EitherT#flatMap().(f)2>
+m&m -0api/Api_1$package.given_Monad_EitherT#flatMap().2?
+kk 1api/Api_1$package.given_Monad_EitherT#`<init>`().2(
+o
+o api/Api_1$package.Elem#[X]2(
+oo api/Api_1$package.Elem#[X]2"
+pp scala/Predef.String#2
+pp scala/Char#2
+qq scala/Array#2
+qq local382%
+qq api/Api_1$package.Elem#2
+qq local382%
+rr scala/package.Iterable#2
+rr local392%
+rr api/Api_1$package.Elem#2
+rr local392
+ss scala/AnyVal#2(
+ss api/Api_1$package.Elem#[X]2%
+oo 	api/Api_1$package.Elem#2
+uu scala/Tuple#2*
+uu api/Api_1$package.Concat#[X]2
+uu "scala/Tuple#2*
+uu api/Api_1$package.Concat#[Y]2
+u'u ,scala/Tuple#2*
+u/u 0api/Api_1$package.Concat#[X]2-
+vv scala/Tuple$package.EmptyTuple#2*
+vv api/Api_1$package.Concat#[Y]2
+w	w scala/`*:`#2
+ww local402
+ww local412
+ww scala/`*:`#2
+ww local402'
+ww api/Api_1$package.Concat#2
+ww  local412*
+w"w #api/Api_1$package.Concat#[Y]2'
+uu api/Api_1$package.Concat#2/
+yy !api/Api_1$package.firstElem().[X]2/
+yy !api/Api_1$package.firstElem().[X]2/
+yy !api/Api_1$package.firstElem().(x)2%
+yy api/Api_1$package.Elem#2/
+yy !api/Api_1$package.firstElem().[X]2/
+y"y #!api/Api_1$package.firstElem().(x)2"
+z
+z scala/Predef.String#2
+zz local422
+zz local422(
+zz java/lang/String#charAt().2
+{
+{ scala/Array#2
+{{ local432
+{{ local442,
+{{ api/Api_1$package.firstElem().2
+{ { !local442%
+|
+| scala/package.Iterable#2
+|| local452
+|| local462,
+|| "api/Api_1$package.firstElem().2
+|#| $local4622
+|%| )$scala/collection/IterableOps#head().2
+}
+} scala/AnyVal#2
+}} local472
+}} local472,
+yy api/Api_1$package.firstElem().2
+
+ÑÑ 
+api/Entry#2-
+
+Ñ
+Ñ api/Api_1$package.keyOf().(e)2-
+
+ÑÑ api/Api_1$package.keyOf().(e)2
+
+ÑÑ api/Entry#Key#2-
+
+ÑÑ api/Api_1$package.keyOf().(e)2 
+
+ÑÑ "api/Entry#key().2*
+
+ÑÑ 	api/Api_1$package.keyOf().2
+
+ÖÖ 
+api/Entry#2
+
+ÖÖ local482
+
+ÖÖ local482
+
+ÖÖ api/Entry#Key#2
+
+Ö"Ö #local502
+
+Ö'Ö (local502 
+
+Ö)Ö ,api/Entry#key().2+
+
+ÖÖ 
+api/Api_1$package.depFun().2
+
+Ü$Ü %local532
+
+Ü.Ü /local532
+
+Ü+Ü ,local542#
+
+Ü4Ü 8scala/package.List.2
+
+Ü9Ü :local542*
+
+ÜÜ api/Api_1$package.polyFun.2$
+
+áá scala/Predef.String#2-
+
+áá api/Api_1$package.Rec#name().2
+
+á(á +
+scala/Int#2*
+
+á#á &api/Api_1$package.Rec#age.2&
+
+áá api/Api_1$package.Rec#2
+
+êê 
+scala/`&`#2
+
+êê api/HasName#2
+
+êê  api/HasAge#20
+
+êê  api/Api_1$package.describe().(x)2$
+
+ê#ê )scala/Predef.String#2(
+
+ê,ê -scala/StringContext#s().20
+
+ê0ê 1 api/Api_1$package.describe().(x)2#
+
+ê2ê 6api/HasName#name().20
+
+ê:ê ; api/Api_1$package.describe().(x)2!
+
+ê<ê ?api/HasAge#age().2-
+
+êê api/Api_1$package.describe().2
+
+ëë 
+scala/`|`#2
+
+ëë 
+scala/Int#2$
+
+ëë scala/Predef.String#2-
+
+ë
+ë api/Api_1$package.widen().(x)2$
+
+ëë "scala/Predef.String#2-
+
+ë%ë &api/Api_1$package.widen().(x)2
+
+í
+í 
+scala/Int#2
+
+íí local552
+
+íí local552%
+
+íí scala/Any#toString().2$
+
+ì
+ì scala/Predef.String#2
+
+ìì local562
+
+ìì local562*
+
+ëë 	api/Api_1$package.widen().2
+
+Ã+Ã 1scala/AnyVal#2
+
+ÃÃ !
+scala/Int#2,
+
+ÃÃ api/Api_1$package.RichInt#i.2
+
+ÕÕ 
+scala/Int#2,
+
+ÕÕ api/Api_1$package.RichInt#i.2"
+
+ÕÕ scala/Int#`*`(+3).2,
+
+ÕÕ api/Api_1$package.RichInt#i.24
+
+ÕÕ $api/Api_1$package.RichInt#squared().28
+
+ÃÃ (api/Api_1$package.RichInt#`<init>`().(i)25
+
+ÃÃ %api/Api_1$package.RichInt#`<init>`().2*
+
+ÃÃ api/Api_1$package.RichInt#2$
+
+ŒŒ scala/Predef.String#20
+
+ŒŒ  api/Api_1$package.strToInt().(s)2
+
+Œ"Œ %
+scala/Int#20
+
+Œ(Œ ) api/Api_1$package.strToInt().(s)2*
+
+Œ*Œ 0java/lang/String#length().2-
+
+ŒŒ api/Api_1$package.strToInt().2!
+
+œœ scala/Conversion#2
+
+œœ scala/Boolean#2
+
+œœ 
+scala/Int#2
+
+œ!œ "local572
+
+œ)œ *local572
+
+ÂÂ scala/Double#2-
+
+ÂÂ api/Api_1$package.power().(x)2
+
+Â&Â )
+scala/Int#2-
+
+Â#Â $api/Api_1$package.power().(n)2
+
+Â,Â 2scala/Double#2-
+
+ÊÊ api/Api_1$package.power().(n)2#
+
+ÊÊ scala/Int#`==`(+3).2-
+
+ÁÁ api/Api_1$package.power().(n)2"
+
+ÁÁ scala/Int#`%`(+3).2#
+
+ÁÁ scala/Int#`==`(+3).2*
+
+ËË api/Api_1$package.power().2-
+
+ËË api/Api_1$package.power().(x)2-
+
+ËË api/Api_1$package.power().(n)2"
+
+ËË scala/Int#`/`(+3).2
+
+ËË 	local582
+
+ÈÈ local582%
+
+ÈÈ scala/Double#`*`(+6).2
+
+ÈÈ 	local582-
+
+ÍÍ api/Api_1$package.power().(x)2%
+
+Í	Í 
+scala/Double#`*`(+6).2*
+
+ÍÍ api/Api_1$package.power().2-
+
+ÍÍ api/Api_1$package.power().(x)2-
+
+ÍÍ api/Api_1$package.power().(n)2"
+
+ÍÍ scala/Int#`-`(+3).2*
+
+ÂÂ api/Api_1$package.power().20
+
+ÏÏ  api/Api_1$package.typeName().[T]2$
+
+ÏÏ scala/Predef.String#2@
+
+Ï(Ï 30scala/compiletime/package$package.erasedValue().20
+
+Ï4Ï 5 api/Api_1$package.typeName().[T]2
+
+Ì
+Ì 
+scala/Int#2$
+
+Ó
+Ó scala/Predef.String#2-
+
+ÏÏ api/Api_1$package.typeName().2.
+
+ÒBÒ Capi/Api_1$package.choose().(b)2
+
+Ò(Ò /scala/Boolean#2.
+
+Ò%Ò &api/Api_1$package.choose().(b)2
+
+Ò2Ò 5
+scala/Any#2+
+
+ÒÒ api/Api_1$package.choose().2
+
+Û$Û '
+scala/Int#26
+
+Û!Û "&api/Api_1$package.assertPositive().(x)2
+
+Û*Û -
+scala/Int#26
+
+ÙÙ &api/Api_1$package.assertPositive().(x)2"
+
+ÙÙ scala/Int#`<`(+3).2:
+
+ÙÙ *scala/compiletime/package$package.error().26
+
+Ù.Ù /&api/Api_1$package.assertPositive().(x)23
+
+ÛÛ #api/Api_1$package.assertPositive().2
+
+˜˜ !
+scala/Any#20
+
+˜˜  api/Api_1$package.showExpr().(x)2$
+
+˜$˜ *scala/Predef.String#21
+
+˜0˜ <!api/Api_1$package.showExprImpl().2-
+
+˜˜ api/Api_1$package.showExpr().2"
+
+¯¯ scala/quoted/Expr#2
+
+¯¯ 
+scala/Any#24
+
+¯¯ $api/Api_1$package.showExprImpl().(x)2$
+
+¯%¯ +scala/quoted/Quotes#2"
+
+¯.¯ 2scala/quoted/Expr#2$
+
+¯3¯ 9scala/Predef.String#2"
+
+¯=¯ Ascala/quoted/Expr.2+
+
+¯D¯ Hscala/quoted/Quotes#show().24
+
+¯B¯ C$api/Api_1$package.showExprImpl().(x)21
+
+¯¯ !api/Api_1$package.showExprImpl().22
+
+˙˙ "api/Api_1$package.fieldNames().[T]2#
+
+˙˙ scala/package.List#2$
+
+˙˙ %scala/Predef.String#23
+
+˙,˙ :#api/Api_1$package.fieldNamesImpl().22
+
+˙;˙ <"api/Api_1$package.fieldNames().[T]2/
+
+˙˙ api/Api_1$package.fieldNames().26
+
+˚˚ &api/Api_1$package.fieldNamesImpl().[T]2"
+
+˚˚ scala/quoted/Type#26
+
+˚˚ &api/Api_1$package.fieldNamesImpl().[T]2?
+
+˚˚ /api/Api_1$package.fieldNamesImpl().(evidence$1)2$
+
+˚%˚ +scala/quoted/Quotes#26
+
+˚"˚ #&api/Api_1$package.fieldNamesImpl().(q)2"
+
+˚.˚ 2scala/quoted/Expr#2#
+
+˚3˚ 7scala/package.List#2$
+
+˚8˚ >scala/Predef.String#26
+
+¸	¸ 
+&api/Api_1$package.fieldNamesImpl().(q)2,
+
+¸¸ scala/quoted/Quotes#reflect.2O
+
+˝˝ %?scala/quoted/Quotes#reflectModule#TypeReprMethods#typeSymbol().2;
+
+˝˝ +scala/quoted/Quotes#reflectModule#TypeRepr.2F
+
+˝˝ 6scala/quoted/Quotes#reflectModule#TypeReprModule#of().26
+
+˝˝ &api/Api_1$package.fieldNamesImpl().[T]2
+
+˝˝ 	local612"
+
+˛˛ scala/quoted/Expr.2M
+
+˛˛ =scala/quoted/Quotes#reflectModule#SymbolMethods#caseFields().2
+
+˛˛ 
+local6126
+
+˛˛ &scala/collection/immutable/List#map().2G
+
+˛˛  7scala/quoted/Quotes#reflectModule#SymbolMethods#name().23
+
+˚˚ #api/Api_1$package.fieldNamesImpl().2
+
+Ä"Ä %
+scala/Int#24
+
+ÄÄ  $api/Api_1$package.unrolledSum().(xs)2
+
+Ä)Ä ,
+scala/Int#24
+
+Ä2Ä A$api/Api_1$package.unrolledSumImpl().20
+
+ÄÄ  api/Api_1$package.unrolledSum().2"
+
+ÅÅ scala/quoted/Expr#2"
+
+ÅÅ  scala/package.Seq#2
+
+Å!Å $
+scala/Int#28
+
+ÅÅ (api/Api_1$package.unrolledSumImpl().(xs)2$
+
+Å.Å 4scala/quoted/Quotes#2"
+
+Å7Å ;scala/quoted/Expr#2
+
+Å<Å ?
+scala/Int#28
+
+ÅCÅ E(api/Api_1$package.unrolledSumImpl().(xs)2%
+
+ÇÇ scala/quoted/Varargs.2
+
+ÇÇ local632
+
+ÇÇ local632<
+
+ÇÇ !,scala/collection/IterableOnceOps#foldLeft().2
+
+Ç+Ç .local642
+
+Ç0Ç 1local652
+
+Ç:Ç =local642"
+
+Ç>Ç ?scala/Int#`+`(+4).2
+
+ÇAÇ Blocal6528
+
+ÉÉ (api/Api_1$package.unrolledSumImpl().(xs)27
+
+ÉÉ 'scala/collection/IterableOnceOps#sum().24
+
+ÅÅ $api/Api_1$package.unrolledSumImpl().2$
+
+ÜÜ scala/Predef.String#2
+
+ÜÜ !
+scala/Int#2%
+
+ÜÜ api/Api_1$package.NT#2%
+
+áá 
+api/Api_1$package.NT#2'
+
+áá api/Api_1$package.nt().2-
+
+àà api/Api_1$package.bigTuple().2)
+
+ã	ã 
+api/Api_1$package.Ctx#[T]2
+
+ãã 	api/Show#2
+
+ãã 
+scala/Int#2)
+
+ãã api/Api_1$package.Ctx#[T]2&
+
+ãã api/Api_1$package.Ctx#2/
+
+åå api/Api_1$package.withCtx().[T]2&
+
+åå api/Api_1$package.Ctx#2/
+
+åå api/Api_1$package.withCtx().[T]2/
+
+åå api/Api_1$package.withCtx().(f)2/
+
+åå api/Api_1$package.withCtx().[T]2/
+
+åå  api/Api_1$package.withCtx().(f)2
+
+å'å +	api/Show.2(
+
+å,å :api/Show.given_Show_Int.2,
+
+åå api/Api_1$package.withCtx().2
+
+ç
+ç 
+scala/Int#2
+
+çç 
+scala/Int#2
+
+çç 
+scala/Int#2
+
+çç 
+scala/Int#2
+
+çç !
+scala/Int#2
+
+ç#ç &
+scala/Int#2
+
+ç(ç +
+scala/Int#2
+
+ç-ç 0
+scala/Int#2
+
+ç2ç 5
+scala/Int#2
+
+ç7ç :
+scala/Int#2
+
+ç<ç ?
+scala/Int#2
+
+çAç D
+scala/Int#2
+
+çFç I
+scala/Int#2
+
+çKç N
+scala/Int#2
+
+çPç S
+scala/Int#2
+
+çUç X
+scala/Int#2
+
+çZç ]
+scala/Int#2
+
+ç_ç b
+scala/Int#2
+
+çdç g
+scala/Int#2
+
+çiç l
+scala/Int#2
+
+çnç q
+scala/Int#2
+
+çsç v
+scala/Int#2
+
+çxç {
+scala/Int#2
+çÄç É
+scala/Int#2
+
+éé local692
+
+éé local702
+
+é	é 
+local712
+
+éé local722
+
+éé local732
+
+éé local742
+
+éé local752
+
+éé local762
+
+éé local772
+
+éé local782
+
+é!é "local792
+
+é$é %local802
+
+é'é (local812
+
+é*é +local822
+
+é-é .local832
+
+é0é 1local842
+
+é3é 4local852
+
+é6é 7local862
+
+é9é :local872
+
+é<é =local882
+
+é?é @local892
+
+éBé Clocal902
+
+éEé Flocal912
+
+éKé Llocal692"
+
+éMé Nscala/Int#`+`(+4).2
+
+éOé Plocal912(
+
+çç api/Api_1$package.f22().21
+
+ëë !api/Api_1$package.singleton().(x)21
+
+ëë !api/Api_1$package.singleton().(x)2.
+
+ëë api/Api_1$package.singleton().2&
+
+íí api/Api_1$package.lit.2'
+
+ìì scala/Predef.valueOf().2-
+
+ìì api/Api_1$package.valueOf3().2
+ api/PZ E0F8F4CDD462B01E4EF5DE44F4012A4Bb,
+##   B
+2
+
+##  
+scala/Any#b>
+## 2
+0
+ 
+scala/StringContext.apply().2
+
+## bQ
+%(% .E
+C
+3B1
+
+scala/Predef.refArrayOps().
+api/Color#2
+
+%(% .b3
+I*I /'B%
+2
+
+I*I /java/lang/String#bM
+I0I ?A
+?
+2
+
+I0I ?+)
+'api/Show.given_Show_List().(evidence$1)ÄÄb3
+KK #'B%
+2
+
+KK #java/lang/String#b>
+K3K E2
+0
+ 
+scala/StringContext.apply().2
+
+K3K Eb<
+JJ 0
+.
+2
+
+JJ 
+api/Show.optShow().(s)ÄÄbr
+O/O ?fBd
+2
+
+O/O ?TJR
+	api/Show#[_]86
+[_]*_Ää&$scala/Nothing#
+scala/Any#bH
+U9U L<
+:
+*(
+&scala/collection/LinearSeqOps#apply().2
+
+U9U Lb3
+WW F'B%
+2
+
+WW Fjava/lang/String#br
+WW ;fBd
+2
+
+WW ;TJR
+	api/Show#[_]86
+[_]*_Ää&$scala/Nothing#
+scala/Any#b:
+dMd Q.
+,
+
+scala/Function1#apply().2
+
+dMd QbB
+
+üLü R4
+2
+ 
+scala/StringContext.apply().2
+
+üLü Rb0
+
+†† %"B 
+2
+
+†† %
+scala/Int#bK
+
+†† %=
+;
+2
+
+†† %%#
+!scala/math/Numeric.IntIsIntegral.ÄÄbU
+
+¿'¿ +GBE
+):'
+2
+
+¿'¿ +
+scala/Some.apply().scala/Predef.String#bj
+
+¿'¿ 2\
+Z
+HBF
+*:(
+
+scala/Some.
+scala/Some.apply().scala/Predef.String#2
+
+¿'¿ 2bk
+
+‘‘ *]
+[
+IBG
+.,
+*scala/LowPriorityImplicits#wrapRefArray().java/lang/String#2
+
+‘‘ *bL
+
+’’ '>
+<
+*(
+&scala/collection/LinearSeqOps#apply().2
+
+’’ 'bE
+
+◊4◊ B7
+5
+2
+
+◊4◊ B
+api/Exts.sortedWith().(x$2)ÄÄb”
+:: ∆B√
+2
+
+:: ≤BØ
+zäw
+CBA
+¢	local291
+/-+scala/annotation/unchecked/uncheckedStable#
+
+scala/Int#
+ api/Api_1$package.eval().[T]1
+/-+scala/annotation/unchecked/uncheckedStable#bö
+:: çBä
+2
+
+:: zBx
+Cä@
+¢	local29
+
+scala/Int#
+ api/Api_1$package.eval().[T]1
+/-+scala/annotation/unchecked/uncheckedStable#b◊
+;;  B«
+2
+
+;; ∂B≥
+~ä{
+CBA
+¢	local301
+/-+scala/annotation/unchecked/uncheckedStable#
+scala/Boolean#
+ api/Api_1$package.eval().[T]1
+/-+scala/annotation/unchecked/uncheckedStable#bû
+;; ëBé
+2
+
+;; ~B|
+GäD
+¢	local30
+scala/Boolean#
+ api/Api_1$package.eval().[T]1
+/-+scala/annotation/unchecked/uncheckedStable#b0
+<< $B"
+2
+
+<< scala/Boolean#bj
+== '^
+\
+LBJ
+.:,
+
+scala/Tuple2.
+scala/Tuple2.apply().	local34	local352
+
+== 'bü
+gg í
+è
+B}
+H:F
+
+scala/package.List.+
+)scala/collection/IterableFactory#apply().1/-api/Api_1$package.given_Monad_List.pure().[A]2
+
+gg b©
+ll ú
+ô
+àBÖ
+9:7
+
+scala/package.Right.
+scala/util/Right.apply().scala/Nothing#420api/Api_1$package.given_Monad_EitherT#pure().[A]2
+
+ll b…
+y"} ºBπ
+2
+
+y"} ® §
+%#!api/Api_1$package.firstElem().[X]+
+scala/Predef.String#scala/Char#A
+scala/Array#[t]$"api/Api_1$package.Elem#[t]O
+'%scala/collection/Iterable#[t]$"api/Api_1$package.Elem#[t]:
+scala/AnyVal#%#!api/Api_1$package.firstElem().[X]b6
+{ { $*
+(
+
+scala/Array#apply().2
+
+{ { $b{
+
+Ü4Ü ;m
+k
+YBW
+H:F
+
+scala/package.List.+
+)scala/collection/IterableFactory#apply().	local532
+
+Ü4Ü ;bB
+
+ê.ê @4
+2
+ 
+scala/StringContext.apply().2
+
+ê.ê @b1
+
+˜=˜ ?#
+!
+2
+
+˜=˜ =	
+local59ÄÄb1
+
+˜0˜ @#
+!
+2
+
+˜0˜ @	
+local59ÄÄbY
+
+¯=¯ AKBI
+0:.
+2
+
+¯=¯ A
+scala/quoted/Expr.apply().java/lang/String#bu
+
+¯=¯ Ig
+e
+SBQ
+8:6
+
+scala/quoted/Expr.
+scala/quoted/Expr.apply().java/lang/String#2
+
+¯=¯ Ib0
+
+¯D¯ H"B 
+2
+
+¯D¯ H
+scala/Any#bh
+
+¯=¯ IZ
+X
+2
+
+¯=¯ IBB@
+'%
+#scala/quoted/ToExpr.StringToExpr().java/lang/String#ÄÄbP
+
+¯=¯ IB
+@
+2
+
+¯=¯ I*(
+&api/Api_1$package.showExprImpl().(x$2)ÄÄb_
+
+˙,˙ =Q
+O
+2
+
+˙,˙ =,
+*
+
+scala/quoted/Type.of().	
+local60	
+local60ÄÄb1
+
+˙=˙ =#
+!
+2
+
+˙=˙ =	
+local60ÄÄbY
+
+˝˝ K
+I
+2
+
+˝˝ 31
+/api/Api_1$package.fieldNamesImpl().(evidence$1)ÄÄb
+
+˛˛ qBo
+0:.
+2
+
+˛˛ 
+scala/quoted/Expr.apply().;9 scala/collection/immutable/List#java/lang/String#bù
+
+˛˛ "é
+ã
+yBw
+8:6
+
+scala/quoted/Expr.
+scala/quoted/Expr.apply().;9 scala/collection/immutable/List#java/lang/String#2
+
+˛˛ "b7
+
+˛˛ )B'
+2
+
+˛˛ java/lang/String#b‰
+
+˛˛ "’
+“
+2
+
+˛˛ "ª
+∏
+%#
+!scala/quoted/ToExpr.ListToExpr().K
+I
+
+scala/quoted/Type.of().*(
+&api/Api_1$package.fieldNamesImpl().(q)BB@
+'%
+#scala/quoted/ToExpr.StringToExpr().java/lang/String#ÄÄb∑
+
+˛"˛ "®
+•
+2
+
+˛"˛ "K
+I
+
+scala/quoted/Type.of().*(
+&api/Api_1$package.fieldNamesImpl().(q)BB@
+'%
+#scala/quoted/ToExpr.StringToExpr().java/lang/String#ÄÄbP
+
+˛"˛ "B
+@
+2
+
+˛"˛ "*(
+&api/Api_1$package.fieldNamesImpl().(q)ÄÄbP
+
+˛˛ "B
+@
+2
+
+˛˛ "*(
+&api/Api_1$package.fieldNamesImpl().(q)ÄÄb1
+
+ÄBÄ E#
+!
+2
+
+ÄBÄ B	
+local62ÄÄb1
+
+Ä2Ä F#
+!
+2
+
+Ä2Ä F	
+local62ÄÄbW
+
+ÇÇ IBG
+5:3
+2
+
+ÇÇ !
+scala/quoted/Varargs.unapply().
+scala/Int#bH
+
+ÇÇ !:B8
+2
+
+ÇÇ !&$scala/quoted/Expr#
+scala/Int#bS
+
+Ç"Ç (E
+C
+2
+
+Ç%Ç &-+
+)api/Api_1$package.unrolledSumImpl().(x$2)ÄÄbS
+
+Ç6Ç DE
+C
+2
+
+Ç9Ç B-+
+)api/Api_1$package.unrolledSumImpl().(x$2)ÄÄb0
+
+ÉÉ "B 
+2
+
+ÉÉ 
+scala/Int#bK
+
+ÉÉ =
+;
+2
+
+ÉÉ %#
+!scala/math/Numeric.IntIsIntegral.ÄÄbS
+
+ÉÉ E
+C
+2
+
+ÉÉ -+
+)api/Api_1$package.unrolledSumImpl().(x$2)ÄÄbZ
+
+áá "LBJ
+2
+
+áá "86scala/Tuple2#java/lang/String#
+scala/Int#bP
+
+áá "BB@
+2
+
+áá .,scala/Tuple2#∫
+
+R
+name∫	
+R
+ageb{
+
+áá "m
+k
+YBW
+.:,
+
+scala/Tuple2.
+scala/Tuple2.apply().java/lang/String#
+scala/Int#2
+
+áá "bå
+
+àà f˝B˙
+2
+
+àà fÁ‰scala/`*:`#
+scala/Int#ƒ¡scala/`*:`#
+scala/Int#°ûscala/`*:`#
+scala/Int#˛˚scala/`*:`#
+scala/Int#€ÿscala/`*:`#
+scala/Int#∏µscala/`*:`#
+scala/Int#ïíscala/`*:`#
+scala/Int#ÚÔscala/`*:`#
+scala/Int#œÃscala/`*:`#
+scala/Int#¨©scala/`*:`#
+scala/Int#âÜscala/`*:`#
+scala/Int#Ê„scala/`*:`#
+scala/Int#√¿scala/`*:`#
+scala/Int#†ùscala/`*:`#
+scala/Int#˝˙scala/`*:`#
+scala/Int#⁄◊scala/`*:`#
+scala/Int#∑¥scala/`*:`#
+scala/Int#îëscala/`*:`#
+scala/Int#ÒÓscala/`*:`#
+scala/Int#ŒÀscala/`*:`#
+scala/Int#´®scala/`*:`#
+scala/Int#àÖscala/`*:`#
+scala/Int#fdscala/`*:`#
+scala/Int#ECscala/`*:`#
+scala/Int#$¢!scala/Tuple$package.EmptyTuple.bE
+
+àà f7
+5
+#!
+scala/runtime/TupleXXL.apply().2
+
+àà fbE
+
+åå ;7
+5
+#!
+scala/ContextFunction1#apply().2
+
+åå ;
