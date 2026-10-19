@@ -87,7 +87,7 @@ GROUP_ORDINAL = re.compile(r"^\d+$")
 COMPILER_VERSION = re.compile(r"^c[\d.]+$")
 
 # Options that need infrastructure we don't provide (or that make compilation of the case meaningless here).
-UNSUPPORTED_OPTS = ("-scalajs", "-Xplugin", "-Yscala2-library-tasty", "-Ystop-before:", "-Ystop-after:", "-Yread-docs")
+UNSUPPORTED_OPTS = ("-scalajs", "-Yscala2-library-tasty", "-Ystop-before:", "-Ystop-after:", "-Yread-docs")
 
 
 def log(*a):
@@ -346,7 +346,7 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
         args += subst(v["opts"], tmp) + list(extra_opts) + [expand_case_opt(o, classes, tmp, case, libcp) for o in sopts] + scala
         steps.append(("scalac", args))
         if java:
-            steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8"] +
+            steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8", "-parameters"] +
                           case.javac_opts + java))
     if v.get("post") == "print-tasty":
         steps.append(("main:dotty.tools.dotc.core.tasty.TastyPrinter", [f"@tasty-in:{classes}"]))
