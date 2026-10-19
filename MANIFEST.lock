@@ -1,21 +1,8 @@
-# integration/scala3-main, built 2026-10-19T23:37:17Z by build-integration from manifest.toml
+# integration/scala3-merkle, built 2026-10-19T23:37:26Z by build-integration from manifest.toml
 
-base	upstream/main	cd8ff838e984a4c7b2b55e73fdf2d75f4fd0ab11
+base	origin/integration/scala3-main	64f3774f6134e039c57dfc6fbf792ff7dd7ba439
 
-scala3#27264	refs/pull/27264/head	bd72f609bb66af5f10c3c18e8edbdf1bcfbe8a2e	clean
-scala3#27290	refs/pull/27290/head	5e9e5984ea80aeb44491014ea3e295229fc4a9fd	clean
-scala3#27297	refs/pull/27297/head	907dae7763c8c1fb8a24c8b28f2cf97dbc86ff41	clean
-rz-scala3#11	refs/pull/11/head	54abb61c21d581a241dd0aaca84bb59e01355769	clean
-rz-scala3#36	refs/pull/36/head	8395dd7b6401af141f25b4ca14bbb6907b911cde	clean
-rz-scala3#47	refs/pull/47/head	0de2bdfb97707c5a45803f75dd5d3fd43a32985e	rerere
-rz-scala3#48	refs/pull/48/head	61ecac37058c6fa6bee2e8cc8812e05883b19e68	clean
-
-# excluded
-rz-scala3#6	duplicate of scala3#27275
-rz-scala3#1	nestmates; conflicts in the backend, unrelated
-rz-scala3#2	performance draft
-rz-scala3#3	performance draft
-rz-scala3#4	performance draft
-rz-scala3#9	Scaladoc performance, unrelated
-rz-scala3#5	Merkle; see integration/scala3-merkle
-rz-scala3#10	Merkle; see integration/scala3-merkle
+rz-scala3#5	refs/heads/claude/merkle-sbt-bridge-hashing-main	174007e178defd0c624171bb0b9cabcd68f92f2a	rerere
+rz-scala3#42	refs/pull/42/head	997c58db230e0ff2b4c2dda5273945bfe5a6d223	clean
+rz-scala3#10	refs/heads/claude/merkle-joint-separate-flags-main	480e79ff8a10206379ed54ad81c8d8e6a23fd666	clean
+pure-init-direct-hash	fixups/pure-init-direct-hash.patch	2e0b7cd6b5fb191b4a6af3d767f2f26b44aa1633	applied
