@@ -181,7 +181,7 @@
     Object.assign(ST, { D, unit: vs.length ? vs[0] : 0, verIdx: 0, evIdx: 0, selNode: null, selSym: null });
     { const mn = $('mergenote'); mn.hidden = !D.merged; if (D.merged) mn.textContent = `${D.files.length} recordings, merged by phase; not a joint compile`; }
     const mb = performance.memory ? ` · heap ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB` : '';
-    $('recname').textContent = label.replace(/^data(-jvm)?\//, '').replace(/ \(\d+ ms.*$/, ''); $('loadinfo').textContent = label + ' · ' + D.schema + ' · ' + Object.entries(D.counts).map(([k, v]) => v + ' ' + k).join(', ') + mb;
+    updateVariantUI && setTimeout(() => updateVariantUI(), 0); $('recname').textContent = label.replace(/^data(-jvm)?\//, '').replace(/ \(\d+ ms.*$/, ''); $('loadinfo').textContent = label + ' · ' + D.schema + ' · ' + Object.entries(D.counts).map(([k, v]) => v + ' ' + k).join(', ') + mb;
     const w = $('warnings'); w.innerHTML = '';
     const items = D.warnings.slice(); Object.entries(D.unknown).forEach(([k, v]) => items.push(`unknown record kind "${k}" ×${v} (ignored)`));
     w.hidden = !items.length; if (items.length) { w.append(Object.assign(document.createElement('b'), { textContent: items.length + ' load warning(s): ' })); w.append(items.slice(0, 6).join(' · ') + (items.length > 6 ? ' …' : '')); w.title = items.join('\n'); }
@@ -209,6 +209,10 @@
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
+    if (h.has('nspan')) {   // a node by span (stable across option variants, ids are not)
+      const m = /^(\d+)-(\d+):(.*)$/.exec(h.get('nspan')), vi = R.vers()[patch.verIdx ?? ST.verIdx];
+      if (m && vi) { let best = null; vi.ids.forEach((id) => { if (best != null) return; const n = D.nodes.get(id); if (n && n.span && n.span[0] === +m[1] && n.span[1] === +m[2] && n.kind === m[3]) best = id; }); if (best != null) patch.selNode = best; }
+    }
     if (h.has('gran')) { patch.gran = h.get('gran'); $('gran').value = patch.gran; } if (h.has('chn')) { patch.chThrNodes = +h.get('chn'); $('chnodes').value = h.get('chn'); } if (h.has('chmode')) { patch.chMode = h.get('chmode'); $('chmode').value = patch.chMode; } if (h.has('chm')) { patch.chMetric = h.get('chm'); $('chmetric').value = patch.chMetric; } if (h.has('chp')) { patch.chThrPct = +h.get('chp'); $('chpct').value = h.get('chp'); }
     if (h.has('range')) {   // range=<phase>:<lo>-<hi> (1-based lines of that phase's tree text, in the selected unit)
       const m = /^(.+):(\d+)-(\d+)$/.exec(h.get('range')), v = m && R.stk && D.versionsOf(ST.unit).find((x) => !x.ir && D.phaseRaw(x.phase) === m[1]);
@@ -226,7 +230,7 @@
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); p.set('cls', R.curClass()); } } if (R.ev()) p.set('seq', R.seq());
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
     if (ST.level !== 'file') p.set('level', ST.level);
-    if (R.stackOpen) p.set('stack', 1);
+    if (R.stackOpen) p.set('stack', 1); { const vi = R.variantInfo && R.variantInfo(); if (vi) p.set('variant', vi.v.label); }
     if (ST.gran && ST.gran !== 'chapters') p.set('gran', ST.gran); if (ST.chThrNodes != null && ST.chThrNodes !== 6) p.set('chn', ST.chThrNodes); if (ST.chThrPct != null && ST.chThrPct !== 4) p.set('chp', ST.chThrPct); if (ST.chMetric && ST.chMetric !== 'lines') p.set('chm', ST.chMetric); if (ST.chMode && ST.chMode !== 'groups') p.set('chmode', ST.chMode);
     if (ST.range && !ST.range.ir && ST.range.unit === ST.unit) p.set('range', D.phaseRaw(ST.range.phase) + ':' + (ST.range.lo + 1) + '-' + (ST.range.hi + 1));
     if (ST.skip) p.set('skip', 1); if (ST.collapse) p.set('collapse', 1); if (ST.showRetyped) p.set('retyped', 1);
@@ -411,7 +415,7 @@
     drag('hs', 'x'); drag('vs', 'y');
     R.setView = (v) => { if (v === 'stack') { R.openStack && R.openStack(); return; } main.classList.remove('max-scrub', 'max-insp', 'max-proj'); if (v !== 'all') main.classList.add('max-' + v); document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); if (ST.D) R.render(); };
     document.querySelectorAll('#viewtabs button').forEach((b) => (b.onclick = () => R.setView(b.dataset.v))); R.setView('all');
-    $('btn-recs').onclick = () => openRecs(); $('btn-recs2').onclick = () => { $('opts').hidden = true; openRecs(); };
+    $('variant').onchange = (ev) => R.switchVariant(ev.target.value); $('btn-recs').onclick = () => openRecs(); $('btn-recs2').onclick = () => { $('opts').hidden = true; openRecs(); };
     $('btn-opts').onclick = (ev) => { ev.stopPropagation(); $('opts').hidden = !$('opts').hidden; };
     document.addEventListener('mousedown', (ev) => { const o = $('opts'); if (!o.hidden && !o.contains(ev.target) && ev.target !== $('btn-opts')) o.hidden = true; });
     document.addEventListener('mousedown', (ev) => { const t = $('phtab'); if (!t.hidden && !t.contains(ev.target) && !ev.target.closest('#btn-phtab')) t.hidden = true; }); $('btn-help').onclick = () => { $('help').hidden = false; }; $('btn-about').onclick = openAbout; $('btn-link').onclick = copyLink;
@@ -460,6 +464,7 @@
       else if (ev.key === 'ArrowLeft') { if (ev.shiftKey) R.stepEvent(-1); else R.pageTurn(-1); }
       else if (ev.key === ']' || ev.key === '.') { if (!(ST.follow && R.stepPhase(1))) R.setPhase(ST.verIdx + 1); }
       else if (ev.key === '[' || ev.key === ',') { if (!(ST.follow && R.stepPhase(-1))) R.setPhase(ST.verIdx - 1); }
+      else if (ev.key === 'g') { if (!(R.cfgOpenSelected && R.cfgOpenSelected())) return; }
       else if (ev.key === 'e') R.phaseEnd();
       else if (ev.key === 'i') R.jumpInteresting(1);
       else if (ev.key === 'I') R.jumpInteresting(-1);
@@ -503,27 +508,46 @@
     <span>click a graph node</span><span>jump to the first event that touches it</span>
     <span>click in the source pane</span><span>select the innermost node at that position</span></div>`;
   const RECS = [];
+  // a row with option variants loads the chosen one (base unless a chip was picked)
+  const resolveRec = (r) => { if (!r.variants) return r; const v = r.variants.find((x) => x.label === (r.sel || 'base')) || r.variants[0]; return Object.assign({}, r, v, { name: r.name + (v.label === 'base' ? '' : ' ' + v.label) }); };
   const fmtSize = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' kB');
   function renderRecs() {
     const box = $('reclist'); box.innerHTML = '';
     RECS.forEach((r, i) => {
       const d = document.createElement('div'); d.className = 'rec';
       const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!r.checked }); cb.onchange = () => { r.checked = cb.checked; $('rec-load').disabled = !RECS.some((x) => x.checked); };
-      const nm = document.createElement('b'); nm.textContent = r.name; nm.title = r.url || r.file?.name || '';
-      const sz = document.createElement('span'); sz.className = 'dim'; sz.textContent = r.size ? fmtSize(r.size) : '';
+      const cur = resolveRec(r);
+      const nm = document.createElement('b'); nm.textContent = r.name; nm.title = cur.url || r.file?.name || '';
+      const sz = document.createElement('span'); sz.className = 'dim'; sz.textContent = cur.size ? fmtSize(cur.size) : '';
       const ld = Object.assign(document.createElement('button'), { textContent: 'Load', onclick: () => loadEntries([r]) });
+      const chips = document.createElement('span'); chips.className = 'vchips';
+      (r.variants || []).forEach((v) => { const c = Object.assign(document.createElement('button'), { className: 'vchip' + ((r.sel || 'base') === v.label ? ' on' : ''), textContent: v.label, title: `${v.name}\n${v.schema} · ${v.phases} phases · ${v.events} events · ${v.nodes} nodes · ${v.versions} versions${v.jvm ? ` · ${v.classes} classes, ${v.jvm} class versions` : ''} · ${fmtSize(v.size)}${v.args && v.args.length ? '\n' + v.args.join(' ') : ''}` }); c.onclick = () => { r.sel = v.label; renderRecs(); }; chips.append(c); });
       const meta = document.createElement('div'); meta.className = 'meta';
-      meta.textContent = r.fixture ? 'synthetic: hand-written v0 data modelled on Givens.scala, useful as a quick demo only' : r.events != null ? `${r.schema} · ${r.units.length} unit${r.units.length > 1 ? 's' : ''} (${r.units.slice(0, 3).join(', ')}${r.units.length > 3 ? ', …' : ''}) · ${r.phases} phases · ${r.events} events · ${r.nodes} nodes${r.jvm ? ` · + JVM bytecode: ${r.classes} classes, ${r.jvm} class versions` : ''}` : 'local file';
-      d.append(cb, nm, sz, ld, meta); box.append(d);
+      const rs = cur; meta.textContent = r.fixture ? 'synthetic: hand-written v0 data modelled on Givens.scala, useful as a quick demo only' : rs.events != null ? `${rs.schema} · ${r.units.length} unit${r.units.length > 1 ? 's' : ''} (${r.units.slice(0, 3).join(', ')}${r.units.length > 3 ? ', …' : ''}) · ${rs.phases} phases · ${rs.events} events · ${rs.nodes} nodes${rs.jvm ? ` · + JVM bytecode: ${rs.classes} classes, ${rs.jvm} class versions` : ''}` : 'local file';
+      d.append(cb, nm, chips, sz, ld, meta); box.append(d);
     });
     if (!RECS.length) box.innerHTML = '<span class="dim">No recordings listed (no <code>recordings.json</code>; run <code>gen_index.py</code>). Drop files below.</span>';
     $('rec-load').disabled = !RECS.some((x) => x.checked);
   }
+  // ---- variant switcher (header): same unit / class / phase / selected node in another option variant of the same recording ----
+  R.variantInfo = () => { const u = R.srcUrls; if (!u || u.length !== 1) return null; for (const r of RECS) { if (r.variants) { const v = r.variants.find((x) => x.url === u[0]); if (v) return { r, v }; } } return null; };
+  function updateVariantUI() {
+    const sel = $('variant'), vi = R.variantInfo(), esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); if (!vi) { sel.hidden = true; return; }
+    sel.hidden = false; sel.innerHTML = vi.r.variants.map((v) => `<option value="${esc(v.label)}"${v.label === vi.v.label ? ' selected' : ''}>${esc(v.label)}</option>`).join(''); sel.title = 'compiler option variant of this recording';
+  }
+  R.switchVariant = (label) => {
+    const vi = R.variantInfo(), D = ST.D; if (!vi || !D) return; const t = vi.r.variants.find((x) => x.label === label); if (!t || t === vi.v) return;
+    const p = new URLSearchParams(); p.set('src', t.url); const u = D.units.get(ST.unit); if (u) p.set('unit', (u.path || '').replace(/^.*\//, ''));
+    const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); const c = R.curClass(); if (c) p.set('cls', c); } }
+    const nd = ST.selNode != null ? D.nodes.get(ST.selNode) : null; if (nd && nd.span) p.set('nspan', nd.span[0] + '-' + nd.span[1] + ':' + nd.kind);
+    p.set('variant', t.label); if (ST.skip) p.set('skip', 1);
+    location.hash = '#' + p.toString().replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
+  };
   function openRecs() { $('recs').hidden = false; renderRecs(); }
   function addLocal(files) { files.forEach((f) => RECS.push({ name: f.name.replace(/\.jsonl$/, ''), file: f, size: f.size, checked: true })); openRecs(); }
   function loadLocal(files) { loadEntries(files.map((f) => ({ name: f.name, file: f, size: f.size }))); }
   async function loadEntries(es) {
-    $('recs').hidden = true;
+    es = es.map(resolveRec); $('recs').hidden = true;
     const label = es.length > 1 ? es.length + ' recordings merged' : es[0].name;
     if (es.length === 1 && es[0].fixture) return loadFixture();
     const sources = [];
@@ -535,10 +559,10 @@
   }
   async function start() {
     const h = location.hash.slice(1), srcParam = new URLSearchParams(h).get('src');
+    if (!RECS.some((x) => !x.fixture)) { try { const r = await fetch('recordings.json'); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); R.recsLoaded = true; } } catch (e) { /* none */ } }
     if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { $('loadinfo').textContent = String(e.message || e); openRecs(); }); return; }
     if (h) return loadFixture();                     // deep link without src: the built-in fixture (screenshots)
-    RECS.push({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true });
-    for (const u of ['recordings.json']) { try { const r = await fetch(u); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); break; } } catch (e) { /* none */ } }
+    RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true });
     openRecs();
   }
   function loadFixture() {

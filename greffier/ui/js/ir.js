@@ -175,7 +175,7 @@
     const nameOf = (p) => R.verName({ irPseudo: true, phase: p });
     const dis = (b) => (b ? ' disabled' : '');
     const nextE = hist[idx + 1], pe = idx > 0 ? hist[idx - 1] : null;
-    let h = `<div class="mp-bar"><select id="mpsel" aria-label="method">${opts}</select><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀ previous change</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">next change ▶</button><span class="dim">step ${Math.max(0, idx)}/${hist.length - 1}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
+    let h = `<div class="mp-bar"><select id="mpsel" aria-label="method">${opts}</select><button id="mpgraph" title="open the method's control-flow graph in a lightbox (g)">▣ graph</button><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀ previous change</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">next change ▶</button><span class="dim">step ${Math.max(0, idx)}/${hist.length - 1}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
     if (idx > 0) {
       const a = hist[idx - 1].text.replace(/\n$/, ''), b = curE.text.replace(/\n$/, '');
       h += `<div class="dim">${atThis ? `<b>${esc(nameOf(v.phase))}</b> changed this method:` : `last change was <b>${esc(nameOf(curE.phase))}</b> (not changed by ${esc(nameOf(v.phase))}):`} diff from ${esc(nameOf(hist[idx - 1].phase))}</div><div class="df">${diffHtml(diffLines(a, b))}</div>`;
@@ -187,6 +187,7 @@
     box.innerHTML = h;
     st.irMethod = key;
     $('mpsel').onchange = (ev) => R.set({ irMethod: ev.target.value });
+    $('mpgraph').onclick = () => R.cfgOpen && R.cfgOpen(cls, key, v.phase);
     const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) R.set({ verIdx: k }); };
     $('mpprev').onclick = () => go(hist[idx - 1]); $('mpnext').onclick = () => nextE && go(nextE);
   }

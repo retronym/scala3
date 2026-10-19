@@ -152,6 +152,20 @@
   .pager .fab { width: 42px; height: 42px; flex: none; border-radius: 50%; border: 1px solid #3a5380; background: linear-gradient(#27406a, #1b2d4d); color: #e5eeff; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.45); } .pager .fab:hover { background: linear-gradient(#335487, #22395f); } .pager .fab:active { transform: translateY(1px); }
   .pager .dots { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; } .pager .dot { width: 9px; height: 9px; padding: 0; border-radius: 50%; border: 0; background: #3b475c; cursor: pointer; font-size: 10px; line-height: 9px; color: #ffd666; } .pager .dot.cur { background: #6eaaff; box-shadow: 0 0 0 2px rgba(110,170,255,.35); } .pager .dot.star { background: none; width: 11px; height: 11px; font-size: 12px; line-height: 11px; } .pager .dot.star.cur { color: #fff; text-shadow: 0 0 5px #6eaaff; } .pager .dot:hover { background: #8fb8ff; }
   #spager .dots, #spager .fab { display: none; } #spager { padding: 4px 10px; } #spager { position: absolute; left: 12px; bottom: 150px; width: 276px; z-index: 20003; touch-action: manipulation; }
+    #cfgov { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 12; } #cfgov[hidden] { display: none; } #cfgbd { position: absolute; inset: 0; background: rgba(4,7,12,.82); backdrop-filter: blur(2px); }
+  #cfgbox { position: absolute; inset: 6px; display: flex; flex-direction: column; background: #0f1520; border: 1px solid #2b3a55; border-radius: 12px; box-shadow: 0 20px 70px rgba(0,0,0,.7); overflow: hidden; }
+  #cfghead { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #151d2b; border-bottom: 1px solid #222e43; font-size: 12px; color: #c4d0e4; } #cfghead b { font: 600 12.5px ui-monospace, Menlo, monospace; } #cfghead button { background: #1d2a40; color: #cfe0ff; border: 1px solid #33466a; border-radius: 5px; padding: 2px 8px; cursor: pointer; } #cfghead button:disabled { opacity: .4; cursor: default; } #cfghead #cfgx { margin-left: auto; }
+  #cfgcnt { margin-left: 4px; } #cfgcue { margin-left: 10px; color: #e8b04a; opacity: 0; transition: opacity .25s; font-style: italic; } #cfgcue.on { opacity: 1; } #cfglegend { margin-left: 12px; color: #7f8ba0; font-size: 10.5px; } #cfglegend i { display: inline-block; width: 14px; height: 3px; margin: 0 3px 2px 8px; border-radius: 2px; }
+  #cfgbody { flex: 1; min-height: 0; display: flex; } #cfggraph { position: relative; flex: 3; overflow: hidden; background: radial-gradient(#1a2538 1px, transparent 1px) 0 0/22px 22px, #0c121c; cursor: grab; touch-action: none; } #cfggraph.pan { cursor: grabbing; }
+  #cfgcanvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; } #cfgsvg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; } #cfgsvg .ce { pointer-events: stroke; } #cfgsvg .ce .hit { fill: none; stroke: transparent; stroke-width: 12; } #cfgsvg.hv .ce { opacity: .22; } #cfgsvg.hv .ce.hl { opacity: 1; } #cfgsvg .ce.hl .vis { stroke-width: 3.2; } #cfgsvg .el { paint-order: stroke; stroke: #0c121c; stroke-width: 3px; }
+  .cfgb { position: absolute; background: #151d2b; border: 1px solid #2f4263; border-radius: 7px; min-width: 120px; max-width: 540px; overflow: hidden; font: 11.5px/16px ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; box-shadow: 0 4px 14px rgba(0,0,0,.4); } .cfgb.entry { border-color: #3fb68b; } .cfgb.exit { border-color: #ff8a65; } .cfgb.ghost { border-style: dashed; }
+  #cfgcanvas.hv .cfgb { opacity: .45; } #cfgcanvas.hv .cfgb.hl, #cfgcanvas.hv .cfgb.nb { opacity: 1; } .cfgb.hl { border-color: #ffd666; box-shadow: 0 0 0 2px rgba(255,214,102,.35); } .cfgb.foc { outline: 2px solid #6eaaff; }
+  .cfgb .bh { display: flex; gap: 8px; align-items: center; padding: 3px 8px; background: #1c2840; border-bottom: 1px solid #2a3a58; cursor: pointer; font: 11px ui-monospace, Menlo, monospace; } .cfgb .bh b { color: #cfe0ff; } .cfgb .bh span { color: #7f8ba0; } .cfgb .tag { font-style: normal; font-size: 9.5px; padding: 0 5px; border-radius: 8px; background: #234c3b; color: #8fe0b8; } .cfgb .tag.ex { background: #5a2f26; color: #ffb59c; } .cfgb .tag.tg { background: none; color: #7f8ba0; margin-left: auto; }
+  .cfgb .bb { padding: 4px 0 5px; } .cfgb .bb .ln { padding: 0 10px; min-height: 16px; } .cfgb .bb .ln.minor { opacity: .4; font-size: 10px; } .cfgb .bb .ln.more { color: #7f8ba0; font-style: italic; text-align: center; }
+  #cfglist { flex: 2; min-width: 280px; overflow: auto; border-left: 1px solid #222e43; background: #101722; padding: 8px 0; font: 11.5px/17px ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; } #cfglist .ln { padding: 0 12px; } #cfglist .ln.hl { background: rgba(255,214,102,.14); box-shadow: inset 3px 0 #ffd666; }
+  #cfgov .n.sel { outline: 2px solid var(--sel, #ffd666); outline-offset: 0; background: rgba(255,214,102,.18); } #cfgov .n.lnk:not(.n) { text-decoration: underline; } #cfgov .n.lnk { background: rgba(110,170,255,.18); }
+  #cfgmini { position: absolute; right: 10px; bottom: 10px; border: 1px solid #2b3a55; border-radius: 6px; cursor: pointer; }
+  .vchips { display: inline-flex; gap: 4px; margin: 0 6px; } .vchip { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; color: inherit; } .vchip.on { background: var(--acc); color: #fff; border-color: var(--acc); } #variant { margin-left: 4px; font-size: 11.5px; max-width: 220px; }
   #srange { position: absolute; right: 96px; top: 56px; z-index: 20003; width: 300px; max-height: 52%; overflow: auto; background: rgba(13,18,28,.92); border: 1px solid #2b4570; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; touch-action: auto; overscroll-behavior: contain; } #srange[hidden] { display: none; }
   #srange .ch { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; } #srange .ch button { margin-left: auto; background: none; border: 0; color: #7f8ba0; cursor: pointer; }
   #srange .ce { display: grid; grid-template-columns: 70px 1fr; column-gap: 6px; padding: 1px 2px; cursor: pointer; border-radius: 3px; white-space: nowrap; } #srange .ce:hover { background: #1a2436; } #srange .ce .cp { overflow: hidden; text-overflow: ellipsis; color: #7f8ba0; } #srange .ce code { overflow: hidden; text-overflow: ellipsis; font: 11px ui-monospace, Menlo, monospace; }
@@ -168,7 +182,7 @@
 <body>
 <header>
   <span class="wordmark" title="Greffier: the clerk's record of a Scala 3 compile">Greffier</span>
-  <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button>
+  <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button> <select id="variant" hidden aria-label="recording variant"></select>
   <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button><button data-v="stack" title="the version stack of this unit, over the viewer (s)">Stack</button></span>
   <span id="mergenote" class="mergenote" hidden></span>
   <button id="btn-exp" title="show or hide the project explorer (x)">☰ explorer</button>
@@ -258,11 +272,13 @@
 <div id="about" class="modal" hidden><div class="card"><h2><span class="wordmark big">Greffier</span> <button class="x" data-close="about">×</button></h2><p class="tagline">the clerk's record of a Scala 3 compile: every phase, every decision, replayable</p><div id="aboutbody"></div></div></div>
 <div id="help" class="modal" hidden><div class="card"><h2>Keys <button class="x" data-close="help">×</button></h2><div id="cheat2"></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
 <script src="fixture.js"></script>
 <script src="js/loader.js"></script>
 <script src="js/app.js"></script>
 <script src="js/scrubber.js"></script>
 <script src="js/ir.js"></script>
+<script src="js/cfg.js"></script>
 <script src="js/diff.js"></script>
 <script src="js/scores.js"></script>
 <script src="js/stack/model.js"></script>
