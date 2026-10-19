@@ -1,0 +1,17 @@
+# Greffier demo. Written with LLM assistance (see LLM_POLICY.md).
+name = "greffier"
+main = "worker.js"
+compatibility_date = "2025-10-01"
+routes = [{ pattern = "greffier.zaugg.id.au", custom_domain = true }]
+
+[assets]
+directory = "./site"
+binding = "ASSETS"
+# Worker code runs first only for /data/*; everything else is a static asset.
+run_worker_first = ["/data/*"]
+
+# R2 is not enabled on the account yet (API error 10042). Enable it in the dashboard, then
+# uncomment and run build.sh --upload --deploy to publish util / util-opt.
+# [[r2_buckets]]
+# binding = "RECORDINGS"
+# bucket_name = "greffier-recordings"

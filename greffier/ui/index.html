@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greffier</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%231c7ed6%27/%3E%3Cpath d=%27M22 6c-6 1-11 6-13 14l-2 6 6-2c8-2 13-7 14-13-2 1-4 2-6 2 2-2 3-4 1-7z%27 fill=%27white%27/%3E%3Cpath d=%27M7 26l9-9%27 stroke=%27%231c7ed6%27 stroke-width=%271.6%27/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --fg:#1b1f24; --dim:#7a828e; --line:#dde1e7; --acc:#1c7ed6; --new:#d9f2d9; --newu:#2f9e44; --cur:#f08c00; --sel:#1c7ed6; --code:#f1f3f5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --panel:#1c2027; --fg:#e4e7ec; --dim:#8b94a3; --line:#2c323c; --new:#1d3a22; --code:#252a33; --newu:#51cf66; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; }
+  code, pre, #text { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 14px; margin: 0; }
+  .dim { color: var(--dim); } .pad { padding: 12px; }
+  #warnings { background: #fff3bf; color: #5f3b00; padding: 3px 12px; font-size: 12px; } #warnings b { margin-right: 4px; }
+  #cursorbar { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #cursorbar input[type=range] { width: 100%; }
+  #phases button { margin-right: 4px; } button.on { background: var(--acc); color: #fff; border-color: var(--acc); }
+  button, select { font: inherit; padding: 1px 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 4px; cursor: pointer; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  section > h2 { margin: 0; font-size: 12px; padding: 4px 10px; border-bottom: 1px solid var(--line); text-transform: uppercase; letter-spacing: .04em; color: var(--dim); display: flex; gap: 10px; align-items: baseline; }
+  section > h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .body { overflow: auto; flex: 1; min-height: 0; padding: 8px 10px; }
+  #text { white-space: pre-wrap; font-size: 12px; line-height: 1.55; }
+  .n { border-radius: 2px; } .n.new { border-bottom: 1px dotted var(--newu); } .n.new.top { background: var(--new); border-bottom: 2px solid var(--newu); }
+  .n.hov { outline: 1px dashed var(--dim); } .n.sel { outline: 2px solid var(--sel); outline-offset: 0; } .n.cur { box-shadow: 0 0 0 2px var(--cur); background: rgba(240,140,0,.18); }
+  #verinfo { padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 12px; } .newtag { color: var(--newu); font-weight: 600; }
+  #nodeinfo { border-top: 1px solid var(--line); padding: 6px 10px; max-height: 38%; overflow: auto; font-size: 12px; }
+  pre.old { margin: 2px 0 4px 18px; padding: 2px 6px; background: var(--code); border-left: 3px solid var(--dim); white-space: pre-wrap; font-size: 11px; }
+  .how { padding: 0 5px; border-radius: 3px; background: var(--code); font-size: 11px; } .how-synth { color: #d6336c; } .how-heuristic { color: #e67700; } .how-copy { color: var(--dim); } .how-rewrite { color: #1c7ed6; } .how-split { color: #7048e8; } .how-elide { color: #c92a2a; }
+  #tip { position: fixed; z-index: 10; max-width: 520px; background: var(--panel); border: 1px solid var(--dim); border-radius: 6px; padding: 6px 9px; box-shadow: 0 4px 16px rgba(0,0,0,.25); pointer-events: none; font-size: 12px; } #tip .k { font-weight: 600; }
+  #stack { max-height: 110px; overflow: auto; border-bottom: 1px solid var(--line); background: var(--code); } .frame { padding: 1px 6px; cursor: pointer; white-space: nowrap; } .frame.cur { background: rgba(240,140,0,.25); font-weight: 600; }
+  .ev { margin: 1px 0; } .evh { padding: 1px 4px; border-radius: 3px; cursor: default; } .ev.cur > .evh { background: rgba(240,140,0,.25); outline: 1px solid var(--cur); }
+  .kids { margin-left: 14px; border-left: 1px solid var(--line); padding-left: 4px; } details > summary { list-style-position: outside; }
+  .seq { display: inline-block; min-width: 26px; color: var(--dim); font-size: 11px; cursor: pointer; text-align: right; margin-right: 4px; }
+  .chip { font-size: 10.5px; padding: 0 5px; border-radius: 3px; background: var(--code); border: 1px solid var(--line); margin-right: 4px; cursor: pointer; }
+  .k-Typed { color: #1c7ed6; } .k-Resolve { color: #2f9e44; } .k-ImplicitSearch { color: #7048e8; } .k-Candidate { color: #9c36b5; } .k-Complete { color: #e8590c; } .k-Adapt { color: #0c8599; } .k-Report { color: #c92a2a; } .k-PhaseBegin { color: var(--dim); }
+  .ok { color: #2f9e44; font-weight: 600; } .bad { color: #c92a2a; font-weight: 600; } .why { color: var(--dim); } .sev-warning { color: #e67700; font-weight: 600; } .sev-error { color: #c92a2a; font-weight: 600; }
+  .ex { margin-left: 62px; font-size: 11px; color: var(--dim); }
+  #graph { flex: 1; min-height: 0; } #graph svg { width: 100%; height: 100%; display: block; } #graph path { transition: stroke-opacity .45s, stroke-width .45s; } #graph .dot, #graph .ring { transition: opacity .3s; } #graph text { fill: var(--fg); pointer-events: none; }
+  #legend { padding: 3px 10px; font-size: 11px; border-top: 1px solid var(--line); } .lg { margin-right: 8px; } .lg i { display: inline-block; width: 14px; height: 3px; margin-right: 3px; vertical-align: middle; }
+  #text.virt { white-space: pre; line-height: 18px; position: relative; } #text .vbox { position: absolute; left: 0; right: 0; }
+  .gc { text-transform: none; letter-spacing: 0; margin-left: 6px; font-size: 11px; } .gc select, .gc input { font-size: 11px; }
+  .more { cursor: pointer; padding: 1px 8px; } .how-retype { color: #0c8599; } #perf { font-variant-numeric: tabular-nums; }
+  #evslider { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; margin: 0; width: 100%; }
+  #evslider::-webkit-slider-runnable-track { height: 4px; background: var(--line); border-radius: 2px; } #evslider::-webkit-slider-thumb { -webkit-appearance: none; width: 8px; height: 16px; margin-top: -6px; background: var(--acc); border-radius: 2px; }
+  #evslider::-moz-range-thumb { width: 8px; height: 16px; background: var(--acc); border: 0; border-radius: 2px; }
+  #cursorbar > div:nth-child(2) > input { flex: 1; } #bands { position: relative; height: 22px; background: var(--code); border-radius: 3px; overflow: hidden; }
+  .band { position: absolute; top: 0; bottom: 0; background: #7a828e33; font-size: 10px; line-height: 22px; padding: 0 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; border-left: 1px solid var(--bg); min-width: 2px; box-sizing: border-box; }
+  .band.odd { background: #7a828e66; } .band:hover { outline: 1px solid var(--acc); z-index: 3; } .band.cur { background: var(--acc); color: #fff; z-index: 2; }
+  .banner { background: #fff3bf; color: #5f3b00; padding: 3px 8px; margin: -4px -10px 4px; border-bottom: 1px solid #e6c200; } .banner button { margin-left: 8px; font-size: 11px; }
+  #evlabel, #bandlabel { width: 270px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #bands2 { display: flex; height: 8px; margin-top: 2px; } #bands2 .cell { flex: 1; background: #7a828e33; cursor: pointer; } #bands2 .cell.odd { background: #7a828e66; } #bands2 .cell:hover { outline: 1px solid var(--acc); } #bands2 .cell.cur { background: var(--acc); }
+  #bandcursor { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #f08c00; z-index: 4; pointer-events: none; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: center; justify-content: center; } .modal[hidden] { display: none; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; width: min(820px, 94vw); max-height: 90vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+  .card h2 { margin: 0 0 8px; font-size: 16px; display: flex; } .card h3 { margin: 12px 0 4px; font-size: 13px; } .card p { margin: 3px 0; } .x { margin-left: auto; font-size: 16px; line-height: 1; }
+  .rec { display: grid; grid-template-columns: auto 1fr auto auto; gap: 2px 10px; align-items: center; padding: 3px 4px; border-radius: 4px; } .rec:hover { background: var(--code); } .rec .meta { grid-column: 2 / 5; font-size: 11px; color: var(--dim); margin-bottom: 2px; }
+  button.primary { background: var(--acc); color: #fff; border-color: var(--acc); } button:disabled { opacity: .5; cursor: default; }
+  #drop { margin-top: 10px; padding: 10px; border: 2px dashed var(--line); border-radius: 6px; text-align: center; } body.dragging #drop { border-color: var(--acc); background: var(--code); } .lnk { color: var(--acc); cursor: pointer; text-decoration: underline; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; } .recbar { margin-top: 6px; }
+  #legend-kinds { padding: 2px 10px; font-size: 11px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 2px 10px; } #legend-kinds i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+  #srcpane { border-top: 1px solid var(--line); font-size: 12px; } #srcpane summary { padding: 3px 10px; cursor: pointer; } #srcpane[hidden] { display: none; } #srctext { max-height: 220px; overflow: auto; padding: 4px 10px; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.45; }
+  .sn { background: #2f9e4433; border-bottom: 1px solid var(--newu); } .ss { background: #1c7ed644; outline: 1px solid var(--sel); } .sc { box-shadow: inset 0 -2px var(--cur); } #srctext span { cursor: text; }
+  .t-kw { color: #c2255c; font-weight: 600; } .t-str { color: #2b8a3e; } .t-num { color: #e67700; } .t-com { color: var(--dim); font-style: italic; }
+  @media (prefers-color-scheme: dark) { .t-kw { color: #f783ac; } .t-str { color: #8ce99a; } .t-num { color: #ffa94d; } }
+  .n.syn { font-style: italic; } .n.syn:not(.new) { background: repeating-linear-gradient(135deg, transparent 0 4px, #7a828e22 4px 6px); }
+  #text { --kc: #7a828e; } .n { --kc: #7a828e; } .n.hov { outline: 1.5px solid var(--kc); } .bykind .n { border-bottom: 2px solid var(--kc); }
+  .k-DefDef { --kc: #1c7ed6; } .k-ValDef { --kc: #4263eb; } .k-ClassDef, .k-ModuleDef, .k-TypeDef { --kc: #7048e8; } .k-Apply { --kc: #e8590c; } .k-TypeApply { --kc: #d6336c; } .k-Select, .k-Ident { --kc: #2f9e44; } .k-TypeTree, .k-AppliedTypeTree, .k-Bind { --kc: #0c8599; } .k-Literal { --kc: #e67700; } .k-Block, .k-If, .k-Match, .k-CaseDef, .k-Closure { --kc: #868e96; } .k-PackageDef, .k-Template { --kc: #495057; }
+  .chip2 { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; margin-right: 3px; border: 1px solid var(--line); text-decoration: none; color: var(--fg); }
+  .chip2.cs { border-color: var(--newu); background: var(--new); } .chip2.cr { border-color: #1c7ed6; } .chip2.cb { border-color: #868e96; } .chip2.cc { border-style: dotted; color: var(--dim); } .chip2.cm { border-color: #c92a2a; color: #c92a2a; cursor: pointer; }
+  .n.nc-struct { border-bottom: 2px solid var(--newu); } .n.nc-struct.top { background: var(--new); } .n.nc-retype { border-bottom: 2px dotted #1c7ed6; } .n.nc-rebuilt { border-bottom: 1px dotted #868e96; } .n.nc-copy { border-bottom: 1px dotted #ced4da; }
+  #removed { border-bottom: 1px solid var(--line); font-size: 12px; } #removed summary { padding: 2px 10px; cursor: pointer; color: #c92a2a; } #remlist { max-height: 130px; overflow: auto; padding: 0 10px 4px; } #remlist pre { margin: 1px 0; }
+  .lk { cursor: pointer; } .lk:hover { outline: 1px solid var(--acc); } .crumb { cursor: pointer; padding: 0 3px; border-radius: 3px; font-size: 11px; } .crumb:hover { background: var(--code); } .crumb.on { font-weight: 700; color: var(--acc); } #crumbs { padding: 3px 10px 0; border-top: 1px solid var(--line); }
+  #evfilter { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 11px; flex-wrap: wrap; } #evfilter select, #evfilter input[type=search] { font-size: 11px; } #evtabs { display: flex; gap: 4px; padding: 0 8px; } #evtabs:not(:empty) { padding: 3px 8px; border-bottom: 1px solid var(--line); }
+  .chipbtn { background: #c92a2a22; border-color: #c92a2a; color: #c92a2a; font-size: 11px; padding: 0 8px; border-radius: 9px; text-transform: none; letter-spacing: 0; }
+  .evh { white-space: normal; word-break: break-word; } .rmsg { white-space: pre-wrap; margin: 2px 0 2px 62px; color: var(--fg); font-size: 12px; } .kids.flat { margin-left: 0; padding-left: 0; border-left: none; } .flatrow { cursor: pointer; }
+  .tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; z-index: 3; pointer-events: none; } .tick.rep { background: #c92a2a; } .tick.fail { background: #f59f00; top: 8px; }
+  #gmatches { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 8px; } #gmatches:not(:empty) { padding: 3px 8px; } #gmatches button { font-size: 11px; padding: 0 6px; }
+  #neigh { max-height: 30%; overflow: auto; border-top: 1px solid var(--line); padding: 2px 8px; font-size: 11px; } .ntab { border-collapse: collapse; width: 100%; } .ntab th { text-align: left; color: var(--dim); font-weight: 500; } .ntab td { padding: 0 6px 0 0; } .ntab tr[data-i] { cursor: pointer; } .ntab tr[data-i]:hover { background: var(--code); }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: calc(var(--cl, 50) * 1% - 4px) 8px minmax(0, 1fr); grid-template-rows: calc(var(--rt, 48) * 1% - 4px) 8px minmax(0, 1fr); padding: 8px; }
+  #scrub { grid-column: 1; grid-row: 1 / 4; } #insp { grid-column: 3; grid-row: 1; } #proj { grid-column: 3; grid-row: 3; }
+  .split { background: transparent; border-radius: 3px; } .split:hover, .split.drag { background: var(--acc); opacity: .5; } #hs { grid-column: 2; grid-row: 1 / 4; cursor: col-resize; } #vs { grid-column: 3; grid-row: 2; cursor: row-resize; }
+  main.max-scrub, main.max-insp, main.max-proj, main.single { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); } main.max-scrub .split, main.max-insp .split, main.max-proj .split, main.single .split { display: none; }
+  main.max-scrub #scrub, main.max-insp #insp, main.max-proj #proj, main.single #scrub { grid-column: 1; grid-row: 1; } main.max-scrub #insp, main.max-scrub #proj, main.max-insp #scrub, main.max-insp #proj, main.max-proj #scrub, main.max-proj #insp, main.single #insp, main.single #proj { display: none; }
+  #viewtabs { display: inline-flex; gap: 0; } #viewtabs button { border-radius: 0; margin-left: -1px; } #viewtabs button:first-child { border-radius: 4px 0 0 4px; } #viewtabs button:last-child { border-radius: 0 4px 4px 0; } .gc { white-space: nowrap; }
+  #insp .body, #scrub .body { font-size: 12px; }
+  #panes { display: flex; flex: 1; min-height: 0; } #panes > .body { flex: 1; min-width: 0; } #bcbody { border-left: 2px solid var(--line); } #bcinfo { padding: 2px 0 4px; font-size: 11px; position: sticky; top: 0; background: var(--panel); z-index: 2; } #bctext { white-space: pre; font-size: 12px; line-height: 1.5; }
+  .t-op { color: #1c7ed6; font-weight: 600; } .t-lbl { color: #868e96; } .t-desc { color: #0c8599; } @media (prefers-color-scheme: dark) { .t-op { color: #74c0fc; } .t-desc { color: #66d9e8; } }
+  .n.k-InsnRange { --kc: #1c7ed6; } .n.k-MethodNode { --kc: #e8590c; } .n.k-ClassNode { --kc: #7048e8; } .n.k-FieldNode { --kc: #2f9e44; }
+  .n.ir-rw { border-bottom: 2px solid var(--newu); background: var(--new); } .n.ir-inl { border-bottom: 2px solid #7048e8; background: #7048e822; } .n.ir-cp { border-bottom: 1px dotted #ced4da; }
+  .n.lnk { outline: 2px dashed #f08c00; outline-offset: -1px; background: rgba(240,140,0,.14); } .n.lnkh { outline: 2px solid #f08c00; background: rgba(240,140,0,.35); }
+  .chip2.ci { border-color: #7048e8; } .lk-tree, .lk-ir, .lk-sel { cursor: pointer; color: var(--acc); } a.lk-ir, a.lk-sel { text-decoration: underline; }
+  #mpanel { border-top: 1px solid var(--line); font-size: 12px; max-height: 38%; overflow: auto; } #mpanel summary { padding: 3px 10px; cursor: pointer; } #mpbody { padding: 0 10px 6px; } .mp-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; } .mp-bar select { max-width: 300px; font-size: 11px; }
+  .df { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; white-space: pre; overflow-x: auto; background: var(--code); border-radius: 4px; padding: 2px 6px; margin: 3px 0; } .df-add { color: #2b8a3e; background: #2f9e4422; } .df-del { color: #c92a2a; background: #c92a2a18; } .df-same { color: var(--dim); } .df-gap { color: var(--dim); text-align: center; }
+  #text { position: relative; } .ln { min-height: 1.55em; } #text.virt .ln { min-height: 18px; } .ln.ghost { position: absolute; left: 0; right: 0; pointer-events: none; text-decoration: line-through; color: #c92a2a; background: #c92a2a14; z-index: 1; } .ln.ghost * { background: none !important; color: inherit !important; }
+  #animctl { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; } #animctl select { font-size: 11px; }
+  #zoombar { font-size: 11px; padding: 0 2px 2px; } #zoombar a { color: var(--acc); cursor: pointer; text-decoration: underline; } #bands.zoomed { background: var(--code); } #bands.zoomed .band { background: #7a828e22; cursor: crosshair; font-size: 11px; }
+  .etick { position: absolute; bottom: 0; width: 2px; height: 55%; z-index: 3; pointer-events: none; opacity: .85; }
+  header { gap: 8px; } .grow { flex: 1; } .recname { font-weight: 600; max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pop { position: fixed; top: 38px; right: 8px; z-index: 15; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 8px 12px; width: 340px; max-height: 80vh; overflow: auto; } .pop[hidden] { display: none; } .pgrp { display: flex; flex-direction: column; gap: 3px; padding: 5px 0; border-bottom: 1px solid var(--line); } .pgrp:last-child { border-bottom: 0; } .pgrp > b { font-size: 11px; text-transform: uppercase; color: var(--dim); letter-spacing: .04em; } .pgrp label { display: flex; gap: 6px; align-items: center; }
+  footer#foot { padding: 2px 12px; font-size: 11px; border-top: 1px solid var(--line); background: var(--panel); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #heat { position: relative; height: 5px; margin-top: 1px; } .hc { position: absolute; top: 0; bottom: 0; } .hc.star { box-shadow: 0 0 0 1px #f08c00 inset; }
+  .band.star::after { content: '★'; position: absolute; top: -1px; right: 1px; font-size: 9px; color: #f08c00; }
+  .popwide { right: auto; left: 50%; transform: translateX(-50%); width: min(720px, 94vw); } .phhead { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; } .phhead .x { margin-left: auto; }
+  table.phtab { border-collapse: collapse; width: 100%; font-size: 12px; } table.phtab th { text-align: left; cursor: pointer; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); padding: 2px 6px; } table.phtab th.sorted { color: var(--acc); } table.phtab td { padding: 1px 6px; } table.phtab tr[data-i] { cursor: pointer; } table.phtab tr[data-i]:hover { background: var(--code); } table.phtab tr.star td:nth-child(2) { color: #e67700; font-weight: 600; } table.phtab tr.cur { background: rgba(28,126,214,.15); } .bar { display: inline-block; height: 8px; background: #d6336c; border-radius: 2px; vertical-align: middle; }
+  #work { flex: 1; min-height: 0; display: flex; } #work > main { flex: 1; min-width: 0; } #explorer { flex: none; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 8px 8px; min-height: 0; overflow: hidden; } #explorer[hidden], #exsplit[hidden] { display: none; }
+  #exsplit { flex: none; width: 8px; cursor: col-resize; margin: 8px 0; } .exhead { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12px; } .exhead input { flex: 1; min-width: 0; font-size: 11px; } .exhead .x { margin-left: 0; } .exmulti { display: flex; gap: 6px; padding: 2px 8px; font-size: 11px; } .exmulti:empty { display: none; }
+  #exptree { overflow: auto; flex: 1; font-size: 12px; } .xr { display: flex; align-items: center; gap: 4px; padding: 1px 6px; cursor: pointer; white-space: nowrap; } .xr:hover { background: var(--code); } .xr.cur { background: rgba(28,126,214,.16); } .xr .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; } .xr .tg { width: 10px; color: var(--dim); } .xr .kd { color: var(--dim); font-size: 10px; } .xr.sub { color: var(--dim); font-size: 10px; text-transform: uppercase; cursor: default; } .xr .mc { margin: 0; } .cnt { font-size: 10px; display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; } .cnt .cb { display: inline-block; height: 6px; background: #d6336c; border-radius: 2px; } button.on { background: var(--acc); color: #fff; border-color: var(--acc); }
+  #multi { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 6px; padding: 6px; } #multi[hidden] { display: none; } #multi.stack { grid-auto-rows: minmax(260px, 340px); } #multi.wide { grid-auto-rows: 100%; } .mpane { display: flex; flex-direction: column; min-height: 0; min-width: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; } .mphead { position: sticky; top: 0; display: flex; gap: 6px; align-items: center; padding: 3px 8px; background: var(--code); border-bottom: 1px solid var(--line); font-size: 12px; z-index: 2; } .mphead .x { margin-left: auto; } .mpbody2 { flex: 1; overflow: auto; padding: 4px 8px; white-space: pre; font-size: 12px; line-height: 1.5; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  #proj h2 .gt { text-transform: none; letter-spacing: 0; color: var(--fg); font-weight: 600; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #gtabs { display: flex; gap: 4px; padding: 4px 8px 0; } #gtabs button.on { background: var(--acc); color: #fff; border-color: var(--acc); font-size: 11px; } #gtabs button { font-size: 11px; padding: 0 8px; }
+  #gsum { padding: 4px 8px; font-size: 12px; border-bottom: 1px solid var(--line); } #neigh { flex: 1; min-height: 60px; max-height: none; overflow: auto; border-top: 0; } .kchip { display: inline-block; border: 1px solid; border-radius: 9px; padding: 0 6px; font-size: 10.5px; } .wbar { display: inline-block; height: 5px; background: #7a828e; border-radius: 2px; margin-left: 4px; vertical-align: middle; } .spark { vertical-align: middle; } .ntab td { padding: 1px 8px 1px 0; vertical-align: middle; }
+  #gdet { border-top: 1px solid var(--line); } #gdet summary { padding: 3px 10px; cursor: pointer; font-size: 12px; } #gdet[open] #graph { height: 280px; } .gctl { display: flex; gap: 8px; align-items: center; padding: 0 8px; font-size: 11px; } #gdet:not([open]) { flex: none; }
+  #panes[hidden] { display: none; }
+  .wordmark { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 17px; letter-spacing: .02em; color: var(--acc); padding-right: 4px; } .wordmark.big { font-size: 26px; } .tagline { margin: 0 0 8px; color: var(--dim); font-style: italic; } #aboutbody h3 { margin: 10px 0 3px; } #aboutbody pre { background: var(--code); padding: 4px 8px; border-radius: 4px; overflow: auto; } #aboutbody li { margin: 2px 0; }
+  kbd { background: var(--code); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="wordmark" title="Greffier: the clerk's record of a Scala 3 compile">Greffier</span>
+  <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button>
+  <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button></span>
+  <button id="btn-exp" title="show or hide the project explorer (x)">☰ explorer</button>
+  <button id="btn-phtab" title="phases ranked by how much they changed (p)">▦ phases</button>
+  <span class="grow"></span>
+  <button id="btn-opts" aria-haspopup="true" title="view options">⚙ view options</button> <button id="btn-about" title="what this is">about</button> <button id="btn-help" title="keys and help (?)">?</button>
+</header>
+<div id="opts" class="pop" hidden>
+  <div class="pgrp"><b>Recording</b>
+    <label>unit <select id="unit"></select></label> <label id="clslabel" hidden>class <select id="clsel" hidden></select></label>
+    <span><button id="btn-link" title="copy a deep link to the current state">copy link</button> <button id="btn-recs2" title="open the recordings panel">recordings…</button></span></div>
+  <div class="pgrp"><b>Tree</b>
+    <label title="only structural changes (rewrite / synthetic) are highlighted; retyped, rebuilt and copy nodes are not"><input type="checkbox" id="structonly"> structural only</label>
+    <label title="light syntax colouring of the printed tree"><input type="checkbox" id="syntax" checked> syntax</label>
+    <label title="colour node spans by kind (DefDef, Apply, TypeApply, Select/Ident, TypeTree, Literal)"><input type="checkbox" id="bykind"> colour by kind</label>
+    <label title="Retyped events (erasure/inlining re-typing) are hidden by default"><input type="checkbox" id="retyped"> show Retyped events</label>
+    <label title="drop versions that add no new nodes from the slider"><input type="checkbox" id="skip"> skip no-op versions</label>
+    <label title="hide new-node highlighting for nodes equal to their derive source (same kind/name/sym/span/type, children identical or pure copies)"><input type="checkbox" id="collapse"> collapse pure copies</label></div>
+  <div class="pgrp"><b>Timeline</b>
+    <label><input type="checkbox" id="follow" checked> cursor drives phase</label>
+    <label title="phase bands proportional to wall time when PhaseBegin/PhaseEnd carry a timestamp (ev.ts or ns)"><input type="checkbox" id="bytime" checked> bands by time</label></div>
+  <div class="pgrp"><b>Bytecode</b>
+    <label title="show the generated bytecode beside the final tree phase, linked by hover and selection" hidden><input type="checkbox" id="splitbc"> bytecode beside tree</label></div>
+  <div class="pgrp"><b>Motion</b>
+    <span id="animctl"><button id="replay" title="play the last transition again (r)">⟲ replay</button><label title="animate steps between adjacent versions (off automatically with prefers-reduced-motion)"><input type="checkbox" id="animon" checked> animate</label><select id="animspeed" aria-label="animation speed"><option value="1">1×</option><option value="4">0.25×</option></select></span></div>
+  <div class="pgrp"><b>Interesting phases</b> <label>metric <select id="metric" aria-label="change metric"><option value="struct">structural nodes</option><option value="removed">removed nodes</option><option value="retype">retyped nodes</option><option value="lines">changed lines</option><option value="total">all changes</option></select></label></div>
+</div>
+<div id="warnings" hidden></div>
+<div id="cursorbar">
+  <span>event axis</span><div style="display:flex;gap:10px;align-items:center"><input type="range" id="evslider" aria-label="event axis (seq cursor)" min="0" max="0" value="0"><span id="evlabel" class="dim" ></span></div>
+  <span class="dim" title="phase bands: PhaseBegin..PhaseEnd, same scale as the event slider">phases</span><div style="display:flex;gap:10px;align-items:center"><div style="flex:1;margin:0 4px"><div id="zoombar" hidden></div><div id="bands"></div><div id="heat" title="change per phase (metric from the view options); starred = most interesting (keys i / I)"></div><div id="bands2" title="every phase, equal width"></div></div><span id="bandlabel" class="dim" ></span></div>
+  <span>phase axis</span><div style="display:flex;gap:10px;align-items:center"><input type="range" id="phslider" aria-label="phase axis" min="0" max="0" value="0" style="max-width:220px"><span id="phases"></span><button id="phstart" title="move the event cursor to the start of the selected phase (shift-click on a band does the same)">⇤ start</button><button id="zoom" hidden>⤢ zoom phase</button></div>
+</div>
+<div id="work">
+<aside id="explorer"><div class="exhead"><b>Explorer</b><input id="expfilter" type="search" placeholder="filter units" aria-label="filter units"><button id="expclose" class="x" title="hide (x)">×</button></div><div class="exmulti"><button id="expmulti" hidden></button><button id="expclear" title="clear the selection">clear</button></div><div id="exptree"></div></aside><div id="exsplit" class="split" title="drag to resize"></div>
+<main>
+  <div id="hs" class="split" title="drag to resize"></div><div id="vs" class="split" title="drag to resize"></div>
+  <section id="scrub"><h2>Phase scrubber</h2><div id="verinfo"></div><details id="removed" hidden><summary id="remsum"></summary><div id="remlist"></div></details><div id="legend-kinds"></div><div id="panes"><div class="body"><div id="text"></div></div><div class="body" id="bcbody" hidden><div id="bcinfo" class="dim"></div><div id="bctext"></div></div></div><div id="multi" hidden></div><details id="mpanel" open hidden><summary>method steps (optimiser, per method)</summary><div id="mpbody"></div></details><details id="srcpane"><summary>source <span class="dim" id="srcinfo"></span></summary><div id="srctext"></div></details><div id="crumbs"></div><div id="nodeinfo"></div></section>
+  <section id="insp"><h2>Event inspector <button id="repchip" class="chipbtn" hidden title="jump to the next Report (diagnostic)">Reports</button><span class="r" id="evtitle"></span></h2><div id="evfilter"><select id="evkind" aria-label="event kind filter"></select><input id="evtext" type="search" placeholder="symbol / name / message" aria-label="event text filter" size="18"><select id="evunit" aria-label="event unit filter"></select><label><input type="checkbox" id="evprob"> problems only</label><button id="evclear" hidden>clear</button></div><div id="evtabs"></div><div id="stack"></div><div class="body" id="evtree"></div></section>
+  <section id="proj"><h2>Dependencies <span id="gtitle" class="gt"></span> <label class="gc">scope <select id="gscope"><option value="ego">this unit</option><option value="all">whole project</option></select></label><select id="ghops" class="gc" aria-label="hops"><option value="1">1 hop</option><option value="2">2 hops</option></select><span class="r" id="graphinfo"></span></h2>
+<div id="gtabs"></div><div id="gsum"></div><div id="neigh"></div>
+<details id="gdet"><summary>graph of this neighbourhood <span class="dim">(secondary: a layout of the same edges; collapsed by default)</span></summary><div class="gctl"><label class="gc">level <select id="level"><option value="class">class</option><option value="file">file / package</option></select></label><label class="gc">min weight <input type="number" id="minw" value="1" min="1" style="width:46px"></label><input id="gsearch" type="search" placeholder="find class / file" size="12" aria-label="find a node in the graph"><input type="checkbox" id="gfocus" hidden></div><div id="gmatches"></div><div id="graph"></div><div id="legend"></div></details></section>
+</main>
+</div>
+<footer id="foot"><span id="loadinfo" class="dim"></span> <span id="perf" class="dim"></span></footer>
+<div id="tip" hidden></div>
+<div id="recs" class="modal" hidden><div class="card">
+  <h2><span class="wordmark big">Greffier</span> <button class="x" data-close="recs">×</button></h2>
+  <p class="tagline">the clerk's record of a Scala 3 compile: every phase, every decision, replayable</p>
+  <div class="what">
+    <p><b>What this is.</b> A recording of one <code>dotc</code> run, replayed in linked views with one shared cursor (the event axis and the phase bands under it).</p>
+    <p><b>Explorer</b> (left): units, their classes and members, with how much the current phase changed each of them (and in total); tick several to show them together.</p>
+    <p><b>Phase scrubber</b> (middle): the printed tree after each phase (source text for the parser), nodes that changed are underlined by kind of change; hover shows where a node came from. With JVM bytecode in the recording the phase list continues into the optimiser's passes.</p>
+    <p><b>Event inspector</b> (top right): the typer's decisions (typing, adaptation, implicit search with candidates, completions) for the selected node, with filters and a Reports chip.</p>
+    <p><b>Dependencies</b> (bottom right): what the selected unit depends on, as a table of neighbours by kind with weights and a sparkline of when each edge was established, plus a summary of what it pulled in; the graph of the neighbourhood is collapsed under it.</p>
+    <p><b>Phases table</b> (▦ in the header) ranks phases by how much they changed; <kbd>i</kbd> / <kbd>I</kbd> jump between the most interesting ones. View options (⚙) holds the toggles; <kbd>?</kbd> lists the keys.</p>
+  </div>
+  <h3>Recordings</h3>
+  <div id="reclist"><span class="dim">loading list…</span></div>
+  <div class="recbar">
+    <button id="rec-load" class="primary" disabled>Load selected</button> <span class="dim" id="rec-hint">tick several to merge them into one recording</span>
+  </div>
+  <div id="drop">Drop one or many <code>.jsonl</code> files anywhere on this page
+    <span class="dim">· or <label class="lnk">choose files<input type="file" id="file" multiple accept=".jsonl,.json,.ndjson,.txt" hidden></label> · <label class="lnk">choose a folder<input type="file" id="dir" webkitdirectory hidden></label></span></div>
+  <div id="cheat"></div>
+</div></div>
+<div id="phtab" class="pop popwide" hidden><div class="phhead"><b id="phtitle">Phases</b> <label>metric <select id="metric2" aria-label="change metric"></select></label><button class="x" data-close="phtab">×</button></div><div id="phbody"></div></div>
+<div id="about" class="modal" hidden><div class="card"><h2><span class="wordmark big">Greffier</span> <button class="x" data-close="about">×</button></h2><p class="tagline">the clerk's record of a Scala 3 compile: every phase, every decision, replayable</p><div id="aboutbody"></div></div></div>
+<div id="help" class="modal" hidden><div class="card"><h2>Keys <button class="x" data-close="help">×</button></h2><div id="cheat2"></div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="fixture.js"></script>
+<script src="js/loader.js"></script>
+<script src="js/app.js"></script>
+<script src="js/scrubber.js"></script>
+<script src="js/ir.js"></script>
+<script src="js/scores.js"></script>
+<script src="js/explorer.js"></script>
+<script src="js/multi.js"></script>
+<script src="js/inspector.js"></script>
+<script src="js/deps.js"></script>
+<script src="js/graph.js"></script>
+</body>
+</html>
