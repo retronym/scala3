@@ -9,7 +9,7 @@ The corpus is selected by measurement rather than by hand: every candidate is co
 - `harness.py` — everything: measuring, selection, materialising, compiling, diffing, reporting.
 - `driver/CoverageDriver.java` — runs many compilation jobs in one warm JVM and dumps per-job JaCoCo data. Calls the compiler reflectively, so it works with any Scala 3 release.
 - `pools.txt` — the vulpix test directories used as the candidate pool, with the options `CompilationTests` uses for each.
-- `cases/` — the materialised corpus. `cases/synthetic/` holds hand-written cases; the rest are copies of selected vulpix tests (copied, so the corpus stays stable as `tests/` changes).
+- `cases/` — the materialised corpus. The hand-written cases are in `cases/synthetic/`: `env/` for compilation setups the vulpix tests lack (a Scala 2 library on the classpath, pipelining against outline TASTy, `-sourcepath`, a compiler plugin, Scala.js interop), `lang/` for language features from the spec and SIPs, and `backend/` for bytecode shapes (nesting, boxing, Unit, traits, closures, switches, Java-facing signatures, Java/Scala bridges). The rest are copies of selected vulpix tests, copied so the corpus stays stable as `tests/` changes.
 - `manifest.txt` — `<case under cases/> <variant> [-- <pool options>]`, one compilation job per line.
 - `.work/` (ignored) — toolchain caches, campaign results, reports.
 
@@ -27,7 +27,7 @@ Directives in a case's files:
 
 ## Variants
 
-A variant is an option set layered on top of the case's own options (see `VARIANTS` in `harness.py`): `base`, `check` (`-Ycheck:all`), `lint` (`-Wall -Wsafe-init …`), `pickler` (`-Ytest-pickler`), `opt` (`-opt -opt-inline:**`), `print` (`-Vprint:all …`), `sbt-dump`, `docs`, `profile`, `jar`, `from-tasty`, `print-tasty`, `rewrite-*`, and others. Set cover chooses (case, variant) pairs, so a case can appear under several variants.
+A variant is an option set layered on top of the case's own options (see `VARIANTS` in `harness.py`): `base`, `check` (`-Ycheck:all`), `lint` (`-Wall -Wsafe-init …`), `pickler` (`-Ytest-pickler`), `opt` (`-opt -opt-inline:**`), `scalajs` (`-scalajs` with the Scala.js library on the classpath), `print` (`-Vprint:all …`), `sbt-dump`, `docs`, `profile`, `jar`, `from-tasty`, `print-tasty`, `decompile`, `rewrite-*`, and others. Variants that make the compiler write next to the sources (`sbt-dump`, `rewrite-*`) compile copies. Set cover chooses (case, variant) pairs, so a case can appear under several variants.
 
 ## Workflow
 
@@ -35,8 +35,9 @@ Use an explicit JDK (17), and a built compiler (`--compiler local` exports the n
 
 ```bash
 python3 coverage-corpus/harness.py measure vulpix --pool @pools.txt --variants base check lint
-python3 coverage-corpus/harness.py measure syn --pool cases/synthetic cases/synthetic/lang --variants base check lint
-python3 coverage-corpus/harness.py select vulpix syn --out .work/sel.txt
+python3 coverage-corpus/harness.py measure syn --pool cases/synthetic/env cases/synthetic/lang cases/synthetic/backend --variants base check lint opt sbt-dump
+python3 coverage-corpus/harness.py measure more --pool @pools.txt --cases-from .work/cases.txt --variants scalajs profile decompile
+python3 coverage-corpus/harness.py select vulpix syn more --out .work/sel.txt --max-lines 20000
 python3 coverage-corpus/harness.py curve .work/sel.txt vulpix syn --out .work/curve
 python3 coverage-corpus/harness.py materialize .work/sel.txt
 python3 coverage-corpus/harness.py corpus-measure
@@ -44,7 +45,7 @@ python3 coverage-corpus/harness.py report corpus --html
 python3 coverage-corpus/harness.py gaps --report latest --filter typer
 ```
 
-`select` takes `--min-gain`, `--job-overhead` and `--ms-weight` to trade coverage for size; `curve` shows the trade-off (line coverage against cumulative corpus kLOC along the greedy order).
+`select` takes `--max-lines` (a source budget), `--min-gain`, `--job-overhead` and `--ms-weight` to trade coverage for size; `curve` shows the trade-off (line coverage against cumulative corpus kLOC along the greedy order).
 
 For writing new cases, keep a warm compiler running and send cases to it:
 
@@ -71,6 +72,6 @@ Workers are `nice`d and default to one fewer than the number of cores.
 
 ## Future work
 
-- A Scala.js variant (needs the Scala.js library classpath).
+- A run mode that executes the `@main` cases after compiling, to catch miscompiles as well as differences.
 - An option to disable MegaPhase fusion, for the unfused-vs-fused comparison.
 - Normalising known-benign differences in `diff` (e.g. source paths in TASTy).
