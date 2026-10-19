@@ -21,12 +21,12 @@ import dotty.tools.dotc.printing.XprintMode
 import dotty.tools.dotc.reporting.{Diagnostic, Reporter}
 import dotty.tools.dotc.transform.MegaPhase
 import dotty.tools.dotc.transform.MegaPhase.MiniPhase
-import dotty.tools.dotc.typer.TyperObserver
 import dotty.tools.dotc.typer.Implicits.{SearchResult, SearchSuccess, SearchFailure}
 import dotty.tools.dotc.util.SourceFile
 import dotty.tools.dotc.util.Spans.Span
 
-/** One per compiler run, installed as `ctx.base.observer` by `ReplayPlugin.init`. Writes schema v1
+/** One per compiler run, installed by `ReplayPlugin.init` (via `Install`: the fork's `ctx.base.observer`,
+ *  or the agent's `Hooks.observer`). Writes schema v1
  *  (see `../SCHEMA-v1.md`).
  *
  *  One arena (tree identity -> dense id) serves both the typer event hooks and the per-phase walks
@@ -37,7 +37,7 @@ import dotty.tools.dotc.util.Spans.Span
  *  symbol names, messages, `tree.symbol`) waits for the end of the phase, when the buffered
  *  records are written: definitions first (sym, type, node), then `ev` lines in seq order.
  */
-final class Recorder(outPath: String, groupName: Map[Phase, String], options: List[String]) extends TyperObserver:
+final class Recorder(outPath: String, groupName: Map[Phase, String], options: List[String]) extends Observer:
   private val withSyms = !options.contains("nosyms")
   private val withText = !options.contains("notext")
   private val withDerive = !options.contains("noderive")
@@ -149,7 +149,7 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
         "deriveByHow" -> obj(deriveCount.toList.sortBy(_._1).map((k, v) => s"${k._1}/${k._2}" -> v)*),
         "jvm" -> (if jvm == null then null else obj(jvm.nn.stats*))))
       out.close()
-      if ctx.base.observer eq this then ctx.base.observer = null
+      Install.uninstall(this)
       if options.contains("timing") && jvm != null then
         System.err.println(f"[replay] jvm recording: ${jvm.nn.nanos / 1e6}%.0f ms")
       if check then
@@ -457,7 +457,7 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
       val u = if pos.exists then unitOf.getOrElse(pos.source, -1) else -1
       addEv(Ev(allocSeq(), parent, "Report", runningId, u, span, Array(), Nil, dia, reporter.getClass.getSimpleName))
 
-  override def copied(tree: Tree[?], copy: Tree[?])(using Context): Unit =
+  override def copied(tree: Tree[?], copy: Tree[?]): Unit =
     if suspended == 0 then copiedFrom.put(copy, tree)
 
   // ---- JVM backend hooks (see JvmRecorder) --------------------------------------------------
@@ -507,6 +507,13 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
     emit(obj((std ++ fields.filterNot((k, _) => stdKeys(k)))*))
     nodesWritten += 1
     id
+
+  /** Agent only (the fork has no such hook). Not an enter/exit pair: a leaf under the current event. */
+  override def rejected(ref: TermRef, reason: String)(using Context): Unit =
+    if !active then perturbations += (if suspended > 0 then 1 else 0)
+    else
+      addEv(Ev(allocSeq(), parent, "Rejected", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(), List(ref.symbol),
+        s"""{"ref":${typeId(ref)},"reason":${jstr(reason)}}"""))
 
   // ---- versions -------------------------------------------------------------------------------
 

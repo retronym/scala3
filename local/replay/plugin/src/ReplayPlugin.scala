@@ -17,7 +17,9 @@ import dotty.tools.dotc.CompilationUnit
  *   - `check`       verify offsets against each node's own `show`
  *   - `showplan`    print the resulting phase plan to stderr
  *
- *  The recorder is installed as `ctx.base.observer` here, in `init`, which runs once per Run before
+ *   - `selfattach=<replay-agent.jar>[;<agent opts>]`  agent build only: attach the hook agent from here
+ *
+ *  The recorder is installed here (`Install`: fork or agent delivery), in `init`, which runs once per Run before
  *  any phase, so typer events from the first phase on share the arena with the Record phases.
  */
 class ReplayPlugin extends ResearchPlugin:
@@ -56,7 +58,7 @@ class ReplayPlugin extends ResearchPlugin:
             dotty.tools.dotc.report.warning("replay-record: JVM recording needs -Ybackend-parallelism:1, skipping it")
             List("nojvm")
         val rec = Recorder(out, groupName, options ++ jvmOpts)
-        ctx.base.observer = rec
+        Install.install(rec, options)
         val n = groups.length
         groups.zipWithIndex.flatMap((g, i) => List(g, List(RecordPhase(rec, g, i == n - 1))))
     // -Vphases prints `new Compiler().phases`, ignoring plugins, so print the plan we hand back.
