@@ -49,7 +49,17 @@ public interface IncrementalCallback {
     return false;
   }
 
-  /** How to report class APIs: `TREE` unless Zinc implements `xsbti.AnalysisCallback5`. */
+  /**
+   * Whether Zinc composes the hashes of inherited members from each ancestor's own (Merkle
+   * hashing, `xsbti.AnalysisCallback5.merkleHashing`). If so, a class's API leaves out what it
+   * inherits from classes Zinc analyses, and `apiMode` says how to report it. Otherwise the API
+   * includes every inherited member and is reported in full.
+   */
+  default boolean merkleHashing() {
+    return false;
+  }
+
+  /** How to report class APIs under `merkleHashing`: `TREE` unless Zinc implements `xsbti.AnalysisCallback5`. */
   default ApiMode apiMode() {
     return ApiMode.TREE;
   }

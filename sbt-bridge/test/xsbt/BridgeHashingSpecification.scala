@@ -171,6 +171,21 @@ class BridgeHashingSpecification {
     assertEquals(List("A"), tree.apis.values.flatten.map(_.name).toList)
   }
 
+  /** Under name hashing every inherited member is in the API, and the full API is sent whatever the mode. */
+  @Test def nameHashingMaterialisesInheritedMembers(): Unit = {
+    def inherited(merkle: Boolean) = {
+      val cb = new TestCallback5(ApiMode.HASHES, optimizedSealed = false, merkle = merkle)
+      new ScalaCompilerForUnitTesting().compileSrcs(List(List("class A { def f = 1 }", "class B extends A")), callback = Some(cb))
+      (cb.sent.isEmpty, cb.apis.values.flatten.find(_.name == "B").map(_.structure.inherited.map(_.name).toSet))
+    }
+    val (noneSent, Some(names)) = inherited(merkle = false): @unchecked
+    assertTrue(noneSent)
+    assertTrue(names.contains("f"))
+    val (merkleNoneSent, merkleFull) = inherited(merkle = true)
+    assertFalse(merkleNoneSent)
+    assertEquals(None, merkleFull)
+  }
+
   @Test def libraryMembersAsStubs(): Unit = {
     def inherited(materialise: Boolean) = {
       val cb = new TestCallback5(ApiMode.CHECK, optimizedSealed = false, materialise)
