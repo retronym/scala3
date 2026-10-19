@@ -10,6 +10,18 @@ export default {
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
 
+    // Stale deep link to a previous content hash: redirect to the current file for that base name.
+    const m = /^\/data\/(.+?)\.[0-9a-f]{8}\.jsonl$/.exec(url.pathname);
+    if (m) {
+      const idx = await env.ASSETS.fetch(new Request(new URL('/recordings.json', url)));
+      if (idx.ok) {
+        const base = m[1];
+        const hit = (await idx.json()).flatMap((r) => [r, ...(r.variants || [])])
+          .map((r) => r.url).find((u) => u && u.startsWith('data/' + base + '.'));
+        if (hit && '/' + hit !== url.pathname) return Response.redirect(new URL('/' + hit, url), 302);
+      }
+    }
+
     if (!env.RECORDINGS) return asset; // R2 not enabled on this account yet
     const key = decodeURIComponent(url.pathname.slice('/data/'.length));
     const head = request.method === 'HEAD';

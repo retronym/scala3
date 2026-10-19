@@ -9,7 +9,8 @@ SITE="$HERE/site"
 BUCKET=greffier-recordings
 ASSET_LIMIT=$((24 * 1024 * 1024))   # stay under the 25 MiB static-asset cap
 
-rm -rf "$SITE"; mkdir -p "$SITE/data"
+# keep previously published data files (content-hashed, immutable) so old deep links keep working
+mkdir -p "$SITE/data"; find "$SITE" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +
 cp "$UI/index.html" "$UI/fixture.js" "$UI/fixture.jsonl" "$SITE/"
 cp -R "$UI/js" "$SITE/js"
 [ -f "$UI/TOURS.md" ] && cp "$UI/TOURS.md" "$SITE/"
