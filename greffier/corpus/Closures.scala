@@ -16,3 +16,8 @@ object Closures:
   def partial: PartialFunction[Int, String] =
     case 0 => "zero"
     case n if n > 0 => "pos"
+
+  // Call sites with literal closures: under -opt the inliner inlines applyTwice/byName here
+  // and the closure optimiser then calls the lambda bodies directly.
+  def demo: Int = applyTwice(x => x * 2, 21)
+  def thunked: String = byName(true, "lazy " + "value")
