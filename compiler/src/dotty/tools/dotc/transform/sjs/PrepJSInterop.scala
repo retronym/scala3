@@ -173,6 +173,11 @@ class PrepJSInterop extends MacroTransform with IdentityDenotTransformer { thisP
           super.transform(tree)
 
         case tree: ValOrDefDef =>
+          // MoveStatics moves the field into the trait, but Scala.js interfaces cannot have fields
+          if tree.isInstanceOf[ValDef] && sym.hasAnnotation(defn.ScalaStaticAnnot)
+              && sym.owner.is(ModuleClass) && sym.owner.companionClass.is(Trait) then
+            report.error("Scala.js does not support @static fields in the companion object of a trait", tree)
+
           // Prepare exports
           val exports = genExport(sym)
           if (exports.nonEmpty) {
