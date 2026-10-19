@@ -3,12 +3,15 @@ package xsbti
 import scala.collection.mutable.ArrayBuffer
 import xsbti.api.ClassLike
 
-/** A `TestCallback` that asks the bridge to hash APIs itself, and records what it sends. */
-class TestCallback5(mode: AnalysisCallback5.ApiMode, optimizedSealed: Boolean, materialise: Boolean = true)
+/** A `TestCallback` that asks the bridge to hash APIs itself, and records what it sends.
+ *  Without `merkle` the bridge extracts for name hashing, and sends full APIs whatever `mode` says.
+ */
+class TestCallback5(mode: AnalysisCallback5.ApiMode, optimizedSealed: Boolean, materialise: Boolean = true, merkle: Boolean = true)
     extends TestCallback with AnalysisCallback5 {
   /** `(full, thin, hashes)` under `CHECK`; `full` is null under `HASHES`. */
   val sent = new ArrayBuffer[(ClassLike | Null, ClassLike, ClassHashes)]
 
+  override def merkleHashing(): Boolean = merkle
   override def apiMode(): AnalysisCallback5.ApiMode = mode
   override def useOptimizedSealed(): Boolean = optimizedSealed
   override def materialiseLibraryMembers(binaryClassName: String): Boolean = materialise

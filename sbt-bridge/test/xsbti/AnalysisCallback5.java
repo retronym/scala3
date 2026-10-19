@@ -10,6 +10,10 @@ import xsbti.api.ClassLike;
 public interface AnalysisCallback5 extends AnalysisCallback2 {
     enum ApiMode { TREE, HASHES, CHECK }
 
+    default boolean merkleHashing() {
+        return false;
+    }
+
     ApiMode apiMode();
 
     default boolean materialiseLibraryMembers(String binaryClassName) {
