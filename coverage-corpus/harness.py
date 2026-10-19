@@ -61,8 +61,25 @@ VARIANTS = {
     "rewrite-new": dict(opts=["-rewrite", "-new-syntax"], copy_sources=True),
     "rewrite-old": dict(opts=["-rewrite", "-old-syntax"], copy_sources=True),
     "rewrite-migration": dict(opts=["-rewrite", "-source", "3.4-migration"], copy_sources=True),
-    "debug": dict(opts=["-g:vars", "-Xcheck-macros", "-Ydebug-error", "-Ylog:all", "-Ydebug-type-error"]),
+    "debug": dict(opts=["-Ydebug", "-Ylog:all", "-Ydebug-flags", "-Ydebug-names", "-Ydebug-pos", "-Ycheck-mods",
+                        "-Ycheck-reentrant", "-Ydebug-missing-refs"]),
     "release11": dict(opts=["-release", "11"]),
+    "opt": dict(opts=["-opt", "-opt-inline:**", "-Wopt:all", "-Yopt-log-inline", "_"]),
+    "opt-everything": dict(opts=["-opt", "-opt-inline:**", "-Yopt-inline-heuristics:everything"]),
+    "profile": dict(opts=["-Yprofile-enabled", "-Yprofile-trace", "{tmp}/trace.json", "-Vprofile", "-Vprofile-details", "5",
+                          "-Ydetailed-stats", "-Yinstrument", "-Yinstrument-defs", "-verbose"]),
+    "docs": dict(opts=["-Xread-docs", "-Xcook-docs", "-Yretain-trees"]),
+    "sbt-dump": dict(opts=["-Yforce-sbt-phases", "-Ydump-sbt-inc", "-Xsemanticdb", "-semanticdb-text"]),
+    "jar": dict(opts=[], jar=True),
+    "parallel-backend": dict(opts=["-Ybackend-parallelism", "4"]),
+    "misc": dict(opts=["-Xno-forwarders", "-Yno-patmat-opt", "-Ycheck-all-patmat", "-Yno-suspended-units",
+                       "-Yretain-trees", "-Xno-generic-signatures"]),
+    "legacy-lazy": dict(opts=["-Ylegacy-lazy-vals", "-Ycheck-constraint-deps"]),
+    "recheck": dict(opts=["-Yrecheck-test"]),
+    "init-global": dict(opts=["-Ysafe-init-global"]),
+    "print-tasty": dict(opts=["-Yprint-tasty"], post="print-tasty"),
+    "print-plain": dict(opts=["-Vprint:all", "-Yplain-printer", "-Xprint-diff-del", "-Yprint-pos", "-Yshow-tree-ids",
+                              "-Yprint-debug-owners", "-Xprint-inline"]),
 }
 
 SOURCE_EXTS = (".scala", ".java")
@@ -161,6 +178,7 @@ class Case:
     scalac_opts: list = field(default_factory=list)
     javac_opts: list = field(default_factory=list)
     skip: str = ""
+    pool_opts: list = field(default_factory=list)  # options of the pool the case came from (cf. CompilationTests)
 
 
 DIRECTIVE = re.compile(r"^\s*//>\s*using\s+(options|javacOpt|javacOptions)\s+(.*)$")
@@ -192,7 +210,7 @@ def group_key(f: Path):
     return ordinal, compiler
 
 
-def make_case(path: Path, id: str):
+def make_case(path: Path, id: str, pool_opts=()):
     if path.is_file():
         files = [path]
         stages = [files]
@@ -209,15 +227,26 @@ def make_case(path: Path, id: str):
         if any(k[1] for k in groups):
             return Case(id, path, stages, skip="needs other compiler version")
     sopts, jopts = parse_directives(files)
-    c = Case(id, path, stages, sopts, jopts)
+    c = Case(id, path, stages, list(pool_opts) + sopts, jopts, pool_opts=list(pool_opts))
     if any(o.startswith(u) for o in sopts for u in UNSUPPORTED_OPTS):
         c.skip = "unsupported option"
     return c
 
 
 def discover(roots, base=REPO):
+    """roots: `path` or `path=<scalac options for every case in it>`"""
     cases = []
+    expanded = []
     for r in roots:
+        if r.startswith("@"):
+            expanded += [l.strip() for l in (HERE / r[1:]).read_text().splitlines() if l.strip() and not l.startswith("#")]
+        else:
+            expanded.append(r)
+    for r in expanded:
+        r, _, opts = r.partition("=")
+        if not Path(r).is_absolute() and not Path(r).exists():
+            r = REPO / r
+        opts = shlex.split(opts)
         r = Path(r).resolve()
         children = [r] if r.is_file() else sorted(r.iterdir())
         for p in children:
@@ -227,7 +256,7 @@ def discover(roots, base=REPO):
                 id = str(p.relative_to(base))
             except ValueError:
                 id = str(p)
-            c = make_case(p, id)
+            c = make_case(p, id, opts)
             if c and not c.skip:
                 cases.append(c)
     return cases
@@ -267,6 +296,10 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
                 mapping[f] = src / rel
         stages = [[mapping[f] for f in s] for s in stages]
     cp = ":".join(tc.library_cp + [str(classes)])
+    dest = str(classes)
+    if v.get("jar"):
+        # every stage writes its own jar; later stages see the earlier jars
+        jars = [tmp / f"stage{i}.jar" for i in range(len(stages))]
     steps = []
     for s in stages:
         s = list(s)
@@ -276,12 +309,18 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
             random.Random(order).shuffle(s)
         scala = [str(f) for f in s if "JAVA_ONLY" not in f.name]
         java = [str(f) for f in s if f.suffix == ".java" and "SCALA_ONLY" not in f.name]
-        args = ["-d", str(classes), "-classpath", cp, "-color:never", "-Wconf:any:s" if variant != "lint" else "-Wconf:any:w"]
+        if v.get("jar"):
+            i = len([k for k, _ in steps if k == "scalac"])
+            dest = str(jars[i])
+            cp = ":".join(tc.library_cp + [str(classes)] + [str(j) for j in jars[:i]])
+        args = ["-d", dest, "-classpath", cp, "-color:never", "-Wconf:any:s" if variant != "lint" else "-Wconf:any:w"]
         args += subst(v["opts"], tmp) + list(extra_opts) + case.scalac_opts + scala
         steps.append(("scalac", args))
         if java:
             steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8"] +
                           case.javac_opts + java))
+    if v.get("post") == "print-tasty":
+        steps.append(("scalac", ["-print-tasty", "-classpath", cp, "-color:never", f"@tasty-in:{classes}"]))
     if v.get("post") == "from-tasty":
         steps.append(("scalac", ["-from-tasty", "-d", str(tmp / "from-tasty"), "-classpath", cp, "-color:never",
                                  "-Wconf:any:s", f"@tasty-in:{classes}"]))
@@ -482,8 +521,17 @@ def write_exec(path, entries):
 
 
 class Registry:
-    def __init__(self, path):
+    def __init__(self, path, exclusive=False):
         self.path = path
+        if exclusive:
+            # offsets are assigned in memory: two campaigns writing the same registry would corrupt each other
+            import fcntl
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.lockfh = open(str(path) + ".lock", "w")
+            try:
+                fcntl.flock(self.lockfh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                sys.exit(f"another campaign is running against {path}; use a different CORPUS_WORK")
         self.slots = {}  # (cid, name) -> (byte_offset, nprobes)
         self.size = 0
         if path.exists():
@@ -594,7 +642,7 @@ def cmd_measure(a):
     d = campaign_dir(tc, a.name)
     if a.fresh:
         shutil.rmtree(d, ignore_errors=True)
-    reg = Registry(WORK / "campaigns" / tc.key / "registry.json")
+    reg = Registry(WORK / "campaigns" / tc.key / "registry.json", exclusive=True)
     (d / "bits").mkdir(parents=True, exist_ok=True)
     done = set()
     resfile = d / "results.jsonl"
@@ -609,13 +657,17 @@ def cmd_measure(a):
 
     def on_result(r):
         rec = dict(job=r.job.id, case=r.job.case.id, variant=r.job.variant, status=r.status, ms=r.ms, detail=r.detail,
-                   size=case_size(r.job.case.path))
+                   size=case_size(r.job.case.path), opts=r.job.case.pool_opts)
         ex = exec_dir / (r.job.id + ".exec")
         if r.status == "OK" and ex.exists():
             bits = reg.bits(ex.read_bytes())
             save_bits(d / "bits" / (r.job.id + ".z"), bits)
             rec["probes"] = bits.bit_count()
         ex.unlink(missing_ok=True)
+        if r.status == "OK" and rec.get("probes") and len(reg.slots) != getattr(reg, "saved", -1):
+            reg.saved = len(reg.slots)
+            with reg.lock:
+                reg.save()
         shutil.rmtree(r.job.out, ignore_errors=True)
         shutil.rmtree(str(r.job.out) + ".tmp", ignore_errors=True)
         fh.write(json.dumps(rec) + "\n")
@@ -698,7 +750,8 @@ def cmd_select(a):
     tot_size = 0
     for r, gain in chosen:
         tot_size += r["size"]
-        lines.append(f"{r['case']} {r['variant']}  # +{gain} probes, {r['size']}B, {r['ms']}ms")
+        opts = " -- " + " ".join(r.get("opts") or []) if r.get("opts") else ""
+        lines.append(f"{r['case']} {r['variant']}{opts}  # +{gain} probes, {r['size']}B, {r['ms']}ms")
     Path(a.out).write_text("\n".join(lines) + "\n")
     log(f"selected {len(chosen)} jobs / {len(jobs)}; covers {cover.bit_count()} of {total} pool probes "
         f"({100 * cover.bit_count() / max(total, 1):.2f}%), {tot_size / 1024:.0f} KiB of source; "
@@ -719,7 +772,7 @@ def materialized_name(case_id):
 def cmd_materialize(a):
     entries = [l.split("#")[0].split() for l in Path(a.selection).read_text().splitlines() if l.strip() and not l.startswith("#")]
     out = []
-    for case_id, variant in entries:
+    for case_id, variant, *opts in entries:
         dest = materialized_name(case_id)
         src = REPO / case_id
         tgt = CASES / dest
@@ -731,7 +784,7 @@ def cmd_materialize(a):
             else:
                 tgt.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, tgt)
-        out.append(f"{dest} {variant}")
+        out.append(" ".join([str(dest), variant, *opts]))
     out = sorted(set(out))
     MANIFEST.write_text("# <case under cases/> <variant>; generated by `harness.py materialize`, then hand-edited\n" + "\n".join(out) + "\n")
     log(f"wrote {MANIFEST} ({len(out)} entries)")
@@ -743,10 +796,10 @@ def manifest_jobs(tc, out_root, extra_opts=(), order="sorted", joint=False, vari
         line = line.split("#")[0].strip()
         if not line:
             continue
-        rel, variant = line.split()
+        rel, variant, *opts = line.split()
         if variants and variant not in variants:
             continue
-        c = make_case(CASES / rel, rel)
+        c = make_case(CASES / rel, rel, opts[1:] if opts[:1] == ["--"] else opts)
         if c is None or c.skip:
             log(f"skip {rel}: {c and c.skip}")
             continue
@@ -760,7 +813,7 @@ def cmd_corpus_measure(a):
     d = campaign_dir(tc, a.name)
     shutil.rmtree(d, ignore_errors=True)
     (d / "bits").mkdir(parents=True)
-    reg = Registry(WORK / "campaigns" / tc.key / "registry.json")
+    reg = Registry(WORK / "campaigns" / tc.key / "registry.json", exclusive=True)
     out_root = WORK / "out" / a.name
     jobs = manifest_jobs(tc, out_root)
     exec_dir = WORK / "exec" / a.name
@@ -768,7 +821,7 @@ def cmd_corpus_measure(a):
 
     def on_result(r):
         rec = dict(job=r.job.id, case=r.job.case.id, variant=r.job.variant, status=r.status, ms=r.ms, detail=r.detail,
-                   size=case_size(CASES / r.job.case.id))
+                   size=case_size(CASES / r.job.case.id), opts=r.job.case.pool_opts)
         ex = exec_dir / (r.job.id + ".exec")
         if r.status == "OK" and ex.exists():
             bits = reg.bits(ex.read_bytes())
