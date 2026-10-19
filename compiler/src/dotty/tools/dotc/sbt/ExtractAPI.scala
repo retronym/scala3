@@ -1252,6 +1252,9 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
 
   private def annotationsH(sym: Symbol): List[(Int, List[(String, Int)])] =
     inlineBodyHash(sym, inlineOrigin = NoSymbol).map(h => markerH(h.toString)).toList ++
+      (if sym.isConstructor && sym == sym.owner.primaryConstructor && hasPureInit(sym.owner) then
+        List(markerH("<pure-init>"))
+      else Nil) ++
       recordedAnnotations(sym).map(annotationH)
 
   /** Mirrors `apiDefinition` with no inline origin. */
