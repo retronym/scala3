@@ -63,11 +63,10 @@ VARIANTS = {
     "rewrite-migration": dict(opts=["-rewrite", "-source", "3.4-migration"], copy_sources=True),
     "debug": dict(opts=["-Ydebug", "-Ylog:all", "-Ydebug-flags", "-Ydebug-names", "-Ydebug-pos", "-Ycheck-mods",
                         "-Ycheck-reentrant", "-Ydebug-missing-refs"]),
-    "release11": dict(opts=["-release", "11"]),
     "opt": dict(opts=["-opt", "-opt-inline:**", "-Wopt:all", "-Yopt-log-inline", "_"]),
     "opt-everything": dict(opts=["-opt", "-opt-inline:**", "-Yopt-inline-heuristics:everything"]),
     "profile": dict(opts=["-Yprofile-enabled", "-Yprofile-trace", "{tmp}/trace.json", "-Vprofile", "-Vprofile-details", "5",
-                          "-Ydetailed-stats", "-Yinstrument", "-Yinstrument-defs", "-verbose"]),
+                          "-Ydetailed-stats", "-verbose"]),
     "docs": dict(opts=["-Xread-docs", "-Xcook-docs", "-Yretain-trees"]),
     "sbt-dump": dict(opts=["-Yforce-sbt-phases", "-Ydump-sbt-inc", "-Xsemanticdb", "-semanticdb-text"]),
     "jar": dict(opts=[], jar=True),
@@ -78,6 +77,7 @@ VARIANTS = {
     "recheck": dict(opts=["-Yrecheck-test"]),
     "init-global": dict(opts=["-Ysafe-init-global"]),
     "print-tasty": dict(opts=["-Yprint-tasty"], post="print-tasty"),
+    "decompile": dict(opts=[], post="decompile"),
     "print-plain": dict(opts=["-Vprint:all", "-Yplain-printer", "-Xprint-diff-del", "-Yprint-pos", "-Yshow-tree-ids",
                               "-Yprint-debug-owners", "-Xprint-inline"]),
 }
@@ -349,7 +349,9 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
             steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8"] +
                           case.javac_opts + java))
     if v.get("post") == "print-tasty":
-        steps.append(("scalac", ["-print-tasty", "-classpath", cp, "-color:never", f"@tasty-in:{classes}"]))
+        steps.append(("main:dotty.tools.dotc.core.tasty.TastyPrinter", [f"@tasty-in:{classes}"]))
+    if v.get("post") == "decompile":
+        steps.append(("driver:dotty.tools.dotc.decompiler.Main", ["-classpath", cp, "-color:never", "-d", str(tmp), f"@tasty-in:{classes}"]))
     if v.get("post") == "from-tasty":
         steps.append(("scalac", ["-from-tasty", "-d", str(tmp / "from-tasty"), "-classpath", cp, "-color:never",
                                  "-Wconf:any:s", f"@tasty-in:{classes}"]))
