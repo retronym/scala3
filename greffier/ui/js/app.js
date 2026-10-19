@@ -353,8 +353,19 @@
       b2._key = D.bands.length + '|' + String(l); b2._D = D; b2._f = f; b2.innerHTML = '';
       fb.forEach((b, i) => { const el = document.createElement('div'); el.className = 'cell' + (i % 2 ? ' odd' : ''); el._b = b; el.title = `${D.phaseName(b.phase)} · seq ${b.begin}–${b.end} (click: output, shift-click: start)`; el.onclick = (ev) => { ST.follow = true; $('follow').checked = true; if (ST.zoomKey) R.zoomTo(b); R.gotoPhase(b.phase, ev.shiftKey ? 'begin' : 'end'); }; b2.append(el); });
     }
+    // IR segment of the strip: one cell per JVM phase, distinct background and a "JVM" caption
+    b2.querySelectorAll('.jvm, .sep, .jvmcap').forEach((e) => e.remove());
+    if (D.hasIR) {
+      const vs = R.vers(), irs = vs.map((v, i) => [v, i]).filter(([v]) => v.irPseudo);
+      if (irs.length) {
+        const top = new Set(R.interesting ? R.interesting().map((x) => x.i) : []); b2.append(Object.assign(document.createElement('div'), { className: 'sep' }));
+        const mx = Math.max(1, ...vs.map((v) => R.metricVal(R.scoreOf(v))));
+        irs.forEach(([v, i], j) => { const el = document.createElement('div'); const hv = R.metricVal(R.scoreOf(v)); if (i !== ST.verIdx) el.style.background = `rgba(112,72,232,${(0.18 + 0.82 * Math.sqrt(hv / mx)).toFixed(2)})`; el.className = 'cell jvm' + (j % 2 ? ' odd' : '') + (top.has(i) ? ' star' : '') + (i === ST.verIdx ? ' cur' : ''); el.title = `JVM · ${R.verName(v)} (${R.newCount(v)} classes changed) — click: show this phase`; el.onclick = () => { ST.follow = true; R.setPhase(i); }; b2.append(el); });
+        const cap = document.createElement('div'); cap.className = 'jvmcap'; cap.textContent = 'JVM'; b2.append(cap); const f0 = b2.querySelector('.sep'); cap.style.left = (f0.offsetLeft + 2) + 'px';
+      }
+    }
     cur = R.curBand();
-    [...b2.children].forEach((el) => el.classList.toggle('cur', el._b === cur));
+    [...b2.children].forEach((el) => el._b && el.classList.toggle('cur', el._b === cur));
     const topPh = new Set(R.interesting ? R.interesting().map((x) => x.v.phase) : []);
     [...box.children].forEach((el) => { if (el._b) { el.classList.toggle('cur', el._b === cur && !zb); el.classList.toggle('star', topPh.has(el._b.phase)); } });
     box.classList.toggle('zoomed', !!zb);

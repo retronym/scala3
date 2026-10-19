@@ -31,9 +31,9 @@
   R.irScore = (unit, phase) => {
     ensure(); const D = S.D, sc = blank(); if (!D.hasIR) return sc;
     D.irDerives.forEach((d) => { if (d.phase !== phase) return; const cls = d.new.length ? D.irClassOf.get(d.new[0]) : d.old.length ? D.irClassOf.get(d.old[0]) : null; const c = cls && D.jvmClasses.get(cls); if (!c || c.unit !== unit) return;
-      if (d.how === 'rewrite' || d.how === 'inlined-from') sc.struct += d.new.length; else if (d.how === 'elide') sc.removed += d.old.length; else if (d.how === 'copy') sc.copy += d.new.length; });
+      if (d.how === 'rewrite' || d.how === 'inlined-from' || d.how === 'codegen') sc.struct += d.new.length; else if (d.how === 'elide') sc.removed += d.old.length; else if (d.how === 'copy') sc.copy += d.new.length; });
     const l = S.lines.get('ir:' + unit + ':' + phase); if (l) { sc.lines = l.add + l.del; sc.add = l.add; sc.del = l.del; }
-    return sc;
+    sc.ir = true; return sc;
   };
   R.scoreOf = (v) => (v.irPseudo ? R.irScore(v.unit, v.phase) : R.treeScore(v.unit, v.phase));
   const METRICS = { struct: (s) => s.struct, removed: (s) => s.removed, retype: (s) => s.retype, lines: (s) => s.lines || 0, total: (s) => s.struct + s.removed + s.retype + s.rebuilt + (s.lines || 0) / 4 };
@@ -50,18 +50,23 @@
     return { add, del };
   }
   R.computeLines = async (unit) => {
-    ensure(); const D = S.D, cls0 = R.curClass && R.curClass(), tag = 'u' + unit + '|' + cls0; if (S.pending.has(tag) || S.done.has(tag)) return; S.pending.add(tag);
+    ensure(); const D = S.D, cls0 = R.curClass && R.curClass(), tag = 'u' + unit; if (S.pending.has(tag) || S.done.has(tag)) return; S.pending.add(tag);
     const vs = D.versionsOf(unit); let n = 0, changed = 0;
     for (let i = 1; i < vs.length; i++) {
       const key = unit + ':' + vs[i].phase; if (S.lines.has(key)) continue;
       S.lines.set(key, vs[i].text === vs[i - 1].text ? { add: 0, del: 0 } : lineDiff(vs[i - 1].text, vs[i].text, false)); S.tree.delete(key); changed++;
       if (++n % 6 === 0) await new Promise((r) => setTimeout(r, 0)); if (S.D !== D) return;
     }
-    // JVM: current class of this unit, phase by phase
-    const cls = R.curClass && R.curClass(); const c = cls && D.jvmClasses.get(cls);
-    if (c && c.unit === unit) {
-      let prev = null; for (const cv of c.versions) { if (prev && !S.lines.has('ir:' + unit + ':' + cv.phase)) { S.lines.set('ir:' + unit + ':' + cv.phase, lineDiff(prev.text, cv.text, true)); changed++; } prev = cv; if (++n % 4 === 0) await new Promise((r) => setTimeout(r, 0)); if (S.D !== D) return; }
+    // JVM: every class of the unit, phase by phase, summed per phase: instructions emitted at genBCode (+), instruction lines +/- after
+    const acc = new Map(), bump = (ph, add, del) => { const k = 'ir:' + unit + ':' + ph; const o = acc.get(k) || { add: 0, del: 0 }; o.add += add; o.del += del; acc.set(k, o); };
+    for (const c of D.jvmClasses.values()) {
+      if (c.unit !== unit) continue; let prev = null;
+      for (const cv of c.versions) {
+        if (!prev) bump(cv.phase, cv.text.split('\n').filter((t) => isOp.test(t) && !notOp.test(t)).length, 0); else { const d = lineDiff(prev.text, cv.text, true); bump(cv.phase, d.add, d.del); }
+        prev = cv; if (++n % 4 === 0) await new Promise((r) => setTimeout(r, 0)); if (S.D !== D) return;
+      }
     }
+    acc.forEach((v, k) => { if (!S.lines.has(k)) { S.lines.set(k, v); changed++; } });
     S.pending.delete(tag); S.done.add(tag); if (R.ST.D === D && changed) R.render();
   };
 
@@ -69,9 +74,13 @@
   const N_TOP = 5;
   R.versionScores = () => { const vs = R.vers(); return vs.map((v, i) => ({ v, i, sc: R.scoreOf(v) })); };
   R.interesting = () => {
-    const vs = R.versionScores().filter((x) => x.i > 0), top = vs.slice().sort((a, b) => R.metricVal(b.sc) - R.metricVal(a.sc)).filter((x) => R.metricVal(x.sc) > 0).slice(0, N_TOP);
-    return top.sort((a, b) => a.i - b.i);
+    const D = R.ST.D, vs = R.versionScores().filter((x) => x.i > 0), top = vs.slice().sort((a, b) => R.metricVal(b.sc) - R.metricVal(a.sc)).filter((x) => R.metricVal(x.sc) > 0).slice(0, N_TOP);
+    const stops = new Set(top.map((x) => x.i));
+    // where bytecode first appears and the final class state are always stops, whatever the metric
+    vs.forEach((x) => { if (x.v.irPseudo && (x.v.phase === D.irGenPhase || D.phaseRaw(x.v.phase) === 'jvm:classfile')) stops.add(x.i); });
+    return vs.filter((x) => stops.has(x.i)).sort((a, b) => a.i - b.i);
   };
+  R.isBytecodeStart = (v) => !!(v && v.irPseudo && v.phase === R.ST.D.irGenPhase);
   R.dots = (v, all) => { const m = Math.max(1, ...all.map((x) => R.metricVal(x.sc))), r = R.metricVal(R.scoreOf(v)) / m; return r <= 0 ? '' : r < 0.08 ? '●' : r < 0.25 ? '●●' : r < 0.55 ? '●●●' : '●●●●'; };
   R.jumpInteresting = (d) => {
     const top = R.interesting(); if (!top.length) return; const cur = R.ST.verIdx;
@@ -84,12 +93,12 @@
     const D = R.ST.D, box = $('phbody'); if (!D || $('phtab').hidden) return;
     R.computeLines(R.ST.unit);
     const rows = R.versionScores(), top = new Set(R.interesting().map((x) => x.i)), mv = R.metricVal;
-    const val = { pos: (r) => r.i, name: (r) => R.verName(r.v), struct: (r) => r.sc.struct, removed: (r) => r.sc.removed, retype: (r) => r.sc.retype, rebuilt: (r) => r.sc.rebuilt, lines: (r) => r.sc.lines || 0, metric: (r) => mv(r.sc) };
+    const val = { pos: (r) => r.i, name: (r) => R.verName(r.v), struct: (r) => r.sc.struct, removed: (r) => r.sc.removed, retype: (r) => r.sc.retype, rebuilt: (r) => r.sc.rebuilt, lines: (r) => (r.sc.ir ? 0 : r.sc.lines || 0), instr: (r) => (r.sc.ir ? r.sc.lines || 0 : 0), metric: (r) => mv(r.sc) };
     rows.sort((a, b) => { const x = val[sortKey](a), y = val[sortKey](b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
     const max = Math.max(1, ...rows.map((r) => mv(r.sc)));
     const th = (k, t, title) => `<th data-k="${k}" title="${esc(title || 'sort')}" class="${sortKey === k ? 'sorted' : ''}">${t}${sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
-    box.innerHTML = `<table class="phtab"><tr>${th('pos', '#')}${th('name', 'phase')}${th('struct', 'structural', 'new or rewritten nodes (IR: rewritten + inlined ranges)')}${th('removed', 'removed', 'nodes that left the tree (IR: elided ranges)')}${th('retype', 'retyped')}${th('rebuilt', 'rebuilt')}${th('lines', 'lines ±', 'added / removed lines of the printed text (IR: instruction lines of the current class)')}<th>score</th></tr>` +
-      rows.map((r) => `<tr data-i="${r.i}" class="${top.has(r.i) ? 'star' : ''}${r.i === R.ST.verIdx ? ' cur' : ''}"><td>${r.i + 1}</td><td>${r.v.irPseudo ? '<span class="dim">IR</span> ' : ''}${esc(R.verName(r.v))}${top.has(r.i) ? ' ★' : ''}</td><td>${r.sc.struct || ''}</td><td>${r.sc.removed || ''}</td><td>${r.sc.retype || ''}</td><td>${r.sc.rebuilt || ''}</td><td>${r.sc.lines == null ? '…' : r.sc.lines ? '+' + r.sc.add + ' −' + r.sc.del : ''}</td><td><span class="bar" style="width:${Math.round(60 * mv(r.sc) / max)}px"></span></td></tr>`).join('') + '</table>';
+    box.innerHTML = `<table class="phtab"><tr>${th('pos', '#')}${th('name', 'phase')}${th('struct', 'structural', 'new or rewritten nodes (IR: rewritten + inlined ranges)')}${th('removed', 'removed', 'nodes that left the tree (IR: elided ranges)')}${th('retype', 'retyped')}${th('rebuilt', 'rebuilt')}${th('lines', 'lines ±', 'added / removed lines of the printed text')}${th('instr', 'instructions ±', 'JVM phases: instructions emitted at genBCode (+), then instruction lines added / removed, summed over the unit\'s classes')}<th>score</th></tr>` +
+      rows.map((r) => `<tr data-i="${r.i}" class="${top.has(r.i) ? 'star' : ''}${r.i === R.ST.verIdx ? ' cur' : ''}"><td>${r.i + 1}</td><td>${r.v.irPseudo ? '<span class="dim">JVM</span> ' : ''}${esc(R.verName(r.v))}${top.has(r.i) ? ' ★' : ''}${R.isBytecodeStart(r.v) ? ' <span class="bctag2">⟐ bytecode</span>' : ''}</td><td>${r.sc.struct || ''}</td><td>${r.sc.removed || ''}</td><td>${r.sc.retype || ''}</td><td>${r.sc.rebuilt || ''}</td><td>${r.sc.ir ? '' : r.sc.lines == null ? '…' : r.sc.lines ? '+' + r.sc.add + ' −' + r.sc.del : ''}</td><td>${r.sc.ir ? (r.sc.lines == null ? '…' : r.sc.lines ? '+' + r.sc.add + ' −' + r.sc.del : '') : ''}</td><td><span class="bar" style="width:${Math.round(60 * mv(r.sc) / max)}px"></span></td></tr>`).join('') + '</table>';
     box.querySelectorAll('th[data-k]').forEach((t) => (t.onclick = () => { const k = t.dataset.k; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'name' || k === 'pos' ? 1 : -1; } renderTable(); }));
     box.querySelectorAll('tr[data-i]').forEach((tr) => (tr.onclick = () => { R.setPhase(+tr.dataset.i); }));
     $('phtitle').textContent = `Phases of ${((D.units.get(R.ST.unit) || {}).path || '').replace(/^.*\//, '')}`;
@@ -105,7 +114,7 @@
     const max = Math.max(1, ...vals.values()), key = [R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size].join('|');
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
-      ax.segs.forEach(({ b, a0, a1 }) => { const v = vals.get(b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
+      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (b.phase === D.irGenPhase && D.hasIR ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
     }
   }
   R.renderHeat = renderHeat;
