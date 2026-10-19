@@ -19,8 +19,9 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
   private var isRelative = new Array[Boolean](initialOffsetSize)
   private var numOffsets = 0
 
-  // For each offset, `offsetIndexBefore` its reference's target: recorded when the reference is filled, so that
-  // `compactify` finds the target's delta without a search
+  // For each reference, the index of the last offset before its target, recorded when the target is known, so
+  // that `compactify` finds the target's delta without a search. It cannot live in `ScratchData` with the other
+  // arrays of `compactify`: with parallel pickling, one buffer is compacted while the next one is being filled.
   private var targetIdx = new Array[Int](initialOffsetSize)
 
   // The indices of the length fields reserved but not yet filled. Lengths nest, so they are filled in LIFO order.
@@ -52,29 +53,35 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
     addr
   }
 
-  /** Write reference right adjusted into freshly reserved field. */
+  /** Write a reference to `target`, which lies before the current address, right adjusted into a freshly
+   *  reserved field.
+   */
   def writeRef(target: Addr): Unit = {
+    assert(target.index <= length, s"forward reference to $target")
     keepOffset(relative = false)
-    // `target` is a backward reference, usually to something recent: search back from the latest offset
+    // the target is usually something recent: search back from the latest offset
     targetIdx(numOffsets - 1) = offsetIndexBefore(target, hint = numOffsets - 1)
     fillAddr(reserveAddr(), target)
   }
 
-  /** Drop everything written from `addr` on. The addresses handed out since must not be used again. A length
-   *  field reserved there and still open, by an exception while writing its contents, is dropped with it.
+  /** Drop everything written from `addr` on. The addresses handed out since must not be used again: no
+   *  field reserved before may have been filled in the dropped range. A length field reserved there and
+   *  still open, by an exception while writing its contents, is dropped with it.
    */
   def truncate(addr: Addr): Unit =
     length = addr.index
     while numOffsets > 0 && offsets(numOffsets - 1) >= length do numOffsets -= 1
     while numOpenLengths > 0 && openLengths(numOpenLengths - 1) >= numOffsets do numOpenLengths -= 1
 
-  /** Fill previously reserved field with a reference to the current address */
+  /** Fill the field reserved at `at` with a reference to the current address. Length fields are filled
+   *  innermost first.
+   */
   def fillRef(at: Addr, relative: Boolean): Unit = {
     val i =
       if relative then
         numOpenLengths -= 1
         openLengths(numOpenLengths)
-      else offsetIndexBefore(at + 1)
+      else offsetIndexBefore(at + 1) // the field at `at`
     assert(offsets(i) == at.index, s"reference at $at is not offset #$i")
     // Every offset kept so far lies before `currentAddr`, so the last of them is the one before it
     targetIdx(i) = numOffsets - 1
@@ -90,7 +97,9 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
   private def deltaOf(idx: Int, scratch: ScratchData): Int =
     if idx < 0 then 0 else scratch.delta(idx)
 
-  // The offset found by the last `adjusted`: addresses are usually adjusted in order, so the next one is near it
+  // The offset found by the last `adjusted`, to start the next search from. Addresses are mostly adjusted in
+  // ascending order (the pickler's tree addresses), where the next one is near it; otherwise (its symbol
+  // addresses, in hash order) the gallop costs about as much as a binary search.
   private var lastAdjusted = -1
 
   /** The address to which `x` is translated under compression */
