@@ -1088,7 +1088,7 @@ object CheckUnused:
               val clz = Class.forName(implName) // TODO improve to use class path or reflect
               val ok = clz.getConstructors.head.getParameters.map(p => termName(p.getName)).toList.init
               allowVariableBindings(ok, args)
-            catch case _: ClassNotFoundException => ()
+            catch case _: (ClassNotFoundException | NoClassDefFoundError) => () // the latter on case-insensitive file systems, e.g. Unapply vs UnApply
         args.foreach(traverse)
       case tree => traverseChildren(tree)
 
