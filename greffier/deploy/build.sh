@@ -42,9 +42,12 @@ python3 - "$SITE/recordings.json" <<'EOF'
 import json, sys, os
 p = sys.argv[1]; d = json.load(open(p))
 import re
+def fix(r):
+    if r.get('url'): r['url'] = 'data/' + os.path.basename(r['url'])
+    if r.get('name'): r['name'] = re.sub(r'\.[0-9a-f]{8}$', '', r['name'])   # drop the content hash from the display name
 for r in d:
-    r['url'] = 'data/' + os.path.basename(r['url'])
-    r['name'] = re.sub(r'\.[0-9a-f]{8}$', '', r['name'])   # drop the content hash from the display name
+    fix(r)
+    for v in r.get('variants', []): fix(v)
 json.dump(d, open(p, 'w'), indent=1)
 EOF
 (cd "$UI" && python3 gen_index.py data >/dev/null)
