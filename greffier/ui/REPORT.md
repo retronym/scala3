@@ -563,3 +563,54 @@ Checks: first card of each of the 5 units in corpus-opt has no diff rows and a 1
 
 
 Screenshot: `shots/pages-stack.png`.
+
+### Pages v3: chapters from phase groups (default)
+Replaces the percentage rule (still available as "custom thresholds", `chmode=custom`). Unit of coalescing = the MegaPhase group (`phase.megaOf` from the phase records; unfused phases such as parser, typer, posttyper, erasure are groups of their own); bytecode: genBCode, inliner, each optimiser round, the post passes (localVariables, lineNumbers), classfile. Score = changed lines (bytecode: range-derive counts). A group is a chapter iff its score ≥ 0.5 × the median of the non-zero group scores of its kind (tree / bytecode), else it joins the previous chapter. parser, typer, erasure, genBCode are always chapters; inliner and the optimiser rounds collapse into one "optimiser" chapter unless a single one reaches the median; localVariables+lineNumbers need ≥ 0.5 × median; classfile joins the previous chapter unless ≥ the median. Result: Givens 13, Closures 12, Signatures 12 chapters (your expectation was ~8–11). Not tuned further: posttyper joins typer, and the two post-erasure groups (mixin, constructors) stay separate chapters in Givens and Closures; the remaining knob is the 0.5 factor. Lists:
+
+**Givens.scala** — 13 chapters
+1. parser — parser (+0 −0 lines, score 0)
+2. typer (+ 1 minor phase) — typer → posttyper (+60 −18 lines, score 78)
+3. firstTransform (+ 5 minor phases) — firstTransform → getters (+29 −27 lines, score 56)
+4. erasure — erasure (+43 −40 lines, score 83)
+5. mixin+… (+ 1 minor phase) — arrayApply → mixin+… (+109 −18 lines, score 127)
+6. constructors — constructors (+49 −16 lines, score 65)
+7. lambdaLift — lambdaLift → elimStaticThis (+42 −33 lines, score 75)
+8. moveStatic (+ 1 minor phase) — flatten → selectStatic (+176 −162 lines, score 338)
+9. genBCode (bytecode) — genBCode (bytecode) (+566 −0 instr, score 331)
+10. jvm:inliner — jvm:inliner (+170 −10 instr, score 54)
+11. optimiser round 1 (+ 7 minor passes) — jvm:r1:nullness → jvm:r1:simplifyJumps (+76 −159 instr, score 176)
+12. optimiser (4 passes) — jvm:r2:dce → jvm:r2:storeLoadPairs (+1 −9 instr, score 29)
+13. jvm:localVariables (+ 2 minor phases) — jvm:localVariables → jvm:classfile (+16 −16 instr, score 44)
+
+**Closures.scala** — 12 chapters
+1. parser — parser (+0 −0 lines, score 0)
+2. typer (+ 1 minor phase) — typer → posttyper (+16 −12 lines, score 28)
+3. expandSAMs (+ 1 minor phase) — firstTransform → elimRepeated (+27 −10 lines, score 37)
+4. patternMatcher (+ 2 minor phases) — elimByName → specializeFunctions (+20 −11 lines, score 31)
+5. erasure (+ 1 minor phase) — erasure → mixin+… (+32 −27 lines, score 59)
+6. constructors — constructors (+13 −5 lines, score 18)
+7. lambdaLift — lambdaLift (+61 −42 lines, score 103)
+8. flatten (+ 1 minor phase) — flatten → moveStatic (+30 −30 lines, score 60)
+9. genBCode (bytecode) — genBCode (bytecode) (+226 −0 instr, score 146)
+10. jvm:inliner — jvm:inliner (+55 −3 instr, score 19)
+11. optimiser round 1 (+ 6 minor passes) — jvm:r1:nullness → jvm:r1:simplifyJumps (+24 −59 instr, score 80)
+12. jvm:localVariables (+ 2 minor phases) — jvm:localVariables → jvm:classfile (+0 −0 instr, score 17)
+
+**Signatures.scala** — 12 chapters
+1. parser — parser (+0 −0 lines, score 0)
+2. typer (+ 5 minor phases) — typer → elimRepeated (+2292 −630 lines, score 2922)
+3. patternMatcher (+ 7 minor phases) — elimByName → collectNullableFields (+3690 −1210 lines, score 4900)
+4. erasure — erasure (+1687 −3208 lines, score 4895)
+5. tailrec (+ 4 minor phases) — elimErasedValueType → constructors (+667 −488 lines, score 1155)
+6. lambdaLift — lambdaLift → elimStaticThis (+1841 −1812 lines, score 3653)
+7. flatten (+ 1 minor phase) — flatten → selectStatic (+1928 −1737 lines, score 3665)
+8. genBCode (bytecode) — genBCode (bytecode) (+6390 −0 instr, score 4880)
+9. jvm:inliner — jvm:inliner (+812 −234 instr, score 368)
+10. optimiser round 1 (+ 8 minor passes) — jvm:r1:nullness → jvm:r1:simplifyJumps (+643 −1339 instr, score 3152)
+11. optimiser (7 passes) — jvm:r2:dce → jvm:r2:simplifyJumps (+30 −55 instr, score 322)
+12. jvm:localVariables (+ 2 minor phases) — jvm:localVariables → jvm:classfile (+571 −571 instr, score 1548)
+
+Screenshot: `shots/pages-stack.png` (Givens-opt, paging with →).
+
+### Pages: placement
+The main viewer is the primary home: ◀ ▶ FABs, counter ("chapter 6/12 · constructors · +13 −5 lines") and chapter dots sit at the bottom of the explorer panel, always visible; turning sets the viewer's phase (normal animated transition) and the timeline's heat strip marks the current chapter (blue underline on its phases) and chapter starts (blue left edge). ← / → and a horizontal two-finger swipe over the scrubber or explorer turn pages; if the scrubber text overflows horizontally, the swipe scrolls it unless Shift is held. The stack overlay keeps only a minimal pager (counter + keys + swipe, no FABs or dots). Verified on Closures-opt by dispatching two wheel gestures (erasure → mixin group → constructors). Screenshot: `shots/pages-main.png`.

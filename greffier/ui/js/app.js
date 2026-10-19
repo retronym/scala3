@@ -209,7 +209,7 @@
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
-    if (h.has('gran')) { patch.gran = h.get('gran'); $('gran').value = patch.gran; } if (h.has('chn')) { patch.chThrNodes = +h.get('chn'); $('chnodes').value = h.get('chn'); } if (h.has('chm')) { patch.chMetric = h.get('chm'); $('chmetric').value = patch.chMetric; } if (h.has('chp')) { patch.chThrPct = +h.get('chp'); $('chpct').value = h.get('chp'); }
+    if (h.has('gran')) { patch.gran = h.get('gran'); $('gran').value = patch.gran; } if (h.has('chn')) { patch.chThrNodes = +h.get('chn'); $('chnodes').value = h.get('chn'); } if (h.has('chmode')) { patch.chMode = h.get('chmode'); $('chmode').value = patch.chMode; } if (h.has('chm')) { patch.chMetric = h.get('chm'); $('chmetric').value = patch.chMetric; } if (h.has('chp')) { patch.chThrPct = +h.get('chp'); $('chpct').value = h.get('chp'); }
     if (h.has('range')) {   // range=<phase>:<lo>-<hi> (1-based lines of that phase's tree text, in the selected unit)
       const m = /^(.+):(\d+)-(\d+)$/.exec(h.get('range')), v = m && R.stk && D.versionsOf(ST.unit).find((x) => !x.ir && D.phaseRaw(x.phase) === m[1]);
       if (v) patch.range = { unit: ST.unit, phase: v.phase, lo: +m[2] - 1, hi: +m[3] - 1, nodes: R.stk.nodesInLines(v, +m[2] - 1, +m[3] - 1), ir: false, cls: null };
@@ -227,7 +227,7 @@
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
     if (ST.level !== 'file') p.set('level', ST.level);
     if (R.stackOpen) p.set('stack', 1);
-    if (ST.gran && ST.gran !== 'chapters') p.set('gran', ST.gran); if (ST.chThrNodes != null && ST.chThrNodes !== 6) p.set('chn', ST.chThrNodes); if (ST.chThrPct != null && ST.chThrPct !== 4) p.set('chp', ST.chThrPct); if (ST.chMetric && ST.chMetric !== 'lines') p.set('chm', ST.chMetric);
+    if (ST.gran && ST.gran !== 'chapters') p.set('gran', ST.gran); if (ST.chThrNodes != null && ST.chThrNodes !== 6) p.set('chn', ST.chThrNodes); if (ST.chThrPct != null && ST.chThrPct !== 4) p.set('chp', ST.chThrPct); if (ST.chMetric && ST.chMetric !== 'lines') p.set('chm', ST.chMetric); if (ST.chMode && ST.chMode !== 'groups') p.set('chmode', ST.chMode);
     if (ST.range && !ST.range.ir && ST.range.unit === ST.unit) p.set('range', D.phaseRaw(ST.range.phase) + ':' + (ST.range.lo + 1) + '-' + (ST.range.hi + 1));
     if (ST.skip) p.set('skip', 1); if (ST.collapse) p.set('collapse', 1); if (ST.showRetyped) p.set('retyped', 1);
     return p.toString().replace(/%2C/g, ',').replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
@@ -436,8 +436,17 @@
     $('collapse').onchange = (ev) => R.set({ collapse: ev.target.checked, verIdx: 0 });
     $('retyped').onchange = (ev) => { const seq = R.seq(); ST.showRetyped = ev.target.checked; R.set({ evIdx: R.evIndexAtOrAfter(seq) }); };
     $('bytime').onchange = (ev) => R.set({ byTime: ev.target.checked });
-    $('gran').onchange = (ev) => R.set({ gran: ev.target.value }); $('chnodes').onchange = (ev) => R.set({ chThrNodes: Math.max(1, +ev.target.value || 8) }); $('chpct').onchange = (ev) => R.set({ chThrPct: Math.max(0, +ev.target.value || 0) }); $('chmetric').onchange = (ev) => R.set({ chMetric: ev.target.value });
+    $('gran').onchange = (ev) => R.set({ gran: ev.target.value }); $('chnodes').onchange = (ev) => R.set({ chThrNodes: Math.max(1, +ev.target.value || 8) }); $('chpct').onchange = (ev) => R.set({ chThrPct: Math.max(0, +ev.target.value || 0) }); $('chmetric').onchange = (ev) => R.set({ chMetric: ev.target.value }); $('chmode').onchange = (ev) => R.set({ chMode: ev.target.value });
     $('follow').onchange = (ev) => { ST.follow = ev.target.checked; };
+    // two-finger horizontal swipe over the scrubber / explorer turns pages; when the scrubber text overflows horizontally the gesture scrolls it unless Shift is held
+    { let acc = 0, last = 0, lock = 0;
+      const swipe = (e) => {
+        if (R.stackOpen || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+        const body = $('text') && $('text').parentNode; if (!e.shiftKey && body && body.scrollWidth > body.clientWidth + 2 && e.currentTarget === $('scrub')) return;
+        e.preventDefault(); const now = performance.now(); if (now - lock < 450) { lock = now - 300; return; }
+        acc = (now - last > 200 ? 0 : acc) + e.deltaX; last = now; if (Math.abs(acc) > 60) { const d = acc > 0 ? 1 : -1; acc = 0; lock = now; R.pageTurn(d); }
+      };
+      ['scrub', 'explorer'].forEach((id) => { const el = $(id); if (el) el.addEventListener('wheel', swipe, { passive: false }); }); }
     document.addEventListener('keydown', (ev) => {
       if (R.stackOpen) { if (ev.key === 'Escape') { R.stackEsc(); ev.preventDefault(); } else if (ev.key === 's' && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) { R.closeStack(); ev.preventDefault(); } else if (ev.key === '?') { $('help').hidden = !$('help').hidden; } return; }
       if (ev.key === 's' && !ev.metaKey && !ev.ctrlKey && ST.D && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && $('recs').hidden) { R.openStack && R.openStack(); ev.preventDefault(); return; }

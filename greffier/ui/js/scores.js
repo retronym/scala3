@@ -79,7 +79,7 @@
   // or a forced phase with a score under 2 (except parser), joins the previous chapter. Named by the dominant phase.
   const scoreOf2 = (v, sc, metric) => (v.irPseudo ? sc.struct + sc.removed : metric === 'nodes' ? sc.struct + sc.removed : (sc.lines || 0));
   let chCache = null;
-  R.chapters = () => {
+  const customChapters = () => {
     const D = R.ST.D; if (!D) return [];
     const vs = R.versionScores(), mn = R.ST.chThrNodes ?? 6, pct = R.ST.chThrPct ?? 4, metric = R.ST.chMetric || 'lines', key = [R.ST.unit, vs.length, mn, pct, metric, S.lines.size, R.curClass && R.curClass()].join('|');
     if (chCache && chCache.key === key) return chCache.val;
@@ -105,6 +105,38 @@
     out.forEach((c, k) => { c.k = k; let d = c.members[0]; c.members.forEach((m) => { if (m.sc > d.sc) d = m; }); c.dom = d.i; const v = vs[c.dom].v, minor = c.members.filter((m) => m.i !== c.dom && m.sc > 0).length; c.name = R.verName(v) + (minor ? ` (+ ${minor} minor phase${minor > 1 ? 's' : ''})` : ''); c.short = R.verName(v); c.v = vs[c.to].v; });
     chCache = { key, val: out }; return out;
   };
+  // ---- chapters from the compiler's own phase groups (default): MegaPhase groups, pruned by the median ----
+  // group = the MegaPhase a phase is fused into (phase.megaOf; unfused phases are groups of their own); bytecode: genBCode, inliner, each optimiser round, the post passes
+  // (localVariables, lineNumbers), classfile. A group is a chapter iff its score (changed lines; bytecode: range-derive counts) >= half the median of the non-zero group scores of
+  // its kind, else it joins the previous chapter. parser, typer, erasure, genBCode always are chapters; inliner and optimiser rounds collapse into one "optimiser" chapter unless
+  // a single one reaches the median; classfile only is a chapter if it reaches the median.
+  let gCache = null;
+  const groupChapters = () => {
+    const D = R.ST.D; if (!D) return [];
+    const vs = R.versionScores(), key = [R.ST.unit, vs.length, S.lines.size, R.curClass && R.curClass()].join('|');
+    if (gCache && gCache.key === key) return gCache.val;
+    const kindOf = (x) => { const r = D.phaseRaw(x.v.phase); if (!x.v.irPseudo) return 'tree'; if (x.v.phase === D.irGenPhase) return 'gen'; if (r === 'jvm:classfile') return 'classfile'; if (r === 'jvm:localVariables' || r === 'jvm:lineNumbers') return 'post'; return 'opt'; };
+    const keyOf = (x) => { const k = kindOf(x), ph = D.phases.get(x.v.phase) || {}; if (k === 'tree') return ph.megaOf ? 'm:' + ph.megaOf : 'p:' + x.v.phase; if (k !== 'opt') return k; const m = /^jvm:r(\d+):/.exec(D.phaseRaw(x.v.phase)); return m ? 'opt:r' + m[1] : 'opt:' + D.phaseRaw(x.v.phase); };
+    const groups = []; vs.forEach((x) => { const k = keyOf(x), g = groups[groups.length - 1]; const sc = scoreOf2(x.v, x.sc, 'lines'); if (g && g.key === k) { g.idx.push(x.i); g.score += sc; g.add += x.sc.add || 0; g.del += x.sc.del || 0; g.members.push({ i: x.i, sc }); } else groups.push({ key: k, kind: kindOf(x), idx: [x.i], score: sc, add: x.sc.add || 0, del: x.sc.del || 0, members: [{ i: x.i, sc }], raw: D.phaseRaw(x.v.phase) }); });
+    const med = (kinds) => { const a = groups.filter((g) => kinds.includes(g.kind) && g.score > 0).map((g) => g.score).sort((p, q) => p - q); return a.length ? a[a.length >> 1] : 0; };
+    const mt = med(['tree']), mi = med(['opt', 'post']);
+    const out = []; const push = (g, extra) => out.push(Object.assign({ gkeys: [g.key], from: g.idx[0], to: g.idx[g.idx.length - 1], members: g.members.slice(), score: g.score, add: g.add, del: g.del, ir: g.kind !== 'tree', forced: false }, extra));
+    const merge = (g) => { const c = out[out.length - 1]; c.gkeys.push(g.key); c.to = g.idx[g.idx.length - 1]; c.members.push(...g.members); c.score += g.score; c.add += g.add; c.del += g.del; c.ir = g.kind !== 'tree'; };
+    groups.forEach((g, gi) => {
+      const first = gi === 0, raw = g.raw;
+      if (g.kind === 'tree') { if (first || g.idx.length === 1 && (raw === 'typer' || raw === 'erasure') || g.score >= 0.5 * mt || !out.length) push(g, { forced: first || raw === 'typer' || raw === 'erasure' }); else merge(g); }
+      else if (g.kind === 'gen') push(g, { forced: true });
+      else if (g.kind === 'opt') { if (g.score >= mi) push(g, { opt: false }); else if (out.length && out[out.length - 1].opt) merge(g); else push(g, { opt: true }); }
+      else if (g.kind === 'post') { if (g.score >= 0.5 * mi || !out.length) push(g); else merge(g); }
+      else { if (g.score >= mi || !out.length) push(g); else merge(g); }
+    });
+    out.forEach((c, k) => {
+      c.k = k; let d = c.members[0]; c.members.forEach((m) => { if (m.sc > d.sc) d = m; }); c.dom = d.i; const v = vs[c.dom].v, minor = c.members.filter((m) => m.i !== c.dom && m.sc > 0).length;
+      c.name = c.opt && c.members.length > 1 ? `optimiser (${c.members.length} passes)` : c.gkeys && /^opt:r\d+$/.test(c.gkeys[0]) && c.gkeys.length === 1 ? `optimiser round ${c.gkeys[0].slice(5)}${minor ? ` (+ ${minor} minor pass${minor > 1 ? 'es' : ''})` : ''}` : R.verName(v) + (minor ? ` (+ ${minor} minor phase${minor > 1 ? 's' : ''})` : ''); c.short = c.opt ? 'optimiser' : R.verName(v); c.v = vs[c.to].v;
+    });
+    gCache = { key, val: out, medians: [mt, mi] }; return out;
+  };
+  R.chapters = () => ((R.ST.chMode || 'groups') === 'groups' ? groupChapters() : customChapters());
   // the page stops for the current granularity: chapter ends, ★ top-N, or every version with a change
   R.interesting = () => {
     const g = R.ST.gran || 'chapters';
@@ -160,10 +192,11 @@
     const zoomed = !!R.ST.zoomKey; box.hidden = zoomed; if (zoomed) return;
     const W = $('bands').clientWidth || 1000, ax = R.axis(W), top = new Set(R.interesting().map((x) => x.v.phase)); R.computeLines(R.ST.unit);
     const vals = new Map(); R.versionScores().forEach((x) => { vals.set(x.v.irPseudo ? 'i' + x.v.phase : x.v.phase, R.metricVal(x.sc)); });
-    const max = Math.max(1, ...vals.values()), key = [R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size, R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct].join('|'), chStart = new Set(R.chapters().filter((c) => c.from > 0).map((c) => { const v = R.vers()[c.from]; return v.irPseudo ? 'i' + v.phase : v.phase; }));
+    const chs = R.chapters(), vsAll = R.vers(), curCh = chs.find((c) => c.from <= R.ST.verIdx && R.ST.verIdx <= c.to), phIdx = new Map(); vsAll.forEach((v, i) => phIdx.set(v.irPseudo ? 'i' + v.phase : v.phase, i));
+    const max = Math.max(1, ...vals.values()), key = [curCh ? curCh.k : -1, R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size, R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct, R.ST.chMode, R.ST.chMetric].join('|'), chStart = new Set(R.chapters().filter((c) => c.from > 0).map((c) => { const v = R.vers()[c.from]; return v.irPseudo ? 'i' + v.phase : v.phase; }));
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
-      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR && !b.ir) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.ir ? 'i' + b.phase : b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (chStart.has(b.ir ? 'i' + b.phase : b.phase) ? ' chb' : '') + (b.phase === D.irGenPhase && D.hasIR && !b.ir ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
+      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR && !b.ir) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.ir ? 'i' + b.phase : b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (chStart.has(b.ir ? 'i' + b.phase : b.phase) ? ' chb' : '') + (curCh && (() => { const i = phIdx.get(b.ir ? 'i' + b.phase : b.phase); return i != null && i >= curCh.from && i <= curCh.to; })() ? ' chcur' : '') + (b.phase === D.irGenPhase && D.hasIR && !b.ir ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
     }
   }
   R.renderHeat = renderHeat;

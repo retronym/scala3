@@ -60,7 +60,7 @@
       if (isIR) { c = S.cards.find((x) => x.kind === 'ir' && x.v.ids.has(sel)) || c; if (c.v.ids.has(sel)) n = sel; } else if (c.kind === 'tree') n = [...R.present(sel, c.v)][0] ?? (c.v.ids.has(sel) ? sel : null); else { const t = S.cards.filter((x) => x.kind === 'tree').pop(); if (t) { c = t; n = [...R.present(sel, t.v)][0] ?? null; } }
       if (n != null && c) st.traceNode(c, n); }, 0);
   }
-  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass(), R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct, R.ST.chMetric].join('|');
+  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass(), R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct, R.ST.chMetric, R.ST.chMode].join('|');
   const fsig = () => [R.ST.trivialNoop !== false, R.scoreState && R.scoreState.lines.size].join('|');
 
   // the overlay owns wheel/touch input while open: the page behind must not scroll, even when the stack cannot move further
