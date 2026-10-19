@@ -1,0 +1,11 @@
+Used Names:
+===========
+module class A$: Unit in [Default], java$u003Blang$u003BObject$u003Binit$u003B in [Default], Object in [Default], Int in [Default], $plus in [Default], x in [Default], 
+module class B$: Predef in [Default], x in [Default], Predef in [Default], $times in [Default], augmentString in [Default], Object in [Default], Int in [Default], String in [Default], Unit in [Default], StringOps in [Default], java$u003Blang$u003BObject$u003Binit$u003B in [Default], 
+module class x-relaxed-ext-imports$package$: Predef in [Default], Tuple2 in [Default], Predef in [Default], B in [Default], experimental in [Default], Object in [Default], Int in [Default], String in [Default], language in [Default], Any in [Default], scala in [Default], Nothing in [Default], relaxedExtensionImports in [Default], Unit in [Default], language in [Default], B in [Default], apply in [Default], experimental in [Default], A in [Default], Tuple2 in [Default], java$u003Blang$u003BObject$u003Binit$u003B in [Default], A in [Default], foo in [Default], 
+
+Dependencies:
+=============
+module class A$: class Object in [DependencyByMemberRefDependencyByInheritance], class Unit in [DependencyByMemberRef], class Int in [DependencyByMemberRef], module class A$ in [DependencyByMemberRef], 
+module class B$: class Object in [DependencyByMemberRefDependencyByInheritance], class Unit in [DependencyByMemberRef], module class Predef$ in [DependencyByMemberRef], class String in [DependencyByMemberRef], class StringOps in [DependencyByMemberRef], class Int in [DependencyByMemberRef], module class B$ in [DependencyByMemberRef], 
+module class x-relaxed-ext-imports$package$: module class relaxedExtensionImports$ in [DependencyByMemberRef], class String in [DependencyByMemberRef], module class Tuple2$ in [DependencyByMemberRef], class Any in [DependencyByMemberRef], class Tuple2 in [DependencyByMemberRef], module class A$ in [DependencyByMemberRef], class Int in [DependencyByMemberRef], module class language$ in [DependencyByMemberRef], class Unit in [DependencyByMemberRef], module class B$ in [DependencyByMemberRef], class Nothing in [DependencyByMemberRef], class Object in [DependencyByMemberRefDependencyByInheritance], module class experimental$ in [DependencyByMemberRef], module class Predef$ in [DependencyByMemberRef], 
