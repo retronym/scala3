@@ -162,6 +162,7 @@ public class CoverageDriver {
         Throwable c = t instanceof java.lang.reflect.InvocationTargetException ? t.getCause() : t;
         status = "CRASH";
         detail = String.valueOf(c).replace('\n', ' ');
+        if (capture == null) c.printStackTrace();  // `serve`: stderr goes to the job's .out
       } finally {
         if (capture != null) { System.setOut(realOut); System.setErr(realErr); }
       }

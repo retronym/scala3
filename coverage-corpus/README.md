@@ -47,6 +47,15 @@ python3 coverage-corpus/harness.py gaps --report latest --filter typer
 
 `select` takes `--max-lines` (a source budget), `--min-gain`, `--job-overhead` and `--ms-weight` to trade coverage for size; `curve` shows the trade-off (line coverage against cumulative corpus kLOC along the greedy order).
 
+For an annotated-source report that attributes every covered compiler line to the corpus jobs that reach it (lines only one job covers are highlighted; each job's page lists the lines only it covers):
+
+```bash
+python3 coverage-corpus/harness.py report corpus --out corpus
+python3 coverage-corpus/harness.py annotate --campaign corpus --pool vulpix syn variants
+```
+
+This works because JaCoCo line coverage is a union over probes: `driver/ProbeLines.java` analyses each probe of each class on its own once per compiler build, and per-job probe bitsets then give exact per-line attribution. `annotate` checks its result against JaCoCo's own report line by line.
+
 For writing new cases, keep a warm compiler running and send cases to it:
 
 ```bash

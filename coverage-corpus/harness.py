@@ -1233,6 +1233,12 @@ def main():
     p.add_argument("--title", default="Compiler line coverage vs corpus size (greedy order)")
     p.set_defaults(fn=cmd_curve)
 
+    p = sub.add_parser("annotate", help="annotated-source HTML report with per-line attribution to jobs")
+    p.add_argument("--campaign", default="corpus", help="jobs to attribute lines to")
+    p.add_argument("--pool", nargs="*", default=[], help="wider campaigns, for the 'pool only' colour")
+    p.add_argument("--out", default="attrib")
+    p.set_defaults(fn=lambda a: __import__("annotate").run(a))
+
     p = sub.add_parser("serve")
     p.set_defaults(fn=cmd_serve)
 
