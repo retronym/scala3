@@ -8,7 +8,8 @@ import dotty.tools.dotc.core.Phases.Phase
 import dotty.tools.dotc.core.SymDenotations.SymDenotation
 import dotty.tools.dotc.core.Types.*
 import dotty.tools.dotc.reporting.{Diagnostic, Reporter}
-import dotty.tools.dotc.typer.Implicits.SearchResult
+import dotty.tools.dotc.core.TyperState
+import dotty.tools.dotc.typer.Implicits.{Candidate, SearchResult}
 import dotty.tools.dotc.util.Spans.Span
 import org.objectweb.asm.tree.{AbstractInsnNode, ClassNode, MethodNode}
 
@@ -34,6 +35,17 @@ trait Observer:
   def copied(tree: Trees.Tree[?], copy: Trees.Tree[?]): Unit = ()
   /** An implicit reference dropped before `tryImplicit`; `reason` is the pruning site. */
   def rejected(ref: TermRef, reason: String)(using Context): Unit = ()
+  /** One ranking (`ImplicitSearch.searchImplicit(eligible, contextual)`) and its `rank` steps. */
+  def scopeEnter(eligible: List[Candidate], contextual: Boolean)(using Context): Unit = ()
+  def scopeExit(eligible: List[Candidate], contextual: Boolean, result: SearchResult | Null)(using Context): Unit = ()
+  def rankStep(pending: List[Candidate], found: SearchResult)(using Context): Unit = ()
+  /** `Typer.tryEither`; `tentativeState` is its fresh TyperState, `commit` any TyperState commit. */
+  def tentativeEnter()(using Context): Unit = ()
+  def tentativeExit(threw: Boolean)(using Context): Unit = ()
+  def tentativeState(ts: TyperState): Unit = ()
+  def commit(ts: TyperState): Unit = ()
+  /** A report buffered by a TyperState's StoreReporter (not seen by `report`). */
+  def bufferedReport(dia: Diagnostic, reporter: Reporter)(using Context): Unit = ()
 
   // JVM backend: same signatures as the fork's TyperObserver
   def classNodes(typeDef: tpd.TypeDef, classNode: ClassNode, mirror: ClassNode | Null)(using Context): Unit = ()

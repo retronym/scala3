@@ -14,7 +14,8 @@ final class JoinPoints {
   enum Kind { ADVICE, SUBSTITUTE, DEFINE_HASHCODE, REPLACE_HASHCODE }
 
   /** {@code fork}: the TyperObserver fork's hooks. {@code fix}: the fork's TypeApply behaviour fix.
-   *  {@code names}: the fork's Name/NameKind content hashes. {@code extra}: hooks the fork does not have. */
+   *  {@code names}: the fork's Name/NameKind content hashes. {@code extra} (option {@code rejected}) and
+   *  {@code tentative} (option {@code tentative}): hooks the fork does not have. */
   record JoinPoint(String group, Kind kind, String owner, String method, String descriptor,
                    Class<?> advice, String requiredField, String forkSite) {
     String key() { return owner + "." + method + descriptor; }
@@ -94,6 +95,21 @@ final class JoinPoints {
       "(" + TYPE + "ZLdotty/tools/dotc/core/Types$TermRef;" + CTX + ")I", Advices.CandidateKind.class, null,
       "(none) filterMatching drops a ref"),
     new JoinPoint("extra", Kind.ADVICE, "dotty.tools.dotc.typer.Implicits$ImplicitSearch", "comesTooLate$1",
-      "(" + CAND + ")Z", Advices.ComesTooLate.class, "x$5", "(none) searchImplicit drops a candidate")
+      "(" + CAND + ")Z", Advices.ComesTooLate.class, "x$5", "(none) searchImplicit drops a candidate"),
+    new JoinPoint("extra", Kind.ADVICE, "dotty.tools.dotc.typer.Implicits$ImplicitSearch", "searchImplicit",
+      "(" + LIST + "Z)" + RESULT, Advices.SearchImplicit.class, "x$5", "(none) one ranking over one scope"),
+    new JoinPoint("extra", Kind.ADVICE, "dotty.tools.dotc.typer.Implicits$ImplicitSearch", "rank$1",
+      "(ZZLscala/collection/mutable/ListBuffer;Z" + LIST + RESULT + LIST + ")" + RESULT, Advices.Rank.class, "x$5",
+      "(none) rank step: pruned candidates"),
+
+    new JoinPoint("tentative", Kind.ADVICE, "dotty.tools.dotc.typer.Typer$", "tryEither",
+      "(Lscala/Function1;Lscala/Function2;" + CTX + ")Ljava/lang/Object;", Advices.TryEither.class, null, "(none) tentative typing"),
+    new JoinPoint("tentative", Kind.ADVICE, "dotty.tools.dotc.core.Contexts$FreshContext", "setNewTyperState",
+      "()Ldotty/tools/dotc/core/Contexts$FreshContext;", Advices.SetNewTyperState.class, null, "(none) tryEither's nested state"),
+    new JoinPoint("tentative", Kind.ADVICE, "dotty.tools.dotc.core.TyperState", "commit",
+      "(" + CTX + ")V", Advices.Commit.class, null, "(none) kept vs discarded"),
+    new JoinPoint("tentative", Kind.ADVICE, "dotty.tools.dotc.reporting.StoreReporter", "report",
+      "(Ldotty/tools/dotc/reporting/Diagnostic;" + CTX + ")V", Advices.StoreReport.class, "fromTyperState",
+      "(none) reports buffered in a TyperState")
   );
 }

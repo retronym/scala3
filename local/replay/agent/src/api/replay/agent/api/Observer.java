@@ -34,6 +34,23 @@ public interface Observer {
   /** {@code TreeCopier.finalize}; the stock method has no Context. */
   void copied(Object tree, Object copy);
 
-  /** Not in the fork: an implicit reference was dropped before {@code tryImplicit}. */
+  // ---- not in the fork (agent options `rejected`, `tentative`) ----
+
+  /** An implicit reference was dropped before {@code tryImplicit} ({@code ref}: TermRef or Candidate). */
   void rejected(Object ref, String reason, Object ctx);
+
+  /** {@code ImplicitSearch.searchImplicit(eligible, contextual)}: one ranking over one scope. */
+  void scopeEnter(Object eligible, boolean contextual, Object ctx);
+  void scopeExit(Object eligible, boolean contextual, Object result, Object ctx);
+  /** Each step of {@code rank(pending, found, rfailures)} inside the current scope. */
+  void rankStep(Object pending, Object found, Object ctx);
+
+  /** {@code Typer.tryEither}: typing under a fresh TyperState that is committed or dropped. */
+  void tentativeEnter(Object ctx);
+  void tentativeExit(boolean threw, Object ctx);
+  /** The FreshContext made by the first {@code setNewTyperState} inside the current tryEither. */
+  void tentativeContext(Object freshCtx);
+  void typerStateCommit(Object typerState);
+  /** {@code StoreReporter.report} on a TyperState's buffering reporter (the fork's hook never sees it). */
+  void bufferedReport(Object diagnostic, Object reporter, Object ctx);
 }

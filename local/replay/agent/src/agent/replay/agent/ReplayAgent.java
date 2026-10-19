@@ -34,7 +34,8 @@ import replay.agent.api.Hooks;
  *
  * {@code -javaagent:replay-agent.jar[=opts]} (premain) or self-attach (agentmain, see the plugin's
  * {@code Install}). Options, comma-separated: {@code fixTypeApply} (the fork's TypeApply copier fix),
- * {@code rejected} (rejected-candidate hooks, not in the fork), {@code nonames} (skip the Name
+ * {@code rejected} (implicit scope, ranking and rejected-candidate hooks, not in the fork),
+ * {@code tentative} (tryEither and TyperState-buffered reports, not in the fork), {@code nonames} (skip the Name
  * hashes), {@code verbose} (print the join-point table on verify).
  *
  * The Name hashes add a method, so they need the class before it is loaded: premain only.
@@ -64,6 +65,7 @@ public final class ReplayAgent {
         case "fork" -> true;
         case "fix" -> opts.contains("fixTypeApply");
         case "extra" -> opts.contains("rejected");
+        case "tentative" -> opts.contains("tentative");
         case "names" -> !opts.contains("nonames");
         default -> false;
       };
@@ -87,6 +89,7 @@ public final class ReplayAgent {
       } else {
         new AgentBuilder.Default()
           .with(AgentBuilder.TypeStrategy.Default.REDEFINE)
+          .with(AgentBuilder.InitializationStrategy.NoOp.INSTANCE) // no Nexus <clinit>: nothing to initialize
           .with(listener)
           .ignore(not(nameStartsWith("dotty.tools.dotc.core.Name")))
           .type(namedOneOf(nameClasses.toArray(String[]::new)))

@@ -30,6 +30,9 @@ public final class Hooks {
   /** Armed by {@code ImplicitSearch.tryImplicit}, consumed by {@code Implicits.typedImplicit}. */
   public static boolean armCandidate;
 
+  /** Armed by {@code Typer.tryEither}, consumed by {@code FreshContext.setNewTyperState}. */
+  public static boolean armTyperState;
+
   /** Installed by the agent: forces loading of every target class in the given loader and
    *  returns the join-point table, or throws if a site was not found. */
   public static Function<ClassLoader, String> verifier;

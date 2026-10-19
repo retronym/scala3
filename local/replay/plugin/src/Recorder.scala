@@ -21,7 +21,8 @@ import dotty.tools.dotc.printing.XprintMode
 import dotty.tools.dotc.reporting.{Diagnostic, Reporter}
 import dotty.tools.dotc.transform.MegaPhase
 import dotty.tools.dotc.transform.MegaPhase.MiniPhase
-import dotty.tools.dotc.typer.Implicits.{SearchResult, SearchSuccess, SearchFailure}
+import dotty.tools.dotc.core.TyperState
+import dotty.tools.dotc.typer.Implicits.{Candidate, SearchResult, SearchSuccess, SearchFailure, AmbiguousImplicits}
 import dotty.tools.dotc.util.SourceFile
 import dotty.tools.dotc.util.Spans.Span
 
@@ -89,8 +90,10 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
 
   /** A buffered event. `syms` holds Symbols, or trees whose symbol is resolved at flush. */
   private final class Ev(val seq: Int, val parent: Int, val kind: String, val phase: Int, val unit: Int,
-      val span: Span, val nodes: Array[Int], val syms: List[Symbol | tpd.Tree], val payload: String | Diagnostic,
-      val reporter: String = "")
+      val span: Span, val nodes: Array[Int], val syms: List[Symbol | tpd.Tree | TermRef], val payload: String | Diagnostic,
+      val reporter: String = ""):
+    /** Extra payload fields for agent-only Report events (`buffered`, `discarded`); empty otherwise. */
+    var flags: String = ""
   private val evBuf = mutable.ArrayBuffer[Ev]()
   private val edgeBuf = mutable.ArrayBuffer[(String, Symbol, Symbol | tpd.Tree, Int)]()
   private val evCount = mutable.HashMap[String, Int]()
@@ -318,12 +321,13 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
         val syms = e.syms.map {
           case s: Symbol => symId(s)
           case t: tpd.Tree => symId(symOf(t))
+          case r: TermRef => symId(r.symbol) // agent-only events defer `.symbol` to here
         }.filter(_ >= 0)
         val payload = e.payload match
           case s: String => s
           case dia: Diagnostic =>
             val msg = try dia.msg.message catch case ex: Exception => s"<${ex.getClass.getSimpleName}>"
-            s"""{"level":${dia.level},"msg":${jstr(msg)},"reporter":${jstr(e.reporter)}}"""
+            s"""{"level":${dia.level},"msg":${jstr(msg)},"reporter":${jstr(e.reporter)}${e.flags}}"""
         val sb = new java.lang.StringBuilder(160)
         sb.append("""{"t":"ev","seq":""").append(e.seq)
           .append(""","parent":""").append(if e.parent < 0 then "null" else e.parent.toString)
@@ -435,8 +439,11 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
       addEv(Ev(seq, parent, "ImplicitSearch", runningId, curUnit, span, Array(arg, chosen), syms,
         s"""{"pt":${typeId(pt)},"result":$result}"""))
 
-  override def candidateEnter(ref: TermRef, span: Span)(using Context): Unit = enter()
+  override def candidateEnter(ref: TermRef, span: Span)(using Context): Unit =
+    if scopes.nonEmpty then scopes.last.tried.put(ref, false)
+    enter()
   override def candidateExit(ref: TermRef, span: Span, res: SearchResult | Null)(using Context): Unit =
+    if scopes.nonEmpty && res.isInstanceOf[SearchSuccess] then scopes.last.tried.put(ref, true)
     val seq = exit()
     if seq >= 0 then
       val (accepted, reason) = res match
@@ -512,8 +519,107 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
   override def rejected(ref: TermRef, reason: String)(using Context): Unit =
     if !active then perturbations += (if suspended > 0 then 1 else 0)
     else
-      addEv(Ev(allocSeq(), parent, "Rejected", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(), List(ref.symbol),
+      addEv(Ev(allocSeq(), parent, "Rejected", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(), List(ref),
         s"""{"ref":${typeId(ref)},"reason":${jstr(reason)}}"""))
+
+  // ---- agent-only hooks: implicit scopes and ranking, tentative typing --------------------------
+
+  /** One `searchImplicit(eligible, contextual)`; `seq` is -1 if not recorded. */
+  private final class ScopeFrame(val seq: Int):
+    val tried = new IdentityHashMap[TermRef, Boolean]     // ref -> its typedImplicit succeeded
+    val pruned = new IdentityHashMap[Candidate, (String, TermRef | Null)]
+    var lastPending: List[Candidate] | Null = null
+  private val scopes = mutable.ArrayBuffer[ScopeFrame]()
+
+  override def scopeEnter(eligible: List[Candidate], contextual: Boolean)(using Context): Unit =
+    enter()
+    scopes += ScopeFrame(if active then stack.last else -1)
+
+  override def rankStep(pending: List[Candidate], found: SearchResult)(using Context): Unit =
+    if scopes.nonEmpty then
+      val f = scopes.last
+      f.lastPending match
+        case prev: List[Candidate] if prev.nonEmpty =>
+          // rank tries the head of each step; anything else missing from the next step was pruned
+          for c <- prev.tail if !pending.exists(_ eq c) && !f.pruned.containsKey(c) do
+            f.pruned.put(c, found match
+              case s: SearchSuccess => ("lowerPriorityThan", s.ref)
+              case _ => ("notBetterThanAmbiguous", null))
+        case _ =>
+      f.lastPending = pending
+
+  override def scopeExit(eligible: List[Candidate], contextual: Boolean, res: SearchResult | Null)(using Context): Unit =
+    val f = scopes.remove(scopes.length - 1)
+    val seq = exit()
+    if seq >= 0 then
+      val winner = res match
+        case s: SearchSuccess => s.ref
+        case _ => null
+      // untried: pruned by ranking, or never reached; tried and succeeded but not chosen: lost in disambiguation
+      for c <- eligible do
+        val verdict: (String, TermRef | Null, Boolean) | Null =
+          if !f.tried.containsKey(c.ref) then
+            val (reason, than) = Option(f.pruned.get(c)).getOrElse(("notTried", null))
+            (reason, than, false)
+          else if f.tried.get(c.ref) && winner != null && (winner ne c.ref) then ("lostTo", winner, true)
+          else null
+        if verdict != null then
+          val (reason, than, tried) = verdict.nn
+          addEv(Ev(allocSeq(), seq, "Rejected", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(),
+            c.ref :: (if than == null then Nil else List(than.nn)),
+            s"""{"ref":${typeId(c.ref)},"reason":${jstr(reason)},"than":${if than == null then "null" else typeId(than)},"level":${c.level},"tried":$tried}"""))
+      val (result, ambiguous) = res match
+        case _: SearchSuccess => ("\"success\"", Nil)
+        case r: SearchFailure => r.reason match
+          case a: AmbiguousImplicits => (jstr("AmbiguousImplicits"), List(a.alt1.ref, a.alt2.ref))
+          case reason => (jstr(reason.getClass.getSimpleName), Nil)
+        case null => ("null", Nil)
+      addEv(Ev(seq, parent, "Scope", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(), ambiguous,
+        s"""{"scope":${if contextual then "\"contextual\"" else "\"implicitScope\""},"eligible":[${eligible.map(c => typeId(c.ref)).mkString(",")}],"levels":[${eligible.map(_.level).mkString(",")}],"result":$result,"ambiguous":[${ambiguous.map(typeId).mkString(",")}]}"""))
+
+  /** One `tryEither`; `reports` are the buffered Report events inside it, in order. */
+  private final class TentFrame(val seq: Int):
+    var state: TyperState | Null = null
+    var kept = false
+    val reports = mutable.ArrayBuffer[Ev]()
+  private val tents = mutable.ArrayBuffer[TentFrame]()
+
+  override def tentativeEnter()(using Context): Unit =
+    enter()
+    tents += TentFrame(if active then stack.last else -1)
+
+  override def tentativeState(ts: TyperState): Unit =
+    if tents.nonEmpty && tents.last.state == null then tents.last.state = ts
+
+  override def commit(ts: TyperState): Unit =
+    var i = tents.length - 1
+    while i >= 0 do
+      if tents(i).state eq ts then tents(i).kept = true
+      i -= 1
+
+  override def tentativeExit(threw: Boolean)(using Context): Unit =
+    val f = tents.remove(tents.length - 1)
+    val seq = exit()
+    val outcome = if threw then "aborted" else if f.kept then "kept" else "discarded"
+    if outcome != "kept" then for r <- f.reports do r.flags = ""","buffered":true,"discarded":true"""
+    if tents.nonEmpty then tents.last.reports ++= f.reports
+    if seq >= 0 then
+      if f.kept && f.reports.isEmpty && nextSeq == seq + 1 then
+        nextSeq = seq // kept with nothing inside: drop, like a no-op Adapt
+      else
+        addEv(Ev(seq, parent, "Tentative", runningId, curUnit, dotty.tools.dotc.util.Spans.NoSpan, Array(), Nil,
+          s"""{"outcome":"$outcome","reports":${f.reports.length}}"""))
+
+  override def bufferedReport(dia: Diagnostic, reporter: Reporter)(using Context): Unit =
+    if !active then perturbations += (if suspended > 0 then 1 else 0)
+    else
+      val pos = dia.pos
+      val span = if pos.exists then pos.span else dotty.tools.dotc.util.Spans.NoSpan
+      val u = if pos.exists then unitOf.getOrElse(pos.source, -1) else -1
+      val e = Ev(allocSeq(), parent, "Report", runningId, u, span, Array(), Nil, dia, reporter.getClass.getSimpleName)
+      e.flags = ""","buffered":true"""
+      if tents.nonEmpty then tents.last.reports += e
+      addEv(e)
 
   // ---- versions -------------------------------------------------------------------------------
 

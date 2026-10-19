@@ -201,7 +201,7 @@ public final class Advices {
     static void exit(@Advice.Argument(2) Object ref, @Advice.Argument(3) Object ctx, @Advice.Return int kind) {
       if (kind == 0) {
         Observer o = Hooks.observer;
-        if (o != null) o.rejected(ref, "noMatch", ctx);
+        if (o != null) o.rejected(ref, "notEligible", ctx);
       }
     }
   }
@@ -214,6 +214,83 @@ public final class Advices {
       if (tooLate) {
         Observer o = Hooks.observer;
         if (o != null) o.rejected(cand, "comesTooLate", ctx);
+      }
+    }
+  }
+
+  /** {@code ImplicitSearch.searchImplicit(eligible, contextual)} (private). */
+  public static final class SearchImplicit {
+    @Advice.OnMethodEnter
+    static Observer enter(@Advice.Argument(0) Object eligible, @Advice.Argument(1) boolean contextual,
+                          @Advice.FieldValue("x$5") Object ctx) {
+      Observer o = Hooks.observer;
+      if (o != null) o.scopeEnter(eligible, contextual, ctx);
+      return o;
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter Observer o, @Advice.Argument(0) Object eligible, @Advice.Argument(1) boolean contextual,
+                     @Advice.FieldValue("x$5") Object ctx, @Advice.Return Object res, @Advice.Thrown Throwable t) {
+      if (o != null) o.scopeExit(eligible, contextual, t == null ? res : null, ctx);
+    }
+  }
+
+  /** {@code searchImplicit}'s local {@code rank(pending, found, rfailures)}: successive pending lists
+   *  show which candidates a success (or an ambiguity being healed) pruned. */
+  public static final class Rank {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(4) Object pending, @Advice.Argument(5) Object found, @Advice.FieldValue("x$5") Object ctx) {
+      Observer o = Hooks.observer;
+      if (o != null) o.rankStep(pending, found, ctx);
+    }
+  }
+
+  /** {@code Typer.tryEither(op)(fallBack)}: arms {@link SetNewTyperState}. */
+  public static final class TryEither {
+    @Advice.OnMethodEnter
+    static Observer enter(@Advice.Argument(2) Object ctx) {
+      Observer o = Hooks.observer;
+      Hooks.armTyperState = true;
+      if (o != null) o.tentativeEnter(ctx);
+      return o;
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter Observer o, @Advice.Argument(2) Object ctx, @Advice.Thrown Throwable t) {
+      Hooks.armTyperState = false;
+      if (o != null) o.tentativeExit(t != null, ctx);
+    }
+  }
+
+  /** {@code FreshContext.setNewTyperState}: the first call after tryEither enter is its nestedCtx. */
+  public static final class SetNewTyperState {
+    @Advice.OnMethodExit
+    static void exit(@Advice.Return Object fresh) {
+      if (Hooks.armTyperState) {
+        Hooks.armTyperState = false;
+        Observer o = Hooks.observer;
+        if (o != null) o.tentativeContext(fresh);
+      }
+    }
+  }
+
+  /** {@code TyperState.commit}: tells kept from discarded tentative states. */
+  public static final class Commit {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.This Object ts) {
+      Observer o = Hooks.observer;
+      if (o != null) o.typerStateCommit(ts);
+    }
+  }
+
+  /** {@code StoreReporter.report}: the TyperState-buffering branch skips {@code Reporter.report}. */
+  public static final class StoreReport {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.This Object reporter, @Advice.Argument(0) Object dia, @Advice.Argument(1) Object ctx,
+                      @Advice.FieldValue("fromTyperState") boolean fromTyperState) {
+      if (fromTyperState) {
+        Observer o = Hooks.observer;
+        if (o != null) o.bufferedReport(dia, reporter, ctx);
       }
     }
   }

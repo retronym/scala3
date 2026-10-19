@@ -8,6 +8,7 @@ import dotty.tools.dotc.core.Phases.Phase
 import dotty.tools.dotc.core.SymDenotations.SymDenotation
 import dotty.tools.dotc.core.Types.*
 import dotty.tools.dotc.reporting.{Diagnostic, Reporter}
+import dotty.tools.dotc.core.TyperState
 import dotty.tools.dotc.typer.Implicits.{Candidate, SearchResult}
 import dotty.tools.dotc.util.Spans.Span
 
@@ -80,3 +81,15 @@ final class AgentBridge(val o: Observer) extends replay.agent.api.Observer:
       case cand: Candidate => cand.ref
       case r: TermRef => r
     o.rejected(r, reason)(using c(ctx))
+  def scopeEnter(eligible: Object, contextual: Boolean, ctx: Object) =
+    o.scopeEnter(eligible.asInstanceOf[List[Candidate]], contextual)(using c(ctx))
+  def scopeExit(eligible: Object, contextual: Boolean, res: Object, ctx: Object) =
+    o.scopeExit(eligible.asInstanceOf[List[Candidate]], contextual, res.asInstanceOf[SearchResult | Null])(using c(ctx))
+  def rankStep(pending: Object, found: Object, ctx: Object) =
+    o.rankStep(pending.asInstanceOf[List[Candidate]], found.asInstanceOf[SearchResult])(using c(ctx))
+  def tentativeEnter(ctx: Object) = o.tentativeEnter()(using c(ctx))
+  def tentativeExit(threw: Boolean, ctx: Object) = o.tentativeExit(threw)(using c(ctx))
+  def tentativeContext(fresh: Object) = o.tentativeState(fresh.asInstanceOf[Context].typerState)
+  def typerStateCommit(ts: Object) = o.commit(ts.asInstanceOf[TyperState])
+  def bufferedReport(dia: Object, reporter: Object, ctx: Object) =
+    o.bufferedReport(dia.asInstanceOf[Diagnostic], reporter.asInstanceOf[Reporter])(using c(ctx))
