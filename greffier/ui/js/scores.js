@@ -39,22 +39,14 @@
   const METRICS = { struct: (s) => s.struct, removed: (s) => s.removed, retype: (s) => s.retype, lines: (s) => s.lines || 0, total: (s) => s.struct + s.removed + s.retype + s.rebuilt + (s.lines || 0) / 4 };
   R.metricVal = (sc) => METRICS[R.ST.metric || 'struct'](sc);
 
-  // ---- lines (lazy, chunked) ----
-  const isOp = /^\s+[A-Z][A-Z0-9_]+\b/, notOp = /^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/;
-  function lineDiff(a, b, ir) {
-    const A = a.split('\n'), B = b.split('\n'), q = new Map(); A.forEach((t, i) => { if (!t.trim()) return; let l = q.get(t); if (!l) q.set(t, (l = [])); l.push(i); });
-    const used = new Set(); let last = -1, add = 0, del = 0;
-    const keep = (t) => (ir ? isOp.test(t) && !notOp.test(t) : t.trim().length > 0);
-    B.forEach((t) => { if (!keep(t)) return; const l = q.get(t); const k = l && l.find((i) => i > last && !used.has(i)); if (k != null) { used.add(k); last = k; } else add++; });
-    A.forEach((t, i) => { if (keep(t) && !used.has(i)) del++; });
-    return { add, del };
-  }
+  // ---- lines (lazy, chunked): the shared diff (diff.js) ----
+  const isOp = /^\s+[A-Z][A-Z0-9_]+\b/, notOp = /^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/, opLine = (t) => isOp.test(t) && !notOp.test(t);
   R.computeLines = async (unit) => {
     ensure(); const D = S.D, cls0 = R.curClass && R.curClass(), tag = 'u' + unit; if (S.pending.has(tag) || S.done.has(tag)) return; S.pending.add(tag);
     const vs = D.versionsOf(unit); let n = 0, changed = 0;
     for (let i = 1; i < vs.length; i++) {
       const key = unit + ':' + vs[i].phase; if (S.lines.has(key)) continue;
-      S.lines.set(key, vs[i].text === vs[i - 1].text ? { add: 0, del: 0 } : lineDiff(vs[i - 1].text, vs[i].text, false)); S.tree.delete(key); changed++;
+      { const d = R.versionDiff(vs[i], vs[i - 1]); S.lines.set(key, { add: d.add, del: d.del }); } S.tree.delete(key); changed++;
       if (++n % 6 === 0) await new Promise((r) => setTimeout(r, 0)); if (S.D !== D) return;
     }
     // JVM: every class of the unit, phase by phase, summed per phase: instructions emitted at genBCode (+), instruction lines +/- after
@@ -62,7 +54,7 @@
     for (const c of D.jvmClasses.values()) {
       if (c.unit !== unit) continue; let prev = null;
       for (const cv of c.versions) {
-        if (!prev) bump(cv.phase, cv.text.split('\n').filter((t) => isOp.test(t) && !notOp.test(t)).length, 0); else { const d = lineDiff(prev.text, cv.text, true); bump(cv.phase, d.add, d.del); }
+        if (!prev) bump(cv.phase, cv.text.split('\n').filter((t) => isOp.test(t) && !notOp.test(t)).length, 0); else { const d = R.countDiff(prev.text, cv.text, opLine); bump(cv.phase, d.add, d.del); }
         prev = cv; if (++n % 4 === 0) await new Promise((r) => setTimeout(r, 0)); if (S.D !== D) return;
       }
     }

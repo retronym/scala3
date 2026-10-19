@@ -9,7 +9,7 @@
   const TAIL = /"nodes":(\d+),"new":(\d+)\}\s*$/;
 
   // ---- versions: heavy fields are decoded lazily -------------------------------------------------------------
-  const LRU = []; const LRU_MAX = 24;
+  const LRU = []; const LRU_MAX = 96;
   class Version {
     constructor(D, h) { Object.assign(this, h); this.D = D; this._l = false; }
     _load() {

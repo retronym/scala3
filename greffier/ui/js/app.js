@@ -128,7 +128,7 @@
 
   R.render = function () {
     const t = [], t0 = performance.now();
-    views.forEach((v) => { const a = performance.now(); v(); t.push(Math.round(performance.now() - a)); });
+    views.forEach((v) => { if (R.stackOpen && !v.light) { t.push(0); return; } const a = performance.now(); v(); t.push(Math.round(performance.now() - a)); });   // the stack overlay hides the viewer: only light views run
     R.lastRender = { total: Math.round(performance.now() - t0), parts: t }; if (R.scheduleHash) R.scheduleHash();
     const p = document.getElementById('perf'); if (p) p.textContent = `render ${R.lastRender.total} ms`;
   };
@@ -209,6 +209,7 @@
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
+    if (h.get('stack') === '1') setTimeout(() => R.openStack && R.openStack(), 0);
     if (h.has('sym')) patch.selSym = +h.get('sym');
     R.set(patch);
   };
@@ -220,6 +221,7 @@
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); p.set('cls', R.curClass()); } } if (R.ev()) p.set('seq', R.seq());
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
     if (ST.level !== 'file') p.set('level', ST.level);
+    if (R.stackOpen) p.set('stack', 1);
     if (ST.skip) p.set('skip', 1); if (ST.collapse) p.set('collapse', 1); if (ST.showRetyped) p.set('retyped', 1);
     return p.toString().replace(/%2C/g, ',').replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
   };
@@ -389,7 +391,7 @@
     }
     vs.forEach((v, k) => { const b = document.createElement('button'); b.textContent = `${D.phaseName(v.phase)} (${R.newCount(v)})`; b.title = `${R.newCount(v)} new nodes`; b.className = k === ps ? 'on' : ''; b.onclick = () => R.setPhase(k); box.append(b); });
   }
-  views.push(renderControls);
+  renderControls.light = true; views.push(renderControls);
 
   document.addEventListener('DOMContentLoaded', () => {
     $('file').onchange = (ev) => { addLocal([...ev.target.files]); ev.target.value = ''; };
@@ -400,7 +402,7 @@
     const main = document.querySelector('main'); try { const L = JSON.parse(localStorage.getItem('replay-layout') || '{}'); if (L.cl) main.style.setProperty('--cl', L.cl); if (L.rt) main.style.setProperty('--rt', L.rt); } catch (e) { /* no storage */ }
     const drag = (id, axis) => { const h = $(id); h.onmousedown = (ev) => { ev.preventDefault(); h.classList.add('drag'); const r = main.getBoundingClientRect(); const mv = (e) => { if (axis === 'x') main.style.setProperty('--cl', Math.max(15, Math.min(85, ((e.clientX - r.left) / r.width) * 100)).toFixed(1)); else main.style.setProperty('--rt', Math.max(12, Math.min(88, ((e.clientY - r.top) / r.height) * 100)).toFixed(1)); }; const up = () => { h.classList.remove('drag'); document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); try { localStorage.setItem('replay-layout', JSON.stringify({ cl: main.style.getPropertyValue('--cl'), rt: main.style.getPropertyValue('--rt') })); } catch (e) { /* ignore */ } R.render(); }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); }; };
     drag('hs', 'x'); drag('vs', 'y');
-    R.setView = (v) => { main.classList.remove('max-scrub', 'max-insp', 'max-proj'); if (v !== 'all') main.classList.add('max-' + v); document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); if (ST.D) R.render(); };
+    R.setView = (v) => { if (v === 'stack') { R.openStack && R.openStack(); return; } main.classList.remove('max-scrub', 'max-insp', 'max-proj'); if (v !== 'all') main.classList.add('max-' + v); document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); if (ST.D) R.render(); };
     document.querySelectorAll('#viewtabs button').forEach((b) => (b.onclick = () => R.setView(b.dataset.v))); R.setView('all');
     $('btn-recs').onclick = () => openRecs(); $('btn-recs2').onclick = () => { $('opts').hidden = true; openRecs(); };
     $('btn-opts').onclick = (ev) => { ev.stopPropagation(); $('opts').hidden = !$('opts').hidden; };
@@ -429,6 +431,8 @@
     $('bytime').onchange = (ev) => R.set({ byTime: ev.target.checked });
     $('follow').onchange = (ev) => { ST.follow = ev.target.checked; };
     document.addEventListener('keydown', (ev) => {
+      if (R.stackOpen) { if (ev.key === 'Escape') { R.stackEsc(); ev.preventDefault(); } else if (ev.key === 's' && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) { R.closeStack(); ev.preventDefault(); } else if (ev.key === '?') { $('help').hidden = !$('help').hidden; } return; }
+      if (ev.key === 's' && !ev.metaKey && !ev.ctrlKey && ST.D && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && $('recs').hidden) { R.openStack && R.openStack(); ev.preventDefault(); return; }
       if (ev.key === 'Escape' && !$('opts').hidden) { $('opts').hidden = true; ev.preventDefault(); return; }
       if (ev.key === 'Escape' && !$('phtab').hidden) { $('phtab').hidden = true; ev.preventDefault(); return; }
       if (ev.key === '?' && (ev.target.tagName === 'TEXTAREA' || (ev.target.tagName === 'INPUT' && /^(text|search|number)$/.test(ev.target.type)))) return;
@@ -469,6 +473,11 @@
     <span><kbd>⇧P</kbd></span><span>phases table (sortable)</span>
     <span><kbd>r</kbd></span><span>replay the last transition (header: speed 1× / 0.25×)</span>
     <span><kbd>x</kbd></span><span>show / hide the project explorer (Ctrl/Cmd-click or tick boxes: several units or classes at once)</span>
+    <span><kbd>s</kbd></span><span>open / close the Stack overlay (also the Stack button in the header)</span>
+    <span>Stack: <kbd>wheel</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>PgUp</kbd> <kbd>PgDn</kbd> <kbd>Home</kbd> <kbd>End</kbd></span><span>move through versions (newest in front); scrolling sets the viewer's phase live</span>
+    <span>Stack: click a line</span><span>trace that node through every version (and select it in the viewer); <kbd>Esc</kbd> clears the trace, then closes</span>
+    <span>Stack: <kbd>⌥</kbd>+wheel, <kbd>j</kbd> <kbd>k</kbd></span><span>scroll the text of the front card</span>
+    <span>Stack: hover / click a receding card, minimap, <kbd>i</kbd> <kbd>I</kbd></span><span>bring it forward; jump anywhere; next / previous ★ phase</span>
     <span><kbd>Esc</kbd></span><span>zoom out of a phase band, else clear the selection / close a dialog</span>
     <span><kbd>?</kbd></span><span>this help</span></div>
     <h3>Mouse</h3><div class="keys"><span>click a span</span><span>select that node (events, lineage, source origin)</span>
