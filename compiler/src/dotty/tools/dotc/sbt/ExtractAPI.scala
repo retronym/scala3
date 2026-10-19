@@ -133,7 +133,7 @@ class ExtractAPI extends Phase {
     var mode = interfaces.ApiMode.TREE
     var optimizedSealed = false
     ctx.withIncCallback: cb =>
-      mode = cb.apiMode
+      if cb.merkleHashing then mode = cb.apiMode
       optimizedSealed = cb.useOptimizedSealed
     // Under HASHES the xsbti.api tree is not built at all.
     val classes =
@@ -157,7 +157,7 @@ class ExtractAPI extends Phase {
 
     ctx.withIncCallback: cb =>
       if !ctx.compilationUnit.suspendedAtInliningPhase then // already registered before this unit was suspended
-        cb.apiMode match
+        mode match
           case interfaces.ApiMode.TREE =>
             classes.foreach(cb.api(sourceFile, _))
           case interfaces.ApiMode.HASHES =>
@@ -421,12 +421,26 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
     } else
       ancestorTypes0
 
-  /** A class's declarations, the inherited members recorded in full, and those recorded as stubs. */
+  /** A class's declarations, the inherited members recorded in full, and those recorded as stubs.
+   *  Without Merkle hashing (`merkleHashing`), every non-private declaration of every base class
+   *  not compiled by Scala 2 is recorded in full, as the name hashes of a class must cover all it
+   *  inherits.
+   */
   private def classMembers(csym: ClassSymbol): (List[Symbol], List[Symbol], List[Symbol]) =
     val cinfo = csym.classInfo
     // The constructor of an object carries the `pureInitMarker`, so keep it.
     val decls = cinfo.decls.toList
     val declSet = decls.toSet
+    if !merkleHashing then
+      val inherited = cinfo.baseClasses
+        .filter(bc => !bc.is(Scala2x))
+        .flatMap(_.classInfo.decls.filter(s => !(s.is(Private) || declSet.contains(s))))
+      (decls, inherited, Nil)
+    else merkleMembers(cinfo, decls, declSet)
+
+  /** The members of a class under Merkle hashing: see `isInternal`. */
+  private def merkleMembers(cinfo: ClassInfo, decls: List[Symbol], declSet: Set[Symbol]): (List[Symbol], List[Symbol], List[Symbol]) =
+    val csym = cinfo.cls
     val inherited = new mutable.ListBuffer[Symbol]
     val stubbed = new mutable.ListBuffer[Symbol]
     for bc <- cinfo.baseClasses if bc ne csym do
@@ -460,6 +474,11 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.HashSet[Symbol],
     })
 
   private val materialiseCache = new mutable.HashMap[Symbol, Boolean]
+
+  private lazy val merkleHashing: Boolean =
+    var result = false
+    ctx.withIncCallback(cb => result = cb.merkleHashing)
+    result
 
   private def isSubprojectClass(owner: Symbol): Boolean =
     var result = false

@@ -105,6 +105,8 @@ public final class IncrementalCallback implements dotty.tools.dotc.sbt.interface
    */
   private static final class Callback5 {
     final MethodHandle apiMode;
+    /** Null for a Zinc that implements `AnalysisCallback5` without it, which is always Merkle. */
+    final MethodHandle merkleHashing;
     final MethodHandle useOptimizedSealed;
     final MethodHandle materialiseLibraryMembers;
     final MethodHandle api;
@@ -114,6 +116,13 @@ public final class IncrementalCallback implements dotty.tools.dotc.sbt.interface
     Callback5(Class<?> cb5, Class<?> classHashes) throws ReflectiveOperationException {
       MethodHandles.Lookup lookup = MethodHandles.publicLookup();
       apiMode = lookup.findVirtual(cb5, "apiMode", MethodType.methodType(cb5.getClassLoader().loadClass("xsbti.AnalysisCallback5$ApiMode")));
+      MethodHandle merkle;
+      try {
+        merkle = lookup.findVirtual(cb5, "merkleHashing", MethodType.methodType(boolean.class));
+      } catch (NoSuchMethodException e) {
+        merkle = null;
+      }
+      merkleHashing = merkle;
       useOptimizedSealed = lookup.findVirtual(cb5, "useOptimizedSealed", MethodType.methodType(boolean.class));
       materialiseLibraryMembers = lookup.findVirtual(cb5, "materialiseLibraryMembers", MethodType.methodType(boolean.class, String.class));
       api = lookup.findVirtual(cb5, "api", MethodType.methodType(void.class, xsbti.VirtualFileRef.class, xsbti.api.ClassLike.class, classHashes));
@@ -144,6 +153,17 @@ public final class IncrementalCallback implements dotty.tools.dotc.sbt.interface
 
   private Object toXsbti(dotty.tools.dotc.sbt.interfaces.ClassHashes h) throws Throwable {
     return callback5.newClassHashes.invoke(h.apiHash(), h.extraHash(), h.nameHashes(), h.hasMacro());
+  }
+
+  @Override
+  public boolean merkleHashing() {
+    if (callback5 == null) return false;
+    if (callback5.merkleHashing == null) return true;
+    try {
+      return (boolean) callback5.merkleHashing.invoke(delegate);
+    } catch (Throwable t) {
+      throw rethrow(t);
+    }
   }
 
   @Override
