@@ -304,9 +304,10 @@
     const kcls = (id) => { const nd = NODES.get(id); return nd ? 'k-' + nd.kind.replace(/[^A-Za-z]/g, '') + (nd.span[1] <= nd.span[0] ? ' syn' : '') + ' ' : ''; };
     const cls0 = (id) => (news.has(id) ? 'new nc-' + hl.cls.get(id) + (topNew.has(id) ? ' top' : '') : '') + (selSet.has(id) ? ' sel' : '') + (curSet.has(id) ? ' cur' : '');
     const lk = R.irLinks ? R.irLinks().tree : null;
-    const clsF = (id) => kcls(id) + cls0(id) + (lk && lk.has(id) ? ' lnk' : '');
+    const rg = new Set(); if (R.ST.range && !R.ST.range.ir && R.ST.range.unit === R.ST.unit) R.ST.range.nodes.forEach((n) => R.present(n, v).forEach((m) => rg.add(m)));
+    const clsF = (id) => kcls(id) + cls0(id) + (lk && lk.has(id) ? ' lnk' : '') + (rg.has(id) ? ' rg' : '');
     const t0 = performance.now();
-    const { ls, virt } = paint(W, clsF, [...selSet, ...curSet], v.phase + ':' + R.ST.selNode + ':' + R.seq(), 'scala', 'tree:' + R.ST.unit);
+    const { ls, virt } = paint(W, clsF, [...selSet, ...curSet, ...rg], v.phase + ':' + R.ST.selNode + ':' + R.seq() + ':' + (R.ST.range ? R.ST.range.lo + '-' + R.ST.range.hi + ':' + R.ST.range.phase : ''), 'scala', 'tree:' + R.ST.unit);
     R.lastTextMs = Math.round(performance.now() - t0);
     // phase in progress: the cursor is inside phase g whose output (version) appears later (event scrubbing only)
     let banner = '';

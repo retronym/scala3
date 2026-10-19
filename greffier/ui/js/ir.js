@@ -128,8 +128,9 @@
     irPresent(D, [...links.ir], cv).forEach((x) => lnk.add(x));
     const kc = (id) => { const n = D.nodes.get(id); return n ? 'k-' + n.kind + ' ' : ''; };
     const clsF = (id) => { const h = hows.get(id); const nk = (D.nodes.get(id) || {}).kind; return kc(id) + (nk === 'ClassNode' ? '' : h === 'rewrite' ? 'new ir-rw ' : h === 'inlined-from' ? 'new ir-inl ' : h === 'copy' ? 'ir-cp ' : '') + (sel.has(id) ? 'sel ' : '') + (lnk.has(id) ? 'lnk ' : ''); };
-    const targets = [...sel, ...lnk];
-    S().paint(W, clsF, targets, v.phase + ':' + cls + ':' + st.selNode, 'bc', 'ir:' + st.unit + ':' + cls);
+    const rgs = new Set(); { const r = st.range; if (r && !r.ir) { let k = 0; for (const n of r.nodes) { if (k++ > 500) break; irPresent(D, R.irFromTreeNode(n), cv).forEach((x) => rgs.add(x)); } } else if (r && r.ir && r.cls === cls) irPresent(D, [...r.nodes], cv).forEach((x) => rgs.add(x)); }
+    const targets = [...sel, ...lnk, ...rgs];
+    S().paint(W, clsF, targets, v.phase + ':' + cls + ':' + st.selNode + ':' + (st.range ? st.range.lo + '-' + st.range.hi + ':' + st.range.phase : ''), 'bc', 'ir:' + st.unit + ':' + cls);
     // header
     const chips = (changedHere ? (cnt.rewrite ? `<span class="chip2 cs" title="Ranges whose instruction text changed in this step">${cnt.rewrite} rewritten</span>` : '') + (cnt['inlined-from'] ? `<span class="chip2 ci" title="Instructions copied in by the inliner">${cnt['inlined-from']} inlined</span>` : '') + (elided.length ? `<span class="chip2 cm" title="Ranges none of whose instructions survived: listed below, struck through">${elided.length} elided</span>` : '') + (cnt.copy ? `<span class="chip2 cc" title="Ranges unchanged in a changed method">${cnt.copy} unchanged ranges</span>` : '') : '') + (v.phase === D.irGenPhase ? '<span class="dim"> straight from the code generator</span>' : '');
     const note = !changedHere ? `<div class="banner">${esc(cls)} was not changed by <b>${esc(R.verName(v))}</b>; showing its text from <b>${esc(R.verName({ irPseudo: true, phase: cv.phase }))}</b>.</div>` : '';

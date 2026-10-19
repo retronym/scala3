@@ -36,11 +36,21 @@
       this.lbl = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.thr = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.svg.append(this.lbl, this.thr);
       this.u = 0; this.target = 0; this.lastWheel = 0; this.hover = null; this.tr = null;
       this.frames = []; this.works = []; this.textBuilt = 0; this.all = []; this.list = [];
-      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {}); this.onSwitchClass = opts.onSwitchClass || null;
+      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {}); this.onSwitchClass = opts.onSwitchClass || null; this.onRange = opts.onRange || (() => {}); this.rg = null;
       el.addEventListener('wheel', (e) => this.active && this.wheel(e), { passive: false });
       el.addEventListener('pointermove', (e) => this.pmove(e));
       el.addEventListener('pointerleave', () => { this.hover = null; });
       el.addEventListener('click', (e) => this.click(e));
+      el.addEventListener('pointerdown', (e) => {   // gutter: click selects a line, drag / shift-click extends to a range
+        const ln = e.target.closest && e.target.closest('.ln'), row = ln && ln.closest('.r'), card = row && row.closest('.card'), c = card && card._card;
+        if (!c || c !== this.front || !c.rows || e.button) return; const r0 = c.rows[+row.dataset.r]; if (!r0 || r0.nl < 0) return;
+        e.preventDefault(); const anchor = e.shiftKey && this.rg && this.rg.card === c ? this.rg.a : r0.nl; let moved = false; this._rgDrag = false;
+        const lineAt = (ev) => { const t = document.elementFromPoint(ev.clientX, ev.clientY), rr = t && t.closest && t.closest('.r'); if (rr && rr.closest('.card') === card) { const q = c.rows[+rr.dataset.r]; if (q && q.nl >= 0) return q.nl; } return null; };
+        this.setRange(c, anchor, r0.nl, true);
+        const mv = (ev) => { const l = lineAt(ev); if (l != null && l !== this.rg.b) { moved = true; this._rgDrag = true; this.setRange(c, anchor, l, true); } };
+        const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); this.setRange(c, this.rg.a, this.rg.b, false); setTimeout(() => { this._rgDrag = false; }, 0); };
+        addEventListener('pointermove', mv); addEventListener('pointerup', up);
+      });
       el.addEventListener('pointerdown', (e) => {   // drag the scrollbar thumb of the front card
         const sb = e.target.closest && e.target.closest('.sb'), card = sb && sb.closest('.card'), c = card && card._card; if (!c || c !== this.front || !c.rows) return;
         e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); const tr = this.bodyH - 8, n = Math.max(1, c.rows.length);
@@ -58,7 +68,7 @@
 
     // ---- data ----
     setData(D, cards) {
-      this.D = D; this.all = cards; this.tr = null; this.front = null;
+      this.D = D; this.all = cards; this.tr = null; this.rg = null; this.front = null;
       this.el.querySelectorAll('.card').forEach((c) => c.remove());
       cards.forEach((c) => { c.el = null; c.txt = null; c.top = 0; c.hv = 0; c.phDirty = true; c.win = null; });
       this.rebuild(); this.layout(); this.u = this.target = 0; this.kick();
@@ -95,14 +105,14 @@
       c.el = el; c.dim = el.querySelector('.dim'); c.trEl = el.querySelector('.tr'); c.ctEl = el.querySelector('.ct'); c.bar = el.querySelector('.bar'); c.ph = el.querySelector('.phc'); c.txtEl = el.querySelector('.txt'); c.sbEl = el.querySelector('.sb i'); c.hx = c.hx || 0; el._card = c;
       this.el.insertBefore(el, this.svg); this.size(c); if (c.ready) this.rowsReady(c);
     }
-    rowsReady(c) { if (c.ctEl) c.ctEl.innerHTML = this.hdrCount(c); if (c.bar) this.drawBar(c); this.paintTrace(c); c.phDirty = true; }
+    rowsReady(c) { if (c.ctEl) c.ctEl.innerHTML = this.hdrCount(c); if (c.bar) this.drawBar(c); this.paintTrace(c); this.paintRange(c); c.phDirty = true; }
     ensure(c) { if (c.ready) return true; const t0 = performance.now(); M.ensureRows(c); this.rowMs = performance.now() - t0; if (c.el) this.rowsReady(c); return true; }
     buildText(c) {
       if (!c.ready) return; const t0 = performance.now();
       const n = c.rows.length, a = Math.max(0, Math.floor(c.top) - WIN), b = Math.min(n, Math.floor(c.top) + this.VR + WIN);
       let h = ''; for (let k = a; k < b; k++) { const r = c.rows[k]; h += `<div class="r ${r.k}${r.w ? ' w' : ''}${r.mu ? ' mu' : ''}" data-r="${k}"><span class=ln>${r.nl >= 0 ? r.nl + 1 : ''}</span>${(c.kind === 'ir' ? tintBc : tint)(r.t) || ' '}</div>`; }
       c.txtEl.innerHTML = h; c.txt = true; c.win = [a, b]; c.txtEl.style.paddingTop = a * LH + 'px'; this.textBuilt++;
-      this.paintTrace(c); this.placeText(c); this.lastBuildMs = performance.now() - t0;
+      this.paintTrace(c); this.paintRange(c); this.placeText(c); this.lastBuildMs = performance.now() - t0;
     }
     dropText(c) { if (!c.txt) return; c.txtEl.innerHTML = ''; c.txt = false; c.win = null; }
     placeText(c) {
@@ -118,15 +128,17 @@
       const g = c.bar.getContext('2d'), n = c.rows.length, w = c.bar.width;
       g.clearRect(0, 0, w, BAR); g.fillStyle = 'rgba(140,160,190,0.16)'; g.fillRect(0, BAR / 2 - 0.5, w, 1);
       c.rows.forEach((r, k) => { if (r.k === 's' || r.w) return; g.fillStyle = r.k === 'a' ? '#4cc38a' : '#ff5c7a'; g.fillRect((k / n) * w, 0, Math.max(1.5, w / n), BAR); });
+      const sp = this.rg && this.rangeSpans(c); if (sp) { g.fillStyle = 'rgba(110,170,255,0.95)'; for (const [x, y] of sp) g.fillRect((x / n) * w, BAR - 3, Math.max(3, ((y - x + 1) / n) * w), 3); }
     }
     drawPh(c) {
       c.phDirty = false; if (!c.ph || !c.ready) return;
       const g = c.ph.getContext('2d'), sx = c.ph.width / this.W, sy = c.ph.height / this.bodyH, t = this.tr && this.tr.per[c.i];
-      g.clearRect(0, 0, c.ph.width, c.ph.height); const r0 = Math.floor(c.top), off = (c.top - r0) * LH;
+      const rsp = this.rg && this.rangeSpans(c); g.clearRect(0, 0, c.ph.width, c.ph.height); const r0 = Math.floor(c.top), off = (c.top - r0) * LH;
       for (let k = 0; k <= this.VR + 1; k++) {
         const r = c.rows[r0 + k]; if (!r) break; const y = (k * LH - off + PADT) * sy;
         if (r.k !== 's' && !r.w) { g.fillStyle = r.k === 'a' ? 'rgba(76,195,138,0.22)' : 'rgba(255,92,122,0.18)'; g.fillRect(0, y, c.ph.width, LH * sy); }
         if (t && t.rows && t.rows.has(r0 + k)) { g.fillStyle = 'rgba(255,214,102,0.30)'; g.fillRect(0, y, c.ph.width, LH * sy); }
+        if (rsp && rsp.some((q) => q[0] <= r0 + k && r0 + k <= q[1])) { g.fillStyle = 'rgba(110,170,255,0.28)'; g.fillRect(0, y, c.ph.width, LH * sy); }
         const ind = r.t.length - r.t.trimStart().length, len = r.t.trim().length; if (!len) continue;
         g.fillStyle = r.k === 'a' && !r.w ? '#4cc38a' : r.k === 'd' ? '#ff5c7a' : 'rgba(170,186,210,0.45)'; g.fillRect((44 + ind * CW) * sx, y + 4 * sy, Math.min(len * CW, this.W) * sx, 8 * sy);
       }
@@ -147,6 +159,38 @@
       c.phDirty = true;
     }
     setTrace(tr) { this.tr = tr; this.all.forEach((c) => { if (c.el) this.paintTrace(c); }); this.syncTops(); this.onTrace(tr); this.kick(); }
+    // ---- line-range selection: outermost tree nodes covered by the lines of the front card, followed through every other card ----
+    setRange(c, a, b, dragging) {
+      const lo = Math.min(a, b), hi = Math.max(a, b); this.rg = { card: c, a, b, lo, hi, per: null, nodes: null, dragging: !!dragging };
+      if (!dragging) {
+        const t0 = performance.now(), nodes = M.nodesInLines(c.v, lo, hi); this.rg.nodes = nodes;
+        if (nodes.size > 500) { this.rg.fallback = new Set(); for (let l = lo; l <= hi; l++) { const t = (c.lines[l] || '').trim(); if (t) this.rg.fallback.add(t); } }
+        else { const tr = M.trace(this.D, this.all, c.i, nodes); this.rg.sets = tr.sets; this.rg.per = new Array(this.all.length).fill(null); }
+        this.rg.ms = performance.now() - t0;
+      }
+      this.paintAllRange(); this.onRange(this.rg); this.kick();
+    }
+    clearRange() { if (!this.rg) return; this.rg = null; this.paintAllRange(); this.onRange(null); this.kick(); }
+    // spans of rows of card c for the current range (lazy: computed when the card has rows)
+    rangeSpans(c) {
+      const g = this.rg; if (!g || !c.ready) return null;
+      if (c === g.card) return [[c.rowOfLine[g.lo], c.rowOfLine[g.hi]]];
+      if (g.dragging) return null;
+      if (g.per && g.per[c.i]) return g.per[c.i];
+      let sp;
+      if (g.fallback) { sp = []; c.rows.forEach((r, k) => { if (r.nl >= 0 && g.fallback.has(r.t.trim())) { const l = sp[sp.length - 1]; if (l && k <= l[1] + 1) l[1] = k; else sp.push([k, k]); } }); }
+      else sp = M.spansOf(c, g.sets[c.i] || new Set());
+      if (g.per) g.per[c.i] = sp; return sp;
+    }
+    paintRange(c) {
+      if (!c.txt && !c.bar) return; const sp = this.rg ? this.rangeSpans(c) : null;
+      if (c.txt) {
+        c.txtEl.querySelectorAll('.r.rg').forEach((e) => e.classList.remove('rg'));
+        if (sp) for (const [x, y] of sp) for (let k = Math.max(x, c.win[0]); k <= Math.min(y, c.win[1] - 1); k++) { const e = c.txtEl.children[k - c.win[0]]; if (e) e.classList.add('rg'); }
+      }
+      if (c.bar && c.ready) this.drawBar(c); c.phDirty = true;
+    }
+    paintAllRange() { this.all.forEach((c) => { if (c.el && c.ready) this.paintRange(c); }); this.syncTops(); }
     clearTrace() { if (this.tr) this.setTrace(null); }
     maxTop(c) { return Math.max(0, c.rows.length - this.VR + 2); }
     syncTops() {
@@ -154,13 +198,16 @@
       const ft = this.tr && this.tr.per[f.i], anchor = ft && ft.row >= 0 ? ft.row - f.top : null;
       this.all.forEach((c) => {
         if (c === f || c.noop || !c.ready) return; const t = this.tr && this.tr.per[c.i];
+        if (!t && this.rg && !this.rg.dragging) { const sp = this.rangeSpans(c); if (sp && sp.length) { const top = Math.max(0, Math.min(this.maxTop(c), sp[0][0] - 3)); if (top !== c.top) { c.top = top; c.phDirty = true; this.placeText(c); } return; } }
         let top = t && t.row >= 0 && anchor != null ? t.row - anchor : (f.top / Math.max(1, f.rows.length)) * c.rows.length;
         top = Math.max(0, Math.min(this.maxTop(c), top)); if (top !== c.top) { c.top = top; c.phDirty = true; this.placeText(c); }
       });
     }
     scrollFront(dr) { const f = this.front; if (!f || !f.ready) return; f.top = Math.max(0, Math.min(this.maxTop(f), f.top + dr)); f.phDirty = true; this.placeText(f); this.syncTops(); this.kick(); }
     revealTraceRow() {
-      const f = this.front, t = this.tr && f && this.tr.per[f.i]; if (!t || t.row < 0 || !f.ready) return;
+      const f = this.front, t = this.tr && f && this.tr.per[f.i];
+      if (!t && this.rg && !this.rg.dragging && f && f.ready) { const sp = this.rangeSpans(f); if (sp && sp.length && (sp[0][0] < f.top || sp[0][0] > f.top + this.VR - 4)) { f.top = Math.max(0, Math.min(this.maxTop(f), sp[0][0] - 3)); f.phDirty = true; this.placeText(f); } }
+      if (!t || t.row < 0 || !f.ready) return;
       if (t.row < f.top + 2 || t.row > f.top + this.VR - 3) { f.top = Math.max(0, Math.min(this.maxTop(f), t.row - Math.floor(this.VR * 0.4))); f.phDirty = true; this.placeText(f); }
       this.syncTops();
     }
@@ -188,6 +235,7 @@
     click(e) {
       const el = e.target.closest && e.target.closest('.card'); const c = el && el._card; if (!c) return;
       if (c !== this.front) { this.flyTo(c); return; }
+      if (e.target.closest('.ln') || this._rgDrag) return;   // the gutter selects line ranges, tokens trace
       const row = e.target.closest('.r'); if (!row || c.noop || !c.ready) return; const r = c.rows[+row.dataset.r]; if (!r || r.nl < 0) return;
       let pos = null; const cp = document.caretPositionFromPoint ? document.caretPositionFromPoint(e.clientX, e.clientY) : document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
       if (cp) { const node = cp.offsetNode || cp.startContainer, off = cp.offset ?? cp.startOffset; if (node && row.contains(node)) { const rg = document.createRange(); rg.setStart(row, 0); rg.setEnd(node, off); const col = rg.toString().length - row.querySelector('.ln').textContent.length; if (col > r.t.length - r.t.trimStart().length && col < r.t.length) pos = c.lineStart[r.nl] + col; } }

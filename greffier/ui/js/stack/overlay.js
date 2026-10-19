@@ -13,6 +13,7 @@
       onFront: (c) => { $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.kind === 'ir' ? ' <span class=dimt>· ' + esc(c.cls.replace(/^.*\//, '')) + '</span>' : ''}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
       onTrace: (tr) => { renderChron(tr); drawMini(); },
       // the traced code lives in another class than the selected one: switch the JVM segment there and trace again
+      onRange: (g) => onRange(g),
       onSwitchClass: (cls, c, n) => {
         const prev = R.curClass(); R.ST.cls = cls; S.keep = { kind: c.kind, phase: c.phase }; build(false); S.note = `bytecode is in class ${cls.replace(/^.*\//, '')} (was ${(prev || '').replace(/^.*\//, '')})`;
         const tc = S.cards.find((x) => x.kind === c.kind && x.phase === c.phase) || S.cards[0]; if (tc) stack.traceNode(tc, n);
@@ -53,6 +54,7 @@
     st.ensure && S.cards[k] && st.ensure(S.cards[k]); st.jumpTo(S.cards[k].s, true); st.u = st.target = S.cards[k].s; S.fsig = fsig();
     if (R.computeLines) R.computeLines(R.ST.unit);
     status();
+    { const r = R.ST.range; if (r && r.unit === R.ST.unit) setTimeout(() => { if (!R.stackOpen || stack.rg) return; const c = S.cards.find((x) => x.kind === (r.ir ? 'ir' : 'tree') && x.phase === r.phase && (!r.ir || x.cls === r.cls)); if (c) stack.setRange(c, r.lo, r.hi, false); }, 50); }
     // the selected node is traced right after opening (its thread appears without a click)
     if (R.ST.selNode != null && keepPhase !== false) setTimeout(() => { if (!R.stackOpen) return; const sel = R.ST.selNode, isIR = !!(R.ST.D.nodes.get(sel) || {}).ir; let c = S.cards[k], n = null;
       if (isIR) { c = S.cards.find((x) => x.kind === 'ir' && x.v.ids.has(sel)) || c; if (c.v.ids.has(sel)) n = sel; } else if (c.kind === 'tree') n = [...R.present(sel, c.v)][0] ?? (c.v.ids.has(sel) ? sel : null); else { const t = S.cards.filter((x) => x.kind === 'tree').pop(); if (t) { c = t; n = [...R.present(sel, t.v)][0] ?? null; } }
@@ -82,7 +84,7 @@
     document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.remove('on')); if (R.setView) R.setView(document.querySelector('main').classList.contains('max-scrub') ? 'scrub' : document.querySelector('main').classList.contains('max-insp') ? 'insp' : document.querySelector('main').classList.contains('max-proj') ? 'proj' : 'all'); R.render();
   };
   // Esc: first drop an active trace, then close
-  R.stackEsc = () => { if (stack && stack.tr) { stack.clearTrace(); return; } R.closeStack(); };
+  R.stackEsc = () => { if (stack && stack.rg) { stack.clearRange(); return; } if (stack && stack.tr) { stack.clearTrace(); return; } R.closeStack(); };
 
   // ---- minimap ----
   function drawMini() {
@@ -97,6 +99,30 @@
       const t = tr && tr.per[c.i];
       if (t && t.how && t.how !== 'same' && t.how !== 'copy') { g.fillStyle = M.HOW_COL[t.how]; g.beginPath(); g.arc(w - 4, yy, 2.5, 0, 7); g.fill(); } else if (t && t.how) { g.fillStyle = 'rgba(111,129,150,0.8)'; g.fillRect(w - 5, yy - 0.5, 2, 1); }
     }
+  }
+  // ---- line range: viewer state (R.ST.range) + side panel with the per-phase rows ----
+  const lineSpan = (c, sp) => { let a = sp[0][0], b = sp[sp.length - 1][1]; while (a <= b && c.rows[a] && c.rows[a].nl < 0) a++; while (b >= a && c.rows[b] && c.rows[b].nl < 0) b--; return [c.rows[a] ? c.rows[a].nl + 1 : 0, c.rows[b] ? c.rows[b].nl + 1 : 0]; };
+  function onRange(g) {
+    const box = $('srange');
+    if (!g) { if (R.ST.range) R.set({ range: null }); box.hidden = true; return; }
+    if (!g.dragging) { const c = g.card, isIR = c.kind === 'ir'; R.set({ range: { unit: R.ST.unit, phase: c.phase, lo: g.lo, hi: g.hi, nodes: g.nodes, ir: isIR, cls: isIR ? c.cls : null } }); }
+    renderRange(g); if (!g.dragging) [300, 900, 2000].forEach((t) => setTimeout(() => { if (stack && stack.rg === g) renderRange(g); }, t));
+  }
+  function renderRange(g) {
+    const box = $('srange'); box.hidden = false; const c0 = g.card, n = g.hi - g.lo + 1;
+    let h = `<div class=ch><b>lines ${g.lo + 1}–${g.hi + 1}</b> <span class=dimt>${n} line${n > 1 ? 's' : ''}${g.nodes ? ', ' + g.nodes.size + ' node' + (g.nodes.size > 1 ? 's' : '') : ''} · ${esc(c0.short)}</span><button id="srx" title="Esc">✕</button></div>`;
+    if (g.fallback) h += `<div class=dimt style="padding:2px 8px;color:#e8b04a">over 500 nodes: matched by line text only</div>`;
+    if (g.nodes && !g.dragging) {
+      let prev = null, rowsH = '';
+      S.cards.forEach((c, i) => {
+        if (!c.ready || c.noop && c !== c0) return; const sp = stack.rangeSpans(c); if (!sp || !sp.length) return;
+        let cov = 0, add = 0, del = 0; sp.forEach(([x, y]) => { cov += y - x + 1; for (let k = x; k <= y; k++) { const r = c.rows[k]; if (r && r.k === 'a' && !r.w) add++; else if (r && r.k === 'd') del++; } });
+        const ls = lineSpan(c, sp), moved = prev && (prev[0] !== ls[0] || prev[1] !== ls[1]) ? ` · moved from ${prev[0]}–${prev[1]}` : ''; prev = ls;
+        rowsH += `<div class="ce" data-i="${i}"><span class=cp>${esc(c.short)}</span><code>${ls[0]}–${ls[1]} · ${cov} row${cov > 1 ? 's' : ''}${add || del ? ` · <span style="color:#4cc38a">+${add}</span> <span style="color:#ff5c7a">−${del}</span>` : ''}${moved}</code></div>`;
+      });
+      h += rowsH || '<div class=dimt style="padding:4px 8px">no other phase contains these nodes</div>';
+    }
+    box.innerHTML = h; box.querySelector('#srx').onclick = () => stack.clearRange(); box.querySelectorAll('.ce').forEach((e) => { e.onclick = () => stack.flyTo(S.cards[+e.dataset.i]); });
   }
   // ---- chronicle ----
   function renderChron(tr) {

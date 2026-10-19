@@ -88,11 +88,12 @@
   }
   // trace node n of card j through all cards. Tree cards follow derive records; the thread continues into the JVM cards through codegen
   // derives (tree node -> InsnRange) and back (instruction -> tree node). Per card: node set, primary node, its line/row, how it got there.
-  M.trace = function (D, cards, j, n) {
+  M.trace = function (D, cards, j, n) { return traceSet(D, cards, j, n instanceof Set ? n : new Set([n]), n instanceof Set); };
+  function traceSet(D, cards, j, start, multi) {
     cards.forEach((c) => M.ensureRows(c));
     const N = cards.length, Nt = cards.findIndex((c) => c.kind === 'ir') < 0 ? N : cards.findIndex((c) => c.kind === 'ir');
     const sets = new Array(N).fill(null), how = new Array(N).fill(null), E = () => new Set(); let via = null, switchClass = null;
-    sets[j] = new Set([n]);
+    sets[j] = new Set(start); const n = multi ? null : [...start][0];
     const backTree = (from) => { for (let i = from; i >= 0; i--) { if (!sets[i + 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i + 1], cards[i], true, false); sets[i] = r.out; how[i + 1] = r.how; } };
     const fwdIR = (from) => { for (let i = from; i < N; i++) { if (!sets[i - 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i - 1], cards[i], false, true); sets[i] = r.out; how[i] = r.how; } };
     if (j < Nt) {
@@ -126,6 +127,28 @@
     });
     for (let i = 1; i < N; i++) { const a = res[i - 1], b = res[i]; if (b.line >= 0 && a.line >= 0 && cards[i].kind === cards[i - 1].kind && (b.how === 'same' || b.how === 'copy') && cards[i].lines[b.line].trim() !== cards[i - 1].lines[a.line].trim()) b.how = 'edit'; }
     if (via && Nt < N && res[Nt].set.size) res[Nt].via = via;
-    const nd = D.nodes.get(n); return { node: n, kind: nd ? nd.kind : '?', from: j, per: res, switchClass };
+    const nd = multi ? null : D.nodes.get(n); return { node: n, kind: nd ? nd.kind : '?', from: j, per: res, switchClass, sets };
+  }
+
+  // ---- line ranges ------------------------------------------------------------------------------------------------------
+  // outermost nodes of version v whose span lies inside lines a..b (0-based, inclusive); a range inside one node gives that node's innermost cover
+  M.nodesInLines = function (v, a, b) {
+    const lines = R.linesOf(v), ls = [0]; for (let k = 0, p = 0; k < lines.length - 1; k++) { p += lines[k].length + 1; ls.push(p); }
+    const S = ls[a], E = (ls[b] ?? 0) + (lines[b] || '').length, inside = new Set(), off = v.offsets;
+    // the trimmed range: skip leading indentation / trailing blanks so a node starting at the first token is inside
+    const S2 = S + ((lines[a] || '').length - (lines[a] || '').trimStart().length);
+    for (const o of off) if (o[2] > o[1] && o[1] >= S2 && o[2] <= E) inside.add(o[0]);
+    let out = new Set();
+    inside.forEach((id) => { let x = R.parentOf(v, id), hit = false, h = 0; while (x != null && h++ < 200) { if (inside.has(x)) { hit = true; break; } x = R.parentOf(v, x); } if (!hit) out.add(id); });
+    if (!out.size) { let best = null; for (const o of off) if (o[1] <= S2 && E <= o[2] && (!best || o[2] - o[1] < best[2] - best[1])) best = o; if (best) out.add(best[0]); }
+    return out;
+  };
+  // rows (of card c, ready) covered by node set `set`: [first,last] row spans, merged; ghost rows between are included
+  M.spansOf = function (c, set) {
+    const sp = [], byId = c.v.byId; if (!c.rowOfLine) { c.rowOfLine = new Int32Array(c.lines.length); c.rows.forEach((r, k) => { if (r.nl >= 0) c.rowOfLine[r.nl] = k; }); }
+    for (const id of set) { const o = byId.get(id); if (!o) continue; const l0 = M.lineOf(c, o[1]), l1 = M.lineOf(c, Math.max(o[1], o[2] - 1)); sp.push([c.rowOfLine[l0], c.rowOfLine[Math.max(l0, l1)]]); }
+    sp.sort((x, y) => x[0] - y[0]); const out = [];
+    for (const q of sp) { const l = out[out.length - 1]; if (l && q[0] <= l[1] + 1) l[1] = Math.max(l[1], q[1]); else out.push([q[0], q[1]]); }
+    return out;
   };
 })(window.R);
