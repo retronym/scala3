@@ -22,6 +22,7 @@
       case 'ImplicitSearch': return `${pt()}${p.result ? ' <span class="' + (p.result === 'success' ? 'ok' : 'bad') + '">' + esc(p.result) + '</span>' : ''}${e.syms.length ? ' → ' + sy(e.syms[0]) : ''}`;
       case 'Candidate': return `<span class="${p.accepted ? 'ok' : 'bad'}">${p.accepted ? '✓ accepted' : '✗ rejected'}</span> ${e.syms.length ? sy(e.syms[0]) : ''}${(() => { const h = p.ref != null ? R.typeHtml(tx(D, p.ref), 80) : null; return h ? ' ' + h : ''; })()} <span class="why">${esc(p.reason ?? p.why ?? '')}</span>`;
       case 'Report': { const sev = p.severity ?? SEV[p.level] ?? p.level; return `<span class="sev-${esc(sev)}">${esc(sev ?? '')}</span>${p.reporter ? ' <span class="dim">(' + esc(p.reporter) + ')</span>' : ''}<div class="rmsg">${esc(p.msg ?? '')}</div>`; }
+      case 'JvmPhase': return `<span class="dim">JVM phase</span> <b>${esc(p.name ?? D.phaseName(e.phase))}</b> <span class="dim">(synthetic step: bytecode versions of this phase)</span>`;
       case 'PhaseBegin': return `<b>${esc(p.name ?? D.phaseName(e.phase))}</b>`;
       case 'PhaseEnd': return `<span class="dim">end of</span> <b>${esc(D.phaseName(e.phase))}</b>`;
       default: return esc(cut(JSON.stringify(p), 120));

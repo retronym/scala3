@@ -168,9 +168,21 @@
     D.evs = out; D.merged = true;
   }
 
+  // The JVM phases extend the event axis: the genBCode bytecode appears at genBCode's PhaseEnd, every later JVM phase (optimiser
+  // pass, jvm:classfile) gets one synthetic `JvmPhase` event after the last recorded event, and the class versions of that phase
+  // take its seq (a recording has the genBCode seq on all of them).
+  function addJvmEvents(D) {
+    const phs = new Set(); let gs = Infinity; D.jvmClasses.forEach((c) => c.versions.forEach((v) => { phs.add(v.phase); if (v.seq != null && v.seq < gs) gs = v.seq; }));
+    const ids = [...phs].sort((a, b) => a - b), gen = ids[0]; let last = D.evs.reduce((m, e) => Math.max(m, e.seq), -1);
+    D.irSeq = new Map([[gen, gs === Infinity ? last : gs]]);
+    ids.slice(1).forEach((p) => { last++; D.irSeq.set(p, last); D.evs.push({ file: 0, ts: null, seq: last, parent: null, kind: 'JvmPhase', phase: p, unit: null, span: [0, 0], nodes: [], syms: [], payload: { name: (D.phases.get(p) || {}).name || '#' + p } }); });
+    D.jvmClasses.forEach((c) => c.versions.forEach((v) => { if (D.irSeq.has(v.phase)) v.seq = D.irSeq.get(v.phase); }));
+  }
+
   // ---- indexes ---------------------------------------------------------------------------------------------------------
   R.index = function (D) {
     if (D.files.length > 1) mergeTimeline(D);
+    if (D.jvmClasses.size) addJvmEvents(D);
     D.evs.sort((a, b) => a.seq - b.seq);
     D.evBySeq = new Map(D.evs.map((e) => [e.seq, e]));
     D.evChildren = new Map();
@@ -183,13 +195,14 @@
       D.evs.forEach((e) => { const k = e.file + ':' + e.phase;
         if (e.kind === 'PhaseBegin') open.set(k, { phase: e.phase, file: e.file, begin: e.seq, end: null, t0: e.ts });
         else if (e.kind === 'PhaseEnd' && open.has(k)) { const b = open.get(k); b.end = e.seq; b.t1 = e.ts; D.bands.push(b); open.delete(k); } });
+      D.evs.forEach((e) => { if (e.kind === 'JvmPhase') D.bands.push({ phase: e.phase, file: 0, begin: e.seq, end: e.seq, t0: null, t1: null, ir: true }); });
       D.bands.sort((a, b) => a.begin - b.begin);
       // time axis, only if every band has timestamps (ev.ts / ev.ns / payload.ts|ns); files are concatenated
-      D.hasTime = D.bands.length > 0 && D.bands.every((b) => b.t0 != null && b.t1 != null && b.t1 >= b.t0);
+      D.hasTime = D.bands.length > 0 && D.bands.every((b) => b.ir || (b.t0 != null && b.t1 != null && b.t1 >= b.t0));
       if (D.hasTime) {
-        const byFile = new Map(); D.bands.forEach((b) => { const f = byFile.get(b.file) || { lo: Infinity, hi: -Infinity }; f.lo = Math.min(f.lo, b.t0); f.hi = Math.max(f.hi, b.t1); byFile.set(b.file, f); });
+        const byFile = new Map(); D.bands.forEach((b) => { if (b.ir) return; const f = byFile.get(b.file) || { lo: Infinity, hi: -Infinity }; f.lo = Math.min(f.lo, b.t0); f.hi = Math.max(f.hi, b.t1); byFile.set(b.file, f); });
         let acc = 0; [...byFile.keys()].sort((a, b) => a - b).forEach((k) => { const f = byFile.get(k); f.off = acc - f.lo; acc += f.hi - f.lo; });
-        D.hasTime = acc > 0; D.bands.forEach((b) => { const f = byFile.get(b.file); b.x0 = (b.t0 + f.off) / acc; b.x1 = (b.t1 + f.off) / acc; b.ms = (b.t1 - b.t0); });
+        D.hasTime = acc > 0; D.bands.forEach((b) => { if (b.ir) { b.x0 = b.x1 = 1; b.ms = 0; return; } const f = byFile.get(b.file); b.x0 = (b.t0 + f.off) / acc; b.x1 = (b.t1 + f.off) / acc; b.ms = (b.t1 - b.t0); });
       } }
     D.syminfo.forEach((l) => l.sort((a, b) => a.fromPhase - b.fromPhase));
     D.versions.sort((a, b) => (a.phase - b.phase) || ((a.unit ?? -1) - (b.unit ?? -1)));

@@ -51,8 +51,10 @@
     let last = 0, m; BC.lastIndex = 0;
     while ((m = BC.exec(str))) {
       if (m.index > last) el.append(str.slice(last, m.index));
-      const t = m[0], sp = document.createElement('span'); sp.textContent = t;
-      sp.className = t[0] === '/' ? 't-com' : t[0] === '"' ? 't-str' : /^(LINENUMBER|LOCALVARIABLE|MAXSTACK|MAXLOCALS|FRAME|TRYCATCHBLOCK)$/.test(t) ? 't-com' : /^L\d+$/.test(t) ? 't-lbl' : /^[A-Z][A-Z0-9_]+$/.test(t) ? 't-op' : /^-?\d+$/.test(t) ? 't-num' : 't-desc'; el.append(sp); last = m.index + t.length;
+      const t = m[0];
+      if (t[0] === '"' || /^-?\d+$/.test(t)) el.append(t);   // strings and numeric operands stay plain
+      else { const sp = document.createElement('span'); sp.textContent = t; sp.className = /^[A-Z][A-Z0-9_]+$/.test(t) && !/^(LINENUMBER|LOCALVARIABLE|MAXSTACK|MAXLOCALS|FRAME|TRYCATCHBLOCK)$/.test(t) && !/^L\d+$/.test(t) ? 't-op' : 't-dim'; el.append(sp); }
+      last = m.index + t.length;
     }
     if (last < str.length) el.append(str.slice(last));
   }
@@ -273,7 +275,7 @@
       const el = pane.querySelector('.n.sel, .n.cur, .n.lnk');
       if (el) { const r = el.getBoundingClientRect(), br = body.getBoundingClientRect(); if (r.top < br.top || r.bottom > br.bottom) body.scrollTop += r.top - br.top - br.height / 3; }
     }
-    pane.classList.toggle('bykind', $('bykind').checked);
+    pane.classList.toggle('bykind', $('bykind').checked); pane.classList.toggle('bc', curLang === 'bc');
     R._painted = { D: st.D, key: animKey, verIdx: st.verIdx, W };
     if (snap) { A.lastSnap = snap; runTransition(snap, pane); } else if (!adjacent) A.stats = null;
     return { ls, virt };
@@ -386,22 +388,23 @@
     $('removed').addEventListener('toggle', () => { if (R.ST.D) R.render(); });
     $('srctext').addEventListener('click', srcClick);
     const pane = $('text');
-    let lastId = null, lastEl = null;
+    let lastId = null, lastEl = null, lastAll = [];
+    const unhov = () => { lastAll.forEach((x) => x.classList.remove('hov')); lastAll = []; };
     pane.parentNode.addEventListener('scroll', () => { if (cur && cur.virt && !cur.raf) cur.raf = requestAnimationFrame(() => { cur.raf = 0; paintWindow(); }); }, { passive: true });
     // hover is driven by mousemove (not mouseover) so it stays correct when a click re-renders the text
     pane.addEventListener('mousemove', (ev) => {
       const t = tip(), h = nodeAt(ev);
-      if (!h) { t.hidden = true; if (lastEl) lastEl.classList.remove('hov'); lastEl = null; lastId = null; return; }
+      if (!h) { t.hidden = true; unhov(); lastEl = null; lastId = null; return; }
       if (h.id !== lastId || h.el !== lastEl) {
-        if (lastEl) lastEl.classList.remove('hov');
-        lastEl = ev.altKey ? h.el.closest('.n') : h.el; lastEl.classList.add('hov'); lastId = h.id;
+        unhov();
+        lastEl = ev.altKey ? h.el.closest('.n') : h.el; lastId = h.id; lastAll = [...pane.querySelectorAll('.n[data-n="' + h.id + '"]')]; lastAll.forEach((x) => x.classList.add('hov'));
         const vv = R.ver(); if (vv.irPseudo) { t.innerHTML = R.irTip(h.id); t.hidden = false; return; }
         const d = R.describeNode(h.id, vv); if (!d) { t.hidden = true; return; }
         t.innerHTML = infoHtml(d, vv, false) + `<div class="dim">click selects this node · Alt+click selects its parent</div>` + (R.irTreeTip ? R.irTreeTip(h.id) : ''); t.hidden = false;
       }
       t.style.left = Math.min(ev.clientX + 14, innerWidth - t.offsetWidth - 8) + 'px'; t.style.top = Math.min(ev.clientY + 16, innerHeight - t.offsetHeight - 8) + 'px';
     });
-    pane.addEventListener('mouseleave', () => { tip().hidden = true; if (lastEl) lastEl.classList.remove('hov'); lastEl = null; lastId = null; });
+    pane.addEventListener('mouseleave', () => { tip().hidden = true; unhov(); lastEl = null; lastId = null; });
     pane.addEventListener('click', (ev) => { const h = nodeAt(ev); if (h) { const nd = R.ST.D.nodes.get(h.id); lastEl = null; lastId = null; tip().hidden = true; R.set({ selNode: h.id, selSym: nd ? nd.sym : null }); } });
     // breadcrumb + lineage links
     document.addEventListener('click', (ev) => {

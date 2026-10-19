@@ -24,7 +24,7 @@
     if (prev) ver.ids.forEach((n) => { if (!prev.ids.has(n)) cls.set(n, S.classOf(D, n, ver)); });
     const sel = isCls ? new Set() : R.present(R.ST.selNode, ver), links = R.irLinks ? R.irLinks() : { ir: new Set() }, lnk = isCls ? new Set([...links.ir].filter((x) => ver.ids.has(x))) : new Set();
     const clsF = (id) => { const nd = D.nodes.get(id), c = cls.get(id); return (nd ? 'k-' + nd.kind.replace(/[^A-Za-z]/g, '') + ' ' : '') + (c && !(R.ST.collapse && c === 'copy') && !(R.ST.structOnly && c !== 'struct') ? 'new nc-' + c + ' ' : '') + (sel.has(id) ? 'sel ' : '') + (lnk.has(id) ? 'lnk ' : ''); };
-    const body = document.createElement('div'); body.className = 'mpbody2'; body.dataset.unit = unit; body.dataset.ver = ''; el.append(body);
+    const body = document.createElement('div'); body.className = 'mpbody2' + (lang === 'bc' ? ' bc' : ''); body.dataset.unit = unit; body.dataset.ver = ''; el.append(body);
     const ls = S.lineStarts(W.text), hi = ls.length > LINE_CAP ? ls[LINE_CAP] : W.text.length;
     S.setLang(lang); body.append(S.lineify(S.build(W.text, W.offs, clsF, 0, hi))); S.setLang('scala');
     if (ls.length > LINE_CAP) body.append(Object.assign(document.createElement('div'), { className: 'dim', textContent: `… ${ls.length - LINE_CAP} more lines (select only this unit to see everything)` }));

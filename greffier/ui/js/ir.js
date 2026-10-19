@@ -133,7 +133,10 @@
     // header
     const chips = (changedHere ? (cnt.rewrite ? `<span class="chip2 cs" title="Ranges whose instruction text changed in this step">${cnt.rewrite} rewritten</span>` : '') + (cnt['inlined-from'] ? `<span class="chip2 ci" title="Instructions copied in by the inliner">${cnt['inlined-from']} inlined</span>` : '') + (elided.length ? `<span class="chip2 cm" title="Ranges none of whose instructions survived: listed below, struck through">${elided.length} elided</span>` : '') + (cnt.copy ? `<span class="chip2 cc" title="Ranges unchanged in a changed method">${cnt.copy} unchanged ranges</span>` : '') : '') + (v.phase === D.irGenPhase ? '<span class="dim"> straight from the code generator</span>' : '');
     const note = !changedHere ? `<div class="banner">${esc(cls)} was not changed by <b>${esc(R.verName(v))}</b>; showing its text from <b>${esc(R.verName({ irPseudo: true, phase: cv.phase }))}</b>.</div>` : '';
-    $('verinfo').innerHTML = note + `<b>${esc(R.verName(v))}</b> · class <b>${esc(cls)}</b> · ${cv.ids.size} nodes · ${S().lineStarts(cv.text).length} lines ${chips}${!changedHere || v.phase === D.irGenPhase ? '' : ''}`;
+    const ops = cv.text.split('\n').filter((t) => /^\s+[A-Z][A-Z0-9_]+\b/.test(t) && !/^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/.test(t)).length;
+    const clsSel = `<select id="irclass" aria-label="class">${[...D.jvmClasses.values()].filter((c) => c.unit === st.unit).map((c) => `<option${c.name === cls ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+    $('verinfo').innerHTML = note + `<b>${esc(v.phase === D.irGenPhase ? 'genBCode' : R.verName(v))}</b> · class ${clsSel} · ${ops} instructions · ${cv.ids.size} nodes ${chips}`;
+    $('irclass').onchange = (ev) => R.set({ cls: ev.target.value });
     // elided ranges, struck through (text from the class version before the step)
     const rl = $('removed');
     if (elided.length && pcv) {
@@ -201,7 +204,7 @@
     const fl = first ? S().lineOf(ls, first[1]) : 0, a = Math.max(0, fl - 40), b = Math.min(ls.length - 1, fl + 260), lo = ls[a], hi = b + 1 < ls.length ? ls[b + 1] : W.text.length;
     S().setLang('bc');
     const kc = (id) => { const n = D.nodes.get(id); return n ? 'k-' + n.kind + ' ' : ''; };
-    $('bctext').replaceChildren(S().build(W.text, W.offs, (id) => kc(id) + (lk.has(id) ? 'lnk ' : ''), lo, hi));
+    $('bctext').classList.add('bc'); $('bctext').replaceChildren(S().lineify(S().build(W.text, W.offs, (id) => kc(id) + (lk.has(id) ? 'lnk ' : ''), lo, hi)));
     $('bcinfo').innerHTML = `<b>${esc(cls)}</b> at genBCode · lines ${a + 1}–${b + 1} of ${ls.length} <select id="bcclass" aria-label="class for the bytecode pane">${[...D.jvmClasses.values()].filter((c) => c.unit === st.unit).map((c) => `<option${c.name === cls ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select> <span class="dim">dashed = generated from the selected tree node; hover links both ways</span>`;
     $('bcclass').onchange = (ev) => R.set({ cls: ev.target.value });
     const first_el = $('bctext').querySelector('.lnk'); if (first_el) { const body = bb, r = first_el.getBoundingClientRect(), br = body.getBoundingClientRect(); if (r.top < br.top || r.bottom > br.bottom) body.scrollTop += r.top - br.top - br.height / 3; }

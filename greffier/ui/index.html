@@ -60,7 +60,7 @@
   .card h2 { margin: 0 0 8px; font-size: 16px; display: flex; } .card h3 { margin: 12px 0 4px; font-size: 13px; } .card p { margin: 3px 0; } .x { margin-left: auto; font-size: 16px; line-height: 1; }
   .rec { display: grid; grid-template-columns: auto 1fr auto auto; gap: 2px 10px; align-items: center; padding: 3px 4px; border-radius: 4px; } .rec:hover { background: var(--code); } .rec .meta { grid-column: 2 / 5; font-size: 11px; color: var(--dim); margin-bottom: 2px; }
   button.primary { background: var(--acc); color: #fff; border-color: var(--acc); } button:disabled { opacity: .5; cursor: default; }
-  #drop { margin-top: 10px; padding: 10px; border: 2px dashed var(--line); border-radius: 6px; text-align: center; } body.dragging #drop { border-color: var(--acc); background: var(--code); } .lnk { color: var(--acc); cursor: pointer; text-decoration: underline; }
+  #drop { margin-top: 10px; padding: 10px; border: 2px dashed var(--line); border-radius: 6px; text-align: center; } body.dragging #drop { border-color: var(--acc); background: var(--code); } .lnk:not(.n) { color: var(--acc); cursor: pointer; text-decoration: underline; }
   .keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; } .recbar { margin-top: 6px; }
   #legend-kinds { padding: 2px 10px; font-size: 11px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 2px 10px; } #legend-kinds i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
   #srcpane { border-top: 1px solid var(--line); font-size: 12px; } #srcpane summary { padding: 3px 10px; cursor: pointer; } #srcpane[hidden] { display: none; } #srctext { max-height: 220px; overflow: auto; padding: 4px 10px; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.45; }
@@ -119,6 +119,17 @@
   .mergenote { font-size: 11px; color: #5f3b00; background: #fff3bf; border: 1px solid #e6c200; border-radius: 9px; padding: 0 8px; white-space: nowrap; }
   #heat { margin-bottom: 11px; } .bctag { position: absolute; top: 6px; font-size: 9px; line-height: 10px; color: #7048e8; white-space: nowrap; font-weight: 600; } .bctag2 { color: #7048e8; font-size: 10px; }
   #bands2 .cell.jvm { background: #7048e840; } #bands2 .cell.jvm.odd { background: #7048e866; } #bands2 .cell.jvm.star { outline: 1px solid #f08c00; } #bands2 .cell.jvm.cur { background: #7048e8; } #bands2 .jvmcap { position: absolute; font-size: 9px; color: #7048e8; font-weight: 700; top: -11px; } #bands2 { position: relative; } #bands2 .sep { flex: 0 0 4px; }
+  /* tree pane: only the outermost of nested nodes of the same change class is underlined (no stacked underlines on a new subtree) */
+  .n.nc-struct .n.nc-struct:not(.top), .n.nc-retype .n.nc-retype, .n.nc-rebuilt .n.nc-rebuilt, .n.nc-copy .n.nc-copy { border-bottom: none; }
+  /* bytecode panes: no underlines, outlines or per-node boxes. Whole lines carry the state: selected = solid bar + faint fill, hover = fainter,
+     linked from the tree = dotted bar, rewritten/inlined = thin coloured bar. Text keeps full contrast. */
+  .bc .n, .bc .n.hov, .bc .n.sel, .bc .n.cur, .bc .n.lnk, .bc .n.lnkh, .bc .n.ir-rw, .bc .n.ir-inl, .bc .n.ir-cp, .bc .n.new { outline: none !important; border-bottom: none !important; background: none !important; box-shadow: none !important; }
+  .bc .ln:has(.n.k-InsnRange.ir-rw) { box-shadow: inset 2px 0 0 #2f9e44; } .bc .ln:has(.n.k-InsnRange.ir-inl) { box-shadow: inset 2px 0 0 #7048e8; }
+  .bc .ln:has(.n.hov) { background: rgba(28,126,214,.06); box-shadow: inset 3px 0 0 rgba(28,126,214,.35); }
+  .bc .ln:has(.n.lnk), .bc .ln:has(.n.lnkh) { background-image: repeating-linear-gradient(to bottom, #f08c00 0 3px, transparent 3px 6px); background-size: 3px 100%; background-repeat: no-repeat; }
+  .bc .ln:has(.n.lnkh) { background-color: rgba(240,140,0,.10); }
+  .bc .ln:has(.n.sel) { background-color: rgba(28,126,214,.12); background-image: none; box-shadow: inset 3px 0 0 #1c7ed6; }
+  .t-dim { color: var(--dim); } .bc .t-op { font-weight: 500; }
   kbd { background: var(--code); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 </style>
 </head>

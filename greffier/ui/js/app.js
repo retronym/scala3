@@ -35,7 +35,7 @@
     const D = ST.D; if (!D.hasIR) return [];
     const u = ST.unit, classes = [...D.jvmClasses.values()].filter((c) => c.unit === u); if (!classes.length) return [];
     const out = [];
-    D.irPhaseIds.forEach((p, i) => { const n = classes.filter((c) => c.versions.some((v) => v.phase === p)).length; if (n) out.push({ ir: true, irPseudo: true, phase: p, unit: u, seq: (D.irGenSeq ?? 0) + 0.01 * (i + 1), ids: new Set(), offsets: [], byId: new Map(), text: '', hdrNew: n, hdrNodes: 0, vi: -1 }); });
+    D.irPhaseIds.forEach((p, i) => { const n = classes.filter((c) => c.versions.some((v) => v.phase === p)).length; if (n) out.push({ ir: true, irPseudo: true, phase: p, unit: u, seq: D.irSeq && D.irSeq.has(p) ? D.irSeq.get(p) : (D.irGenSeq ?? 0) + 0.01 * (i + 1), ids: new Set(), offsets: [], byId: new Map(), text: '', hdrNew: n, hdrNodes: 0, vi: -1 }); });
     return out;
   };
   const treeVers = () => {
@@ -69,7 +69,7 @@
   R.curFile = () => { const e = R.ev(); return e && e.file != null ? e.file : 0; };
   R.curBand = () => { const i = ST.evIdx, f = R.curFile(); let best = null; R.bands().forEach((b) => { if (b.file === f && b.i0 <= i && i <= b.i1 && (!best || b.i1 - b.i0 < best.i1 - best.i0)) best = b; }); return best; };
   // Move the cursor to the begin or end of a phase group (in the current file), following phase/unit.
-  R.gotoPhase = (g, where) => { const f = R.curFile(), b = ST.D.bands.find((x) => x.phase === g && x.file === f); if (!b) return false; R.setEvBySeq(where === 'end' ? b.end : b.begin, true); return true; };
+  R.gotoPhase = (g, where, ir) => { const f = R.curFile(), bs = ST.D.bands, b = bs.find((x) => x.phase === g && x.file === f && !!x.ir === !!ir) || bs.find((x) => x.phase === g && x.file === f && !x.ir); if (!b) return false; R.setEvBySeq(where === 'end' ? b.end : b.begin, true); return true; };
   R.stepPhase = (d) => {
     const cv = R.ver(), vv = R.vers();
     if (cv && cv.irPseudo) { const k = ST.verIdx + d; if (k >= 0 && vv[k] && (vv[k].irPseudo || d < 0)) R.setPhase(k); return true; }   // inside the IR segment: step the JVM phases
@@ -95,7 +95,7 @@
   R.curClass = () => {
     const D = ST.D; if (!D.hasIR) return null;
     if (ST.cls) { const c = D.jvmClasses.get(ST.cls); if (c && c.unit === ST.unit) return ST.cls; }
-    const cl = [...D.jvmClasses.values()].filter((c) => c.unit === ST.unit); const pick = cl.find((c) => !/\$package\$|\$$/.test(c.name)) || cl[0]; return pick ? pick.name : null;
+    const cl = [...D.jvmClasses.values()].filter((c) => c.unit === ST.unit); const pick = cl.find((c) => /\$$/.test(c.name) && !/\$package\$/.test(c.name)) || cl.find((c) => !/\$package\$/.test(c.name)) || cl[0]; return pick ? pick.name : null;
   };
   // jump to a JVM node (class text at `phase`, default genBCode) with the node selected
   R.jumpToIR = (id, phase) => {
@@ -158,7 +158,7 @@
   // Phase pick moves the event cursor to that version's seq (v1) or last event of the phase (v0).
   R.setPhase = function (k) {
     const D = ST.D, vs = R.vers(); k = Math.max(0, Math.min(vs.length - 1, k));
-    if (ST.follow && vs[k] && !vs[k].irPseudo && D.bands.length && R.gotoPhase(vs[k].phase, 'end')) return;   // a phase pick shows that phase's output (cursor at PhaseEnd); shift-click / the start button go to its start
+    if (ST.follow && vs[k] && D.bands.length && R.gotoPhase(vs[k].phase, 'end', !!vs[k].irPseudo)) return;   // a phase pick shows that phase's output (cursor at PhaseEnd); shift-click / the start button go to its start
     const patch = { verIdx: k };
     if (ST.follow && vs[k]) {
       if (vs[k].seq != null) patch.evIdx = R.evIndexAtOrAfter(vs[k].seq);
@@ -331,11 +331,11 @@
       box._key = key; box._D = D; box._W = W; box.innerHTML = '';
       ax.segs.forEach(({ b, a0, a1 }, i) => {
         const el = document.createElement('div'), w = Math.max(2, (a1 - a0) * W);
-        el.className = 'band' + (i % 2 ? ' odd' : ''); el.style.left = (a0 * 100) + '%'; el.style.width = w + 'px'; el._b = b;
+        el.className = 'band' + (i % 2 ? ' odd' : '') + (b.ir ? ' jvm' : ''); el.style.left = (a0 * 100) + '%'; el.style.width = w + 'px'; el._b = b;
         el.title = `${D.phaseName(b.phase)} · seq ${b.begin}–${b.end} · ${Math.max(0, b.i1 - b.i0 - 1)} visible events` + (D.hasTime ? ` · ${(b.ms / (D.timeUnit || 1)).toFixed(1)} ${D.timeUnitName || 'units'}` : '') + ' · click: output, shift-click: start, double-click: zoom';
         if (w >= 56) el.textContent = zb ? D.phaseName(b.phase) : D.phaseShort(b.phase);
-        el.onclick = (ev) => { ST.follow = true; $('follow').checked = true; const w2 = ev.shiftKey ? 'begin' : 'end'; if (ST.zoomKey) { /* zoomed: a click puts the cursor at that x */ const r = el.getBoundingClientRect(); R.setEv(ax.toIdx(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))), true); return; } R.gotoPhase(b.phase, w2) || R.setEvBySeq(w2 === 'end' ? b.end : b.begin, true); };
-        el.ondblclick = () => { if (!ST.zoomKey) R.zoomTo(b); };
+        el.onclick = (ev) => { ST.follow = true; $('follow').checked = true; const w2 = ev.shiftKey ? 'begin' : 'end'; if (ST.zoomKey) { /* zoomed: a click puts the cursor at that x */ const r = el.getBoundingClientRect(); R.setEv(ax.toIdx(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width))), true); return; } R.gotoPhase(b.phase, w2, !!b.ir) || R.setEvBySeq(w2 === 'end' ? b.end : b.begin, true); };
+        el.ondblclick = () => { if (!ST.zoomKey && !b.ir) R.zoomTo(b); };
         box.append(el);
       });
       if (zb) {   // zoomed: one tick per visible event, coloured by kind (capped)
@@ -351,20 +351,13 @@
     const fb = R.bands().filter((b) => b.file === f);
     if (b2._key !== D.bands.length + '|' + String(l) || b2._D !== D || b2._f !== f) {
       b2._key = D.bands.length + '|' + String(l); b2._D = D; b2._f = f; b2.innerHTML = '';
-      fb.forEach((b, i) => { const el = document.createElement('div'); el.className = 'cell' + (i % 2 ? ' odd' : ''); el._b = b; el.title = `${D.phaseName(b.phase)} · seq ${b.begin}–${b.end} (click: output, shift-click: start)`; el.onclick = (ev) => { ST.follow = true; $('follow').checked = true; if (ST.zoomKey) R.zoomTo(b); R.gotoPhase(b.phase, ev.shiftKey ? 'begin' : 'end'); }; b2.append(el); });
-    }
-    // IR segment of the strip: one cell per JVM phase, distinct background and a "JVM" caption
-    b2.querySelectorAll('.jvm, .sep, .jvmcap').forEach((e) => e.remove());
-    if (D.hasIR) {
-      const vs = R.vers(), irs = vs.map((v, i) => [v, i]).filter(([v]) => v.irPseudo);
-      if (irs.length) {
-        const top = new Set(R.interesting ? R.interesting().map((x) => x.i) : []); b2.append(Object.assign(document.createElement('div'), { className: 'sep' }));
-        const mx = Math.max(1, ...vs.map((v) => R.metricVal(R.scoreOf(v))));
-        irs.forEach(([v, i], j) => { const el = document.createElement('div'); const hv = R.metricVal(R.scoreOf(v)); if (i !== ST.verIdx) el.style.background = `rgba(112,72,232,${(0.18 + 0.82 * Math.sqrt(hv / mx)).toFixed(2)})`; el.className = 'cell jvm' + (j % 2 ? ' odd' : '') + (top.has(i) ? ' star' : '') + (i === ST.verIdx ? ' cur' : ''); el.title = `JVM · ${R.verName(v)} (${R.newCount(v)} classes changed) — click: show this phase`; el.onclick = () => { ST.follow = true; R.setPhase(i); }; b2.append(el); });
-        const cap = document.createElement('div'); cap.className = 'jvmcap'; cap.textContent = 'JVM'; b2.append(cap); const f0 = b2.querySelector('.sep'); cap.style.left = (f0.offsetLeft + 2) + 'px';
-      }
+      fb.forEach((b, i) => { if (b.ir && !b2.querySelector('.sep')) { b2.append(Object.assign(document.createElement('div'), { className: 'sep' })); } const el = document.createElement('div'); el.className = 'cell' + (i % 2 ? ' odd' : '') + (b.ir ? ' jvm' : ''); el._b = b; el.title = `${D.phaseName(b.phase)} · seq ${b.begin}–${b.end} (click: output, shift-click: start)`; el.onclick = (ev) => { ST.follow = true; $('follow').checked = true; if (ST.zoomKey && !b.ir) R.zoomTo(b); R.gotoPhase(b.phase, ev.shiftKey ? 'begin' : 'end', !!b.ir); }; b2.append(el); });
+      if (b2.querySelector('.sep')) { const cap = document.createElement('div'); cap.className = 'jvmcap'; cap.textContent = 'JVM'; b2.append(cap); cap._pos = true; }
     }
     cur = R.curBand();
+    { const vs = R.vers(), mx = Math.max(1, ...vs.map((v) => R.metricVal(R.scoreOf(v)))), top = new Set(R.interesting ? R.interesting().map((x) => x.i) : []);
+      [...b2.children].forEach((el) => { if (!el._b || !el._b.ir) return; const i = vs.findIndex((v) => v.irPseudo && v.phase === el._b.phase), v = vs[i], hv = v ? R.metricVal(R.scoreOf(v)) : 0; el.style.background = i === ST.verIdx ? '' : `rgba(112,72,232,${(0.18 + 0.82 * Math.sqrt(hv / mx)).toFixed(2)})`; el.classList.toggle('star', top.has(i)); });
+      const cap = b2.querySelector('.jvmcap'), sp = b2.querySelector('.sep'); if (cap && sp) cap.style.left = (sp.offsetLeft + 2) + 'px'; }
     [...b2.children].forEach((el) => el._b && el.classList.toggle('cur', el._b === cur));
     const topPh = new Set(R.interesting ? R.interesting().map((x) => x.v.phase) : []);
     [...box.children].forEach((el) => { if (el._b) { el.classList.toggle('cur', el._b === cur && !zb); el.classList.toggle('star', topPh.has(el._b.phase)); } });

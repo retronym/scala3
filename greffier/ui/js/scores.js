@@ -110,11 +110,11 @@
     const D = R.ST.D, box = $('heat'); if (!D || !D.bands.length) { box.hidden = true; return; }
     const zoomed = !!R.ST.zoomKey; box.hidden = zoomed; if (zoomed) return;
     const W = $('bands').clientWidth || 1000, ax = R.axis(W), top = new Set(R.interesting().map((x) => x.v.phase)); R.computeLines(R.ST.unit);
-    const vals = new Map(); R.versionScores().forEach((x) => { if (!x.v.irPseudo) vals.set(x.v.phase, R.metricVal(x.sc)); });
+    const vals = new Map(); R.versionScores().forEach((x) => { vals.set(x.v.irPseudo ? 'i' + x.v.phase : x.v.phase, R.metricVal(x.sc)); });
     const max = Math.max(1, ...vals.values()), key = [R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size].join('|');
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
-      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (b.phase === D.irGenPhase && D.hasIR ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
+      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR && !b.ir) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.ir ? 'i' + b.phase : b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (b.phase === D.irGenPhase && D.hasIR && !b.ir ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
     }
   }
   R.renderHeat = renderHeat;
