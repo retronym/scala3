@@ -1,0 +1,37 @@
+{"t":"meta","schema":"v1","compiler":"3.10.2-RC1-bin-SNAPSHOT-nonbootstrapped-git-b36dfc5","args":["-opt=true"],"requires":["-Ybackend-parallelism:1"],"units":[{"id":0,"path":"Hi.scala","text":"object Hi:\n  def inc(x: Int): Int =\n    val y = x\n    y + 1\n"}]}
+{"t":"phase","id":0,"name":"genBCode","mini":false,"group":0,"megaOf":null,"denotTransformer":false}
+{"t":"phase","id":1,"name":"jvm:r1:pushPop","ir":"jvm","mini":false,"group":1,"megaOf":null,"denotTransformer":false}
+{"t":"ev","seq":0,"parent":null,"kind":"PhaseBegin","phase":0,"unit":null,"span":null,"nodes":[],"syms":[],"payload":{"name":"genBCode","members":["genBCode"]}}
+{"t":"ev","seq":1,"parent":null,"kind":"PhaseEnd","phase":0,"unit":null,"span":null,"nodes":[],"syms":[],"payload":{}}
+{"t":"sym","id":0,"name":"inc","owner":null,"fullName":"Hi.inc","kind":"term","local":true,"unit":0,"firstPhase":0,"firstSeq":null}
+{"t":"node","id":0,"kind":"Ident","span":[48,49],"unit":0,"children":[],"sym":null,"name":"x"}
+{"t":"node","id":1,"kind":"ValDef","span":[40,49],"unit":0,"children":[0],"sym":null,"name":"y"}
+{"t":"node","id":2,"kind":"Ident","span":[54,55],"unit":0,"children":[],"sym":null,"name":"y"}
+{"t":"node","id":3,"kind":"Literal","span":[58,59],"unit":0,"children":[],"sym":null,"name":"1"}
+{"t":"node","id":4,"kind":"DefDef","span":[13,59],"unit":0,"children":[1,2,3],"sym":0,"name":"inc"}
+{"t":"version","phase":0,"unit":0,"seq":1,"root":4,"text":"def inc(x: Int): Int =\n      {\n        val y: Int = x\n        y + 1\n      }","offsets":[[4,0,75],[1,39,53],[0,52,53],[2,62,63],[3,66,67]],"nodes":5,"new":5}
+{"t":"node","id":5,"ir":"jvm","kind":"MethodNode","span":null,"unit":0,"children":[],"sym":0,"name":"inc","desc":"(I)I","insns":12}
+{"t":"node","id":6,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":5,"range":[3,6]}
+{"t":"node","id":7,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":5,"range":[3,4]}
+{"t":"node","id":8,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":5,"range":[7,8]}
+{"t":"node","id":9,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":5,"range":[8,9]}
+{"t":"node","id":10,"ir":"jvm","kind":"ClassNode","span":null,"unit":0,"children":[5],"sym":null,"name":"Hi$","mirror":false}
+{"t":"version","ir":"jvm","phase":0,"unit":0,"seq":1,"class":"Hi$","root":10,"text":"// class version 61.0 (61)\n// access flags 0x31\n// signature Ljava/lang/Object;\n// declaration: Hi$\npublic final class Hi$ implements java/io/Serializable {\n\n  // compiled from: Hi.scala\n\n  ATTRIBUTE Scala : unknown\n\n  ATTRIBUTE Scala3InlineInfo : unknown\n\n  // access flags 0x1\n  public inc(I)I\n    // parameter final  x\n   L0\n    LINENUMBER 3 L0\n   L1\n    ILOAD 1\n    ISTORE 2\n   L2\n    LINENUMBER 4 L2\n    ILOAD 2\n    ICONST_1\n    IADD\n    IRETURN\n   L3\n    LOCALVARIABLE y I L2 L3 2\n    LOCALVARIABLE this LHi$; L1 L3 0\n    LOCALVARIABLE x I L1 L3 1\n}\n","offsets":[[10,0,556],[5,257,554],[6,354,385],[7,354,366],[8,405,417],[9,417,430]],"nodes":6,"new":6}
+{"t":"derive","ir":"jvm","phase":0,"unit":0,"new":[5],"old":[4],"how":"codegen","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":0,"unit":0,"new":[6],"old":[1],"how":"codegen","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":0,"unit":0,"new":[7],"old":[0],"how":"codegen","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":0,"unit":0,"new":[8],"old":[2],"how":"codegen","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":0,"unit":0,"new":[9],"old":[3],"how":"codegen","confidence":"exact"}
+{"t":"node","id":11,"ir":"jvm","kind":"MethodNode","span":null,"unit":0,"children":[],"sym":0,"name":"inc","desc":"(I)I","insns":10}
+{"t":"node","id":12,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":11,"range":[3,4]}
+{"t":"node","id":13,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":11,"range":[5,6]}
+{"t":"node","id":14,"ir":"jvm","kind":"InsnRange","span":null,"unit":0,"children":[],"sym":null,"name":null,"method":11,"range":[6,7]}
+{"t":"node","id":15,"ir":"jvm","kind":"ClassNode","span":null,"unit":0,"children":[11],"sym":null,"name":"Hi$","mirror":false}
+{"t":"version","ir":"jvm","phase":1,"unit":0,"seq":1,"class":"Hi$","root":15,"text":"// class version 61.0 (61)\n// access flags 0x31\n// signature Ljava/lang/Object;\n// declaration: Hi$\npublic final class Hi$ implements java/io/Serializable {\n\n  // compiled from: Hi.scala\n\n  ATTRIBUTE Scala : unknown\n\n  ATTRIBUTE Scala3InlineInfo : unknown\n\n  // access flags 0x1\n  public inc(I)I\n    // parameter final  x\n   L0\n    LINENUMBER 3 L0\n   L1\n   L2\n    LINENUMBER 4 L2\n    ILOAD 1\n    ICONST_1\n    IADD\n    IRETURN\n   L3\n    LOCALVARIABLE y I L2 L3 2\n    LOCALVARIABLE this LHi$; L1 L3 0\n    LOCALVARIABLE x I L1 L3 1\n}\n","offsets":[[15,0,531],[11,257,529],[12,354,360],[13,380,392],[14,392,405]],"nodes":5,"new":5}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[11],"old":[5],"how":"rewrite","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[12],"old":[6],"how":"rewrite","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[13],"old":[8],"how":"rewrite","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[14],"old":[9],"how":"copy","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[],"old":[7],"how":"elide","confidence":"exact"}
+{"t":"derive","ir":"jvm","phase":1,"unit":0,"new":[15],"old":[10],"how":"rewrite","confidence":"exact"}
+{"t":"stats","events":2,"nodes":16}

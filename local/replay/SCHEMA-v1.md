@@ -84,3 +84,74 @@ Lineage from this unit's previous version to this one, for its `new` nodes, plus
 ### edge
 
 Between the top-level classes enclosing `from` and `to`, aggregated per (kind, from, to, phase group): `weight` is the number of occurrences in that phase, `ev` the first one's seq. A later phase may add another record for the same pair; sum weights for totals. `resolves` from `Typed` results that are RefTrees, `forces` from `Complete`, `implicit` from successful `ImplicitSearch`.
+
+## Extension: JVM bytecode (`ir: "jvm"`)
+
+Produced when the run reaches `genBCode` (switch off with `-P:replay-record:nojvm`). `meta.requires` lists `-Ybackend-parallelism:1`: the optimiser and class-writer hooks have no Context, and with more backend threads they would run concurrently, so the plugin skips JVM recording (with a warning) unless parallelism is 1. Records without an `ir` field are tree records, as above.
+
+All JVM records come after the last tree version and before `stats`. They are grouped by JVM phase, then by class: `[phase] { [node…] version [derive…] }*`.
+
+### phase
+
+The genBCode group keeps its id. If the optimiser changed anything, one synthetic phase per optimiser step follows, with fresh ids above every compiler phase id, in execution order:
+
+```
+{"t":"phase","id":p,"name":"jvm:r1:dce","ir":"jvm","mini":false,"group":p,"megaOf":null,"denotTransformer":false}
+```
+
+| name | step |
+|---|---|
+| `jvm:inliner` | after the global optimiser (inliner and closure optimiser, `-opt-inline`, `-opt:closure-invocations`), for all classes |
+| `jvm:r<k>:<pass>` | after local optimiser pass `<pass>` in removal round `k` (`nullness`, `dce`, `boxUnbox`, `copyProp`, `staleStores`, `redundantCasts`, `pushPop`, `storeLoadPairs`, `staleHandlers`, `simplifyJumps`) |
+| `jvm:localVariables`, `jvm:lineNumbers` | the local optimiser's final cleanups |
+| `jvm:classfile` | the class as handed to the `ClassWriter` (InnerClasses attribute rebuilt) |
+
+Rounds are counted per method (`beforeMethodOpt` starts a round), so `jvm:r2:dce` holds whatever methods reached a second round. Only steps that changed some method's text get a phase.
+
+### node
+
+```
+{"t":"node","id":n,"ir":"jvm","kind":"ClassNode","name":"Givens$","children":[fields…, methods…],"sym":s|null,"mirror":bool, "span":null,"unit":u}
+{"t":"node","id":n,"ir":"jvm","kind":"FieldNode","name":"MODULE$","desc":"LGivens$;","sym":s|null, "children":[],"span":null,"unit":u}
+{"t":"node","id":n,"ir":"jvm","kind":"MethodNode","name":"render","desc":"()Ljava/lang/String;","insns":38,"sym":s|null, "children":[],"span":null,"unit":u}
+{"t":"node","id":n,"ir":"jvm","kind":"InsnRange","method":m,"range":[start,end], "children":[],"sym":null,"name":null,"span":null,"unit":u}
+```
+
+- Ids share the tree id space (dense, increasing).
+- `ClassNode.name` is the JVM internal name. `mirror` is true for a module's static-forwarder class.
+- `MethodNode.insns` counts every `AbstractInsnNode`, including labels, line numbers and frames. `sym` is the DefDef's symbol (for a forwarder, the module method's symbol).
+- `InsnRange.range` is `[start, end)` in instruction indices of method `m` at the version that lists it. Instructions are not nodes themselves. A range belongs to exactly one MethodNode id: when a method changes, its ranges get new ids too.
+- Ranges nest at genBCode (they come from nested `genLoad` calls). One range node may stand for several tree nodes with the same extent (e.g. `genStat` and the `genLoad` it calls, or a `Block` and its only expression); each tree node gets its own `derive`.
+
+### version
+
+```
+{"t":"version","ir":"jvm","phase":p,"unit":u,"seq":q,"class":"Givens$","root":classNodeId,
+ "text":"…","offsets":[[n,s,e],…],"nodes":count,"new":count}
+```
+
+- One version per class, not per unit. `seq` is genBCode's `PhaseEnd` for every JVM phase: the optimiser runs inside genBCode.
+- At genBCode every class has a version. At a later JVM phase a class has a version only if one of its methods changed (or, for `jvm:classfile`, the class text changed). The class at JVM phase `p` is its latest version with phase ≤ `p`, in phase-record order. There is no `textSameAs`.
+- `text` is ASM `Textifier` output for the class (as `javap -c -v`-like as ASM gets: access flags, descriptors, labels `L0…`, `LINENUMBER`, `LOCALVARIABLE`, `MAXSTACK`).
+- `offsets` cover the ClassNode (whole text), each FieldNode, each MethodNode (header and body), and each InsnRange (from the range's first instruction line to the start of the next instruction line after its end). They are in pre-order like tree offsets. Overlapping ranges are possible after optimisation, because a range is re-placed at the min..max of its surviving instructions.
+- `nodes` is the number of nodes in `offsets`; `new` is the number of node records written for this version.
+
+### derive
+
+JVM derives carry `"ir":"jvm"`. Their `old` ids are tree nodes (for `codegen`) or earlier JVM nodes.
+
+| how | new | old | meaning |
+|---|---|---|---|
+| `codegen` | [jvm nodes] | [tree node] | at genBCode. TypeDef → ClassNode (main and mirror class); ValDef → FieldNode (`MODULE$` ← TypeDef); DefDef → MethodNode (forwarders ← the module method's DefDef); tree node → InsnRange (one record per tree node, listing all its ranges) |
+| `rewrite` | [n] | [o] | a changed MethodNode, a ClassNode's next version, or a range whose instruction text changed |
+| `copy` | [n] | [o] | a range whose instruction text is unchanged in a changed method |
+| `elide` | [] | [ranges] | ranges none of whose instructions survived the step |
+| `inlined-from` | [range] | [callee MethodNode or InsnRange], or [] | instructions the inliner copied into this method. `callee` (`"Owner.name(desc)"`) names the callee. `old` is the callee's genBCode MethodNode (whole body) or one of its genBCode InsnRanges (the copies of that range's instructions). It is `[]` when the callee was not compiled in this run (classpath bytecode) |
+
+Confidence for `codegen`:
+
+- `exact` when the tree is the arena node itself, follows the copier hook back to one, or (for DefDef/ValDef) is matched by symbol, or a forwarder is matched by (owner, name, descriptor).
+- `heuristic` when it is matched by equal span and kind, by method name (static forwarders `m$` and the trait `$init$` get fresh symbols), or `<clinit>` falls back to the TypeDef.
+- JVM steps after genBCode are always `exact`. They follow instruction-node identity, which the optimiser preserves for the instructions it keeps.
+
+No `ev` records are written for the backend (no `GenLoad` events). The ranges carry the same information without adding to the `seq` order.

@@ -150,6 +150,8 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
         "jvm" -> (if jvm == null then null else obj(jvm.nn.stats*))))
       out.close()
       if ctx.base.observer eq this then ctx.base.observer = null
+      if options.contains("timing") && jvm != null then
+        System.err.println(f"[replay] jvm recording: ${jvm.nn.nanos / 1e6}%.0f ms")
       if check then
         System.err.println(s"[replay] offset checks: $offsetChecks, failures: $offsetFailures ${failKinds.toList.sortBy(-_._2).mkString(" ")}, text mismatches: $textMismatches")
 

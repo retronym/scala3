@@ -49,7 +49,8 @@ private final class MarkingMethodVisitor(val p: Textifier) extends MethodVisitor
   override def visitLineNumber(line: Int, start: Label): Unit = { m(); super.visitLineNumber(line, start) }
   override def visitLocalVariable(name: String, desc: String, sig: String, start: Label, end0: Label, index: Int): Unit =
     end(); super.visitLocalVariable(name, desc, sig, start, end0, index)
-  override def visitMaxs(maxStack: Int, maxLocals: Int): Unit = { end(); super.visitMaxs(maxStack, maxLocals) }
+  // MAXSTACK/MAXLOCALS are 0 until the optimiser or the ClassWriter computes them: leave them out of the text
+  override def visitMaxs(maxStack: Int, maxLocals: Int): Unit = end()
   override def visitEnd(): Unit = { end(); super.visitEnd() }
 
 /** Records where each field's and method's text starts in the class Textifier's text list. */
@@ -202,6 +203,11 @@ final class JvmRecorder(rec: Recorder):
   private val stack = mutable.ArrayBuffer[(tpd.Tree, AbstractInsnNode | Null)]()
   private var globalOpt = false     // the inliner / closure optimiser runs before the local optimiser
   private var globalPending = false // ... and has not been snapshotted yet
+  // time spent in the recorder's backend hooks and in emission (ns), reported on stderr with `timing`
+  var nanos = 0L
+  private inline def timed[T](inline op: T): T =
+    val t0 = System.nanoTime
+    try op finally nanos += System.nanoTime - t0
   // stats
   var unknownTrees, methodsTotal, methodsWithAncestor, insnsTotal, insnsCovered, rangesTotal, rangesWithAncestor,
     textChars, statesTotal, inlineRecs, classfileChanged = 0
@@ -225,7 +231,7 @@ final class JvmRecorder(rec: Recorder):
     val end = mn.instructions.getLast
     if start != null && end != null && (prevLast ne end) then jmethod(mn).raw += ((tree, start, end))
 
-  def classNodes(typeDef: tpd.TypeDef, cn: ClassNode, mirror: ClassNode | Null)(using Context): Unit =
+  def classNodes(typeDef: tpd.TypeDef, cn: ClassNode, mirror: ClassNode | Null)(using Context): Unit = timed:
     globalOpt = ctx.settings.optInlineEnabled || ctx.settings.optClosureInvocations
     globalPending = globalOpt
     val u = rec.unitIdOf(ctx.compilationUnit.source)
@@ -278,14 +284,14 @@ final class JvmRecorder(rec: Recorder):
             if clones.nonEmpty then extras += RangeDef(clones, Inlined(r.calleeOwner, r.callee, rs.range))
       maybeState(jm, JKey.Inline, JvmText.method(jm.mn), extras)
 
-  def optimizerPass(owner: String, mn: MethodNode, pass: String): Unit =
+  def optimizerPass(owner: String, mn: MethodNode, pass: String): Unit = timed:
     if globalPending then snapshotGlobal()
     val jm = methodOf.get(mn)
     if jm != null then
       if pass == "beforeMethodOpt" then jm.round += 1
       else maybeState(jm, JKey.local(jm.round, pass), JvmText.method(mn), Nil)
 
-  def classWritten(cn: ClassNode): Unit =
+  def classWritten(cn: ClassNode): Unit = timed:
     if globalPending then snapshotGlobal()
     val c = classOf.get(cn)
     if c != null then
@@ -320,8 +326,10 @@ final class JvmRecorder(rec: Recorder):
   /** Writes all JVM records: per key (genBCode first), per class, the node records, the version and
    *  its derive records. Called by `Recorder.close` after the last tree version.
    */
-  def emit(genPhase: Int, seq: Int, firstFreePhaseId: Int)(using Context): Unit =
-    if classes.isEmpty then return
+  def emit(genPhase: Int, seq: Int, firstFreePhaseId: Int)(using Context): Unit = timed:
+    if classes.nonEmpty then emit0(genPhase, seq, firstFreePhaseId)
+
+  private def emit0(genPhase: Int, seq: Int, firstFreePhaseId: Int)(using Context): Unit =
     val keys = (classes.iterator.flatMap(_.methods.iterator.flatMap(_.states.iterator.map(_.key)))
       ++ (if classes.exists(_.ctFinal != null) then Iterator(JKey.Classfile) else Iterator.empty)).toSet.toList.sorted
     var nextPhase = firstFreePhaseId
@@ -392,10 +400,12 @@ final class JvmRecorder(rec: Recorder):
     // text and offsets
     val sb = new java.lang.StringBuilder
     val offs = mutable.ArrayBuffer[List[Int]]()
-    for ((s, e), id) <- ct.fieldOff.zip(c.fieldIds) do offs += List(id, s, e)
+    // fields and methods start with a blank line in the Textifier output: leave it out of their offsets
+    def skipNl(t: String, i: Int) = if i < t.length && t.charAt(i) == '\n' then i + 1 else i
+    for ((s, e), id) <- ct.fieldOff.zip(c.fieldIds) do offs += List(id, skipNl(ct.parts(0), s), e)
     for k <- c.methods.indices do
       sb.append(ct.parts(k))
-      val hdr = sb.length - ct.parts(k).length + ct.hdrStart(k)
+      val hdr = skipNl(ct.parts(k), ct.hdrStart(k)) + sb.length - ct.parts(k).length
       val st = c.methods(k).states(c.methods(k).emitted)
       val base = sb.length
       sb.append(st.text.text)
