@@ -313,4 +313,36 @@ class ExtractAPISpecification {
     assertEquals(Set("C3", "C4", "C5", "C6"), withSelfType.map(_.name).toSet)
     assertEquals(Set("X", "Y", "C1", "C2", "C8"), withoutSelfType.map(_.name).toSet)
   }
+
+  /** Hashes of inline bodies and secondary type parameters must only depend on
+   *  the source, not on identity hashes, which differ between JVMs.
+   */
+  @Test
+  def stableMarkerHashes = {
+    val src =
+      """|class Ctx
+         |object A {
+         |  inline def ctx(using c: Ctx): Ctx = c
+         |  inline def runSub(using Ctx): Ctx = ctx
+         |  inline def clazz: Class[?] = classOf[java.util.List[? <: Ctx]]
+         |  inline def poly[T](x: T)[U <: T](y: U): T = x
+         |}
+         |""".stripMargin
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val apis = compilerForTesting.extractApiFromSrc(src)
+    val markers =
+      for
+        cl <- apis.sortBy(_.name)
+        d <- cl.structure.declared.sortBy(_.name)
+        a <- d.annotations
+        c <- Some(a.base).collect { case c: Constant => c }
+      yield s"${cl.name}.${d.name} ${c.value}"
+    val expected =
+      """|A.clazz -567460141
+         |A.ctx -1620716396
+         |A.poly -1231004346
+         |A.poly 2017998618
+         |A.runSub 1562250696""".stripMargin
+    assertEquals(expected, markers.mkString("\n"))
+  }
 }
