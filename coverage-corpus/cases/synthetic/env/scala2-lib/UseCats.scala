@@ -58,4 +58,8 @@ object UseCats:
     println(Const[String, Int]("c").retag[Boolean].getConst)
     println(OptionT.liftF(List(1, 2)).map(_ + 1).value)
     println(List(Option(1), None).sequence.void)
+    // deprecated members: forces Scala 2 annotation arguments (Scala2Unpickler.readTree)
+    import scala.annotation.nowarn
+    val dep = (Functor[List].fmap(List(1))(_ + 1): @nowarn) ++ (List(1, 2).foldMapA(i => Option(i)).toList: @nowarn)
+    println(dep)
     println(Applicative[Option].map2(Some(1), Some(2))(_ + _).toString + Option(1).tupleRight("x").toString)
