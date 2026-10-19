@@ -76,6 +76,11 @@ class TreeBuffer extends TastyBuffer(50000) {
     fillAddr(reserveAddr(), target)
   }
 
+  /** Drop everything written from `addr` on */
+  def truncate(addr: Addr): Unit =
+    length = addr.index
+    while numOffsets > 0 && offsets(numOffsets - 1) >= length do numOffsets -= 1
+
   /** Fill previously reserved field with a reference to the current address */
   def fillRef(at: Addr, relative: Boolean): Unit = {
     val i =
