@@ -180,6 +180,7 @@ class Case:
     skip: str = ""
     pool_opts: list = field(default_factory=list)  # options of the pool the case came from (cf. CompilationTests)
     deps: list = field(default_factory=list)       # `//> using dep` coordinates
+    stage_opts: list = None                        # per-stage scalac options, for multi-stage cases
 
 
 DIRECTIVE = re.compile(r"^\s*//>\s*using\s+(options|javacOpt|javacOptions|dep)\s+(.*)$")
@@ -245,6 +246,9 @@ def make_case(path: Path, id: str, pool_opts=()):
             return Case(id, path, stages, skip="needs other compiler version")
     sopts, jopts, deps = parse_directives(files)
     c = Case(id, path, stages, list(pool_opts) + sopts, jopts, pool_opts=list(pool_opts), deps=deps)
+    if len(stages) > 1:
+        # options apply to the stage whose files declare them
+        c.stage_opts = [list(pool_opts) + parse_directives(s)[0] for s in stages]
     if any(o.startswith(u) for o in sopts for u in UNSUPPORTED_OPTS):
         c.skip = "unsupported option"
     return c
@@ -312,15 +316,20 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
                 rel = f.relative_to(case.path if case.path.is_dir() else case.path.parent)
                 mapping[f] = src / rel
         stages = [[mapping[f] for f in s] for s in stages]
-    libcp = tc.library_cp + (resolve_deps(case.deps) if case.deps else [])
+    # `//> using dep @compiler` puts the compiler itself on the classpath (e.g. to build a plugin in an earlier stage)
+    deps = [d for d in case.deps if d != "@compiler"]
+    libcp = tc.library_cp + (resolve_deps(deps) if deps else [])
+    if "@compiler" in case.deps:
+        libcp += [p for p in tc.compiler_cp if p not in libcp]
     cp = ":".join(libcp + [str(classes)])
     dest = str(classes)
     if v.get("jar"):
         # every stage writes its own jar; later stages see the earlier jars
         jars = [tmp / f"stage{i}.jar" for i in range(len(stages))]
     steps = []
-    for s in stages:
+    for si, s in enumerate(stages):
         s = list(s)
+        sopts = case.stage_opts[si] if case.stage_opts and len(case.stage_opts) == len(stages) else case.scalac_opts
         if order == "reverse":
             s.reverse()
         elif order.startswith("shuffle"):
@@ -332,7 +341,7 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
             dest = str(jars[i])
             cp = ":".join(libcp + [str(classes)] + [str(j) for j in jars[:i]])
         args = ["-d", dest, "-classpath", cp, "-color:never", "-Wconf:any:s" if variant != "lint" else "-Wconf:any:w"]
-        args += subst(v["opts"], tmp) + list(extra_opts) + case.scalac_opts + scala
+        args += subst(v["opts"], tmp) + list(extra_opts) + [o.replace("{classes}", str(classes)) for o in sopts] + scala
         steps.append(("scalac", args))
         if java:
             steps.append(("javac", ["-d", str(classes), "-cp", cp, "-nowarn", "-proc:none", "-encoding", "UTF-8"] +
@@ -343,15 +352,19 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
         steps.append(("scalac", ["-from-tasty", "-d", str(tmp / "from-tasty"), "-classpath", cp, "-color:never",
                                  "-Wconf:any:s", f"@tasty-in:{classes}"]))
     job = Job(jid, case, variant, out, steps)
-    job.prepare = lambda: prepare(job, tmp, classes, mapping if v.get("copy_sources") else None)
+    resources = [f for f in case.path.iterdir() if f.is_file() and f.suffix not in SOURCE_EXTS and not f.name.startswith(".")
+                 and f.suffix not in (".check", ".flags")] if case.path.is_dir() else []
+    job.prepare = lambda: prepare(job, tmp, classes, mapping if v.get("copy_sources") else None, resources)
     return job
 
 
-def prepare(job, tmp, classes, mapping):
+def prepare(job, tmp, classes, mapping, resources=()):
     shutil.rmtree(job.out, ignore_errors=True)
     shutil.rmtree(tmp, ignore_errors=True)
     classes.mkdir(parents=True, exist_ok=True)
     tmp.mkdir(parents=True, exist_ok=True)
+    for r in resources:  # e.g. plugin.properties
+        shutil.copyfile(r, classes / r.name)
     if mapping:
         for a, b in mapping.items():
             b.parent.mkdir(parents=True, exist_ok=True)
@@ -858,6 +871,109 @@ def cmd_corpus_measure(a):
     summarize(tc, [a.name], reg)
 
 
+def jacoco_line_coverage(tc, reg, bits, workdir):
+    """(covered lines, total lines) of the compiler for a probe bitset, via jacococli."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    reg.to_exec(workdir / "x.exec", bits)
+    cmd = [java_bin(), "-jar", jacoco_jars()["cli"], "report", str(workdir / "x.exec"), "--csv", str(workdir / "x.csv")]
+    for c in tc.compiler_classes:
+        cmd += ["--classfiles", c]
+    subprocess.run(cmd, check=True, capture_output=True)
+    import csv as csvm
+    rows = list(csvm.DictReader(open(workdir / "x.csv")))
+    cov = sum(int(r["LINE_COVERED"]) for r in rows)
+    return cov, cov + sum(int(r["LINE_MISSED"]) for r in rows)
+
+
+def source_lines(case_id):
+    p = Path(case_id)
+    if not p.is_absolute():
+        p = (CASES / p) if (CASES / p).exists() else (REPO / p)
+    files = [p] if p.is_file() else [f for f in p.rglob("*") if f.is_file() and f.suffix in SOURCE_EXTS]
+    return sum(f.read_bytes().count(b"\n") for f in files)
+
+
+def cmd_curve(a):
+    """Coverage vs corpus size along the greedy order of a selection: TSV + SVG plot."""
+    tc = toolchain(a.compiler)
+    reg = Registry(WORK / "campaigns" / tc.key / "registry.json")
+    byk = {}
+    for n in a.campaigns:
+        for r in load_campaign(tc, n):
+            byk[(r["case"], r["variant"])] = r
+    warm = load_warmup(tc, a.campaigns)
+    entries = [l.split("#")[0].split()[:2] for l in Path(a.selection).read_text().splitlines()
+               if l.strip() and not l.startswith("#")]
+    pts, acc, loc = [], warm, 0
+    n = len(entries)
+    marks = sorted({int(round(n * f)) for f in [x / a.points for x in range(1, a.points + 1)]} |
+                   {2 ** k for k in range(20) if 2 ** k < n} | {n})
+    cum = []
+    for i, (case, variant) in enumerate(entries, 1):
+        acc |= byk[(case, variant)]["bits"]
+        loc += source_lines(case)
+        if i in marks:
+            cum.append((i, loc, acc))
+    pool = warm
+    for r in byk.values():
+        pool |= r["bits"]
+
+    def one(t):
+        i, loc, bits = t
+        c, tot = jacoco_line_coverage(tc, reg, bits, WORK / "curve" / str(i))
+        return (i, loc, c, tot)
+    with concurrent.futures.ThreadPoolExecutor(6) as ex:
+        pts = list(ex.map(one, cum + [(-1, 0, pool)]))
+    pool_pt = pts.pop()
+    out = Path(a.out)
+    with open(out.with_suffix(".tsv"), "w") as fh:
+        fh.write("jobs\tsource_lines\tlines_covered\tlines_total\tpct\n")
+        for i, l, c, t in pts:
+            fh.write(f"{i}\t{l}\t{c}\t{t}\t{100 * c / t:.2f}\n")
+    pool_pct = 100 * pool_pt[2] / pool_pt[3]
+    for i, l, c, t in pts:
+        print(f"{i:5d} jobs {l / 1000:8.1f} kLOC  {100 * c / t:6.2f}% lines")
+    print(f"pool union: {pool_pct:.2f}% lines")
+    write_svg(out.with_suffix(".svg"), [(l / 1000, 100 * c / t) for _, l, c, t in pts], pool_pct, a.title)
+    log(f"wrote {out.with_suffix('.svg')}")
+
+
+def write_svg(path, pts, ref, title):
+    import math
+    W, H, L, R, T, B = 720, 420, 60, 20, 40, 50
+    xs = [max(x, 0.01) for x, _ in pts]
+    x0, x1 = math.log10(min(xs)), math.log10(max(xs))
+    x1 = x1 if x1 > x0 else x0 + 1
+    ymin = math.floor(min(y for _, y in pts) / 10) * 10
+    ymax = math.ceil(max(ref, max(y for _, y in pts)) / 10) * 10
+    sx = lambda x: L + (math.log10(max(x, 0.01)) - x0) / (x1 - x0) * (W - L - R)
+    sy = lambda y: T + (ymax - y) / (ymax - ymin) * (H - T - B)
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="sans-serif" font-size="12">',
+         f'<rect width="{W}" height="{H}" fill="white"/>',
+         f'<text x="{W / 2}" y="22" text-anchor="middle" font-size="14">{title}</text>']
+    for y in range(int(ymin), int(ymax) + 1, 5):
+        o.append(f'<line x1="{L}" x2="{W - R}" y1="{sy(y)}" y2="{sy(y)}" stroke="#eee"/>')
+        o.append(f'<text x="{L - 6}" y="{sy(y) + 4}" text-anchor="end">{y}%</text>')
+    for k in range(math.floor(x0), math.ceil(x1) + 1):
+        for m in (1, 2, 5):
+            v = m * 10 ** k
+            if x0 <= math.log10(v) <= x1:
+                o.append(f'<line x1="{sx(v)}" x2="{sx(v)}" y1="{T}" y2="{H - B}" stroke="#eee"/>')
+                o.append(f'<text x="{sx(v)}" y="{H - B + 16}" text-anchor="middle">{v:g}</text>')
+    o.append(f'<text x="{(L + W - R) / 2}" y="{H - 12}" text-anchor="middle">corpus size (kLOC, log scale)</text>')
+    o.append(f'<text x="16" y="{(T + H - B) / 2}" transform="rotate(-90 16 {(T + H - B) / 2})" text-anchor="middle">compiler line coverage</text>')
+    o.append(f'<line x1="{L}" x2="{W - R}" y1="{sy(ref)}" y2="{sy(ref)}" stroke="#c33" stroke-dasharray="5,4"/>')
+    o.append(f'<text x="{W - R - 4}" y="{sy(ref) - 6}" text-anchor="end" fill="#c33">whole pool: {ref:.1f}%</text>')
+    o.append('<polyline fill="none" stroke="#2563eb" stroke-width="2" points="' +
+             " ".join(f"{sx(x)},{sy(y)}" for x, y in pts) + '"/>')
+    for x, y in pts:
+        o.append(f'<circle cx="{sx(x)}" cy="{sy(y)}" r="3" fill="#2563eb"/>')
+    x, y = pts[-1]
+    o.append(f'<text x="{sx(x) - 6}" y="{sy(y) + 18}" text-anchor="end" fill="#2563eb">{x:.1f} kLOC: {y:.1f}%</text>')
+    o.append("</svg>")
+    path.write_text("\n".join(o))
+
+
 def cmd_report(a):
     tc = toolchain(a.compiler)
     reg = Registry(WORK / "campaigns" / tc.key / "registry.json")
@@ -1088,6 +1204,14 @@ def main():
     p.add_argument("--variants", nargs="*", help="only manifest entries with these variants")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_compile)
+
+    p = sub.add_parser("curve")
+    p.add_argument("selection")
+    p.add_argument("campaigns", nargs="+")
+    p.add_argument("--out", required=True, help="path stem for .tsv/.svg")
+    p.add_argument("--points", type=int, default=10)
+    p.add_argument("--title", default="Compiler line coverage vs corpus size (greedy order)")
+    p.set_defaults(fn=cmd_curve)
 
     p = sub.add_parser("serve")
     p.set_defaults(fn=cmd_serve)
