@@ -234,7 +234,7 @@ object PickledQuotes {
     treePkl.pickle(tree :: Nil)
     treePkl.compactify()
     if tree.span.exists then
-      PositionPickler.picklePositions(pickler, treePkl.buf.addrOfTree, treePkl.treeAnnots, treePkl.typeAnnots,
+      PositionPickler.picklePositions(pickler, treePkl.addrOfTree, treePkl.treeAnnots, treePkl.typeAnnots,
         ctx.compilationUnit.source, tree :: Nil)
 
     val pickled = pickler.assembleParts()

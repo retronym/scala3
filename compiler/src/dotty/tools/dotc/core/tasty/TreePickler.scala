@@ -31,6 +31,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private val forwardSymRefs = Symbols.MutableSymbolMap[List[Addr]]()
   private val pickledTypes = util.EqHashMap[Type, Addr]()
 
+  /** A map from trees to the address at which a tree is pickled. */
+  private val treeAddrs = util.IntMap[untpd.Tree](initialCapacity = 8192)
+
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
    */
@@ -80,6 +83,18 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   def addrOfSym(sym: Symbol): Option[Addr] =
     symRefs.get(sym)
+
+  def addrOfTree(tree: untpd.Tree): Addr =
+    val idx = treeAddrs(tree)
+    if idx < 0 then NoAddr else Addr(idx)
+
+  private def registerTreeAddr(tree: untpd.Tree): Addr =
+    val idx = treeAddrs(tree)
+    if idx < 0 then
+      treeAddrs(tree) = currentAddr.index
+      currentAddr
+    else
+      Addr(idx)
 
   def preRegister(tree: Tree)(using Context): Unit = tree match
     case tree: MemberDef => symRefs.getOrElseUpdate(tree.symbol, NoAddr)
@@ -963,5 +978,10 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         i += 1
 
     updateMapWithDeltas(symRefs)
+
+    var i = 0
+    while i < treeAddrs.size do
+      treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
+      i += 1
   }
 }

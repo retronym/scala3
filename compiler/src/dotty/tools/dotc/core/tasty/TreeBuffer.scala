@@ -5,11 +5,10 @@ package tasty
 
 import dotty.tools.tasty.util.Util.dble
 import dotty.tools.tasty.TastyBuffer
-import TastyBuffer.{Addr, NoAddr, AddrWidth}
+import TastyBuffer.{Addr, AddrWidth}
 
 import util.Util.bestFit
 import config.Printers.pickling
-import ast.untpd.Tree
 import java.util.Arrays
 
 class TreeBuffer extends TastyBuffer(50000) {
@@ -19,21 +18,6 @@ class TreeBuffer extends TastyBuffer(50000) {
   private var offsets = new Array[Int](initialOffsetSize)
   private var isRelative = new Array[Boolean](initialOffsetSize)
   private var numOffsets = 0
-
-  /** A map from trees to the address at which a tree is pickled. */
-  private val treeAddrs = util.IntMap[Tree](initialCapacity = 8192)
-
-  def registerTreeAddr(tree: Tree): Addr =
-    val idx = treeAddrs(tree)
-    if idx < 0 then
-      treeAddrs(tree) = currentAddr.index
-      currentAddr
-    else
-      Addr(idx)
-
-  def addrOfTree(tree: Tree): Addr =
-    val idx = treeAddrs(tree)
-    if idx < 0 then NoAddr else Addr(idx)
 
   private def offset(i: Int): Addr = Addr(offsets(i))
 
@@ -175,12 +159,6 @@ class TreeBuffer extends TastyBuffer(50000) {
       wasted
     }
 
-    def adjustTreeAddrs(): Unit =
-      var i = 0
-      while i < treeAddrs.size do
-        treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
-        i += 1
-
     val origLength = length
     computeDeltas()
     //println(s"offsets: ${offsets.take(numOffsets).deep}")
@@ -192,7 +170,6 @@ class TreeBuffer extends TastyBuffer(50000) {
       saved > 0 && length / saved < 100
     do ()
     adjustOffsets()
-    adjustTreeAddrs()
     val wasted = compress()
     pickling.println(s"original length: $origLength, compressed to: $length, wasted: $wasted") // DEBUG, for now.
   end compactify
