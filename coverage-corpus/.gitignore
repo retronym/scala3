@@ -1,1 +1,4 @@
 .work/
+# written next to sources by -semanticdb-text / -Ydump-sbt-inc in some cases
+*.semanticdb
+*.inc

@@ -1,7 +1,0 @@
-Used Names:
-===========
-module class x-qualified-polyfun-quotes$package$: Function1 in [Default], PolyFunction in [Default], Expr in [Default], x in [Default], Quotes in [Default], ContextFunction1 in [Default], quotedPatternsWithPolymorphicFunctions in [Default], experimental in [Default], Object in [Default], Int in [Default], language in [Default], Any in [Default], scala in [Default], Nothing in [Default], quoted in [Default], x$2 in [Default], Unit in [Default], language in [Default], apply in [Default], experimental in [Default], java$u003Blang$u003BObject$u003Binit$u003B in [Default], e in [Default], A in [Default], 
-
-Dependencies:
-=============
-module class x-qualified-polyfun-quotes$package$: class Any in [DependencyByMemberRef], trait Function1 in [DependencyByMemberRef], class Unit in [DependencyByMemberRef], trait ContextFunction1 in [DependencyByMemberRef], trait Quotes in [DependencyByMemberRef], class Expr in [DependencyByMemberRef], class Object in [DependencyByMemberRefDependencyByInheritance], module class experimental$ in [DependencyByMemberRef], module class language$ in [DependencyByMemberRef], class Int in [DependencyByMemberRef], class Nothing in [DependencyByMemberRef], module class x-qualified-polyfun-quotes$package$ in [DependencyByMemberRef], module class quotedPatternsWithPolymorphicFunctions$ in [DependencyByMemberRef], trait PolyFunction in [DependencyByMemberRef], 

@@ -69,7 +69,9 @@ VARIANTS = {
     "profile": dict(opts=["-Yprofile-enabled", "-Yprofile-trace", "{tmp}/trace.json", "-Vprofile", "-Vprofile-details", "5",
                           "-Ydetailed-stats", "-verbose"]),
     "docs": dict(opts=["-Xread-docs", "-Xcook-docs", "-Yretain-trees"]),
-    "sbt-dump": dict(opts=["-Yforce-sbt-phases", "-Ydump-sbt-inc", "-Xsemanticdb", "-semanticdb-text"]),
+    # -Ydump-sbt-inc writes next to the sources, so compile copies
+    "sbt-dump": dict(opts=["-Yforce-sbt-phases", "-Ydump-sbt-inc", "-Xsemanticdb", "-semanticdb-text",
+                           "-semanticdb-target", "{tmp}/semanticdb"], copy_sources=True),
     "jar": dict(opts=[], jar=True),
     "parallel-backend": dict(opts=["-Ybackend-parallelism", "4"]),
     "misc": dict(opts=["-Xno-forwarders", "-Yno-patmat-opt", "-Ycheck-all-patmat", "-Yno-suspended-units",
@@ -774,6 +776,7 @@ def cmd_select(a):
             chosen.append((r, (r["bits"] & ~cover).bit_count()))
             cover |= r["bits"]
     import heapq
+    used_lines = sum(source_lines(r["case"]) for r, _ in chosen)
     heap = [(-(r["bits"] & ~cover).bit_count() / cost(r), i) for i, r in enumerate(jobs)]
     heapq.heapify(heap)
     while heap:
@@ -786,6 +789,11 @@ def cmd_select(a):
             continue
         if gain < a.min_gain:
             continue
+        if a.max_lines:
+            lines = source_lines(r["case"])
+            if used_lines + lines > a.max_lines:
+                continue
+            used_lines += lines
         chosen.append((r, gain))
         cover |= r["bits"]
     lines = []
@@ -1181,6 +1189,7 @@ def main():
     p.add_argument("--job-overhead", type=int, default=1500, help="cost of a job, in source-byte equivalents")
     p.add_argument("--ms-weight", type=float, default=2.0, help="cost per compile millisecond, in source-byte equivalents")
     p.add_argument("--keep", help="file listing cases always selected (with base variant)")
+    p.add_argument("--max-lines", type=int, help="source-line budget for the selection")
     p.set_defaults(fn=cmd_select)
 
     p = sub.add_parser("materialize")

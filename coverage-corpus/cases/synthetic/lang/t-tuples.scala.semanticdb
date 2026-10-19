@@ -1,1646 +1,0 @@
-
-¿¶ÉUsers/jzaugg-virtus/code/.worktrees/scala3/scala-compiler-coverage-tests-1f3db1/coverage-corpus/cases/synthetic/lang/t-tuples.scala∆def test =
-  val t = (1, "a", true)
-  val t2 = 0 *: t
-  val t3 = t ++ (2.0, 'c')
-  val h = t.head; val tl = t.tail; val l = t.last; val in = t.init
-  val sz = t.size
-  val m = t.map[[X] =>> List[X]]([X] => (x: X) => List(x))
-  val z = t.zip((1, 2, 3))
-  val tk = t.take(2); val dr = t.drop(1); val sp = t.splitAt(1)
-  val rev = t.reverse
-  val e: EmptyTuple = EmptyTuple
-  val big = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
-  val bh = big.head; val b23 = big(23); val bs = big.size; val bt = big.tail; val bc = big ++ big
-  val arr = t.toArray; val lst = t.toList; val it = t.productIterator.toList
-  val fromArr = Tuple.fromArray(Array(1, 2))
-  val ap = t(1)
-  val (x, y, w) = t
-  val nested = ((1, 2), (3, (4, 5)))
-  val ((n1, n2), (n3, (n4, n5))) = nested
-  type M = Tuple.Map[(Int, String), Option]
-  val mm: M = (Some(1), Some("s"))
-  type C = Tuple.Concat[(Int, String), (Boolean, Char)]
-  val cc: C = (1, "s", true, 'c')
-  type U = Tuple.Union[(Int, String)]
-  val uu: U = "s"
-  type F = Tuple.Filter[(1, "a", 2), [X] =>> X match { case Int => true; case _ => false }]
-  type E = Tuple.Elem[(Int, String), 1]
-  val ee: E = "s"
-  val nt = (name = "x", age = 1)
-  val ntn = nt.name; val nta = nt.age
-  val ntt: (String, Int) = nt.toTuple
-  val nn = nt(0); val aa = nt(1)
-  def named(p: (x: Int, y: Int)) = p.x + p.y
-  val np = named((x = 1, y = 2))
-  val nts = List((a = 1, b = "x")).map(_.a)
-  type NT = NamedTuple.NamedTuple[("a", "b"), (Int, String)]
-  val ntx: NT = (a = 1, b = "s")
-  type Names = NamedTuple.Names[NT]
-  type DropN = NamedTuple.Drop[NT, 1]
-  case class City(name: String, pop: Int)
-  type CF = NamedTuple.From[City]
-  val cf: CF = (name = "x", pop = 1)
-  t.toString + t2 + t3 + h + tl + l + in + sz + m + z + tk + dr + sp + rev + e + bh + b23 + bs + bt + bc.size + arr.toList +
-    lst + it + fromArr + ap + x + y + w + n1 + n2 + n3 + n4 + n5 + mm + cc + uu + ee + ntn + nta + ntt + nn + aa + np + nts + ntx + cf
-*f
-local0 Ä*tÄäP"N
-LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#*à
-local1 Ä*t2Ääq"o
-mkscala/`*:`#
-scala/Int#LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#*ƒ
-local2 Ä*t3Ää¨"©
-¶£scala/`*:`#
-scala/Int#ÉÄscala/`*:`#java/lang/String#ZXscala/`*:`#scala/Boolean#53scala/Tuple2#scala/Double#scala/Char#*(
-local3 Ä*hÄä"
-
-scala/Int#*å
-local4 Ä*tlÄäu"s
-qoscala/`*:`#java/lang/String#IGscala/`*:`#scala/Boolean#$¢!scala/Tuple$package.EmptyTuple.*,
-local5 Ä*lÄä"
-scala/Boolean#*á
-local6 Ä*inÄäp"n
-ljscala/`*:`#
-scala/Int#KIscala/`*:`#java/lang/String##!scala/Tuple$package.EmptyTuple#*)
-local7 Ä*szÄä"
-
-scala/Int#*9
-local8	*XÄä&$scala/Nothing#
-scala/Any#*9
-local9	*XÄä&$scala/Nothing#
-scala/Any#*"
-local10*xÄä"
-
-local9*§
-local11 Ä*mÄäå"â
-ÜÉscala/`*:`#42 scala/collection/immutable/List#
-scala/Int#Ω∫scala/`*:`#;9 scala/collection/immutable/List#java/lang/String#nlscala/`*:`#86 scala/collection/immutable/List#scala/Boolean##!scala/Tuple$package.EmptyTuple#*õ
-local12 Ä*zÄäÉ"Ä
-˝˙scala/`*:`#1/scala/Tuple2#
-scala/Int#
-scala/Int#∑¥scala/`*:`#86scala/Tuple2#java/lang/String#
-scala/Int#kiscala/`*:`#53scala/Tuple2#scala/Boolean#
-scala/Int##!scala/Tuple$package.EmptyTuple#*à
-local13 Ä*tkÄäp"n
-ljscala/`*:`#
-scala/Int#KIscala/`*:`#java/lang/String##!scala/Tuple$package.EmptyTuple#*ç
-local14 Ä*drÄäu"s
-qoscala/`*:`#java/lang/String#IGscala/`*:`#scala/Boolean#$¢!scala/Tuple$package.EmptyTuple.*ã
-local15 Ä*spÄäs"q
-omscala/Tuple.Split#LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#	∫
-2*≤
-local16 Ä*revÄäò"ï
-íèscala/`*:`#scala/Boolean#ljscala/`*:`#java/lang/String#DBscala/`*:`#
-scala/Int##!scala/Tuple$package.EmptyTuple#*>
-local17 Ä*eÄä'"%
-#!scala/Tuple$package.EmptyTuple#*™
-local18 Ä*bigÄäê"ç
-äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.**
-local19 Ä*bhÄä"
-
-scala/Int#*+
-local20 Ä*b23Ää"
-
-scala/Int#**
-local21 Ä*bsÄä"
-
-scala/Int#*Ü
-local22 Ä*btÄäÌ"Í
-Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.*è
-local23 Ä*bcÄäˆ"Û
-Ìscala/`*:`#
-scala/Int#Õ scala/`*:`#
-scala/Int#™ßscala/`*:`#
-scala/Int#áÑscala/`*:`#
-scala/Int#‰·scala/`*:`#
-scala/Int#¡æscala/`*:`#
-scala/Int#ûõscala/`*:`#
-scala/Int#˚¯scala/`*:`#
-scala/Int#ÿ’scala/`*:`#
-scala/Int#µ≤scala/`*:`#
-scala/Int#íèscala/`*:`#
-scala/Int#ÔÏscala/`*:`#
-scala/Int#Ã…scala/`*:`#
-scala/Int#©¶scala/`*:`#
-scala/Int#ÜÉscala/`*:`#
-scala/Int#„‡scala/`*:`#
-scala/Int#¿Ωscala/`*:`#
-scala/Int#ùöscala/`*:`#
-scala/Int#˙˜scala/`*:`#
-scala/Int#◊‘scala/`*:`#
-scala/Int#¥±scala/`*:`#
-scala/Int#ëéscala/`*:`#
-scala/Int#omscala/`*:`#
-scala/Int#NLscala/`*:`#
-scala/Int#-+scala/`*:`#
-scala/Int#¢	local18*D
-local24 Ä*arrÄä+")
-'%scala/Array#java/lang/Object#*Å
-local25 Ä*lstÄäh"f
-db scala/collection/immutable/List#>í;
-
-scala/Int#
-java/lang/String#
-scala/Boolean#*P
-local26 Ä*itÄä8"6
-42 scala/collection/immutable/List#
-scala/Any#*1
-local27 Ä*fromArrÄä"
-scala/Tuple#*1
-local28 Ä*apÄä"
-java/lang/String#*)
-local29 Ä*xÄä"
-
-scala/Int#*0
-local30 Ä*yÄä"
-java/lang/String#*-
-local31 Ä*wÄä"
-scala/Boolean#*æ
-local32 Ä*nestedÄä°"û
-õòscala/Tuple2#1/scala/Tuple2#
-scala/Int#
-scala/Int#TRscala/Tuple2#
-scala/Int#1/scala/Tuple2#
-scala/Int#
-scala/Int#**
-local33 Ä*n1Ää"
-
-scala/Int#**
-local34 Ä*n2Ää"
-
-scala/Int#**
-local35 Ä*n3Ää"
-
-scala/Int#**
-local36 Ä*n4Ää"
-
-scala/Int#**
-local37 Ä*n5Ää"
-
-scala/Int#*œ
-local38*MÄäµ≤ñìscala/`*:`#!scala/Option#
-scala/Int#a_scala/`*:`#+)scala/Option#scala/Predef.String##!scala/Tuple$package.EmptyTuple#ñìscala/`*:`#!scala/Option#
-scala/Int#a_scala/`*:`#+)scala/Option#scala/Predef.String##!scala/Tuple$package.EmptyTuple#í: *'
-local39 Ä*mmÄä"
-	local38*©
-local40*CÄäèåÉÄscala/`*:`#
-scala/Int#a_scala/`*:`#scala/Predef.String#64scala/Tuple2#scala/Boolean#scala/Char#ÉÄscala/`*:`#
-scala/Int#a_scala/`*:`#scala/Predef.String#64scala/Tuple2#scala/Boolean#scala/Char#í: *'
-local41 Ä*ccÄä"
-	local40*£
-local42*UÄäâÜAí>
-
-scala/Int#
-scala/Predef.String#
-scala/Nothing#Aí>
-
-scala/Int#
-scala/Predef.String#
-scala/Nothing#í: *'
-local43 Ä*uuÄä"
-	local42*:
-local44	*XÄä&$scala/Nothing#
-scala/Any#*◊
-local45*FÄäΩ∫[Yscala/`*:`#	∫
-2?=scala/`*:`#	∫
-2#!scala/Tuple$package.EmptyTuple#[Yscala/`*:`#	∫
-2?=scala/`*:`#	∫
-2#!scala/Tuple$package.EmptyTuple#í: *O
-local46*EÄä64scala/Predef.String#scala/Predef.String#í: *'
-local47 Ä*eeÄä"
-	local46*™
-local48 Ä*ntÄäë"é
-ãàscala/NamedTuple.NamedTuple#.,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#*2
-local49 Ä*ntnÄä"
-java/lang/String#*+
-local50 Ä*ntaÄä"
-
-scala/Int#*X
-local51 Ä*nttÄä?"=
-;9scala/Tuple2#scala/Predef.String#
-scala/Int#*1
-local52 Ä*nnÄä"
-java/lang/String#**
-local53 Ä*aaÄä"
-
-scala/Int#*ò
-local54*pÄäÉ"Ä
-~|scala/NamedTuple.NamedTuple#)'scala/Tuple2#
-∫
-R
-x
-∫
-R
-y1/scala/Tuple2#
-scala/Int#
-scala/Int#*5
-local55*namedÄä	
-local54
-scala/Int#**
-local56 Ä*npÄä"
-
-scala/Int#*Q
-local58 Ä*ntsÄä8"6
-42 scala/collection/immutable/List#
-scala/Int#*∂
-local59*NTÄäõòâÜscala/NamedTuple.NamedTuple#)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b;9scala/Tuple2#
-scala/Int#scala/Predef.String#âÜscala/NamedTuple.NamedTuple#)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b;9scala/Tuple2#
-scala/Int#scala/Predef.String#í: *(
-local60 Ä*ntxÄä"
-	local59*u
-local61*NamesÄäXV)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-bí: *á
-local62*DropNÄäjh20scala/NamedTuple.Drop#	local59	∫
-220scala/NamedTuple.Drop#	local59	∫
-2í: *;
-local63 Ä*nameÄä"
-scala/Predef.String#í: *0
-local64 Ä*popÄä"
-
-scala/Int#í: *J
-local65*copyÄä.,
-local65(name)
-local65(pop)	local66í: *
-local67*copy$default$1ÄäY"W
-UjS
-QBO
-scala/Predef.String#3
-1/-scala/annotation/unchecked/uncheckedVariance#í: *u
-local68*copy$default$2ÄäO"M
-KjI
-GBE
-
-scala/Int#3
-1/-scala/annotation/unchecked/uncheckedVariance#í: *:
-local69*_1Ää "
-j
-scala/Predef.String#í: *0
-local70*_2Ää"
-j
-
-scala/Int#í: *¿
-local66 Ä*CityÄä†
-ùjava/lang/Object#scala/Product#java/io/Serializable#	local66"H
-local63
-local64
-local71
-local65
-local67
-local68
-local69
-local70í: *K
-local72*applyÄä.,
-local72(name)
-local72(pop)	local66í: *%
-local73*x$1Ää"
-	local66*9
-local74*unapplyÄä	
-local73	local66í: *U
-local75*toStringÄä"
-j
-java/lang/String#í: öscala/Any#toString().*k
-local76
- *CityÄäM
-Kjava/lang/Object#¢	local77"$
-local78
-local72
-local74
-local75í: *î
-local79*CFÄä˘ˆ¯ıscala/NamedTuple.NamedTuple#cascala/`*:`#∫
-
-R
-nameCAscala/`*:`#∫	
-R
-pop$¢!scala/Tuple$package.EmptyTuple.pnscala/`*:`#scala/Predef.String#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.¯ıscala/NamedTuple.NamedTuple#cascala/`*:`#∫
-
-R
-nameCAscala/`*:`#∫	
-R
-pop$¢!scala/Tuple$package.EmptyTuple.pnscala/`*:`#scala/Predef.String#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.í: *'
-local80 Ä*cfÄä"
-	local79*T
-"_empty_/`t-tuples$package`.test().*testÄä"
-j
-java/lang/String#í: *ª
-_empty_/`t-tuples$package`. *_empty_Äää
-ájava/lang/Object# ¢_empty_/`t-tuples$package`."L
-&_empty_/`t-tuples$package`.`<init>`().
-"_empty_/`t-tuples$package`.test().*9
-local72(name)*nameÄä"
-scala/Predef.String#*-
-local65(pop)*popÄä"
-
-scala/Int#*-
-local72(pop)*popÄä"
-
-scala/Int#*9
-local65(name)*nameÄä"
-scala/Predef.String#2
- local02
- local02
- local12
- local02!
- scala/Tuple#`++`().2
- local22
-
- local02!
- scala/Tuple#head().2
- local32
- local02!
- !scala/Tuple#tail().2
- local42
-+ ,local02!
-- 1scala/Tuple#last().2
-' (local52
-< =local02!
-> Bscala/Tuple#init().2
-7 9local62
- local02!
- scala/Tuple#size().2
- local72
-
- local02 
- scala/Tuple#map().2
- local82!
- scala/package.List#2
- local82
-" #local92
-, -local92
-) *local102!
-2 6scala/package.List.2
-7 8local102
- local112
-
- local02 
- scala/Tuple#zip().2
- local122
- local02!
- scala/Tuple#take().2
- local132
-  local02!
-! %scala/Tuple#drop().2
- local142
-3 4local02$
-5 <scala/Tuple#splitAt().2
-. 0local152
-		 local02$
-		 scala/Tuple#reverse().2
-		 	local162-
-
-	
- scala/Tuple$package.EmptyTuple#2-
-
-
-  scala/Tuple$package.EmptyTuple.2
-
-
- local172
- 	local182
- local182!
- scala/Tuple#head().2
- local192
- "local182
- local202
-1 4local182!
-5 9scala/Tuple#size().2
-, .local212
-D Glocal182!
-H Lscala/Tuple#tail().2
-? Alocal222
-W Zlocal182!
-[ ]scala/Tuple#`++`().2
-^ alocal182
-R Tlocal232
- local02$
- scala/Tuple#toArray().2
- 	local242
-! "local02#
-# )scala/Tuple#toList().2
- local252
-4 5local02.
-6 E scala/Product#productIterator().28
-F L*scala/collection/IterableOnceOps#toList().2
-/ 1local262
- scala/Tuple.2&
- scala/Tuple.fromArray().2
-  %scala/Array.2
- local272
- local02
- local282
- local02
- local292
-
- local302
- local312
- local322
-# )local322
- 
-local332
- local342
- local352
- local362
- local372
- scala/Tuple.2
- scala/Tuple.Map#2
- 
-scala/Int#2"
- !scala/Predef.String#2
- local382
-
- local382
- scala/Some.2
- scala/Some.2
- local392
- scala/Tuple.2!
- scala/Tuple.Concat#2
- 
-scala/Int#2"
- $scala/Predef.String#2
-( /scala/Boolean#2
-1 5scala/Char#2
- local402
-
- local402
- local412
- scala/Tuple.2 
- scala/Tuple.Union#2
- 
-scala/Int#2"
- #scala/Predef.String#2
- local422
-
- local422
- local432
- scala/Tuple.2!
- scala/Tuple.Filter#2
-& 'local442
-- .local442
-< ?
-scala/Int#2
-N O
-scala/Any#2
- local452
- scala/Tuple.2
- scala/Tuple.Elem#2
- 
-scala/Int#2"
- "scala/Predef.String#2
- local462
-
- local462
- local472
- local482)
- scala/NamedTuple.apply(+1).2
- local482
- 	local492)
- !scala/NamedTuple.apply(+1).2
- !local482
- local502"
- scala/Predef.String#2
- 
-scala/Int#2)
- %scala/NamedTuple.toTuple().2
- local482
- 	local512)
- scala/NamedTuple.apply(+1).2
- local482
- local522)
- scala/NamedTuple.apply(+1).2
- local482
- local532
-   
-scala/Int#2
-   
-scala/Int#2
-   local542)
- #  $scala/NamedTuple.apply(+1).2
- #  $local542 
- '  (scala/Int#`+`(+4).2)
- )  *scala/NamedTuple.apply(+1).2
- )  *local542
-   local552
-!! local552
-!! local562!
-"" scala/package.List.24
-"#" &&scala/collection/immutable/List#map().2)
-"'" (scala/NamedTuple.apply(+1).2
-"" 	local582
-## scala/NamedTuple.2*
-## !scala/NamedTuple.NamedTuple#2
-#/# 2
-scala/Int#2"
-#4# :scala/Predef.String#2
-## 	local592
-$$ local592
-$$ 	local602
-%% scala/NamedTuple.2%
-%% scala/NamedTuple.Names#2
-% % "local592
-%% local612
-&& scala/NamedTuple.2$
-&& scala/NamedTuple.Drop#2
-&& !local592
-&& local622"
-'' scala/Predef.String#2
-'' local632
-'%' (
-scala/Int#2
-' ' #local642
-'' local662
-(( scala/NamedTuple.2$
-(( scala/NamedTuple.From#2
-((  local662
-(( 	local792
-)
-) local792
-)) local802
-** local02&
-** scala/Tuple3#toString().2%
-** java/lang/String#`+`().2
-** local12%
-** java/lang/String#`+`().2
-** local22%
-** java/lang/String#`+`().2
-** local32%
-** java/lang/String#`+`().2
-** local42%
-* * !java/lang/String#`+`().2
-*"* #local52%
-*$* %java/lang/String#`+`().2
-*&* (local62%
-*)* *java/lang/String#`+`().2
-*+* -local72%
-*.* /java/lang/String#`+`().2
-*0* 1local112%
-*2* 3java/lang/String#`+`().2
-*4* 5local122%
-*6* 7java/lang/String#`+`().2
-*8* :local132%
-*;* <java/lang/String#`+`().2
-*=* ?local142%
-*@* Ajava/lang/String#`+`().2
-*B* Dlocal152%
-*E* Fjava/lang/String#`+`().2
-*G* Jlocal162%
-*K* Ljava/lang/String#`+`().2
-*M* Nlocal172%
-*O* Pjava/lang/String#`+`().2
-*Q* Slocal192%
-*T* Ujava/lang/String#`+`().2
-*V* Ylocal202%
-*Z* [java/lang/String#`+`().2
-*\* ^local212%
-*_* `java/lang/String#`+`().2
-*a* clocal222%
-*d* ejava/lang/String#`+`().2
-*f* hlocal232!
-*i* mscala/Tuple#size().2%
-*n* ojava/lang/String#`+`().2
-*p* slocal2428
-*t* z*scala/collection/IterableOnceOps#toList().2%
-*{* |java/lang/String#`+`().2
-++ local252%
-++ 	java/lang/String#`+`().2
-+
-+ local262%
-++ java/lang/String#`+`().2
-++ local272%
-++ java/lang/String#`+`().2
-++ local282%
-++ java/lang/String#`+`().2
-++ local292%
-+ + !java/lang/String#`+`().2
-+"+ #local302%
-+$+ %java/lang/String#`+`().2
-+&+ 'local312%
-+(+ )java/lang/String#`+`().2
-+*+ ,local332%
-+-+ .java/lang/String#`+`().2
-+/+ 1local342%
-+2+ 3java/lang/String#`+`().2
-+4+ 6local352%
-+7+ 8java/lang/String#`+`().2
-+9+ ;local362%
-+<+ =java/lang/String#`+`().2
-+>+ @local372%
-+A+ Bjava/lang/String#`+`().2
-+C+ Elocal392%
-+F+ Gjava/lang/String#`+`().2
-+H+ Jlocal412%
-+K+ Ljava/lang/String#`+`().2
-+M+ Olocal432%
-+P+ Qjava/lang/String#`+`().2
-+R+ Tlocal472%
-+U+ Vjava/lang/String#`+`().2
-+W+ Zlocal492%
-+[+ \java/lang/String#`+`().2
-+]+ `local502%
-+a+ bjava/lang/String#`+`().2
-+c+ flocal512%
-+g+ hjava/lang/String#`+`().2
-+i+ klocal522%
-+l+ mjava/lang/String#`+`().2
-+n+ plocal532%
-+q+ rjava/lang/String#`+`().2
-+s+ ulocal562%
-+v+ wjava/lang/String#`+`().2
-+x+ {local582%
-+|+ }java/lang/String#`+`().2
-	+~+ Ålocal602'
-
-+Ç+ Éjava/lang/String#`+`().2
-
-+Ñ+ Ülocal802,
- "_empty_/`t-tuples$package`.test().PZ 9FC38A33DC309B9CA673800CC52350A7bã
-
- 
-}
-mBk
-.:,
-
-scala/Tuple3.
-scala/Tuple3.apply().
-scala/Int#java/lang/String#scala/Boolean#2
-
-
- bz
- nBl
-2
-
- 
-scala/Int#LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
- ^B\
-2
-
- LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bt
- h
-f
-VBT
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().scala/Double#scala/Char#2
-
- bj
-
- ^B\
-2
-
-
- LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
- !^B\
-2
-
- !LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
-+ 1^B\
-2
-
-+ 1LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
-< B^B\
-2
-
-< BLJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
- ^B\
-2
-
- LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bv
-2 9j
-h
-XBV
-H:F
-
-scala/package.List.+
-)scala/collection/IterableFactory#apply().
-local92
-
-2 9bØ
-
- ¢Bü
-2
-
-
- LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#A?scala/Tuple3#
-scala/Int#
-scala/Int#
-scala/Int#bÄ
- t
-r
-bB`
-.:,
-
-scala/Tuple3.
-scala/Tuple3.apply().
-scala/Int#
-scala/Int#
-scala/Int#2
-
- bj
- ^B\
-2
-
- LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
- %^B\
-2
-
- %LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
-3 <^B\
-2
-
-3 <LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bj
-		 ^B\
-2
-
-		 LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#b´
- gûBõ
-2
-
- gäáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.bA
- g5
-3
-#!
-scala/runtime/TupleXXL.apply().2
-
- gb´
- ûBõ
-2
-
- äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.b«
- "∫B∑
-(:&
-2
-
- "
-scala/Tuple#apply().äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.b⁄
- &Õ
- 
-πB∂
-':%
-	
-local18
-scala/Tuple#apply().äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.2
-
- &b´
-1 9ûBõ
-2
-
-1 9äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.b´
-D LûBõ
-2
-
-D Läáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.b´
-W ]ûBõ
-2
-
-W ]äáscala/`*:`#
-scala/Int#Á‰scala/`*:`#
-scala/Int#ƒ¡scala/`*:`#
-scala/Int#°ûscala/`*:`#
-scala/Int#˛˚scala/`*:`#
-scala/Int#€ÿscala/`*:`#
-scala/Int#∏µscala/`*:`#
-scala/Int#ïíscala/`*:`#
-scala/Int#ÚÔscala/`*:`#
-scala/Int#œÃscala/`*:`#
-scala/Int#¨©scala/`*:`#
-scala/Int#âÜscala/`*:`#
-scala/Int#Ê„scala/`*:`#
-scala/Int#√¿scala/`*:`#
-scala/Int#†ùscala/`*:`#
-scala/Int#˝˙scala/`*:`#
-scala/Int#⁄◊scala/`*:`#
-scala/Int#∑¥scala/`*:`#
-scala/Int#îëscala/`*:`#
-scala/Int#ÒÓscala/`*:`#
-scala/Int#ŒÀscala/`*:`#
-scala/Int#´®scala/`*:`#
-scala/Int#àÖscala/`*:`#
-scala/Int#fdscala/`*:`#
-scala/Int#ECscala/`*:`#
-scala/Int#$¢!scala/Tuple$package.EmptyTuple.b,
-  B
-2
-
- 
-scala/Int#b8
-  +,
-*
-
-scala/Array.apply(+5).2
-
-  +bÜ
- zBx
-(:&
-2
-
- 
-scala/Tuple#apply().LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#bò
- ã
-à
-xBv
-&:$
-
-
-local0
-scala/Tuple#apply().LJscala/Tuple3#
-scala/Int#java/lang/String#scala/Boolean#2
-
- b›
- $–
-Õ
-ºBπ
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().1/scala/Tuple2#
-scala/Int#
-scala/Int#TRscala/Tuple2#
-scala/Int#1/scala/Tuple2#
-scala/Int#
-scala/Int#2
-
- $bp
- d
-b
-RBP
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#
-scala/Int#2
-
- bï
- #à
-Ö
-uBs
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#1/scala/Tuple2#
-scala/Int#
-scala/Int#2
-
- #bp
- "d
-b
-RBP
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#
-scala/Int#2
-
- "bõ
- "é
-ã
-{By
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().scala/Some#
-scala/Int#&$scala/Some#java/lang/String#2
-
- "bG
- ;B9
-':%
-2
-
- 
-scala/Some.apply().
-scala/Int#b\
- P
-N
->B<
-*:(
-
-scala/Some.
-scala/Some.apply().
-scala/Int#2
-
- bN
- BB@
-':%
-2
-
- 
-scala/Some.apply().java/lang/String#bc
- !W
-U
-EBC
-*:(
-
-scala/Some.
-scala/Some.apply().java/lang/String#2
-
- !bû
- !ë
-é
-~B|
-.:,
-
-scala/Tuple4.
-scala/Tuple4.apply().
-scala/Int#java/lang/String#scala/Boolean#scala/Char#2
-
- !bV
-  JBH
-2
-
-  86scala/Tuple2#java/lang/String#
-scala/Int#bL
-  @B>
-2
-
- .,scala/Tuple2#∫
-
-R
-name∫	
-R
-agebw
-  k
-i
-YBW
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().java/lang/String#
-scala/Int#2
-
-  bÜ
- zBx
-2
-
- .,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#b»
- ª
-∏
-ßB§
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1)..,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#2
-
- bN
- B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local482
-
- bÜ
- !zBx
-2
-
- !.,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#b»
- !ª
-∏
-ßB§
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1)..,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#2
-
- !bN
- %B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local482
-
- %bÜ
- %zBx
-2
-
- %.,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#bÜ
- zBx
-2
-
- .,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#b»
- ª
-∏
-ßB§
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1)..,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#2
-
- bN
- B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local482
-
- bÜ
- zBx
-2
-
- .,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#b»
- ª
-∏
-ßB§
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1)..,scala/Tuple2#∫
-
-R
-name∫	
-R
-age86scala/Tuple2#java/lang/String#
-scala/Int#2
-
- bN
-  B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local482
-
-  bz
- #  $nBl
-2
-
- #  $)'scala/Tuple2#
-∫
-R
-x
-∫
-R
-y1/scala/Tuple2#
-scala/Int#
-scala/Int#bº
- #  $Ø
-¨
-õBò
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1).)'scala/Tuple2#
-∫
-R
-x
-∫
-R
-y1/scala/Tuple2#
-scala/Int#
-scala/Int#2
-
- #  $bN
- #  &B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local542
-
- #  &bz
- )  *nBl
-2
-
- )  *)'scala/Tuple2#
-∫
-R
-x
-∫
-R
-y1/scala/Tuple2#
-scala/Int#
-scala/Int#bº
- )  *Ø
-¨
-õBò
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1).)'scala/Tuple2#
-∫
-R
-x
-∫
-R
-y1/scala/Tuple2#
-scala/Int#
-scala/Int#2
-
- )  *bN
- )  ,B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local542
-
- )  ,bO
-!! CBA
-2
-
-!! 1/scala/Tuple2#
-scala/Int#
-scala/Int#bG
-!! ;B9
-2
-
-!! )'scala/Tuple2#
-∫
-R
-x
-∫
-R
-ybp
-!! d
-b
-RBP
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#
-scala/Int#2
-
-!! b,
-"" & B
-2
-
-"" &
-scala/Int#bÿ
-"" ÀB»
-=:;
-2
-
-"" +
-)scala/collection/IterableFactory#apply().ÜÉscala/NamedTuple.NamedTuple#)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b86scala/Tuple2#
-scala/Int#java/lang/String#b˜
-"" "Í
-Á
-÷B”
-H:F
-
-scala/package.List.+
-)scala/collection/IterableFactory#apply().ÜÉscala/NamedTuple.NamedTuple#)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b86scala/Tuple2#
-scala/Int#java/lang/String#2
-
-"" "bV
-"" !JBH
-2
-
-"" !86scala/Tuple2#
-scala/Int#java/lang/String#bG
-"" !;B9
-2
-
-"" )'scala/Tuple2#
-∫
-R
-a
-∫
-R
-bbw
-"" !k
-i
-YBW
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#java/lang/String#2
-
-"" !bÅ
-"'" (uBs
-2
-
-"'" ()'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b86scala/Tuple2#
-scala/Int#java/lang/String#b√
-"'" (∂
-≥
-¢Bü
-8:6
-
-scala/NamedTuple.
-scala/NamedTuple.apply(+1).)'scala/Tuple2#
-∫
-R
-a
-∫
-R
-b86scala/Tuple2#
-scala/Int#java/lang/String#2
-
-"'" (bN
-"'" *B
-@
-0
-.
-
-scala/NamedTuple.apply(+1).	
-local572
-
-"'" *bV
-$$  JBH
-2
-
-$$  86scala/Tuple2#
-scala/Int#java/lang/String#bG
-$$  ;B9
-2
-
-$$ )'scala/Tuple2#
-∫
-R
-a
-∫
-R
-bbw
-$$  k
-i
-YBW
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().
-scala/Int#java/lang/String#2
-
-$$  bV
-)) $JBH
-2
-
-)) $86scala/Tuple2#java/lang/String#
-scala/Int#bL
-)) $@B>
-2
-
-)) .,scala/Tuple2#∫
-
-R
-name∫	
-R
-popbw
-)) $k
-i
-YBW
-.:,
-
-scala/Tuple2.
-scala/Tuple2.apply().java/lang/String#
-scala/Int#2
-
-)) $bë
-*f* mÑBÅ
-2
-
-*f* mÌscala/`*:`#
-scala/Int#Õ scala/`*:`#
-scala/Int#™ßscala/`*:`#
-scala/Int#áÑscala/`*:`#
-scala/Int#‰·scala/`*:`#
-scala/Int#¡æscala/`*:`#
-scala/Int#ûõscala/`*:`#
-scala/Int#˚¯scala/`*:`#
-scala/Int#ÿ’scala/`*:`#
-scala/Int#µ≤scala/`*:`#
-scala/Int#íèscala/`*:`#
-scala/Int#ÔÏscala/`*:`#
-scala/Int#Ã…scala/`*:`#
-scala/Int#©¶scala/`*:`#
-scala/Int#ÜÉscala/`*:`#
-scala/Int#„‡scala/`*:`#
-scala/Int#¿Ωscala/`*:`#
-scala/Int#ùöscala/`*:`#
-scala/Int#˙˜scala/`*:`#
-scala/Int#◊‘scala/`*:`#
-scala/Int#¥±scala/`*:`#
-scala/Int#ëéscala/`*:`#
-scala/Int#omscala/`*:`#
-scala/Int#NLscala/`*:`#
-scala/Int#-+scala/`*:`#
-scala/Int#¢	local18bg
-*p* s[
-Y
-IBG
-.,
-*scala/LowPriorityImplicits#wrapRefArray().java/lang/Object#2
-
-*p* s
