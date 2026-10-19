@@ -60,6 +60,16 @@ EOF
 fi
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"   # where wrangler login stored its token here
 
+# Stack view PoC at /stack/: shares the viewer's loader; rewrite its two relative paths for the site layout.
+STACK="$HERE/../stack"
+if [ -d "$STACK" ]; then
+  mkdir -p "$SITE/stack"
+  cp "$STACK/index.html" "$STACK/NOTES.md" "$SITE/stack/"; cp -R "$STACK/js" "$SITE/stack/js"
+  sed -i '' 's|src="../ui/js/loader.js"|src="../js/loader.js"|' "$SITE/stack/index.html"
+  givens=$(ls "$SITE/data" | grep -E '^Givens\.[0-9a-f]{8}\.jsonl$' | head -1)
+  sed -i '' "s|'../ui/data/Givens.jsonl'|'../data/$givens'|" "$SITE/stack/js/main.js"
+fi
+
 echo "site: $(du -sh "$SITE" | cut -f1); r2 objects: $(wc -l < "$HERE/r2/manifest.txt")"
 
 if [[ "${1:-}" == "--upload" || "${2:-}" == "--upload" ]]; then

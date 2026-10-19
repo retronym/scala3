@@ -404,7 +404,8 @@
     document.querySelectorAll('#viewtabs button').forEach((b) => (b.onclick = () => R.setView(b.dataset.v))); R.setView('all');
     $('btn-recs').onclick = () => openRecs(); $('btn-recs2').onclick = () => { $('opts').hidden = true; openRecs(); };
     $('btn-opts').onclick = (ev) => { ev.stopPropagation(); $('opts').hidden = !$('opts').hidden; };
-    document.addEventListener('mousedown', (ev) => { const o = $('opts'); if (!o.hidden && !o.contains(ev.target) && ev.target !== $('btn-opts')) o.hidden = true; }); $('btn-help').onclick = () => { $('help').hidden = false; }; $('btn-about').onclick = openAbout; $('btn-link').onclick = copyLink;
+    document.addEventListener('mousedown', (ev) => { const o = $('opts'); if (!o.hidden && !o.contains(ev.target) && ev.target !== $('btn-opts')) o.hidden = true; });
+    document.addEventListener('mousedown', (ev) => { const t = $('phtab'); if (!t.hidden && !t.contains(ev.target) && !ev.target.closest('#btn-phtab')) t.hidden = true; }); $('btn-help').onclick = () => { $('help').hidden = false; }; $('btn-about').onclick = openAbout; $('btn-link').onclick = copyLink;
     document.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => { $(b.dataset.close).hidden = true; }));
     document.querySelectorAll('.modal').forEach((m) => m.addEventListener('mousedown', (ev) => { if (ev.target === m && ST.D) m.hidden = true; }));
     // drag and drop anywhere
@@ -429,6 +430,7 @@
     $('follow').onchange = (ev) => { ST.follow = ev.target.checked; };
     document.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape' && !$('opts').hidden) { $('opts').hidden = true; ev.preventDefault(); return; }
+      if (ev.key === 'Escape' && !$('phtab').hidden) { $('phtab').hidden = true; ev.preventDefault(); return; }
       if (ev.key === '?' && (ev.target.tagName === 'TEXTAREA' || (ev.target.tagName === 'INPUT' && /^(text|search|number)$/.test(ev.target.type)))) return;
       if (ev.key === '?' || (ev.key === 'Escape' && (!$('help').hidden || (!$('recs').hidden && ST.D)))) { if (true) { const open = ev.key === '?' ? $('help').hidden : false; $('help').hidden = !open; if (ST.D) $('recs').hidden = true; ev.preventDefault(); return; } }
       const t = ev.target; if (!ST.D || ev.metaKey || ev.ctrlKey || ev.altKey || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.tagName === 'INPUT' && /^(text|search|number|url|email)$/.test(t.type))) return;

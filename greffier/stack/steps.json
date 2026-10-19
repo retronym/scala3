@@ -1,0 +1,31 @@
+[
+ {
+  "js": "const s=__stack; s.jumpTo(0,true); await new Promise(r=>setTimeout(r,800)); return s.front.short",
+  "name": "01-front"
+ },
+ {
+  "js": "const s=__stack, f=s.front; const k=f.rows.findIndex(r=>r.t.includes('def show(a: Int): String')); const el=f.txtEl.children[k]; const rc=el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:rc.left+70,clientY:rc.top+8})); await new Promise(r=>setTimeout(r,500)); return {kind:s.tr.kind, ms:s.tr.ms}",
+  "name": "02-trace-front"
+ },
+ {
+  "js": "const s=__stack; const c=__S.cards.find(c=>c.short==='erasure'); s.flyTo(c); await new Promise(r=>setTimeout(r,1500)); return s.front.short",
+  "name": "03-trace-erasure"
+ },
+ {
+  "js": "const s=__stack; const c=__S.cards.find(c=>c.short==='typer'); s.flyTo(c); await new Promise(r=>setTimeout(r,1800)); return s.front.short",
+  "name": "04-trace-typer"
+ },
+ {
+  "js": "const s=__stack; s.clearTrace(); const c=__S.cards.find(c=>c.short==='erasure'); s.flyTo(c); await new Promise(r=>setTimeout(r,1500)); const i=s.list.indexOf(s.front); s.hover=s.list.slice(0,i).reverse().find(c=>!c.noop); s.kick(); await new Promise(r=>setTimeout(r,600)); return s.hover.short",
+  "name": "05-hover"
+ },
+ {
+  "js": "const s=__stack; s.hover=null; document.getElementById('skip').click(); await new Promise(r=>setTimeout(r,1200)); return s.list.length",
+  "name": "06-skip-noops"
+ },
+ {
+  "js": "const s=__stack; s.jumpTo(0); s.lastWheel=0; await new Promise(r=>setTimeout(r,140)); return s.u",
+  "name": "07-in-flight",
+  "wait": 0
+ }
+]
