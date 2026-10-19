@@ -11,7 +11,7 @@ export default {
     if (asset.status !== 404) return asset;
 
     // Stale deep link to a previous content hash: redirect to the current file for that base name.
-    const m = /^\/data\/(.+?)\.[0-9a-f]{8}\.jsonl$/.exec(url.pathname);
+    const m = /^\/data\/(.+?)(?:\.[0-9a-f]{8})?\.jsonl$/.exec(url.pathname); // stale hash or unhashed base name
     if (m) {
       const idx = await env.ASSETS.fetch(new Request(new URL('/recordings.json', url)));
       if (idx.ok) {

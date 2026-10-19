@@ -197,14 +197,21 @@
   R.renderIR = renderIR;
 
   // ---- per-method optimiser stepping ----
+  // the method a node belongs to (IR MethodNode / InsnRange, or a tree node through its bytecode ranges): the single answer used by the dropdown, the graph and the explorer
+  R.methodOfNode = (id) => {
+    const D = R.ST.D; if (!D || !D.hasIR || id == null) return null; const n = D.nodes.get(id); if (!n) return null;
+    const of = (r) => { const m = r && D.nodes.get(r.method); return m && m.kind === 'MethodNode' ? { cls: D.irClassOf.get(r.id) || D.irClassOf.get(m.id), key: m.name + m.desc } : null; };
+    if (n.ir) return n.kind === 'MethodNode' ? { cls: D.irClassOf.get(n.id), key: n.name + n.desc } : n.kind === 'InsnRange' ? of(n) : null;
+    const rs = R.irFromTreeNode(id) || []; for (const r of rs) { const x = D.nodes.get(r), m = x && x.kind === 'MethodNode' ? { cls: D.irClassOf.get(x.id), key: x.name + x.desc } : of(x); if (m && m.cls) return m; } return null;
+  };
   function renderMethodPanel(v, cls, cv, hows) {
     const D = R.ST.D, st = R.ST, mp = $('mpanel'), box = $('mpbody'), texts = methodTexts(cls);
     // methods present in this class version
     const mn = [...texts.keys()]; if (!mn.length) { box.innerHTML = '<span class="dim">no methods</span>'; return; }
     // default method: selected node's method, else the first method changed at this step
+    // st.irMethod is the one current method; a *new* selection moves it, a dropdown choice sticks until the selection changes
     let key = st.irMethod && texts.has(st.irMethod) ? st.irMethod : null;
-    const sn = st.selNode != null ? D.nodes.get(st.selNode) : null;
-    if (sn && sn.ir) { const m = sn.kind === 'MethodNode' ? sn : sn.kind === 'InsnRange' ? D.nodes.get(sn.method) : null; if (m && texts.has(m.name + m.desc)) key = m.name + m.desc; }
+    if (st.selNode !== st._mSel) { st._mSel = st.selNode; const mo = R.methodOfNode(st.selNode); if (mo && mo.cls === cls && texts.has(mo.key)) { key = mo.key; st._mExplicit = false; } }
     const changedAt = (kk) => (texts.get(kk) || []).some((e) => e.phase === v.phase);
     if (!key) key = mn.find(changedAt) || mn[0];
     const hist = texts.get(key), idx = (() => { let i = -1; hist.forEach((e, j) => { if (e.phase <= v.phase) i = j; }); return i; })();
@@ -224,7 +231,7 @@
     if (inl.length) h += '<div class="anc"><span class="dim">inlined into this method</span>' + inl.slice(0, 20).map(([id, d]) => `<div class="ar"><a class="lk-sel" data-n="${id}" title="select the copied range">range ${(D.nodes.get(id).range || []).join('–')}</a> ← <b>${esc(d.callee || '(unnamed)')}</b>${d.old.length ? ` <a class="lk-ir" data-ir="${d.old[0]}" title="open the callee's bytecode (genBCode)">show callee</a>` : ' <span class="dim">(not compiled in this run)</span>'}</div>`).join('') + (inl.length > 20 ? `<div class="dim">… ${inl.length - 20} more</div>` : '') + '</div>';
     box.innerHTML = h;
     st.irMethod = key;
-    $('mpsel').onchange = (ev) => R.set({ irMethod: ev.target.value });
+    $('mpsel').onchange = (ev) => R.set({ irMethod: ev.target.value, _mExplicit: true });
     $('mpgraph').onclick = () => R.cfgOpen && R.cfgOpen(cls, key, v.phase);
     const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) R.set({ verIdx: k }); };
     $('mpprev').onclick = () => go(hist[idx - 1]); $('mpnext').onclick = () => nextE && go(nextE);

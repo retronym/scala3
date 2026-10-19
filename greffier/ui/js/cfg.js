@@ -85,24 +85,25 @@
     const D = R.ST.D; if (!D || !D.hasIR) return; if (typeof dagre === 'undefined') { alert('dagre failed to load (needs cdnjs)'); return; }
     const hist = historyOf(cls, key); if (!hist.length) return;
     let hi = 0; hist.forEach((p, i) => { if (p <= (phase ?? D.irGenPhase)) hi = i; });
-    C.cls = cls; C.key = key; C.hist = hist; C.hi = hi; C.collapsed = new Map(); C.seen = null; C.k = 1; C.x = 0; C.y = 0; C.focus = null;
+    C.cls = cls; C.key = key; C.hist = hist; R.ST._mSel = R.ST.selNode; C.hi = hi; C.fold = new Map(); C.seen = null; C.k = 1; C.x = 0; C.y = 0; C.focus = null;
     if (!C.built) { build(); C.built = true; } if (!C.open) { C.open = true; document.addEventListener('keydown', onKey, true); }
-    $('cfgov').hidden = false; place(); render(false); syncViewer(true);
+    $('cfgov').hidden = false; place(); render(false); C.seen = C.hist[C.hi];
+    // the viewer follows the lightbox: put it on the JVM phase being shown (opening from a tree version moves it to bytecode)
+    C.syncing = true; try { R.ST.irMethod = key; R.ST.cls = cls; const k = R.vers().findIndex((x) => x.irPseudo && x.phase === C.hist[C.hi]); const v = R.ver(); if (k >= 0 && !(v && v.irPseudo && v.phase === C.hist[C.hi])) R.setPhase(k); else R.set({ irMethod: key, cls }); } finally { C.syncing = false; } R.ST._mExplicit = true; R.scheduleHash && R.scheduleHash();
   };
   // the lightbox covers the main panes only: header, timeline (axis, bands, phase select) and the explorer with the chapter pager stay operable
   function place() { const m = document.querySelector('main'), ov = $('cfgov'); if (!m) return; const r = m.getBoundingClientRect(); Object.assign(ov.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' }); }
-  R.cfgClose = function () { if (!C.open) return; C.open = false; $('cfgov').hidden = true; document.removeEventListener('keydown', onKey, true); };
+  R.cfgKey = () => (C.open ? C.key : null);
+  R.cfgClose = function () { if (!C.open) return; C.open = false; R.scheduleHash && setTimeout(() => R.scheduleHash(), 0); $('cfgov').hidden = true; document.removeEventListener('keydown', onKey, true); };
   R.cfgOpenSelected = function () {
-    const D = R.ST.D, st = R.ST; if (!D || !D.hasIR) return false; const sel = st.selNode != null ? D.nodes.get(st.selNode) : null; let cls = null, m = null;
-    const ofRange = (n) => { const mm = n && D.nodes.get(n.method); if (mm && mm.kind === 'MethodNode') { cls = D.irClassOf.get(n.id) || D.irClassOf.get(mm.id); m = mm; } };
-    if (sel && sel.ir) { if (sel.kind === 'MethodNode') { m = sel; cls = D.irClassOf.get(sel.id); } else if (sel.kind === 'InsnRange') ofRange(sel); }
-    else if (sel) { const r = R.irFromTreeNode(st.selNode); if (r && r.length) ofRange(D.nodes.get(r[0])); }
-    if (!m && st.irMethod) { cls = R.curClass(); R.cfgOpen(cls, st.irMethod, R.ver() && R.ver().irPseudo ? R.ver().phase : D.irGenPhase); return true; }
-    if (!m || !cls) return false; const v = R.ver(); R.cfgOpen(cls, m.name + m.desc, v && v.irPseudo ? v.phase : D.irGenPhase); return true;
+    const D = R.ST.D, st = R.ST; if (!D || !D.hasIR) return false; const v = R.ver(), phase = v && v.irPseudo ? v.phase : D.irGenPhase;
+    const mo = R.methodOfNode(st.selNode); if (mo && mo.cls) { R.cfgOpen(mo.cls, mo.key, phase); return true; }
+    if (st.irMethod) { R.cfgOpen(R.curClass(), st.irMethod, phase); return true; }
+    return false;
   };
   function build() {
-    const ov = document.createElement('div'); ov.id = 'cfgov'; ov.innerHTML = `<div id="cfgbd"></div><div id="cfgbox"><div id="cfghead"><b id="cfgtitle"></b><span id="cfgphase"></span><span id="cfgcnt"></span><span id="cfgclo"></span><span id="cfgcue"></span><button id="cfgprev" title="previous JVM phase of this method ([)">◀ [</button><button id="cfgnext" title="next JVM phase of this method (])">] ▶</button><button id="cfgfit" title="fit to view (f)">⤢ fit</button><span id="cfglegend"></span><button id="cfgx" title="Esc">✕</button></div><div id="cfgbody"><div id="cfggraph"><div id="cfgcanvas"><svg id="cfgsvg"></svg></div><canvas id="cfgmini" width="160" height="110"></canvas></div><div id="cfglist" class="bc"></div></div></div>`;
-    document.body.append(ov); window.addEventListener('resize', () => { if (C.open) { place(); fit(false); } }); $('cfgbd').onclick = R.cfgClose; $('cfgx').onclick = R.cfgClose; $('cfgfit').onclick = () => fit(true); $('cfgprev').onclick = () => step(-1); $('cfgnext').onclick = () => step(1);
+    const ov = document.createElement('div'); ov.id = 'cfgov'; ov.innerHTML = `<div id="cfgbd"></div><div id="cfgbox"><div id="cfghead"><b id="cfgtitle"></b><span id="cfgphase"></span><span id="cfgcnt"></span><span id="cfgclo"></span><label id="cfgcompactl" hidden title="fold large blocks (still never the ones changed in this step)"><input type="checkbox" id="cfgcompact"> compact</label><span id="cfgcue"></span><button id="cfgprev" title="previous JVM phase of this method ([)">◀ [</button><button id="cfgnext" title="next JVM phase of this method (])">] ▶</button><button id="cfgfit" title="fit to view (f)">⤢ fit</button><span id="cfglegend"></span><button id="cfgx" title="Esc">✕</button></div><div id="cfgbody"><div id="cfggraph"><div id="cfgcanvas"><svg id="cfgsvg"></svg></div><canvas id="cfgmini" width="160" height="110"></canvas></div><div id="cfglist" class="bc"></div></div></div>`;
+    document.body.append(ov); window.addEventListener('resize', () => { if (C.open) { place(); fit(false); } }); $('cfgbd').onclick = R.cfgClose; $('cfgx').onclick = R.cfgClose; $('cfgfit').onclick = () => fit(true); $('cfgcompact').onchange = (e) => { C.compact = e.target.checked; render(true, true); }; $('cfgprev').onclick = () => step(-1); $('cfgnext').onclick = () => step(1);
     $('cfglegend').innerHTML = [['fall', 'fallthrough'], ['true', 'true'], ['false', 'false'], ['goto', 'goto'], ['case', 'switch'], ['exc', 'exception']].map(([k, t]) => `<i style="background:${COL[k]}"></i>${t}`).join(' ');
     const g = $('cfggraph'); let drag = null;
     g.addEventListener('wheel', (e) => { e.preventDefault(); const r = g.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016)), k2 = Math.max(0.08, Math.min(2.5, C.k * f)); C.x = mx - (mx - C.x) * (k2 / C.k); C.y = my - (my - C.y) * (k2 / C.k); C.k = k2; apply(); }, { passive: false });
@@ -114,13 +115,19 @@
     ov.addEventListener('mouseover', (e) => { const b = e.target.closest && e.target.closest('.cfgb'), ln = e.target.closest && e.target.closest('#cfglist .ln'), ed = e.target.closest && e.target.closest('#cfgsvg .ce'); hover(b ? +b.dataset.b : ln ? +ln.dataset.bl : null, ed, !!ln); });
     ov.addEventListener('mouseleave', () => hover(null));
     ov.addEventListener('click', (e) => {
-      const h = e.target.closest && e.target.closest('.cfgb .bh'); if (h) { const b = h.parentNode; C.collapsed.set(+b.dataset.b, !C.collapsed.get(+b.dataset.b)); render(true, true); return; }
+      const h = e.target.closest && e.target.closest('.cfgb .bh'); if (h) { const b = h.parentNode, nm = b.dataset.name; C.fold.set(nm, b.dataset.folded !== '1'); render(true, true); return; }
       const n = e.target.closest && e.target.closest('.n'); if (n && n.dataset.n) R.set({ selNode: +n.dataset.n }); else { const b = e.target.closest && e.target.closest('.cfgb'); if (b) C.focus = +b.dataset.b, focusMark(); }
     });
-    R.views.push(() => { if (C.open) { highlights(); syncViewer(false); } });
+    R.views.push(() => { if (C.open) { syncMethod(); highlights(); syncViewer(false); } });
   }
   // the viewer's phase drives the lightbox: a JVM phase that changed this method re-layouts the graph in place; others are stepped over with a cue;
   // moving back before genBCode closes the lightbox (the tree view behind it shows the method's DefDef)
+  // the bytecode pane's current method (R.ST.irMethod) is the single source of truth: changing it (dropdown, selection) switches the graph
+  function syncMethod() {
+    const k = R.ST.irMethod, cls = R.ST.cls || C.cls; if (!k || (k === C.key && cls === C.cls)) return; if (!R.ST.D.jvmClasses.get(cls)) return;
+    const hist = historyOf(cls, k); if (!hist.length) return; const v = R.ver(), p = v && v.irPseudo ? v.phase : hist[0]; let hi = 0; hist.forEach((q, i) => { if (q <= p) hi = i; });
+    C.cls = cls; C.key = k; C.hist = hist; C.hi = hi; C.fold = new Map(); C.focus = null; C.seen = null; render(false); fit(false);
+  }
   function syncViewer(initial) {
     const v = R.ver(); if (!v || C.syncing) return; if (!v.irPseudo) { if (!initial) R.cfgClose(); return; }
     const p = v.phase; if (C.seen === p && !initial) return; let hi = -1; C.hist.forEach((q, i) => { if (q <= p) hi = i; }); if (hi < 0) { if (!initial) R.cfgClose(); return; }
@@ -162,6 +169,7 @@
     ctx.strokeStyle = '#ffd666'; ctx.lineWidth = 1; ctx.strokeRect(ox + (-C.x / C.k) * s, oy + (-C.y / C.k) * s, (g.width / C.k) * s, (g.height / C.k) * s);
   }
   function hover(bi, edgeEl, fromList) {
+    if (bi != null) C.hoverB = bi;
     const cv = $('cfgcanvas'), svg = $('cfgsvg'); cv.classList.toggle('hv', bi != null || !!edgeEl); svg.classList.toggle('hv', bi != null || !!edgeEl);
     cv.querySelectorAll('.cfgb.hl, .cfgb.nb').forEach((e) => e.classList.remove('hl', 'nb')); svg.querySelectorAll('.ce.hl').forEach((e) => e.classList.remove('hl'));
     $('cfglist').querySelectorAll('.ln.hl').forEach((e) => e.classList.remove('hl'));
@@ -203,14 +211,20 @@
     const els = model.blocks.map((b) => {
       const el = document.createElement('div'); el.className = 'cfgb' + (b.entry ? ' entry' : '') + (b.exit ? ' exit' : ''); el.dataset.b = b.id; el.tabIndex = -1;
       const rg = new Set(); b.items.forEach((it) => { if (it.kind === 'insn') { const o = innermost(m.W, it.abs); if (o) rg.add(o); } }); ids.set(b.id, rg);
-      const big = b.insns > 14, collapsed = C.collapsed.has(b.id) ? C.collapsed.get(b.id) : big;
-      el.innerHTML = `<div class="bh"><b>${esc(b.name)}</b><span>${b.insns} insn${b.insns === 1 ? '' : 's'} · lines ${b.firstLine + 1}–${b.lastLine + 1}</span>${b.entry ? '<em class="tag">entry</em>' : ''}${b.exit ? `<em class="tag ex">${esc(b.exit.toLowerCase())}</em>` : ''}${big ? `<em class="tag tg">${collapsed ? '▸' : '▾'}</em>` : ''}</div><div class="bb bc"></div>`;
+      // folding is never automatic by size: an explicit per-label toggle (remembered across phase steps), or the compact mode of very large methods; blocks with a changed /
+      // selected / linked instruction in this step are never folded
+      const hot = [...rg].some((id) => hows.has(id) || sel.has(id) || lnk.has(id)), exp = C.fold.get(b.name), big = b.insns > 6;
+      const collapsed = !hot && big && (exp === true || (exp === undefined && C.compact && b.insns > 8)); el.dataset.name = b.name; el.dataset.folded = collapsed ? '1' : '0';
+      el.innerHTML = `<div class="bh"><b>${esc(b.name)}</b><span>${b.insns} insn${b.insns === 1 ? '' : 's'} · lines ${b.firstLine + 1}–${b.lastLine + 1}</span>${b.entry ? '<em class="tag">entry</em>' : ''}${b.exit ? `<em class="tag ex">${esc(b.exit.toLowerCase())}</em>` : ''}${hot ? '<em class="tag hotag" title="changed, selected or linked in this step: never folded">●</em>' : ''}${big ? `<em class="tag tg" title="fold / unfold this block">${collapsed ? '▸' : '▾'}</em>` : ''}</div><div class="bb bc"></div>`;
       const body = el.querySelector('.bb'); body.append(S().lineify(S().build(m.W.text, m.W.offs, clsF, b.lo, b.hi + 1)));
       const lns = [...body.children]; while (lns.length && !lns[lns.length - 1].textContent.trim()) lns.pop().remove();
       lns.forEach((ln) => { if (/^\s*(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/.test(ln.textContent)) ln.classList.add('minor'); });
+      // dead pushes: a POP straight after an instruction that only pushes (load, constant, closure allocation, dup) is tagged
+      { let prev = null; const PUSH = /^\s+([ILFDA]LOAD|[ILFDA]CONST_\w+|BIPUSH|SIPUSH|LDC|ACONST_NULL|DUP|DUP2|INVOKEDYNAMIC)\b/; lns.forEach((ln) => { const t = ln.textContent; if (!/^\s{4}[A-Z]/.test(t) || ln.classList.contains('minor')) return; if (/^\s+POP2?\b/.test(t) && prev && PUSH.test(prev.t)) { const c = document.createElement('span'); c.className = 'deadchip'; c.textContent = 'dead'; c.title = /INVOKEDYNAMIC/.test(prev.t) ? 'dead closure allocation: its result is only POPped (a later pushPop removes the pair)' : 'dead push: its result is only POPped'; ln.append(c); ln.classList.add('deadln'); } prev = { t }; }); }
       if (collapsed && big) { const vis = lns.filter((ln) => !ln.classList.contains('minor')); const keepSet = new Set([...vis.slice(0, 3), ...vis.slice(-2)]); let hidden = 0, ins = null; lns.forEach((ln) => { if (!keepSet.has(ln)) { ln.style.display = 'none'; if (!ins && lns.indexOf(ln) > 0) ins = ln; hidden++; } }); if (ins) { const d = document.createElement('div'); d.className = 'ln more'; d.textContent = `… ${b.insns - 5 > 0 ? b.insns - 5 : hidden} more instructions`; ins.before(d); } }
       return el;
     });
+    { const tot = model.blocks.reduce((a, b) => a + b.insns, 0); $('cfgcompactl').hidden = tot <= 400; }
     // measure (unscaled), lay out with dagre
     const frag = document.createDocumentFragment(); els.forEach((el) => { el.style.visibility = 'hidden'; el.style.left = '0px'; el.style.top = '0px'; frag.append(el); }); const svg = $('cfgsvg');
     cv.append(frag); const sz = els.map((el) => [el.offsetWidth, el.offsetHeight]);
@@ -222,6 +236,9 @@
     // match old blocks to new ones (same / derived ranges) so they move instead of popping
     const match = new Map(); if (old && animate && C.lastIds) { const used = new Set(); model.blocks.forEach((b) => { const nid = ids.get(b.id); let best = -1, bs = 0; C.lastIds.forEach((oset, oi) => { if (used.has(oi)) return; let ov = 0; oset.forEach((o) => { if (nid.has(o)) ov++; else (D.irByOld.get(o) || []).forEach((d) => d.new.forEach((x) => { if (nid.has(x)) ov++; })); }); if (ov > bs) { bs = ov; best = oi; } }); if (best >= 0) { match.set(b.id, best); used.add(best); } }); }
     const dur = animate ? 420 : 0; const oldPos = C.lastPos;
+    // the block the user was looking at stays where it is on screen: anchor on the hovered / selected instruction's block, else the entry block
+    let anchorOld = null; if (oldPos && keepView) { anchorOld = C.hoverB != null && C.hoverB < oldPos.length ? C.hoverB : null; if (anchorOld == null && R.ST.selNode != null && C.lastIds) C.lastIds.forEach((set, bi) => { if (anchorOld == null && set.has(R.ST.selNode)) anchorOld = bi; }); if (anchorOld == null) anchorOld = 0; }
+    if (anchorOld != null && match.size) { let j = -1; match.forEach((oi, nj) => { if (oi === anchorOld) j = nj; }); if (j < 0) j = match.has(0) ? 0 : [...match.keys()][0]; const op = oldPos[anchorOld], np = C.pos[j]; if (op && np) { C.x = op.x * C.k + C.x - np.x * C.k; C.y = op.y * C.k + C.y - np.y * C.k; C.animView = true; } }
     els.forEach((el, i) => {
       const p = C.pos[i], o = match.has(i) && oldPos ? oldPos[match.get(i)] : null;
       el.style.transition = 'none'; if (o) { el.style.left = o.x - o.w / 2 + 'px'; el.style.top = o.y - o.h / 2 + 'px'; el.style.opacity = '1'; } else { el.style.left = p.x - p.w / 2 + 'px'; el.style.top = p.y - p.h / 2 + 'px'; el.style.opacity = animate ? '0' : '1'; }
@@ -237,7 +254,7 @@
     const lis = $('cfglist'); S().setLang('bc'); lis.replaceChildren(S().lineify(S().build(m.W.text, m.W.offs, clsF, m.lo, m.hi + 1)));
     const lines = [...lis.children], lineBlock = new Map(); model.blocks.forEach((b) => { for (let l = b.firstLine; l <= b.lastLine; l++) lineBlock.set(l, b.id); });
     lines.forEach((ln, i) => { ln.dataset.l = i; if (lineBlock.has(i)) ln.dataset.bl = lineBlock.get(i); });
-    if (!keepView) fit(false); else drawMini(); apply(); if (C.focus != null) focusMark(false);
+    if (!keepView) fit(false); else drawMini(); { const cvs = $('cfgcanvas'); if (C.animView) { cvs.style.transition = 'transform .42s ease'; setTimeout(() => { cvs.style.transition = ''; }, 450); C.animView = false; } } apply(); if (C.focus != null) focusMark(false);
   }
   function innermost(W, abs) { let best = null; for (const o of W.offs) { if (o[1] > abs) break; if (o[2] > abs) { const n = R.ST.D.nodes.get(o[0]); if (n && n.kind === 'InsnRange' && (!best || o[2] - o[1] <= best[2] - best[1])) best = o; } } return best ? best[0] : null; }
   function drawEdges(model, g, dur) {

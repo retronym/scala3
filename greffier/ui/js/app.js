@@ -209,6 +209,7 @@
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
+    if (h.has('method')) { patch.irMethod = h.get('method'); patch._mExplicit = true; }
     if (h.has('nspan')) {   // a node by span (stable across option variants, ids are not)
       const m = /^(\d+)-(\d+):(.*)$/.exec(h.get('nspan')), vi = R.vers()[patch.verIdx ?? ST.verIdx];
       if (m && vi) { let best = null; vi.ids.forEach((id) => { if (best != null) return; const n = D.nodes.get(id); if (n && n.span && n.span[0] === +m[1] && n.span[1] === +m[2] && n.kind === m[3]) best = id; }); if (best != null) patch.selNode = best; }
@@ -221,6 +222,7 @@
     if (h.get('stack') === '1') setTimeout(() => R.openStack && R.openStack(), 0);
     if (h.has('sym')) patch.selSym = +h.get('sym');
     R.set(patch);
+    if (h.has('cfg')) setTimeout(() => { if (!R.cfgOpen || !ST.D) return; const v = R.ver(), cls = R.curClass(); if (cls) R.cfgOpen(cls, h.get('cfg'), v && v.irPseudo ? v.phase : ST.D.irGenPhase); }, 60);
   };
   // current state as hash parameters (used for the address bar, `copy link` and tours)
   R.buildHash = function () {
@@ -230,7 +232,8 @@
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); p.set('cls', R.curClass()); } } if (R.ev()) p.set('seq', R.seq());
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
     if (ST.level !== 'file') p.set('level', ST.level);
-    if (R.stackOpen) p.set('stack', 1); { const vi = R.variantInfo && R.variantInfo(); if (vi) p.set('variant', vi.v.label); }
+    if (R.stackOpen) p.set('stack', 1);
+    { const ck = R.cfgKey && R.cfgKey(); if (ck) p.set('cfg', ck); else if (ST._mExplicit && ST.irMethod && v && v.irPseudo) p.set('method', ST.irMethod); } { const vi = R.variantInfo && R.variantInfo(); if (vi) p.set('variant', vi.v.label); }
     if (ST.gran && ST.gran !== 'chapters') p.set('gran', ST.gran); if (ST.chThrNodes != null && ST.chThrNodes !== 6) p.set('chn', ST.chThrNodes); if (ST.chThrPct != null && ST.chThrPct !== 4) p.set('chp', ST.chThrPct); if (ST.chMetric && ST.chMetric !== 'lines') p.set('chm', ST.chMetric); if (ST.chMode && ST.chMode !== 'groups') p.set('chmode', ST.chMode);
     if (ST.range && !ST.range.ir && ST.range.unit === ST.unit) p.set('range', D.phaseRaw(ST.range.phase) + ':' + (ST.range.lo + 1) + '-' + (ST.range.hi + 1));
     if (ST.skip) p.set('skip', 1); if (ST.collapse) p.set('collapse', 1); if (ST.showRetyped) p.set('retyped', 1);
@@ -244,6 +247,13 @@
 
   // ---- loading ----------------------------------------------------------------------------------------------------------------
   // sources: [{name, size?, open: () => Promise<ReadableStream>}]
+  // a failed load is loud: a banner with the URL and the status, never an empty page
+  function loadError(e, url) {
+    const el = $('loaderr'), msg = String(e && e.message || e), u = url || (e && e.url) || (msg.match(/(\S+\.jsonl?\S*)/) || [])[1] || '', st = e && e.status;
+    el.hidden = false; el.innerHTML = '<b>Could not load the recording.</b> ' + msg.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + (u && !msg.includes(u) ? ' <code>' + u + '</code>' : '') + (st && !/HTTP/.test(msg) ? ' (HTTP ' + st + ')' : '') + ' <button id="loaderr-recs">recordings…</button> <button id="loaderr-x" title="dismiss">×</button>';
+    $('loaderr-x').onclick = () => { el.hidden = true; }; $('loaderr-recs').onclick = () => { el.hidden = true; openRecs(); };
+    $('loadinfo').textContent = 'load failed: ' + msg;
+  }
   async function loadSources(sources, label) {
     const t0 = performance.now(), L = R.createLoader({ lazy: sources.length === 1 });
     R.srcUrls = sources.every((x) => x.url) ? sources.map((x) => x.url) : null; R.isFixture = sources.length === 1 && /^fixture/.test(sources[0].name); R.hashApplied = false;
@@ -255,19 +265,20 @@
         bytes += src.size || 0;
       }
       const tp = performance.now();
-      const D = L.finish();
+      const D = L.finish(); if (!D || (!(D.versions && D.versions.length) && !(D.nodes && D.nodes.size))) throw new Error('the file parsed but contains no recording data (is it really JSONL? a server error page?)');
+      $('loaderr').hidden = true;
       const ms = Math.round(performance.now() - t0);
       R.loadStats = { ms, indexMs: Math.round(performance.now() - tp), files: sources.length };
       R.setData(D, `${label} (${ms} ms, index ${R.loadStats.indexMs} ms)`);
       if (sources[0].hash) R.applyHash();
       R.hashApplied = true; R.scheduleHash();
-    } catch (e) { $('loadinfo').textContent = 'load failed: ' + e.message; console.error(e); }
+    } catch (e) { loadError(e, sources.length === 1 ? sources[0].url : ''); console.error(e); }
   }
   const textSource = (name, text) => ({ name, size: text.length, open: async () => text });
-  const urlSource = (url) => ({ name: url, url, hash: true, open: async () => { const r = await fetch(url); if (!r.ok) throw new Error(url + ': HTTP ' + r.status); return (+r.headers.get('content-length') || 0) < 8e6 ? r.text() : r.body; } });
+  const urlSource = (url) => ({ name: url, url, hash: true, open: async () => { const r = await fetch(url).catch((e) => { throw Object.assign(new Error(url + ': ' + (e.message || 'network error')), { url }); }); if (!r.ok) throw Object.assign(new Error(url + ': HTTP ' + r.status + ' ' + (r.statusText || '')), { url, status: r.status }); return (+r.headers.get('content-length') || 0) < 8e6 ? r.text() : r.body; } });
   async function urlSources(urls) {
     const out = [];
-    for (const u of urls) { const r = await fetch(u, { method: 'HEAD' }).catch(() => null); if (!r || !r.ok) throw new Error('cannot fetch ' + u); out.push(Object.assign(urlSource(u), { size: +r.headers.get('content-length') || 0 })); }
+    for (const u of urls) { const r = await fetch(u, { method: 'HEAD' }).catch(() => null); if (!r || !r.ok) throw Object.assign(new Error('cannot fetch ' + u + (r ? ': HTTP ' + r.status + ' ' + (r.statusText || '') : ': network error')), { url: u, status: r && r.status }); out.push(Object.assign(urlSource(u), { size: +r.headers.get('content-length') || 0 })); }
     return out;
   }
 
@@ -553,14 +564,14 @@
     const sources = [];
     for (const e of es) {
       if (e.file) sources.push({ name: e.file.name, size: e.file.size, open: async () => e.file.stream() });
-      else { const [s] = await urlSources([e.url]); sources.push(s); }
+      else { try { const [s] = await urlSources([e.url]); sources.push(s); } catch (err) { loadError(err, e.url); return; } }
     }
     loadSources(sources, label);
   }
   async function start() {
     const h = location.hash.slice(1), srcParam = new URLSearchParams(h).get('src');
     if (!RECS.some((x) => !x.fixture)) { try { const r = await fetch('recordings.json'); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); R.recsLoaded = true; } } catch (e) { /* none */ } }
-    if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { $('loadinfo').textContent = String(e.message || e); openRecs(); }); return; }
+    if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { loadError(e); openRecs(); }); return; }
     if (h) return loadFixture();                     // deep link without src: the built-in fixture (screenshots)
     RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true });
     openRecs();

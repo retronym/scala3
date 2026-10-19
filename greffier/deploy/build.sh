@@ -45,9 +45,13 @@ import re
 def fix(r):
     if r.get('url'): r['url'] = 'data/' + os.path.basename(r['url'])
     if r.get('name'): r['name'] = re.sub(r'\.[0-9a-f]{8}$', '', r['name'])   # drop the content hash from the display name
+def scrub(r):
+    # the index must not leak local paths: keep only option args, drop -classpath/-d and absolute paths
+    if isinstance(r.get('args'), list):
+        r['args'] = [a for a in r['args'] if not a.startswith(('-classpath', '-d=', '-d')) and '/Users/' not in a]
 for r in d:
-    fix(r)
-    for v in r.get('variants', []): fix(v)
+    fix(r); scrub(r)
+    for v in r.get('variants', []): fix(v); scrub(v)
 json.dump(d, open(p, 'w'), indent=1)
 EOF
 (cd "$UI" && python3 gen_index.py data >/dev/null)
