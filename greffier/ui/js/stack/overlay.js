@@ -12,6 +12,11 @@
       onList: (list) => { S.list = list; drawMini(); },
       onFront: (c) => { $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.kind === 'ir' ? ' <span class=dimt>· ' + esc(c.cls.replace(/^.*\//, '')) + '</span>' : ''}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
       onTrace: (tr) => { renderChron(tr); drawMini(); },
+      // the traced code lives in another class than the selected one: switch the JVM segment there and trace again
+      onSwitchClass: (cls, c, n) => {
+        const prev = R.curClass(); R.ST.cls = cls; S.keep = { kind: c.kind, phase: c.phase }; build(false); S.note = `bytecode is in class ${cls.replace(/^.*\//, '')} (was ${(prev || '').replace(/^.*\//, '')})`;
+        const tc = S.cards.find((x) => x.kind === c.kind && x.phase === c.phase) || S.cards[0]; if (tc) stack.traceNode(tc, n);
+      },
       onSelect: (n) => { const nd = R.ST.D.nodes.get(n); R.set({ selNode: n, selSym: nd ? nd.sym : null }); },
       onFrame: (u, sMax) => { const h = $('smini').clientHeight; $('smark').style.transform = `translateY(${(sMax ? u / sMax : 0) * (h - 16) + 8}px)`; },
     });
@@ -56,15 +61,23 @@
   const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass()].join('|');
   const fsig = () => [R.ST.trivialNoop !== false, R.scoreState && R.scoreState.lines.size].join('|');
 
+  // the overlay owns wheel/touch input while open: the page behind must not scroll, even when the stack cannot move further
+  const lockPage = (on) => {
+    const b = document.body, de = document.documentElement;
+    if (on) { S.scroll = [window.scrollX, window.scrollY]; S.ovf = [b.style.overflow, de.style.overflow]; b.style.overflow = de.style.overflow = 'hidden'; }
+    else if (S.ovf) { b.style.overflow = S.ovf[0]; de.style.overflow = S.ovf[1]; S.ovf = null; if (S.scroll) window.scrollTo(S.scroll[0], S.scroll[1]); }
+  };
+  { const ov = $('stackov'); const stop = (e) => { if (R.stackOpen && !(e.target.closest && e.target.closest('#schron'))) e.preventDefault(); };
+    ov.addEventListener('wheel', stop, { passive: false }); ov.addEventListener('touchmove', stop, { passive: false }); }
   R.openStack = function () {
     const D = R.ST.D; if (!D || R.stackOpen) return;
     const t0 = performance.now(); S.opening = true;
-    R.stackOpen = true; $('stackov').hidden = false; document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'stack'));
+    R.stackOpen = true; $('stackov').hidden = false; lockPage(true); document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'stack'));
     const st = ensure(); build(); st.start();
     S.opening = false; R.stackStats = { openMs: +(performance.now() - t0).toFixed(1) };
   };
   R.closeStack = function () {
-    if (!R.stackOpen) return; R.stackOpen = false; $('stackov').hidden = true; if (stack) stack.stop();
+    if (!R.stackOpen) return; R.stackOpen = false; $('stackov').hidden = true; lockPage(false); if (stack) stack.stop();
     if (S.timer) { clearTimeout(S.timer); S.timer = null; const c = S.last, k = c ? viewerIndex(c) : -1; if (k >= 0 && k !== R.ST.verIdx) { R.ST.follow = true; if (c.kind === 'ir') R.ST.cls = c.cls; R.setPhase(k); } }
     document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.remove('on')); if (R.setView) R.setView(document.querySelector('main').classList.contains('max-scrub') ? 'scrub' : document.querySelector('main').classList.contains('max-insp') ? 'insp' : document.querySelector('main').classList.contains('max-proj') ? 'proj' : 'all'); R.render();
   };
@@ -87,10 +100,10 @@
   }
   // ---- chronicle ----
   function renderChron(tr) {
-    const box = $('schron'); if (!tr) { box.hidden = true; return; }
+    const box = $('schron'); if (!tr) { box.hidden = true; S.note = null; return; }
     const ev = []; tr.per.forEach((t, i) => { if (t.how && t.how !== 'same' && t.how !== 'copy') ev.push({ i, t }); }); const life = tr.per.filter((t) => t.set.size).length; box.hidden = false;
-    box.innerHTML = `<div class=ch><b>${esc(tr.kind)}</b> #${tr.node} <span class=dimt>in ${life}/${tr.per.length} versions · trace ${tr.ms.toFixed(1)} ms</span><button id="schx" title="Esc">✕</button></div>`
-      + ev.map(({ i, t }) => { const c = S.cards[i], l = t.line >= 0 && c.lines ? c.lines[t.line].trim() : ''; return `<div class=ce data-i="${i}"><span class=hw style="color:${M.HOW_COL[t.how]}">${M.HOW_TXT[t.how]}</span><span class=cp>${esc(c.short)}</span><code>${esc(l.slice(0, 90))}</code></div>`; }).join('');
+    box.innerHTML = `<div class=ch><b>${esc(tr.kind)}</b> #${tr.node} <span class=dimt>in ${life}/${tr.per.length} versions · trace ${tr.ms.toFixed(1)} ms</span><button id="schx" title="Esc">✕</button></div>${S.note ? `<div class=dimt style="padding:2px 8px;color:#b197fc">${esc(S.note)}</div>` : ''}`
+      + ev.map(({ i, t }) => { const c = S.cards[i], l = t.line >= 0 && c.lines ? c.lines[t.line].trim() : ''; return `<div class=ce data-i="${i}"><span class=hw style="color:${M.HOW_COL[t.how]}">${M.HOW_TXT[t.how]}${t.via ? ' <span class=dimt>via ' + esc(t.via) + '</span>' : ''}</span><span class=cp>${esc(c.short)}</span><code>${esc(l.slice(0, 90))}</code></div>`; }).join('');
     box.querySelector('#schx').onclick = () => stack.clearTrace(); box.querySelectorAll('.ce').forEach((e) => { e.onclick = () => stack.flyTo(S.cards[+e.dataset.i]); });
   }
 

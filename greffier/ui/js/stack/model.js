@@ -91,15 +91,25 @@
   M.trace = function (D, cards, j, n) {
     cards.forEach((c) => M.ensureRows(c));
     const N = cards.length, Nt = cards.findIndex((c) => c.kind === 'ir') < 0 ? N : cards.findIndex((c) => c.kind === 'ir');
-    const sets = new Array(N).fill(null), how = new Array(N).fill(null), E = () => new Set();
+    const sets = new Array(N).fill(null), how = new Array(N).fill(null), E = () => new Set(); let via = null, switchClass = null;
     sets[j] = new Set([n]);
     const backTree = (from) => { for (let i = from; i >= 0; i--) { if (!sets[i + 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i + 1], cards[i], true, false); sets[i] = r.out; how[i + 1] = r.how; } };
     const fwdIR = (from) => { for (let i = from; i < N; i++) { if (!sets[i - 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i - 1], cards[i], false, true); sets[i] = r.out; how[i] = r.how; } };
     if (j < Nt) {
       backTree(j - 1);
       for (let i = j + 1; i < Nt; i++) { if (!sets[i - 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i - 1], cards[i], false, false); sets[i] = r.out; how[i] = r.how; }
-      if (Nt < N) {   // into bytecode: the codegen ranges of the final tree nodes that exist in this class
-        const gen = E(); if (Nt > 0) sets[Nt - 1].forEach((t) => (D.irFromTree.get(t) || []).forEach((x) => { if (cards[Nt].v.ids.has(x)) gen.add(x); }));
+      if (Nt < N) {   // into bytecode: the codegen ranges of the final tree nodes in this class; a node without one climbs to the nearest ancestor that has one
+        const gen = E(), lastV = Nt > 0 ? cards[Nt - 1].v : null, cv = cards[Nt].v;
+        const rangesOf = (t, ok) => (D.irFromTree.get(t) || []).filter(ok);
+        if (lastV) sets[Nt - 1].forEach((t) => {
+          let x = t, hops = 0, r = rangesOf(x, (y) => cv.ids.has(y));
+          while (!r.length && hops < 40) { x = R.parentOf(lastV, x); if (x == null) break; hops++; r = rangesOf(x, (y) => cv.ids.has(y)); }
+          if (r.length) { r.forEach((y) => gen.add(y)); if (x !== t) { via = via || (D.nodes.get(x) || {}).kind; } return; }
+          // not in this class: find where the range lives and ask the overlay to switch the JVM segment's class
+          x = t; hops = 0; let any = rangesOf(x, () => true);
+          while (!any.length && hops < 40) { x = R.parentOf(lastV, x); if (x == null) break; hops++; any = rangesOf(x, () => true); }
+          if (any.length && !switchClass) { switchClass = D.irClassOf.get(any[0]) || null; if (x !== t) via = (D.nodes.get(x) || {}).kind; }
+        });
         sets[Nt] = gen; how[Nt] = 'born'; fwdIR(Nt + 1);
       }
     } else {   // started on an instruction: back through the JVM cards, then through codegen to the tree
@@ -115,6 +125,7 @@
       return { set: s, primary: pr ? pr[0] : null, line, row: line >= 0 ? c.rowOfLine[line] : -1, rows, how: i === 0 || !sets[i - 1].size ? 'born' : how[i] || 'same' };
     });
     for (let i = 1; i < N; i++) { const a = res[i - 1], b = res[i]; if (b.line >= 0 && a.line >= 0 && cards[i].kind === cards[i - 1].kind && (b.how === 'same' || b.how === 'copy') && cards[i].lines[b.line].trim() !== cards[i - 1].lines[a.line].trim()) b.how = 'edit'; }
-    const nd = D.nodes.get(n); return { node: n, kind: nd ? nd.kind : '?', from: j, per: res };
+    if (via && Nt < N && res[Nt].set.size) res[Nt].via = via;
+    const nd = D.nodes.get(n); return { node: n, kind: nd ? nd.kind : '?', from: j, per: res, switchClass };
   };
 })(window.R);

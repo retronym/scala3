@@ -36,7 +36,7 @@
       this.lbl = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.thr = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.svg.append(this.lbl, this.thr);
       this.u = 0; this.target = 0; this.lastWheel = 0; this.hover = null; this.tr = null;
       this.frames = []; this.works = []; this.textBuilt = 0; this.all = []; this.list = [];
-      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {});
+      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {}); this.onSwitchClass = opts.onSwitchClass || null;
       el.addEventListener('wheel', (e) => this.active && this.wheel(e), { passive: false });
       el.addEventListener('pointermove', (e) => this.pmove(e));
       el.addEventListener('pointerleave', () => { this.hover = null; });
@@ -194,7 +194,11 @@
       const n = nodeAt(c, r.nl, pos); if (n == null) return;
       this.traceNode(c, n); this.onSelect(n);
     }
-    traceNode(c, n) { const t0 = performance.now(), tr = trace(this.D, this.all, c.i, n); tr.ms = performance.now() - t0; this.setTrace(tr); }
+    traceNode(c, n) {
+      const t0 = performance.now(), tr = trace(this.D, this.all, c.i, n); tr.ms = performance.now() - t0;
+      if (tr.switchClass && this.onSwitchClass && !this._switching) { this._switching = true; try { this.onSwitchClass(tr.switchClass, c, n); } finally { this._switching = false; } return; }
+      this.setTrace(tr);
+    }
 
     // ---- frame loop (rAF with a timer fallback for hidden views) ----
     kick() { if (this.raf || !this.active) return; this.raf = requestAnimationFrame((t) => this.frame(t)); this.fb = setTimeout(() => { if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; this.frame(performance.now()); } }, 60); }
@@ -263,11 +267,15 @@
     }
     // labels: one thin label per run of no-change phases, and the marks set by the overlay (e.g. where the bytecode segment starts)
     drawLabels() {
-      let h = '';
-      for (const g of this.groups) {
+      let h = '', used = [];
+      // nearest bands first; a label is dropped when it would sit within a line of one already drawn (receding bands converge)
+      for (const g of [...this.groups].sort((x, y) => x.anchor.s - y.anchor.s)) {
         const c = g.anchor; if (g.n < 2 || !c.el || c.el.style.display === 'none' || c === this.front || c.s - this.u < -0.3) continue;
-        const [sx, sy] = this.proj(c, 6, -2); h += `<text x="${sx.toFixed(1)}" y="${(sy - 3).toFixed(1)}" fill="#7f8ba0" font-size="9" opacity="${(0.8 * +c.el.style.opacity).toFixed(2)}">${g.n} phase${g.n > 1 ? 's' : ''}, no change</text>`;
+        const [sx, sy] = this.proj(c, 6, -2); if (used.some((y) => Math.abs(y - sy) < 13)) continue; used.push(sy);
+        h += `<text x="${sx.toFixed(1)}" y="${(sy - 3).toFixed(1)}" fill="#7f8ba0" font-size="9" opacity="${(0.8 * +c.el.style.opacity).toFixed(2)}">${g.n} phase${g.n > 1 ? 's' : ''}, no change</text>`;
       }
+      // card headers on receding cards: hide the text when the next nearer card's header is less than a line away
+      let lastY = null; for (const c of [...this.list].sort((a, b) => a.s - b.s)) { if (!c.el || c.el.style.display === 'none' || c.noop) continue; const y = this.proj(c, 0, 0)[1]; const cull = c !== this.front && lastY != null && lastY - y < 13 && c.s > this.u; c.el.classList.toggle('cull', !!cull); if (!cull) lastY = y; }
       for (const m of this.marks) {
         const c = m.card; if (!c.el || c.el.style.display === 'none' || c.s - this.u < -0.3) continue;
         const [sx, sy] = this.proj(c, this.W - 8, -2); h += `<text x="${sx.toFixed(1)}" y="${(sy - 4).toFixed(1)}" text-anchor="end" fill="#b197fc" font-size="10" font-weight="600" opacity="${(0.95 * +c.el.style.opacity).toFixed(2)}">${m.text}</text>`;
