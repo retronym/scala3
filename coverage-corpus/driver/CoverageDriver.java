@@ -124,7 +124,7 @@ public class CoverageDriver {
       while (true) {
         String l = lines.get(i++);
         if (l.equals("@end")) break;
-        if (l.equals("@scalac") || l.equals("@javac")) {
+        if (l.equals("@scalac") || l.equals("@javac") || l.startsWith("@main:") || l.startsWith("@driver:")) {
           cur = new ArrayList<>();
           steps.add(cur);
           kinds.add(l.substring(1));
@@ -144,6 +144,14 @@ public class CoverageDriver {
             Object reporter = process.invoke(null, (Object) stepArgs);
             boolean hasErrors = (Boolean) reporter.getClass().getMethod("hasErrors").invoke(reporter);
             if (hasErrors) { status = "FAIL"; detail = "scalac step " + s; break; }
+          } else if (kinds.get(s).startsWith("driver:")) {
+            // a dotc.Driver subclass, e.g. the decompiler: process(args) returns a Reporter
+            Object reporter = Class.forName(kinds.get(s).substring(7)).getMethod("process", String[].class).invoke(null, (Object) stepArgs);
+            boolean hasErrors = (Boolean) reporter.getClass().getMethod("hasErrors").invoke(reporter);
+            if (hasErrors) { status = "FAIL"; detail = "driver step " + s; break; }
+          } else if (kinds.get(s).startsWith("main:")) {
+            // another compiler entry point, e.g. dotty.tools.dotc.core.tasty.TastyPrinter
+            Class.forName(kinds.get(s).substring(5)).getMethod("main", String[].class).invoke(null, (Object) stepArgs);
           } else {
             javax.tools.JavaCompiler javac = javax.tools.ToolProvider.getSystemJavaCompiler();
             int rc = javac.run(null, javacOut, javacOut, stepArgs);
