@@ -268,7 +268,7 @@ def discover(roots, base=REPO):
     for r in expanded:
         r, _, opts = r.partition("=")
         if not Path(r).is_absolute() and not Path(r).exists():
-            r = REPO / r
+            r = HERE / r if (HERE / r).exists() else REPO / r
         opts = shlex.split(opts)
         r = Path(r).resolve()
         children = [r] if r.is_file() else sorted(r.iterdir())
