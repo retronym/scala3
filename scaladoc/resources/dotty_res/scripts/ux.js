@@ -382,7 +382,7 @@ function render(el, { cls = null, id = null, href = null, loc = null } = {}, chl
 }
 function renderDynamicSideMenu() {
   const pathToRoot = document.documentElement.getAttribute("data-pathToRoot")
-  const path = pathToRoot + "dynamicSideMenu.json";
+  const path = pathToRoot + "scripts/dynamicSideMenu.js";
   const rawLocation = getRawLoc();
   const baseUrl = window.location.pathname.split("/").slice(0,
     -1 - pathToRoot.split("/").filter(c => c != "").length
@@ -390,7 +390,11 @@ function renderDynamicSideMenu() {
   function linkTo(loc) {
     return `${baseUrl}/${loc.join("/")}.html`;
   }
-  fetch(path).then(r => r.json()).then(menu => {
+  // Loaded as a script rather than with `fetch`, which browsers refuse for `file://` URLs.
+  const script = document.createElement("script");
+  script.src = path;
+  script.onload = () => {
+    const menu = dynamicSideMenuData;
     function renderNested(item, nestLevel, prefix, isApi) {
       const name = item.name;
       const newName =
@@ -436,27 +440,28 @@ function renderDynamicSideMenu() {
     document.getElementById("leftColumn").appendChild(d);
     d1 && document.getElementById("leftColumn").appendChild(d1);
     d2 && document.getElementById("leftColumn").appendChild(d2);
+    const find = (nav, loc) => nav?.querySelector(`[data-loc="${CSS.escape(loc.join("/"))}"]`);
     updateMenu = (oldLoc, newLoc) => {
       if (oldLoc) {
-        const elem = document.querySelector(`[data-loc="${oldLoc.join("/")}"]`);
+        const elem = find(d2, oldLoc) ?? find(d1, oldLoc);
         if (elem) updatePath(elem, true);
       }
-      if (d1 && d2) {
-        if (newLoc[0] && newLoc[0] == menu.api.location[0]) {
-          d1.hidden = true;
-          d2.hidden = false;
-        } else {
-          d1.hidden = false;
-          d2.hidden = true;
-        }
-      }
-      const elem = document.querySelector(`[data-loc="${newLoc.join("/")}"]`);
+      // Like the statically rendered menu, show the API tree iff the page is part of it.
+      const apiElem = find(d2, newLoc);
+      const elem = apiElem ?? find(d1, newLoc);
+      const isApiRoot = !!menu.api && menu.api.location.join("/") === newLoc.join("/");
+      const apiActive = !!d2 && (!!apiElem || isApiRoot || !d1);
+      if (d1) d1.hidden = apiActive;
+      if (d2) d2.hidden = !apiActive;
+      document.getElementById("docs-nav-button")?.classList.toggle("selected", !apiActive);
+      document.getElementById("api-nav-button")?.classList.toggle("selected", apiActive);
       if (elem) updatePath(elem, false)
     }
     updateMenu(null, rawLocation);
 
     window.dispatchEvent(new Event(DYNAMIC_PAGE_LOAD));
-  })
+  };
+  document.head.appendChild(script);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
