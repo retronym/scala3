@@ -29,6 +29,7 @@ import java.util.*;
  */
 public class CoverageDriver {
   static final PrintStream realOut = System.out;
+  static final PrintStream realErr = System.err;
 
   // `@tasty-in:<dir>` expands to the .tasty files under <dir>, which only exist once earlier steps have run.
   static String[] expand(List<String> args) throws IOException {
@@ -43,12 +44,12 @@ public class CoverageDriver {
     return result.toArray(new String[0]);
   }
 
+  static Method process;
+  static Object agent;
+  static Method getExecutionData;
+
   public static void main(String[] args) throws Exception {
-    List<String> lines = Files.readAllLines(Paths.get(args[0]), StandardCharsets.UTF_8);
-    boolean quiet = args.length > 1 && args[1].equals("--quiet");
-    Method process = Class.forName("dotty.tools.dotc.Main").getMethod("process", String[].class);
-    Object agent = null;
-    Method getExecutionData = null;
+    process = Class.forName("dotty.tools.dotc.Main").getMethod("process", String[].class);
     try {
       Class<?> rt = Class.forName("org.jacoco.agent.rt.RT");
       agent = rt.getMethod("getAgent").invoke(null);
@@ -57,7 +58,57 @@ public class CoverageDriver {
     } catch (ClassNotFoundException e) {
       // no coverage
     }
+    if (args[0].equals("--serve")) {
+      serve(Paths.get(args[1]));
+      return;
+    }
+    List<String> lines = Files.readAllLines(Paths.get(args[0]), StandardCharsets.UTF_8);
+    boolean quiet = args.length > 1 && args[1].equals("--quiet");
     PrintStream sink = new PrintStream(OutputStream.nullOutputStream());
+    runJobs(lines, quiet ? sink : null, realOut, sink);
+  }
+
+  /**
+   * Keeps a warm compiler JVM: picks up `<name>.job` files dropped into `dir`, writes all output of the jobs to
+   * `<name>.out`, then renames the job file to `<name>.done`.
+   */
+  static void serve(Path dir) throws Exception {
+    // scala.Console captures System.out on first use, so install one stream up front and retarget it per request
+    var target = new Object() { volatile OutputStream out = realOut; };
+    PrintStream switching = new PrintStream(new OutputStream() {
+      public void write(int b) throws IOException { target.out.write(b); }
+      public void write(byte[] b, int off, int len) throws IOException { target.out.write(b, off, len); }
+      public void flush() throws IOException { target.out.flush(); }
+    }, true);
+    System.setOut(switching);
+    System.setErr(switching);
+    while (true) {
+      List<Path> jobs;
+      try (var ls = Files.list(dir)) {
+        jobs = ls.filter(p -> p.toString().endsWith(".job")).sorted().toList();
+      }
+      for (Path job : jobs) {
+        String base = job.toString().substring(0, job.toString().length() - 4);
+        try (PrintStream out = new PrintStream(new FileOutputStream(base + ".out"), true)) {
+          List<String> lines = Files.readAllLines(job, StandardCharsets.UTF_8);
+          target.out = out;
+          try {
+            runJobs(lines, null, out, out);
+          } catch (Throwable t) {
+            t.printStackTrace(out);
+          } finally {
+            switching.flush();
+            target.out = realOut;
+          }
+        }
+        Files.move(job, Paths.get(base + ".done"), StandardCopyOption.REPLACE_EXISTING);
+      }
+      if (jobs.isEmpty()) Thread.sleep(50);
+    }
+  }
+
+  /** @param capture where compiler output goes (null: leave System.out/err alone) */
+  static void runJobs(List<String> lines, PrintStream capture, PrintStream results, PrintStream javacOut) throws Exception {
 
     int i = 0;
     while (i < lines.size()) {
@@ -85,7 +136,7 @@ public class CoverageDriver {
       long t0 = System.nanoTime();
       String status = "OK";
       String detail = "";
-      if (quiet) { System.setOut(sink); System.setErr(sink); }
+      if (capture != null) { System.setOut(capture); System.setErr(capture); }
       try {
         for (int s = 0; s < steps.size(); s++) {
           String[] stepArgs = expand(steps.get(s));
@@ -95,7 +146,7 @@ public class CoverageDriver {
             if (hasErrors) { status = "FAIL"; detail = "scalac step " + s; break; }
           } else {
             javax.tools.JavaCompiler javac = javax.tools.ToolProvider.getSystemJavaCompiler();
-            int rc = javac.run(null, sink, sink, stepArgs);
+            int rc = javac.run(null, javacOut, javacOut, stepArgs);
             if (rc != 0) { status = "FAIL"; detail = "javac step " + s; break; }
           }
         }
@@ -104,15 +155,15 @@ public class CoverageDriver {
         status = "CRASH";
         detail = String.valueOf(c).replace('\n', ' ');
       } finally {
-        if (quiet) { System.setOut(realOut); System.setErr(realOut); }
+        if (capture != null) { System.setOut(realOut); System.setErr(realErr); }
       }
       long ms = (System.nanoTime() - t0) / 1_000_000;
       if (agent != null && !execOut.equals("-")) {
         byte[] data = (byte[]) getExecutionData.invoke(agent, true);
         Files.write(Paths.get(execOut), data);
       }
-      realOut.println("@@RESULT " + id + " " + status + " " + ms + " " + detail);
-      realOut.flush();
+      results.println("@@RESULT " + id + " " + status + " " + ms + " " + detail);
+      results.flush();
     }
   }
 }

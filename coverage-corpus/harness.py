@@ -179,13 +179,14 @@ class Case:
     javac_opts: list = field(default_factory=list)
     skip: str = ""
     pool_opts: list = field(default_factory=list)  # options of the pool the case came from (cf. CompilationTests)
+    deps: list = field(default_factory=list)       # `//> using dep` coordinates
 
 
-DIRECTIVE = re.compile(r"^\s*//>\s*using\s+(options|javacOpt|javacOptions)\s+(.*)$")
+DIRECTIVE = re.compile(r"^\s*//>\s*using\s+(options|javacOpt|javacOptions|dep)\s+(.*)$")
 
 
 def parse_directives(files):
-    sopts, jopts = [], []
+    sopts, jopts, deps = [], [], []
     for f in files:
         try:
             text = f.read_text(errors="replace")
@@ -198,8 +199,24 @@ def parse_directives(files):
                     args = shlex.split(m.group(2))
                 except ValueError:
                     args = m.group(2).split()
-                (sopts if m.group(1) == "options" else jopts).extend(args)
-    return sopts, jopts
+                {"options": sopts, "dep": deps}.get(m.group(1), jopts).extend(args)
+    return sopts, jopts, deps
+
+
+_dep_cache = {}
+
+
+def resolve_deps(deps):
+    """`//> using dep g:a:v` -> classpath entries (coursier), without the Scala library (we supply our own)."""
+    key = tuple(sorted(deps))
+    if key not in _dep_cache:
+        cache = WORK / "deps" / (hashlib.sha1("\n".join(key).encode()).hexdigest()[:12] + ".txt")
+        if not cache.exists():
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cp = coursier_fetch(*deps, extra=["--exclude", "org.scala-lang:scala-library", "--exclude", "org.scala-lang:scala3-library_3"])
+            cache.write_text(cp)
+        _dep_cache[key] = [p for p in cache.read_text().split(":") if p]
+    return _dep_cache[key]
 
 
 def group_key(f: Path):
@@ -226,8 +243,8 @@ def make_case(path: Path, id: str, pool_opts=()):
         stages = [groups[k] for k in sorted(groups)]
         if any(k[1] for k in groups):
             return Case(id, path, stages, skip="needs other compiler version")
-    sopts, jopts = parse_directives(files)
-    c = Case(id, path, stages, list(pool_opts) + sopts, jopts, pool_opts=list(pool_opts))
+    sopts, jopts, deps = parse_directives(files)
+    c = Case(id, path, stages, list(pool_opts) + sopts, jopts, pool_opts=list(pool_opts), deps=deps)
     if any(o.startswith(u) for o in sopts for u in UNSUPPORTED_OPTS):
         c.skip = "unsupported option"
     return c
@@ -295,7 +312,8 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
                 rel = f.relative_to(case.path if case.path.is_dir() else case.path.parent)
                 mapping[f] = src / rel
         stages = [[mapping[f] for f in s] for s in stages]
-    cp = ":".join(tc.library_cp + [str(classes)])
+    libcp = tc.library_cp + (resolve_deps(case.deps) if case.deps else [])
+    cp = ":".join(libcp + [str(classes)])
     dest = str(classes)
     if v.get("jar"):
         # every stage writes its own jar; later stages see the earlier jars
@@ -312,7 +330,7 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
         if v.get("jar"):
             i = len([k for k, _ in steps if k == "scalac"])
             dest = str(jars[i])
-            cp = ":".join(tc.library_cp + [str(classes)] + [str(j) for j in jars[:i]])
+            cp = ":".join(libcp + [str(classes)] + [str(j) for j in jars[:i]])
         args = ["-d", dest, "-classpath", cp, "-color:never", "-Wconf:any:s" if variant != "lint" else "-Wconf:any:w"]
         args += subst(v["opts"], tmp) + list(extra_opts) + case.scalac_opts + scala
         steps.append(("scalac", args))
@@ -374,7 +392,7 @@ def warmup_job(tc, n):
     return j
 
 
-def run_jobs(tc, jobs, exec_dir=None, workers=8, chunk=150, timeout=180, heap="3g", on_result=None, verbose=False,
+def run_jobs(tc, jobs, exec_dir=None, workers=8, chunk=1000, timeout=180, heap="4g", on_result=None, verbose=False,
              on_warmup=None):
     """Run jobs across `workers` JVMs, each processing chunks of jobs. A stalled JVM is killed and its remaining jobs
     resumed in a fresh one."""
@@ -922,6 +940,59 @@ def cmd_compile(a):
     log(f"compiled {len(results) - len(bad)}/{len(results)} jobs OK in {time.time() - t0:.0f}s -> {out_root}")
 
 
+SERVE = WORK / "serve"
+
+
+def cmd_serve(a):
+    """Start a warm compiler JVM (no coverage) that `try` sends jobs to."""
+    tc = toolchain(a.compiler)
+    SERVE.mkdir(parents=True, exist_ok=True)
+    pidf = SERVE / "pid"
+    if pidf.exists():
+        try:
+            os.kill(int(pidf.read_text()), 0)
+            log(f"already serving (pid {pidf.read_text()})"); return
+        except (ProcessLookupError, ValueError):
+            pass
+    cp = ":".join(tc.compiler_cp + [driver_classes()])
+    p = subprocess.Popen([java_bin(), "-Xmx4g", "-Xss16m", "-cp", cp, "CoverageDriver", "--serve", str(SERVE)],
+                         stdout=open(SERVE / "server.log", "a"), stderr=subprocess.STDOUT, start_new_session=True)
+    pidf.write_text(str(p.pid))
+    log(f"serving from pid {p.pid}; `harness.py try <case>`; stop with `kill {p.pid}`")
+
+
+def cmd_try(a):
+    """Compile some cases (paths) under variants and print compiler output, via the warm `serve` JVM if running."""
+    tc = toolchain(a.compiler)
+    cases = [make_case(Path(p).resolve(), p, shlex.split(a.opts)) for p in a.cases]
+    out_root = WORK / "try"
+    jobs = [make_job(tc, c, v, out_root) for c in cases for v in a.variants]
+    pidf = SERVE / "pid"
+    alive = False
+    if pidf.exists():
+        try:
+            os.kill(int(pidf.read_text()), 0); alive = True
+        except (ProcessLookupError, ValueError):
+            pass
+    if not alive:
+        log("no warm server (`harness.py serve`); using a fresh JVM")
+        for r in run_jobs(tc, jobs, None, workers=1, chunk=len(jobs), verbose=True):
+            print(f"{r.status} {r.job.id} {r.detail}")
+        return
+    for j in jobs:
+        j.prepare()
+    name = f"try-{os.getpid()}-{time.time_ns()}"
+    tmp = SERVE / (name + ".tmp")
+    write_jobs(tmp, jobs, None)
+    tmp.rename(SERVE / (name + ".job"))
+    done = SERVE / (name + ".done")
+    while not done.exists():
+        time.sleep(0.05)
+    out = (SERVE / (name + ".out")).read_text()
+    print(out, end="")
+    done.unlink(); (SERVE / (name + ".out")).unlink()
+
+
 def cmd_diff(a):
     A, B = Path(a.a), Path(a.b)
     ra = dict(l.split(" ", 2)[:2] for l in (A / "results.txt").read_text().splitlines())
@@ -964,7 +1035,7 @@ def main():
 
     def common_run(p):
         p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 4))
-        p.add_argument("--chunk", type=int, default=150, help="jobs per JVM before restarting it")
+        p.add_argument("--chunk", type=int, default=1000, help="jobs per JVM before restarting it")
 
     p = sub.add_parser("measure"); common_run(p)
     p.add_argument("name")
@@ -1017,6 +1088,15 @@ def main():
     p.add_argument("--variants", nargs="*", help="only manifest entries with these variants")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_compile)
+
+    p = sub.add_parser("serve")
+    p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("try")
+    p.add_argument("cases", nargs="+")
+    p.add_argument("--variants", nargs="+", default=["base"], choices=sorted(VARIANTS))
+    p.add_argument("--opts", default="", help="extra scalac options (like a pool's)")
+    p.set_defaults(fn=cmd_try)
 
     p = sub.add_parser("diff")
     p.add_argument("a"); p.add_argument("b")
