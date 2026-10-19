@@ -43,4 +43,36 @@ public interface IncrementalCallback {
 
   default void dependencyPhaseCompleted() {
   }
+
+  /** Whether the class with this binary name is defined by another subproject that Zinc has analysed. */
+  default boolean isSubprojectClass(String binaryClassName) {
+    return false;
+  }
+
+  /** How to report class APIs: `TREE` unless Zinc implements `xsbti.AnalysisCallback5`. */
+  default ApiMode apiMode() {
+    return ApiMode.TREE;
+  }
+
+  /** Whether name hashes include sealed children only in the pattern-matching scope. */
+  default boolean useOptimizedSealed() {
+    return false;
+  }
+
+  /**
+   * Whether the API of a class inheriting from the library class with this binary name should
+   * include its members in full, rather than as stubs (name, access, modifiers).
+   */
+  default boolean materialiseLibraryMembers(String binaryClassName) {
+    return true;
+  }
+
+  /** Report a class's API as Zinc stores it, with the hashes of the full API (`ApiMode.HASHES`). */
+  default void api(SourceFile sourceFile, xsbti.api.ClassLike thinClass, ClassHashes hashes) {
+  }
+
+  /** As `api(SourceFile, ClassLike, ClassHashes)`, with the full API as well (`ApiMode.CHECK`). */
+  default void apiCheck(SourceFile sourceFile, xsbti.api.ClassLike fullClass, xsbti.api.ClassLike thinClass,
+      ClassHashes hashes) {
+  }
 }
