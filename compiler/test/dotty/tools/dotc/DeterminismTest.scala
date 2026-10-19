@@ -234,6 +234,24 @@ class DeterminismTest {
     test(List(javaAnnots) :: code :: Nil)
   }
 
+  /** Types from Java signatures refer to their package with a `TermRef` when parsed from source and with
+   *  a `ThisType` when read from a classfile, which must not affect how the TASTy shares them.
+   */
+  @Test def testJavaPackagePrefix(): Unit = {
+    def code = List(
+      source("J.java", "public class J { public static String s = \"\"; public static java.util.List<String> l = null; }"),
+      source("C.scala",
+        """class C {
+          |  def f = List(J.s, 1)
+          |  def g = List(J.l, new java.util.ArrayList[String])
+          |  def h = J.l
+          |  def i = java.util.Collections.singletonList("")
+          |}
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
   @Test def testPackedType(): Unit = {
     def code = List(
       source("a.scala",

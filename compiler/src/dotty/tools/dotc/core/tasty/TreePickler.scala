@@ -31,6 +31,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private val forwardSymRefs = Symbols.MutableSymbolMap[List[Addr]]()
   private val pickledTypes = util.EqHashMap[Type, Addr]()
 
+  /** Shares the types that are not in `pickledTypes` but pickle the same as an earlier one, see `pickleType` */
+  private val interner = NodeInterner(buf, SHAREDtype)
+
   /** A map from trees to the address at which a tree is pickled. */
   private val treeAddrs = util.IntMap[untpd.Tree](initialCapacity = 8192)
 
@@ -66,6 +69,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   private inline def withLength(inline op: Unit) = {
     val lengthAddr = reserveRef(relative = true)
+    interner.lengthReserved(lengthAddr)
     op
     fillRef(lengthAddr, relative = true)
   }
@@ -129,6 +133,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       writeRef(label)
 
   private def pickleForwardSymRef(sym: Symbol)(using Context) = {
+    interner.markUnshareable() // the reference is filled in later, and `forwardSymRefs` holds its address
     val ref = reserveRef(relative = false)
     assert(!sym.is(Flags.Package), sym)
     forwardSymRefs(sym) = ref :: forwardSymRefs.getOrElse(sym, Nil)
@@ -182,18 +187,37 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
           else STABLE)
     case _ =>
 
+  /** Pickles `tpe`, or a reference to an earlier type with the same pickled form.
+   *
+   *  Types are shared by pickled form, not by identity: equal types are not always the same object,
+   *  e.g. a reference to a package can be a `TermRef` or a `ThisType`, depending on whether the
+   *  type comes from source or from a classfile. Sharing them only if identical would make the
+   *  TASTy depend on that. A type's form is known once it is pickled; if an earlier type has the
+   *  same form, `interner.intern` drops the bytes and writes a reference to the earlier type instead.
+   *  By then the parts of the type have been shared, so a type that is dropped consists of
+   *  references only, and nothing but its own entry in `pickledTypes` points into the dropped
+   *  bytes. Nothing else may record an address while a type is being pickled, unless
+   *  `interner.markUnshareable` is called, see `pickleForwardSymRef` and the `AnnotatedType` case.
+   *
+   *  A `LazyRef` or a `SkolemType` is pickled as its underlying type, and shares with it. A
+   *  reference to a binder (`RECthis`, `PARAMtype`) is the binder's address, so a recursive type
+   *  or a type lambda has the same form as another only at the same address: such types are
+   *  shared by identity alone.
+   */
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
     printOnAssertionError(i"error when pickling type $tpe") {
       val prev: Addr | Null = pickledTypes.lookup(tpe)
-      if (prev == null) {
-        pickledTypes(tpe) = currentAddr
-        pickleNewType(tpe, richTypes)
-      }
-      else {
-        writeByte(SHAREDtype)
-        writeRef(prev)
-      }
+      if prev != null then interner.writeReference(prev)
+      else
+        val start = currentAddr
+        interner.enter(start)
+        pickledTypes(tpe) = start // for references to `tpe` as a binder while pickling it
+        try pickleNewType(tpe, richTypes)
+        catch case NonFatal(ex) =>
+          interner.abandon() // so that the nodes are closed in pairs when `pickleTree` catches a `TypeError`
+          throw ex
+        pickledTypes(tpe) = interner.intern()
     }
   }
 
@@ -288,6 +312,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         pickleVariances(tpe.hi)
       }
     case tpe: AnnotatedType =>
+      interner.markUnshareable() // the annotation is a tree: `treeAddrs` and `annotatedTypeTrees` would hold on to dropped bytes
       writeByte(ANNOTATEDtype)
       withLength:
         pickleType(tpe.parent, richTypes)
