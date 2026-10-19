@@ -146,7 +146,7 @@
     const old = l[ST.evIdx], e = l[i], patch = { evIdx: i };
     if (followPhase && ST.follow && e) {
       const D = ST.D;
-      const eu = e.unit != null ? e.unit : (D.files.length > 1 ? D.unitOfFile.get(e.file) : null);
+      const eu = e.unit != null ? e.unit : (D.files.length > 1 && !D.merged ? D.unitOfFile.get(e.file) : null);
       if (eu != null && eu !== ST.unit && D.versionsOf(eu).length) { patch.unit = eu; Object.assign(ST, { unit: eu }); }
       const v1 = D.versionsOf(ST.unit)[0] && D.versionsOf(ST.unit)[0].seq != null;
       if (v1 || !old || old.phase !== e.phase) { const k = versionAt(e); if (k >= 0) patch.verIdx = k; }
@@ -179,6 +179,7 @@
     const vs = D.unitsWithVersions;
     ecache = null; vcache = null;
     Object.assign(ST, { D, unit: vs.length ? vs[0] : 0, verIdx: 0, evIdx: 0, selNode: null, selSym: null });
+    { const mn = $('mergenote'); mn.hidden = !D.merged; if (D.merged) mn.textContent = `${D.files.length} recordings, merged by phase; not a joint compile`; }
     const mb = performance.memory ? ` · heap ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB` : '';
     $('recname').textContent = label.replace(/^data(-jvm)?\//, '').replace(/ \(\d+ ms.*$/, ''); $('loadinfo').textContent = label + ' · ' + D.schema + ' · ' + Object.entries(D.counts).map(([k, v]) => v + ' ' + k).join(', ') + mb;
     const w = $('warnings'); w.innerHTML = '';
@@ -200,7 +201,7 @@
     if (h.has('level')) { ST.level = h.get('level'); $('level').value = ST.level; R.initViews && R.initViews(); }
     if (h.has('unit')) { const u = D.unitsWithVersions.find((x) => ((D.units.get(x) || {}).path || '').endsWith(h.get('unit'))); if (u != null) ST.unit = u; }
     // the cursor first: it decides unit and displayed version (follow), then an explicit pname/phase overrides the version
-    if (h.has('seq')) { const i = R.evIndexAtOrAfter(+h.get('seq')); ST.evIdx = i; const e = R.evl()[i]; if (e) { const eu = e.unit != null ? e.unit : (D.files.length > 1 ? D.unitOfFile.get(e.file) : null); if (eu != null && !h.has('unit') && D.versionsOf(eu).length) ST.unit = eu; const k = versionAt(e); if (k >= 0) patch.verIdx = k; } }
+    if (h.has('seq')) { const i = R.evIndexAtOrAfter(+h.get('seq')); ST.evIdx = i; const e = R.evl()[i]; if (e) { const eu = e.unit != null ? e.unit : (D.files.length > 1 && !D.merged ? D.unitOfFile.get(e.file) : null); if (eu != null && !h.has('unit') && D.versionsOf(eu).length) ST.unit = eu; const k = versionAt(e); if (k >= 0) patch.verIdx = k; } }
     if (h.has('cls')) { ST.cls = h.get('cls'); const c = D.hasIR && D.jvmClasses.get(ST.cls); if (c && !h.has('unit')) ST.unit = c.unit; vcache = null; }
     if (h.has('phase')) patch.verIdx = +h.get('phase');
     if (h.has('pname')) {

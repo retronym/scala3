@@ -116,6 +116,7 @@
   #gdet { border-top: 1px solid var(--line); } #gdet summary { padding: 3px 10px; cursor: pointer; font-size: 12px; } #gdet[open] #graph { height: 280px; } .gctl { display: flex; gap: 8px; align-items: center; padding: 0 8px; font-size: 11px; } #gdet:not([open]) { flex: none; }
   #panes[hidden] { display: none; }
   .wordmark { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 17px; letter-spacing: .02em; color: var(--acc); padding-right: 4px; } .wordmark.big { font-size: 26px; } .tagline { margin: 0 0 8px; color: var(--dim); font-style: italic; } #aboutbody h3 { margin: 10px 0 3px; } #aboutbody pre { background: var(--code); padding: 4px 8px; border-radius: 4px; overflow: auto; } #aboutbody li { margin: 2px 0; }
+  .mergenote { font-size: 11px; color: #5f3b00; background: #fff3bf; border: 1px solid #e6c200; border-radius: 9px; padding: 0 8px; white-space: nowrap; }
   kbd { background: var(--code); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 </style>
 </head>
@@ -124,6 +125,7 @@
   <span class="wordmark" title="Greffier: the clerk's record of a Scala 3 compile">Greffier</span>
   <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button>
   <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button></span>
+  <span id="mergenote" class="mergenote" hidden></span>
   <button id="btn-exp" title="show or hide the project explorer (x)">☰ explorer</button>
   <button id="btn-phtab" title="phases ranked by how much they changed (p)">▦ phases</button>
   <span class="grow"></span>

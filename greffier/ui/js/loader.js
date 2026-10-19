@@ -143,8 +143,34 @@
     if (buf.trim()) L.feed(buf, ++lineNo);
   };
 
+  // Several recordings loaded together are separate compiles with the same phase plan. Build ONE timeline: events are ordered by
+  // phase, then file (load order), then original seq; each phase keeps a single PhaseBegin (first file's) and PhaseEnd (last file's),
+  // so every phase is one band holding all files' events. Versions take the merged PhaseEnd of their phase as seq, edges follow.
+  function mergeTimeline(D) {
+    const byPhase = new Map(); D.evs.forEach((e) => { const k = e.phase == null ? -1 : e.phase; let a = byPhase.get(k); if (!a) byPhase.set(k, (a = [])); a.push(e); });
+    const out = [], map = new Map();
+    [...byPhase.keys()].sort((a, b) => a - b).forEach((p) => {
+      const evs = byPhase.get(p), begins = evs.filter((e) => e.kind === 'PhaseBegin').sort((a, b) => a.seq - b.seq), ends = evs.filter((e) => e.kind === 'PhaseEnd').sort((a, b) => a.seq - b.seq);
+      const rest = evs.filter((e) => e.kind !== 'PhaseBegin' && e.kind !== 'PhaseEnd').sort((a, b) => (a.file - b.file) || (a.seq - b.seq));
+      const kb = begins[0], ke = ends[ends.length - 1], seq = [];
+      if (kb) seq.push(kb); rest.forEach((e) => seq.push(e)); if (ke) seq.push(ke);
+      seq.forEach((e) => out.push(e));
+      begins.forEach((e) => map.set(e.seq, kb)); ends.forEach((e) => map.set(e.seq, ke)); rest.forEach((e) => map.set(e.seq, e));
+    });
+    const newSeq = new Map(); out.forEach((e, i) => newSeq.set(e, i));
+    const oldToNew = new Map(); map.forEach((e, old) => oldToNew.set(old, newSeq.get(e)));
+    const parentsOld = new Map(); out.forEach((e) => parentsOld.set(e, e.parent));
+    out.forEach((e) => { e.of = e.file; e.file = 0; e.parent = parentsOld.get(e) == null ? null : (oldToNew.get(parentsOld.get(e)) ?? null); });
+    out.forEach((e, i) => { e.seq = i; });
+    const mp = (q) => (q == null ? q : oldToNew.has(q) ? oldToNew.get(q) : q);
+    D.versions.forEach((v) => { v.seq = mp(v.seq); v.file = 0; }); D.jvmClasses.forEach((c) => c.versions.forEach((v) => { v.seq = mp(v.seq); v.file = 0; }));
+    D.edges.forEach((e) => { e.seq = mp(e.seq); });
+    D.evs = out; D.merged = true;
+  }
+
   // ---- indexes ---------------------------------------------------------------------------------------------------------
   R.index = function (D) {
+    if (D.files.length > 1) mergeTimeline(D);
     D.evs.sort((a, b) => a.seq - b.seq);
     D.evBySeq = new Map(D.evs.map((e) => [e.seq, e]));
     D.evChildren = new Map();
