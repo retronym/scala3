@@ -54,7 +54,7 @@
     st.ensure && S.cards[k] && st.ensure(S.cards[k]); st.jumpTo(S.cards[k].s, true); st.u = st.target = S.cards[k].s; S.fsig = fsig();
     if (R.computeLines) R.computeLines(R.ST.unit);
     status();
-    { const r = R.ST.range; if (r && r.unit === R.ST.unit) setTimeout(() => { if (!R.stackOpen || stack.rg) return; const c = S.cards.find((x) => x.kind === (r.ir ? 'ir' : 'tree') && x.phase === r.phase && (!r.ir || x.cls === r.cls)); if (c) stack.setRange(c, r.lo, r.hi, false); }, 50); }
+    { const r = R.ST.range; if (r && r.unit === R.ST.unit) setTimeout(() => { if (!R.stackOpen || stack.rg) return; const c = S.cards.find((x) => x.kind === (r.ir ? 'ir' : 'tree') && x.phase === r.phase && (!r.ir || x.cls === r.cls)); if (c) { const keep = S.cards[k]; stack.setRange(c, r.lo, r.hi, false); if (keep) stack.jumpTo(keep.s, true); } }, 50); }
     // the selected node is traced right after opening (its thread appears without a click)
     if (R.ST.selNode != null && keepPhase !== false) setTimeout(() => { if (!R.stackOpen) return; const sel = R.ST.selNode, isIR = !!(R.ST.D.nodes.get(sel) || {}).ir; let c = S.cards[k], n = null;
       if (isIR) { c = S.cards.find((x) => x.kind === 'ir' && x.v.ids.has(sel)) || c; if (c.v.ids.has(sel)) n = sel; } else if (c.kind === 'tree') n = [...R.present(sel, c.v)][0] ?? (c.v.ids.has(sel) ? sel : null); else { const t = S.cards.filter((x) => x.kind === 'tree').pop(); if (t) { c = t; n = [...R.present(sel, t.v)][0] ?? null; } }

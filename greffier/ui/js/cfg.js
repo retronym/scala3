@@ -87,9 +87,9 @@
     let hi = 0; hist.forEach((p, i) => { if (p <= (phase ?? D.irGenPhase)) hi = i; });
     C.cls = cls; C.key = key; C.hist = hist; R.ST._mSel = R.ST.selNode; C.hi = hi; C.fold = new Map(); C.seen = null; C.k = 1; C.x = 0; C.y = 0; C.focus = null;
     if (!C.built) { build(); C.built = true; } if (!C.open) { C.open = true; document.addEventListener('keydown', onKey, true); }
-    $('cfgov').hidden = false; place(); render(false); C.seen = C.hist[C.hi];
+    $('cfgov').hidden = false; place(); render(false); { const v0 = R.ver(); C.seen = v0 && v0.irPseudo ? v0.phase : C.hist[C.hi]; }
     // the viewer follows the lightbox: put it on the JVM phase being shown (opening from a tree version moves it to bytecode)
-    C.syncing = true; try { R.ST.irMethod = key; R.ST.cls = cls; const k = R.vers().findIndex((x) => x.irPseudo && x.phase === C.hist[C.hi]); const v = R.ver(); if (k >= 0 && !(v && v.irPseudo && v.phase === C.hist[C.hi])) R.setPhase(k); else R.set({ irMethod: key, cls }); } finally { C.syncing = false; } R.ST._mExplicit = true; R.scheduleHash && R.scheduleHash();
+    C.syncing = true; try { R.ST.irMethod = key; R.ST.cls = cls; const k = R.vers().findIndex((x) => x.irPseudo && x.phase === C.hist[C.hi]); const v = R.ver(); if (k >= 0 && !(v && v.irPseudo)) R.setPhase(k); else R.set({ irMethod: key, cls }); } finally { C.syncing = false; } R.ST._mExplicit = true; R.scheduleHash && R.scheduleHash();
   };
   // the lightbox covers the main panes only: header, timeline (axis, bands, phase select) and the explorer with the chapter pager stay operable
   function place() { const m = document.querySelector('main'), ov = $('cfgov'); if (!m) return; const r = m.getBoundingClientRect(); Object.assign(ov.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' }); }

@@ -208,6 +208,7 @@
     if (h.has('phase')) patch.verIdx = +h.get('phase');
     if (h.has('pname')) {
       const wantIR = h.get('ir') === '1', k = R.vers().findIndex((v) => (D.phaseRaw(v.phase) === h.get('pname') || D.phaseName(v.phase) === h.get('pname')) && !!v.irPseudo === wantIR);
+      if (k < 0) R.notice(`This recording has no phase named “${h.get('pname')}”; showing ${R.verName(R.vers()[ST.verIdx] || R.vers()[0])}.`, true);
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
@@ -259,6 +260,7 @@
 
   // ---- loading ----------------------------------------------------------------------------------------------------------------
   // sources: [{name, size?, open: () => Promise<ReadableStream>}]
+  R.notice = (msg, warn) => { const el = $('notice'); el.textContent = msg; el.className = warn ? 'warn' : ''; el.hidden = false; clearTimeout(R._noticeT); R._noticeT = setTimeout(() => { el.hidden = true; }, warn ? 6000 : 2500); };
   // a failed load is loud: a banner with the URL and the status, never an empty page
   function loadError(e, url) {
     const el = $('loaderr'), msg = String(e && e.message || e), u = url || (e && e.url) || (msg.match(/(\S+\.jsonl?\S*)/) || [])[1] || '', st = e && e.status;
@@ -268,6 +270,7 @@
   }
   async function loadSources(sources, label) {
     const t0 = performance.now(), L = R.createLoader({ lazy: sources.length === 1 });
+    const prev = { urls: R.srcUrls, fixture: R.isFixture, applied: R.hashApplied, hadD: !!ST.D };
     R.srcUrls = sources.every((x) => x.url) ? sources.map((x) => x.url) : null; R.isFixture = sources.length === 1 && /^fixture/.test(sources[0].name); R.hashApplied = false;
     let bytes = 0;
     try {
@@ -278,13 +281,16 @@
       }
       const tp = performance.now();
       const D = L.finish(); if (!D || (!(D.versions && D.versions.length) && !(D.nodes && D.nodes.size))) throw new Error('the file parsed but contains no recording data (is it really JSONL? a server error page?)');
-      $('loaderr').hidden = true;
+      $('loaderr').hidden = true; $('recs').hidden = true;   // a recording that loaded closes the panel, whichever way it was requested
       const ms = Math.round(performance.now() - t0);
       R.loadStats = { ms, indexMs: Math.round(performance.now() - tp), files: sources.length };
       R.setData(D, `${label} (${ms} ms, index ${R.loadStats.indexMs} ms)`);
       if (sources[0].hash) R.applyHash();
       R.hashApplied = true; R.scheduleHash();
-    } catch (e) { loadError(e, sources.length === 1 ? sources[0].url : ''); console.error(e); }
+    } catch (e) {
+      loadError(e, sources.length === 1 ? sources[0].url : ''); console.error(e);
+      if (prev.hadD) { R.srcUrls = prev.urls; R.isFixture = prev.fixture; R.hashApplied = prev.applied; try { history.replaceState(null, '', '#' + R.buildHash()); } catch (er) { /* ignore */ } }   // the address bar names what is still shown
+    }
   }
   const textSource = (name, text) => ({ name, size: text.length, open: async () => text });
   const urlSource = (url) => ({ name: url, url, hash: true, open: async () => { const r = await fetch(url).catch((e) => { throw Object.assign(new Error(url + ': ' + (e.message || 'network error')), { url }); }); if (!r.ok) throw Object.assign(new Error(url + ': HTTP ' + r.status + ' ' + (r.statusText || '')), { url, status: r.status }); return (+r.headers.get('content-length') || 0) < 8e6 ? r.text() : r.body; } });
@@ -420,7 +426,7 @@
     if (vs.length > 12 || D.hasIR) {
       const sel = document.createElement('select'); sel.title = 'phase (picking one shows its output; ⇤ start moves to its beginning)'; sel.setAttribute('aria-label', 'phase');
       const allSc = R.versionScores ? R.versionScores() : []; const tg = document.createElement('optgroup'); tg.label = 'tree phases'; sel.append(tg); let ig = null;
-      vs.forEach((v, k) => { if (v.irPseudo && !ig) { ig = document.createElement('optgroup'); ig.label = 'IR · JVM bytecode'; sel.append(ig); } (v.irPseudo ? ig : tg).append(new Option(`${k + 1}/${vs.length} ${R.verName(v)} ${k > 0 && R.dots ? R.dots(v, allSc) : ''} (${R.newCount(v)} ${v.irPseudo ? (R.newCount(v) === 1 ? 'class' : 'classes') : 'new'})`, k)); });
+      vs.forEach((v, k) => { if (v.irPseudo && !ig) { ig = document.createElement('optgroup'); ig.label = 'IR · JVM bytecode'; sel.append(ig); } (v.irPseudo ? ig : tg).append(Object.assign(new Option(`${k + 1}/${vs.length} ${R.verName(v)} ${k > 0 && R.dots ? R.dots(v, allSc) : ''} (${R.newCount(v)} ${v.irPseudo ? (R.newCount(v) === 1 ? 'class' : 'classes') : 'new'})`, k), { title: v.irPseudo ? 'classes whose bytecode changed in this phase' : 'nodes newly derived in this phase over all units and including pure copies; the header chips count only structural ones of the unit shown, the phases table is a different metric' })); });
       sel.value = ps; sel.onchange = () => R.setPhase(+sel.value); box.append(sel); return;
     }
     vs.forEach((v, k) => { const b = document.createElement('button'); b.textContent = `${D.phaseName(v.phase)} (${R.newCount(v)})`; b.title = `${R.newCount(v)} new nodes`; b.className = k === ps ? 'on' : ''; b.onclick = () => R.setPhase(k); box.append(b); });
@@ -591,9 +597,9 @@
   async function start() {
     const h = location.hash.slice(1), srcParam = new URLSearchParams(h).get('src');
     if (!RECS.some((x) => !x.fixture)) { try { const r = await fetch('recordings.json'); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); R.recsLoaded = true; } } catch (e) { /* none */ } }
-    if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { loadError(e); openRecs(); }); return; }
+    if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { loadError(e); if (ST.D) { try { history.replaceState(null, '', '#' + R.buildHash()); } catch (er) { /* ignore */ } } else openRecs(); }); return; }
     if (h && new URLSearchParams(h).has('fixture')) return loadFixture();                     // the built-in fixture only on request (fixture=1); a link without src names no recording
-    if (h) { $('loadinfo').textContent = 'this link does not name a recording (no src=)'; }
+    if (h) { R.notice('This link does not name a recording (no src=): pick one below.', true); }
     RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true });
     openRecs();
   }
@@ -603,9 +609,9 @@
   }
   function copyLink() {
     const D = ST.D; if (!D) return;
-    if (!R.srcUrls && !R.isFixture) { flash('a recording loaded from local files cannot be linked'); return; }
+    if (!R.srcUrls && !R.isFixture) { R.notice('A recording loaded from local files cannot be linked.', true); return; }
     const url = location.origin + location.pathname + '#' + R.buildHash();
-    (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => flash('link copied' + (R.srcUrls || R.isFixture ? '' : ' (recording was loaded from local files: the link cannot reload it)')), () => window.prompt('copy this link', url));
+    (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => R.notice('Link copied.'), () => window.prompt('copy this link', url));
   }
   // about: what a recording is, plus TOURS.md rendered in-page (tiny markdown subset)
   const ABOUT = `<h3>What a recording is</h3><p>A recording is a JSONL file written by a <code>dotc</code> compiler plugin while it compiles Scala 3 sources: the printed tree after every phase with node spans, how each node derives from its predecessor, the typer's decisions (typing, adaptation, implicit search, completions), the dependencies between classes (with when each was established), and optionally the JVM bytecode and the optimiser's passes. Greffier only reads these files; nothing is compiled in the browser.</p><p>Load recordings from the recordings panel (top left), or drop <code>.jsonl</code> files on the page.</p>`;

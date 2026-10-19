@@ -167,10 +167,11 @@
   #cfgmini { position: absolute; right: 10px; bottom: 10px; border: 1px solid #2b3a55; border-radius: 6px; cursor: pointer; }
   .vchips { display: inline-flex; gap: 4px; margin: 0 6px; } .vchip { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; color: inherit; } .vchip.on { background: var(--acc); color: #fff; border-color: var(--acc); } #variant { margin-left: 4px; font-size: 11.5px; max-width: 220px; }
   #loaderr { position: fixed; left: 0; right: 0; top: 0; z-index: 200; background: #7a1f2b; color: #fff; padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.5); } #loaderr[hidden] { display: none; } #loaderr code { background: rgba(0,0,0,.3); padding: 1px 5px; border-radius: 3px; } #loaderr button { margin-left: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; cursor: pointer; }
+  #notice { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 210; background: #234c6b; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.45); max-width: 80vw; } #notice[hidden] { display: none; } #notice.warn { background: #7a5a1f; }
   body.multi-on #verinfo, body.multi-on #removed, body.multi-on #expager { display: none; } .vchips .vchip.on { font-weight: 600; }
   #optchips .ochip { font-size: 10.5px; padding: 1px 7px; margin-left: 5px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); color: #c08a2d; cursor: default; }
   @media (max-width: 1100px) { #legend-kinds { display: none; } #verinfo { font-size: 11px; } #scrub h2, #insp h2, #proj h2 { padding-top: 2px; padding-bottom: 2px; } }
-  @media (max-width: 700px) { header, #hdr { flex-wrap: wrap; } main { grid-template-columns: 1fr !important; } #work { flex-direction: column; } #explorer { max-height: 30vh; } }
+  @media (max-width: 700px) { header, #hdr { flex-wrap: wrap; } }
   #srange { position: absolute; right: 96px; top: 56px; z-index: 20003; width: 300px; max-height: 52%; overflow: auto; background: rgba(13,18,28,.92); border: 1px solid #2b4570; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; touch-action: auto; overscroll-behavior: contain; } #srange[hidden] { display: none; }
   #srange .ch { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; } #srange .ch button { margin-left: auto; background: none; border: 0; color: #7f8ba0; cursor: pointer; }
   #srange .ce { display: grid; grid-template-columns: 70px 1fr; column-gap: 6px; padding: 1px 2px; cursor: pointer; border-radius: 3px; white-space: nowrap; } #srange .ce:hover { background: #1a2436; } #srange .ce .cp { overflow: hidden; text-overflow: ellipsis; color: #7f8ba0; } #srange .ce code { overflow: hidden; text-overflow: ellipsis; font: 11px ui-monospace, Menlo, monospace; }
@@ -239,7 +240,7 @@
 </main>
 </div>
 <footer id="foot"><span id="loadinfo" class="dim"></span> <span id="perf" class="dim"></span></footer>
-<div id="loaderr" hidden></div>
+<div id="loaderr" hidden></div><div id="notice" hidden role="status"></div>
 <div id="stackov" hidden>
   <div id="sbd"></div>
   <div id="spanel">
