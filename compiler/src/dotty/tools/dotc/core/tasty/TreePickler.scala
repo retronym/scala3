@@ -390,7 +390,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
             pickleTreeUnlessEmpty(rhs)
           pickleModifiers(sym, mdef)
         }
-      if sym.is(Method) && sym.owner.isClass then
+      // -Vprofile-details rescans `mdef.span` in the unit's source; skip methods whose tree comes
+      // from another file, e.g. those of an anonymous class from a transparent inline
+      if sym.is(Method) && sym.owner.isClass && (profile ne NoProfile) && mdef.source == ctx.compilationUnit.source then
         profile.recordMethodSize(sym, (currentAddr.index - addr.index) max 1, mdef.span)
       for docCtx <- ctx.docCtx do
         val comment = docCtx.docstrings.lookup(sym)
