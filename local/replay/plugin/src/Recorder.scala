@@ -44,6 +44,7 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
   private val withEvents = !options.contains("noevents")
   private val noTypeText = options.contains("notypetext") // reproducibility experiment: print no type text at all
   private val check = options.contains("check") // verify offsets: slice == node's own show
+  private val jvm: JvmRecorder | Null = if options.contains("nojvm") then null else JvmRecorder(this)
 
   private val out = new BufferedWriter(new FileWriter(outPath), 1 << 16)
   private var started = false
@@ -125,7 +126,8 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
       val st = ctx.settingsState
       val args = ctx.settings.userSetSettings(st).map(s => s"${s.name}=${s.valueIn(st)}")
       emit(obj("t" -> "meta", "schema" -> "v1", "compiler" -> Properties.simpleVersionString,
-        "args" -> args.toList, "units" -> units.zipWithIndex.map((u, i) =>
+        "args" -> args.toList,
+        "requires" -> (if jvm == null then Nil else List("-Ybackend-parallelism:1")), "units" -> units.zipWithIndex.map((u, i) =>
           obj("id" -> i, "path" -> u.source.file.path, "text" -> String(u.source.content)))))
       for p <- flatPhases if p.exists && !p.isInstanceOf[RecordPhase] && p.phaseName != "terminal"
           && !p.isInstanceOf[dotty.tools.dotc.transform.TreeChecker] do
@@ -137,11 +139,15 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
     if !closed then
       closed = true
       flush()
+      // JVM versions, after the tree versions, when the last group run was genBCode
+      if jvm != null && lastEnd._1 != null && lastEnd._1.nn.phaseName == "genBCode" then
+        quietly(jvm.nn.emit(lastEnd._1.nn.id, lastEnd._2, ctx.base.allPhases.map(_.id).max + 1))
       emit(obj("t" -> "stats", "events" -> nextSeq, "nodes" -> nodeKind.length, "syms" -> symById.length,
         "types" -> typesWritten, "perturbations" -> perturbations,
         "versionsPrinted" -> versionsPrinted, "versionsSkipped" -> versionsSkipped,
         "evByKind" -> obj(evCount.toList.sortBy(_._1)*),
-        "deriveByHow" -> obj(deriveCount.toList.sortBy(_._1).map((k, v) => s"${k._1}/${k._2}" -> v)*)))
+        "deriveByHow" -> obj(deriveCount.toList.sortBy(_._1).map((k, v) => s"${k._1}/${k._2}" -> v)*),
+        "jvm" -> (if jvm == null then null else obj(jvm.nn.stats*))))
       out.close()
       if ctx.base.observer eq this then ctx.base.observer = null
       if check then
@@ -451,6 +457,54 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
 
   override def copied(tree: Tree[?], copy: Tree[?])(using Context): Unit =
     if suspended == 0 then copiedFrom.put(copy, tree)
+
+  // ---- JVM backend hooks (see JvmRecorder) --------------------------------------------------
+
+  override def classNodes(typeDef: tpd.TypeDef, classNode: org.objectweb.asm.tree.ClassNode,
+      mirror: org.objectweb.asm.tree.ClassNode | Null)(using Context): Unit =
+    if jvm != null then quietly(jvm.nn.classNodes(typeDef, classNode, mirror))
+  override def genMethod(dd: tpd.DefDef, method: org.objectweb.asm.tree.MethodNode)(using Context): Unit =
+    if jvm != null then jvm.nn.genMethod(dd, method)
+  override def genLoadEnter(tree: tpd.Tree, method: org.objectweb.asm.tree.MethodNode)(using Context): Unit =
+    if jvm != null then jvm.nn.genLoadEnter(tree, method)
+  override def genLoadExit(tree: tpd.Tree, method: org.objectweb.asm.tree.MethodNode)(using Context): Unit =
+    if jvm != null then jvm.nn.genLoadExit(tree, method)
+  override def optimizerPass(owner: String, method: org.objectweb.asm.tree.MethodNode, pass: String): Unit =
+    if jvm != null then jvm.nn.optimizerPass(owner, method, pass)
+  override def inlined(owner: String, method: org.objectweb.asm.tree.MethodNode, calleeOwner: String,
+      callee: org.objectweb.asm.tree.MethodNode,
+      insnMap: Map[org.objectweb.asm.tree.AbstractInsnNode, org.objectweb.asm.tree.AbstractInsnNode]): Unit =
+    if jvm != null then jvm.nn.inlined(owner, method, calleeOwner, callee, insnMap)
+  override def classWritten(classNode: org.objectweb.asm.tree.ClassNode): Unit =
+    if jvm != null then jvm.nn.classWritten(classNode)
+
+  // services for JvmRecorder
+  private[replay] def unitIdOf(src: SourceFile): Int = unitOf.getOrElse(src, -1)
+  private[replay] def treeNodeId(t: Tree[?]): Int = { val i = nodeIds.get(t); if i == null then -1 else i.intValue }
+  private[replay] def copySource(t: Tree[?]): Tree[?] | Null = copiedFrom.get(t)
+  private[replay] def lastTreeVersion(u: Int): (java.util.BitSet, Array[Int]) =
+    prevVersion.get(u).map(v => (v._2, v._3)).getOrElse((new java.util.BitSet, Array()))
+  private[replay] def nodeKindOf(id: Int): String = nodeKind(id)
+  private[replay] def nodeSpanOf(id: Int): Long = nodeSpan(id)
+  private[replay] def nodeSymOf(id: Int): Int = nodeSym(id)
+  private[replay] def symIdOf(sym: Symbol): Int = { val i = symIds.get(sym); if i == null then -1 else i.intValue }
+  private[replay] def emitObj(fields: (String, Any)*): Unit = emit(obj(fields*))
+  private[replay] def countDerive(how: String, conf: String, n: Int): Unit =
+    deriveCount((how, conf)) = deriveCount.getOrElse((how, conf), 0) + n
+  /** A node outside the tree arena (`ir:"jvm"`): allocated in the shared id space, written at once. */
+  private[replay] def newExtNode(fields: (String, Any)*): Int =
+    assert(nodesWritten == nodeKind.length)
+    val id = nodeKind.length
+    val kind = fields.collectFirst { case ("kind", k: String) => k }.get
+    nodeTree += null; nodeKind += kind; nodeSpan += -1L; nodeChildren += Array(); nodeSym += -1
+    nodeName += null; nodeTpe += null; nodeTypeText += null
+    val get = fields.toMap
+    val std = List("t" -> "node", "id" -> id, "ir" -> "jvm", "kind" -> kind, "span" -> null, "unit" -> get.getOrElse("unit", null),
+      "children" -> get.getOrElse("children", Nil), "sym" -> get.getOrElse("sym", null), "name" -> get.getOrElse("name", null))
+    val stdKeys = std.map(_._1).toSet
+    emit(obj((std ++ fields.filterNot((k, _) => stdKeys(k)))*))
+    nodesWritten += 1
+    id
 
   // ---- versions -------------------------------------------------------------------------------
 

@@ -15,7 +15,7 @@ def summarise(path, show_phases):
     phases, groups = {}, set()
     errors = []
     last_version = {}
-    versions = []
+    versions = []; jvm_versions = []
     ev_kind = collections.Counter(); ev_kind_bytes = collections.Counter()
     derive = collections.Counter()
     last_seq = -1
@@ -31,6 +31,7 @@ def summarise(path, show_phases):
             if t == "phase": phases[r["id"]] = r; groups.add(r["group"])
             elif t == "node":
                 for c in r["children"]: need("node", nodes, c, r)
+                if r.get("kind") == "InsnRange": need("node", nodes, r["method"], r)
                 need("sym", syms, r["sym"], r)
                 nodes[r["id"]] = r
             elif t == "sym": need("sym", syms, r["owner"], r); syms.add(r["id"])
@@ -57,8 +58,14 @@ def summarise(path, show_phases):
                 derive[(r["how"], r["confidence"])] += max(len(r["new"]), len(r["old"]))
             elif t == "version":
                 need("node", nodes, r["root"], r)
-                if evs.get(r["seq"]) != ("PhaseEnd", r["phase"]): err(f"version {r['phase']}/{r['unit']} seq {r['seq']} is not its PhaseEnd")
-                earlier = last_version.setdefault(r["unit"], {})
+                jvm = r.get("ir") == "jvm"
+                if jvm:
+                    # JVM versions: genBCode, or a synthetic optimiser phase; seq is genBCode's PhaseEnd
+                    if evs.get(r["seq"], ("",))[0] != "PhaseEnd": err(f"jvm version {r['class']} seq {r['seq']} is not a PhaseEnd")
+                    if r["phase"] not in groups: err(f"jvm version {r['class']} phase {r['phase']} undefined")
+                    jvm_versions.append(r)
+                elif evs.get(r["seq"]) != ("PhaseEnd", r["phase"]): err(f"version {r['phase']}/{r['unit']} seq {r['seq']} is not its PhaseEnd")
+                earlier = last_version.setdefault((r["unit"], r.get("class")), {})
                 for k in ("text", "offsets"):
                     if k not in r and k + "SameAs" in r:
                         src = earlier.get(r[k + "SameAs"])
@@ -74,7 +81,7 @@ def summarise(path, show_phases):
                     stack.append(e)
                 for (i, _) in r.get("types", []): need("node", nodes, i, r)
                 earlier[r["phase"]] = r
-                versions.append(r)
+                if not jvm: versions.append(r)
             elif t == "stats": stats = r
     total = sum(bytes_by_type.values())
     print(f"== {path}: {total/1024:.0f} KiB, {len(versions)} versions, {len(nodes)} nodes, {len(syms)} syms, {len(types)} types, {last_seq+1} events, errors={len(errors)}")
@@ -90,6 +97,11 @@ def summarise(path, show_phases):
     print(f"   typed trees {typed_nodes} nodes; arena {len(nodes)} = {len(nodes)/max(1,typed_nodes):.2f}x typed; "
           f"versions with new nodes {sum(1 for v in versions if v['new'] > 0)}/{len(versions)}; "
           f"printed/skipped (stats) {stats.get('versionsPrinted')}/{stats.get('versionsSkipped')}; perturbations {stats.get('perturbations')}")
+    if jvm_versions:
+        js = stats.get("jvm", {})
+        print(f"   jvm: {len(jvm_versions)} versions over {len({v['phase'] for v in jvm_versions})} phases, {len({v['class'] for v in jvm_versions})} classes, "
+              f"text {sum(len(v['text']) for v in jvm_versions)/1024:.0f} KiB; methods with tree ancestor {js.get('methodsWithAncestor')}/{js.get('methods')}, "
+              f"instructions in a tree range {js.get('insnsCovered')}/{js.get('insns')}")
     if show_phases:
         name = {g: phases[g]["name"] for g in phases}
         print(f"   {'phase':<28}{'nodes':>8}{'new':>7}{'types':>7}")

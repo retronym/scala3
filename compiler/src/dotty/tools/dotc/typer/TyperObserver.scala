@@ -7,6 +7,7 @@ import core.*, Contexts.*, Types.*, Phases.Phase, SymDenotations.SymDenotation
 import reporting.{Diagnostic, Reporter}
 import util.Spans.Span
 import Implicits.SearchResult
+import org.objectweb.asm.tree.{AbstractInsnNode, ClassNode, MethodNode}
 
 /** Observes typing, completion, implicit search, diagnostics, tree copying and the phase loop,
  *  for tools that record a compilation (e.g. a replay recorder supplied by a plugin).
@@ -47,6 +48,26 @@ trait TyperObserver:
 
   /** A `TreeCopier` produced `copy` from `tree`. */
   def copied(tree: Trees.Tree[?], copy: Trees.Tree[?])(using Context): Unit = ()
+
+  // JVM backend (GenBCode). The hooks without a Context run where the backend serializes classes,
+  // which is a worker thread unless `-Ybackend-parallelism:1`.
+
+  /** `CodeGen` generated `classNode` (and `mirror`, a module's static forwarder class) for `typeDef`,
+   *  before any optimisation.
+   */
+  def classNodes(typeDef: tpd.TypeDef, classNode: ClassNode, mirror: ClassNode | Null)(using Context): Unit = ()
+  /** `BCodeSkelBuilder.genDefDef` started emitting `method` for `dd`. */
+  def genMethod(dd: tpd.DefDef, method: MethodNode)(using Context): Unit = ()
+  /** `genLoadTo` / `genStat` emitting the code for `tree` into `method`. */
+  def genLoadEnter(tree: tpd.Tree, method: MethodNode)(using Context): Unit = ()
+  def genLoadExit(tree: tpd.Tree, method: MethodNode)(using Context): Unit = ()
+  /** An optimiser pass named `pass` ran on `method` of class `owner` (it may not have changed it). */
+  def optimizerPass(owner: String, method: MethodNode, pass: String): Unit = ()
+  /** The inliner copied the body of `callee` into `method`; `insnMap` maps callee instructions to their copies. */
+  def inlined(owner: String, method: MethodNode, calleeOwner: String, callee: MethodNode,
+      insnMap: Map[AbstractInsnNode, AbstractInsnNode]): Unit = ()
+  /** `classNode` is final and about to be serialized by a `ClassWriter`. */
+  def classWritten(classNode: ClassNode): Unit = ()
 
 object TyperObserver:
 
@@ -96,4 +117,11 @@ object TyperObserver:
       res = body
       res
     finally if obs != null then obs.candidateExit(ref, span, res)
+
+  /** No `try`: if code generation throws, the compilation is over anyway. */
+  inline def genLoad(tree: tpd.Tree, method: MethodNode)(inline body: Unit)(using Context): Unit =
+    val obs = ctx.base.observer
+    if obs != null then obs.genLoadEnter(tree, method)
+    body
+    if obs != null then obs.genLoadExit(tree, method)
 end TyperObserver

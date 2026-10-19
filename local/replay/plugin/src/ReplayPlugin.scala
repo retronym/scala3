@@ -13,7 +13,7 @@ import dotty.tools.dotc.CompilationUnit
  *   - `fused`       keep the standard MegaPhase grouping (default: unfuse every MiniPhase,
  *                   except ranges named by `keepFused=a..b`, default `mixin..capturedVars`)
  *   - `norecord`    only rewrite the plan: no Record phases, no observer
- *   - `nosyms`, `notext`, `noderive`, `noevents`, `notypetext`  switch off parts of the output
+ *   - `nosyms`, `notext`, `noderive`, `noevents`, `notypetext`, `nojvm`  switch off parts of the output
  *   - `check`       verify offsets against each node's own `show`
  *   - `showplan`    print the resulting phase plan to stderr
  *
@@ -49,7 +49,13 @@ class ReplayPlugin extends ResearchPlugin:
         val perturb = System.getenv("REPLAY_PERTURB_IDHASH")
         if perturb != null then for _ <- 0 until perturb.toInt do System.identityHashCode(new Object)
         val out = options.collectFirst { case s if s.startsWith("out=") => s.stripPrefix("out=") }.getOrElse("replay.jsonl")
-        val rec = Recorder(out, groupName, options)
+        // the backend hooks without a Context (optimiser, class writer) must run on this thread
+        val jvmOpts =
+          if ctx.settings.YbackendParallelism.value == 1 then Nil
+          else
+            dotty.tools.dotc.report.warning("replay-record: JVM recording needs -Ybackend-parallelism:1, skipping it")
+            List("nojvm")
+        val rec = Recorder(out, groupName, options ++ jvmOpts)
         ctx.base.observer = rec
         val n = groups.length
         groups.zipWithIndex.flatMap((g, i) => List(g, List(RecordPhase(rec, g, i == n - 1))))

@@ -926,6 +926,8 @@ trait BCodeSkelBuilder(val bTypes: KnownBTypes) extends BCodeHelpers {
       if mnode eq null then
         // we failed to emit the method header, no point in continuing
         return
+      val obs = ctx.base.observer
+      if obs != null then obs.genMethod(dd, mnode)
 
       if mnode.name == BCodeUtils.INSTANCE_CONSTRUCTOR_NAME && claszSymbol.isPrimitiveValueClass then
         // The JVM requires all classes' constructors to call a superclass constructor (or another of the class's constructors),

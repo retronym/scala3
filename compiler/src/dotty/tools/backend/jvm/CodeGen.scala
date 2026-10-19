@@ -32,6 +32,7 @@ final class CodeGen(ownerPhase: Phase, gen: BCode, localOpt: Option[LocalOptimiz
   // Save the compiler callbacks to avoid having to capture a Context
   private val compilerCallback = initctx.compilerCallback
   private val incrementalCallback = initctx.incCallback
+  private val observer = initctx.base.observer
   // Keep track of written class names so we can report (potential) conflicts
   private val caseInsensitiveClassNames = new java.util.HashMap[String, (String, SourcePosition)]
   // Create the classfile writer now to avoid having to capture a Context
@@ -158,6 +159,8 @@ final class CodeGen(ownerPhase: Phase, gen: BCode, localOpt: Option[LocalOptimiz
               Some(forced)
             case None => None
         case _ => None
+      val obs = ctx.base.observer
+      if obs != null then obs.classNodes(typeDef, mainClassNode, mirrorClassNode.orNull)
       // Precompute callback-related information,
       val (fullName, isLocal) = atPhase(sbtExtractDependenciesPhase) {
         (ExtractDependencies.classNameAsString(typeDef.symbol), typeDef.symbol.isLocal)
@@ -244,6 +247,7 @@ final class CodeGen(ownerPhase: Phase, gen: BCode, localOpt: Option[LocalOptimiz
     classNode.innerClasses.clear()
     val (declared, referred) = collectNestedClasses()
     addInnerClasses(declared, referred)
+    if observer != null then observer.classWritten(classNode)
     // Finally, convert the class node to bytes
     val writer = new ClassWriterWithBTypeLub(gen.classBTypeCache())
     classNode.accept(writer)

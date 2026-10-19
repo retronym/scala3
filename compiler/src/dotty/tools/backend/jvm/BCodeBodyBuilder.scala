@@ -87,7 +87,10 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
      * Two main cases: `tree` is an assignment,
      * otherwise an `adapt()` to UNIT is performed if needed.
      */
-    def genStat(tree: Tree)(using Context): Unit = {
+    def genStat(tree: Tree)(using Context): Unit =
+      dotty.tools.dotc.typer.TyperObserver.genLoad(tree, mnode)(genStat0(tree))
+
+    private def genStat0(tree: Tree)(using Context): Unit = {
       lineNumber(tree)
 
       tree match {
@@ -314,6 +317,9 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
 
     /* Generate code for trees that produce values, sent to a given `LoadDestination`. */
     def genLoadTo(tree: Tree, expectedType: BType, dest: LoadDestination)(using Context): Unit =
+      dotty.tools.dotc.typer.TyperObserver.genLoad(tree, mnode)(genLoadTo0(tree, expectedType, dest))
+
+    private def genLoadTo0(tree: Tree, expectedType: BType, dest: LoadDestination)(using Context): Unit =
       var generatedType: BType | Null = expectedType
       var generatedDest = LoadDestination.FallThrough
 
@@ -493,7 +499,7 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
       // emit conversion and send to the right destination
       if generatedDest == LoadDestination.FallThrough then
         genAdaptAndSendToDest(generatedType, expectedType, dest)
-    end genLoadTo
+    end genLoadTo0
 
     def genAdaptAndSendToDest(generatedType: BType | Null, expectedType: BType, dest: LoadDestination)(using Context): Unit =
       if generatedType != expectedType then
