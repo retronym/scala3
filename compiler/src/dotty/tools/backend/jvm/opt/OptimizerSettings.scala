@@ -32,4 +32,5 @@ class OptimizerSettings(using @constructorOnly ctx: Context):
   val optLogInline: Option[String] = ctx.settings.YoptLogInline.valueSetByUser
   val optTrace: Option[String] = ctx.settings.YoptTrace.valueSetByUser
   val optAnalysisBudget: Int = ctx.settings.YoptAnalysisBudget.value
+  val observer: dotty.tools.dotc.typer.TyperObserver | Null = ctx.base.observer
 

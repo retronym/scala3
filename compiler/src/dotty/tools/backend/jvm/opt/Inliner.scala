@@ -124,6 +124,9 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
         def doInline(r: InlineRequest, aliasFrame: AliasingFrame[Value], w: Option[IllegalAccessInstructions]): Map[AbstractInsnNode, AbstractInsnNode] = {
           val sizeBefore = method.instructions.size // cheap (a field read)
           val instructionMap = inlineCallsite(r.callsite, Some(aliasFrame), updateCallGraph = false)
+          val observer = settings.observer
+          if observer != null then
+            observer.inlined(r.callsite.callsiteClass.internalName, method, r.callsite.callee.calleeDeclarationClass.internalName, r.callsite.callee.callee, instructionMap)
           val inlined = InlinedCallsite(r.callsite, w.map(iw => iw.copy(instructions = iw.instructions.map(instructionMap))))
           instructionMap.valuesIterator foreach {
             case mi: MethodInsnNode => state.inlinedCalls(mi) = inlined

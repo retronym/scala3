@@ -214,7 +214,12 @@ final class LocalOptimizer(callGraph: CallGraph, inliner: Inliner,
 
       case _ => false
     }
-    def traceIfChanged(optName: String): Unit = if (doTrace) {
+    val observer = settings.observer
+    def traceIfChanged(optName: String): Unit = {
+      if observer != null then observer.optimizerPass(ownerClassName, method, optName)
+      traceIfChanged0(optName)
+    }
+    def traceIfChanged0(optName: String): Unit = if (doTrace) {
       val after = LogUtils.textify(method)
       if (currentTrace != after) {
         println(s"after $optName in ${method.name}")

@@ -103,6 +103,40 @@ def main():
             got = ranges_of(lambda tn: tn["kind"] == "Literal" and tn.get("name") == lit)
             texts = [insn_lines(rng_text(v, off, i)) for i, _ in got]
             check(len(texts) == 1 and texts[0] == [want], f"Literal {lit} -> {texts}")
+    if "--opt" in sys.argv:
+        # follow each genBCode range through copy/rewrite derives to the last version of its class;
+        # literal ranges whose instructions survive must still show the same instructions
+        fwd = {}
+        for d in derives:
+            if d["how"] in ("copy", "rewrite") and len(d["old"]) == 1 and len(d["new"]) == 1 and nodes[d["new"][0]]["kind"] == "InsnRange":
+                fwd[d["old"][0]] = d["new"][0]
+        elided = {o for d in derives if d["how"] == "elide" for o in d["old"]}
+        final = {}
+        for v in versions: final[v["class"]] = v  # last version per class
+        texts = {}
+        for v in versions:
+            for i, s0, e0 in v["offsets"]: texts[i] = v["text"][s0:e0]
+        survived = gone = same_lit = changed_lit = 0
+        for v in gen:
+            off = {i: (s0, e0) for i, s0, e0 in v["offsets"]}
+            fo = {i for i, _, _ in final[v["class"]]["offsets"]}
+            for i in off:
+                if nodes[i]["kind"] != "InsnRange": continue
+                j = i
+                while j in fwd: j = fwd[j]
+                if j in fo:
+                    survived += 1
+                    lits = [t for (t, _) in anc.get(i, []) if nodes[t]["kind"] == "Literal"]
+                    if lits:
+                        if insn_lines(texts[i]) == insn_lines(texts[j]): same_lit += 1
+                        else:
+                            changed_lit += 1
+                            if changed_lit <= 5: print(f"  literal {nodes[lits[0]].get('name')}: {insn_lines(texts[i])} -> {insn_lines(texts[j])}")
+                elif j in elided: gone += 1
+                else:
+                    errors += 1
+                    print(f"  FAIL range {i} ({v['class']}) is neither in the last version nor elided")
+        print(f"  opt: genBCode ranges surviving to the last version {survived}, elided {gone}; literal ranges unchanged {same_lit}, changed {changed_lit}")
     sys.exit(1 if errors else 0)
 
 if __name__ == "__main__":
