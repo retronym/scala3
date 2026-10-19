@@ -14,6 +14,7 @@ def summarise(path, show_phases):
     nodes, syms, types, evs = {}, set(), set(), {}
     phases, groups = {}, set()
     errors = []
+    stats = {}  # absent when the compile stopped on an error (the last RecordPhase never ran)
     last_version = {}
     versions = []; jvm_versions = []
     ev_kind = collections.Counter(); ev_kind_bytes = collections.Counter()

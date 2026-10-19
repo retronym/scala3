@@ -1,0 +1,51 @@
+Closures: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 112, elided 0; literal ranges unchanged 14, changed 0
+Closures-opt: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 107, elided 5; literal ranges unchanged 14, changed 0
+ForDesugar: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 65, elided 0; literal ranges unchanged 6, changed 0
+ForDesugar-opt: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 65, elided 0; literal ranges unchanged 6, changed 0
+Givens: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 283, elided 0; literal ranges unchanged 32, changed 0
+Givens-opt: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 275, elided 8; literal ranges unchanged 30, changed 0
+Mixins: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 213, elided 0; literal ranges unchanged 21, changed 0
+Mixins-opt: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 212, elided 1; literal ranges unchanged 20, changed 0
+Patmat: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 428, elided 0; literal ranges unchanged 49, changed 0
+Patmat-opt: bytecode jvm/nojvm same, plugin/plain same; repro ok; errors=0; opt: genBCode ranges surviving to the last version 398, elided 30; literal ranges unchanged 47, changed 2
+  ok   Apply of shown has 2 ranges (List(1,2,3).shown, "x".shown)
+  ok   'List(1, 2, 3).shown' -> ends 'INVOKEVIRTUAL Givens$package$.shown (Ljava/lang/Object;LShow;)Ljava/lang/String;'
+  ok   '"x".shown' -> ends 'INVOKEVIRTUAL Givens$package$.shown (Ljava/lang/Object;LShow;)Ljava/lang/String;'
+  ok   Literal 1 -> [['ICONST_1']]
+  ok   Literal 2 -> [['ICONST_2']]
+  ok   Literal 3 -> [['ICONST_3']]
+  ok   Literal "x" -> [['LDC "x"']]
+wall: plain 6.0s, record 15.3s
+Files /private/tmp/claude-501/-Users-jzaugg-virtus-code--worktrees-scala3-funny-chaplygin-0b0e4a/36447641-1b14-452c-a8eb-e25d472fae6b/scratchpad/jva/util/rec/dotty/tools/dotc/util/GenericHashMap$EntryIterator.class and /private/tmp/claude-501/-Users-jzaugg-virtus-code--worktrees-scala3-funny-chaplygin-0b0e4a/36447641-1b14-452c-a8eb-e25d472fae6b/scratchpad/jva/util/plain/dotty/tools/dotc/util/GenericHashMap$EntryIterator.class differ
+bytecode DIFFERS (above)
+wall: plain 6.5s, record 16.1s
+Files /private/tmp/claude-501/-Users-jzaugg-virtus-code--worktrees-scala3-funny-chaplygin-0b0e4a/36447641-1b14-452c-a8eb-e25d472fae6b/scratchpad/jva/util-opt/rec/dotty/tools/dotc/util/GenericHashMap$EntryIterator.class and /private/tmp/claude-501/-Users-jzaugg-virtus-code--worktrees-scala3-funny-chaplygin-0b0e4a/36447641-1b14-452c-a8eb-e25d472fae6b/scratchpad/jva/util-opt/plain/dotty/tools/dotc/util/GenericHashMap$EntryIterator.class differ
+bytecode DIFFERS (above)
+== out/util.jsonl: 85202 KiB, 3060 versions, 158252 nodes, 8134 syms, 19786 types, 92173 events, errors=0
+   jvm: 250 versions over 2 phases, 139 classes, text 3574 KiB; methods with tree ancestor 2145/2182, instructions in a tree range 23312/24794
+== out/util-opt.jsonl: 135318 KiB, 3060 versions, 255565 nodes, 8134 syms, 19786 types, 92173 events, errors=0
+   jvm: 944 versions over 26 phases, 139 classes, text 22378 KiB; methods with tree ancestor 2145/2182, instructions in a tree range 23312/24794
+Ranking: dotc exit 1
+Ranking-opt: dotc exit 1
+Traceback (most recent call last):
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 114, in <module>
+    bad = sum(summarise(p, "--phases" in sys.argv) for p in args)
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 114, in <genexpr>
+    bad = sum(summarise(p, "--phases" in sys.argv) for p in args)
+              ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 99, in summarise
+    f"printed/skipped (stats) {stats.get('versionsPrinted')}/{stats.get('versionsSkipped')}; perturbations {stats.get('perturbations')}")
+                               ^^^^^
+UnboundLocalError: cannot access local variable 'stats' where it is not associated with a value
+Ranking: == out/Ranking.jsonl: 153 KiB, 1 versions, 349 nodes, 111 syms, 140 types, 404 events, errors=0
+Traceback (most recent call last):
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 114, in <module>
+    bad = sum(summarise(p, "--phases" in sys.argv) for p in args)
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 114, in <genexpr>
+    bad = sum(summarise(p, "--phases" in sys.argv) for p in args)
+              ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jzaugg-virtus/code/.worktrees/scala3/funny-chaplygin-0b0e4a/local/replay/plugin/analyze.py", line 99, in summarise
+    f"printed/skipped (stats) {stats.get('versionsPrinted')}/{stats.get('versionsSkipped')}; perturbations {stats.get('perturbations')}")
+                               ^^^^^
+UnboundLocalError: cannot access local variable 'stats' where it is not associated with a value
+Ranking-opt: == out/Ranking-opt.jsonl: 153 KiB, 1 versions, 349 nodes, 111 syms, 140 types, 404 events, errors=0

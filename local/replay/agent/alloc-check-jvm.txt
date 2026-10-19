@@ -1,0 +1,10 @@
+dotty.tools.backend.jvm.BCodeBodyBuilder$PlainBodyBuilder genLoadTo()                  insns  1212 ->  1249  allocs 11 -> 11 
+dotty.tools.backend.jvm.BCodeBodyBuilder$PlainBodyBuilder genStat()                    insns   340 ->   373  allocs  0 ->  0 
+dotty.tools.backend.jvm.BCodeSkelBuilder$PlainSkelBuilder genDefDef()                  insns   336 ->   358  allocs  6 ->  6 
+dotty.tools.backend.jvm.BCodeSkelBuilder$PlainSkelBuilder initJMethod()                insns   156 ->   186  allocs  3 ->  3 
+dotty.tools.backend.jvm.CodeGen                    generateClassNodes()         insns   207 ->   227  allocs 10 -> 10 
+dotty.tools.backend.jvm.CodeGen                    serializeClassNode()         insns    50 ->    76  allocs  2 ->  2 
+dotty.tools.backend.jvm.opt.GlobalOptimizer        doInline$1()                 insns    67 ->   101  allocs  3 ->  3 
+dotty.tools.backend.jvm.opt.GlobalOptimizer        inlineCallsite()             insns   633 ->   664  allocs 24 -> 24 
+dotty.tools.backend.jvm.opt.LocalOptimizer         methodOptimizations()        insns   165 ->   195  allocs  1 ->  1 
+dotty.tools.backend.jvm.opt.LocalOptimizer         traceIfChanged$1()           insns    26 ->    37  allocs  1 ->  1 

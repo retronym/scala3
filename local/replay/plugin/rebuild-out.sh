@@ -9,6 +9,6 @@ P=$(cd "$(dirname "$0")" && pwd)
 export REPLAY_VARIANT=agent REPLAY_AGENT_OPTS=${REPLAY_AGENT_OPTS:-fixTypeApply,rejected,tentative}
 "$P/jvm-verify.sh"
 cd "$P/.."
-plugin/record.sh out/Ranking.jsonl agent/test/Ranking.scala >/dev/null 2>&1 || echo "Ranking: dotc exit $?"
-plugin/record.sh out/Ranking-opt.jsonl agent/test/Ranking.scala -- -opt '-opt-inline:<sources>' >/dev/null 2>&1 || echo "Ranking-opt: dotc exit $?"
-for f in Ranking Ranking-opt; do echo "$f: $(python3 plugin/analyze.py out/$f.jsonl | head -1)"; done
+# Ranking.scala has an ambiguous summon on purpose: the compile stops after typer (no JVM records, no stats line)
+plugin/record.sh out/Ranking.jsonl agent/test/Ranking.scala >/dev/null 2>&1 || echo "Ranking: dotc exit $? (expected: ambiguity error)"
+echo "Ranking: $(python3 plugin/analyze.py out/Ranking.jsonl | head -1)"
