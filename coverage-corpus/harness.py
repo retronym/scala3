@@ -37,6 +37,7 @@ WORK = Path(os.environ.get("CORPUS_WORK", HERE / ".work"))
 CASES = HERE / "cases"
 MANIFEST = HERE / "manifest.txt"
 JACOCO_VERSION = "0.8.13"
+SCALAJS_LIBRARY = "org.scala-js:scalajs-library_2.13:1.22.0"  # keep in sync with project/plugins.sbt
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Variants: option sets layered on top of a case's own `//> using options`.
@@ -78,6 +79,7 @@ VARIANTS = {
     "init-global": dict(opts=["-Ysafe-init-global"]),
     "print-tasty": dict(opts=["-Yprint-tasty"], post="print-tasty"),
     "decompile": dict(opts=[], post="decompile"),
+    "scalajs": dict(opts=["-scalajs"], deps=[SCALAJS_LIBRARY]),
     "print-plain": dict(opts=["-Vprint:all", "-Yplain-printer", "-Xprint-diff-del", "-Yprint-pos", "-Yshow-tree-ids",
                               "-Yprint-debug-owners", "-Xprint-inline"]),
 }
@@ -251,7 +253,7 @@ def make_case(path: Path, id: str, pool_opts=()):
     if len(stages) > 1:
         # options apply to the stage whose files declare them
         c.stage_opts = [list(pool_opts) + parse_directives(s)[0] for s in stages]
-    if any(o.startswith(u) for o in sopts for u in UNSUPPORTED_OPTS):
+    if any(o.startswith(u) for o in sopts for u in UNSUPPORTED_OPTS) and not (SCALAJS_LIBRARY in deps and "-scalajs" in sopts):
         c.skip = "unsupported option"
     return c
 
@@ -319,7 +321,7 @@ def make_job(tc, case, variant, out_root, extra_opts=(), order="sorted", joint=F
                 mapping[f] = src / rel
         stages = [[mapping[f] for f in s] for s in stages]
     # `//> using dep @compiler` puts the compiler itself on the classpath (e.g. to build a plugin in an earlier stage)
-    deps = [d for d in case.deps if d != "@compiler"]
+    deps = [d for d in case.deps if d != "@compiler"] + v.get("deps", [])
     libcp = tc.library_cp + (resolve_deps(deps) if deps else [])
     if "@compiler" in case.deps:
         libcp += [p for p in tc.compiler_cp if p not in libcp]

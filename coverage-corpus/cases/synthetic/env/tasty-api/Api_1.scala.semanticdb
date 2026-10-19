@@ -1,5 +1,5 @@
 
-²Ò…Users/jzaugg-virtus/code/.worktrees/scala3/scala-compiler-coverage-tests-1f3db1/coverage-corpus/cases/synthetic/tasty-api/Api_1.scalaÄX// Stage 1 of a separate-compilation case: a broad API surface whose TASTy is unpickled by stage 2.
+¶Ò‰Users/jzaugg-virtus/code/.worktrees/scala3/scala-compiler-coverage-tests-1f3db1/coverage-corpus/cases/synthetic/env/tasty-api/Api_1.scalaÄX// Stage 1 of a separate-compilation case: a broad API surface whose TASTy is unpickled by stage 2.
 package api
 
 import scala.annotation.{tailrec, targetName, nowarn, unchecked, static, implicitNotFound}
