@@ -120,7 +120,9 @@
     if (!prev) return [];
     const w = viewOf(prev), gone = new Set(); prev.ids.forEach((n) => { if (!v.ids.has(n)) gone.add(n); });
     const par = parentMap(prev), out = [];
-    w.offs.forEach(([id]) => { if (gone.has(id) && !gone.has(par.get(id))) out.push(id); });
+    // a node whose derive successor is present was rewritten, not removed (the root PackageDef is rewritten by almost every phase)
+    const D = R.ST.D, rewritten = (id) => (D.deriveByOld.get(id) || []).some((d) => d.how !== 'elide' && d.new.some((x) => v.ids.has(x)));
+    w.offs.forEach(([id]) => { if (gone.has(id) && !gone.has(par.get(id)) && !rewritten(id)) out.push(id); });
     return out;
   }
 
@@ -157,7 +159,7 @@
     const th = d.tpe && typeHtml(d.tpe); if (th) h += `<div><span class="dim">type</span> ${th}</div>`;
     if (d.sym) h += `<div><span class="dim">symbol</span> <b>${esc(d.sym)}</b> <span class="dim">#${n.sym}</span></div>`;
     if (d.si) h += `<div><span class="dim">at ${esc(D.phaseName(v.phase))}</span> ${typeHtml(d.si.info) || '<code>' + esc(d.si.info) + '</code>'} <span class="dim">[${esc(d.si.flags)}] owner ${esc(D.symName(d.si.owner))}${d.si.name && d.si.name !== d.sym ? ' · named ' + esc(d.si.name) : ''}</span></div>`;
-    if (full) h += `<div><span class="dim">source span</span> ${n.span[0]}–${n.span[1]} · <span class="dim">children</span> ${n.children.length} · <span class="dim">events</span> ${d.nev}</div>`;
+    if (full) h += `<div><span class="dim">source span</span> ${n.span[0]}–${n.span[1]} · <span class="dim">children</span> ${n.children.length} · <span class="dim" title="events recorded on this very node; the Events tab counts events of its ancestors too">events on this node</span> ${d.nev}</div>`;
     if (d.anc.length) {
       h += `<div class="anc"><span class="dim">derived from${full ? ' (click a step to jump to that phase with the node selected)' : ''}</span>`;
       d.anc.forEach((a) => {
@@ -318,7 +320,7 @@
     const prev = hl.prev, rem = removedList(v, prev), c = hl.counts;
     const chips = !prev ? '<span title="First version: nothing to compare with.">baseline</span>'
       : (c.struct + c.retype + c.rebuilt + c.copy + rem.length === 0 ? '<span title="Every node is the same object as in the previous version.">no changes</span>' : '') +
-        chip('cs', c.struct, 'structural', 'Nodes that are really new or rewritten (rewrite, split, synthetic). Green underline; the lowest ones are shaded.') +
+        chip('cs', c.struct, 'structural', 'Nodes that are really new or rewritten (rewrite, split, synthetic) in the tree shown. Green underline; the lowest ones are shaded. The phases table and the phase select count every node derived in the phase (including nodes of other units and pure copies), so their numbers are larger.') +
         chip('cr', c.retype, 'retyped', 'Same node re-typed by a later typer (erasure, inlining). Blue dotted underline.') +
         chip('cb', c.rebuilt, 'rebuilt', 'New node whose only change is a changed child (the spine above a change). Grey dotted underline.') +
         chip('cc', c.copy, 'pure copies' + (R.ST.collapse ? ' hidden' : ''), 'Re-created but identical to the source (same kind, name, symbol, span, type; children identical or pure copies).') +

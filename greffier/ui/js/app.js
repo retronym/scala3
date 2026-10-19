@@ -128,6 +128,8 @@
 
   R.render = function () {
     const t = [], t0 = performance.now();
+    { const tip = $('tip'); if (tip) tip.hidden = true; document.body.classList.toggle('multi-on', !!(R.multiActive && R.multiActive()));
+      const oc = $('optchips'); if (oc) { const h = (ST.skip ? '<span class="ochip" title="view options: versions that add no new nodes are skipped by the phase slider and where links land">skip no-ops</span>' : '') + (ST.collapse ? '<span class="ochip" title="view options: pure copies are not highlighted as new">collapse copies</span>' : ''); if (oc._h !== h) { oc._h = h; oc.innerHTML = h; } } }
     views.forEach((v) => { if (R.stackOpen && !v.light) { t.push(0); return; } const a = performance.now(); v(); t.push(Math.round(performance.now() - a)); });   // the stack overlay hides the viewer: only light views run
     R.lastRender = { total: Math.round(performance.now() - t0), parts: t }; if (R.scheduleHash) R.scheduleHash();
     const p = document.getElementById('perf'); if (p) p.textContent = `render ${R.lastRender.total} ms`;
@@ -181,7 +183,7 @@
     Object.assign(ST, { D, unit: vs.length ? vs[0] : 0, verIdx: 0, evIdx: 0, selNode: null, selSym: null });
     { const mn = $('mergenote'); mn.hidden = !D.merged; if (D.merged) mn.textContent = `${D.files.length} recordings, merged by phase; not a joint compile`; }
     const mb = performance.memory ? ` · heap ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB` : '';
-    updateVariantUI && setTimeout(() => updateVariantUI(), 0); $('recname').textContent = label.replace(/^data(-jvm)?\//, '').replace(/ \(\d+ ms.*$/, ''); $('loadinfo').textContent = label + ' · ' + D.schema + ' · ' + Object.entries(D.counts).map(([k, v]) => v + ' ' + k).join(', ') + mb;
+    updateVariantUI && setTimeout(() => updateVariantUI(), 0); $('recname').textContent = label.replace(/^data(-jvm)?\//, '').replace(/\.[0-9a-f]{8}(?=\.jsonl|$)/, '').replace(/ \(\d+ ms.*$/, ''); $('loadinfo').textContent = label + ' · ' + D.schema + ' · ' + Object.entries(D.counts).map(([k, v]) => v + ' ' + k).join(', ') + mb;
     const w = $('warnings'); w.innerHTML = '';
     const items = D.warnings.slice(); Object.entries(D.unknown).forEach(([k, v]) => items.push(`unknown record kind "${k}" ×${v} (ignored)`));
     w.hidden = !items.length; if (items.length) { w.append(Object.assign(document.createElement('b'), { textContent: items.length + ' load warning(s): ' })); w.append(items.slice(0, 6).join(' · ') + (items.length > 6 ? ' …' : '')); w.title = items.join('\n'); }
@@ -195,7 +197,7 @@
 
   // #src=…&unit=…&pname=…&seq=…&node=…&sym=…&level=…&skip=1&collapse=1&retyped=1: deep link both ways (also `phase=<index>`)
   R.applyHash = function () {
-    const h = new URLSearchParams(location.hash.slice(1)), D = ST.D, patch = {};
+    const h = new URLSearchParams(location.hash.slice(1)), D = ST.D, patch = { selNode: null, selSym: null, gsel: null, irMethod: null, _mExplicit: false, range: null };   // a link describes the whole state: nothing carries over from the previous one
     const flag = (k, f) => { if (h.has(k)) { ST[f] = h.get(k) === '1'; $(k).checked = ST[f]; } };
     flag('skip', 'skip'); flag('collapse', 'collapse'); flag('retyped', 'showRetyped'); flag('structonly', 'structOnly');
     if (h.has('level')) { ST.level = h.get('level'); $('level').value = ST.level; R.initViews && R.initViews(); }
@@ -227,7 +229,7 @@
   // current state as hash parameters (used for the address bar, `copy link` and tours)
   R.buildHash = function () {
     const D = ST.D, p = new URLSearchParams();
-    if (R.srcUrls) p.set('src', R.srcUrls.join(','));
+    if (R.srcUrls) p.set('src', R.srcUrls.join(',')); else if (R.isFixture) p.set('fixture', 1);
     const u = D.units.get(ST.unit); if (u && D.unitsWithVersions.length > 1) p.set('unit', (u.path || '').replace(/^.*\//, ''));
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); p.set('cls', R.curClass()); } } if (R.ev()) p.set('seq', R.seq());
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
@@ -240,9 +242,19 @@
     return p.toString().replace(/%2C/g, ',').replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
   };
   let hashTimer = null; R.scheduleHash = () => scheduleHash();
+  // navigation key of a hash: what makes a history entry worth having (phase, class, unit, node, overlays), not the cursor position
+  const navKey = (hash) => { const q = new URLSearchParams(String(hash).replace(/^#/, '')); return ['src', 'unit', 'pname', 'ir', 'cls', 'node', 'sym', 'stack', 'cfg', 'range', 'variant'].map((k) => q.get(k) || '').join('|'); };
+  R.navKey = navKey;
   function scheduleHash() {
-    if (!R.hashApplied || !ST.D || !(R.srcUrls || R.isFixture)) return;
-    clearTimeout(hashTimer); hashTimer = setTimeout(() => { try { history.replaceState(null, '', '#' + R.buildHash()); } catch (e) { /* file:// or sandbox */ } }, 250);
+    if (!R.hashApplied || !ST.D) return;
+    if (!(R.srcUrls || R.isFixture)) { clearTimeout(hashTimer); try { if (location.hash) history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ } return; }   // a local file cannot be linked: do not claim the previous recording
+    clearTimeout(hashTimer); hashTimer = setTimeout(() => {
+      try {
+        const h = '#' + R.buildHash(), k = navKey(h), now = performance.now();
+        if (R._navKey != null && k !== R._navKey && now - (R._navT || 0) > 400) history.pushState(null, '', h); else history.replaceState(null, '', h);   // phase jumps / selections / overlays are history steps
+        if (k !== R._navKey) R._navT = now; R._navKey = k;
+      } catch (e) { /* file:// or sandbox */ }
+    }, 250);
   }
 
   // ---- loading ----------------------------------------------------------------------------------------------------------------
@@ -319,7 +331,7 @@
     };
     return (R._axis = { key, segs, zb, toPos, toIdx, n });
   };
-  const KCOL = { Typed: '#1c7ed6', Retyped: '#868e96', Adapt: '#0c8599', ImplicitSearch: '#7048e8', Candidate: '#9c36b5', Complete: '#e8590c', Report: '#c92a2a', Resolve: '#2f9e44' };
+  const KCOL = { Typed: '#1c7ed6', Retyped: '#868e96', Adapt: '#0c8599', ImplicitSearch: '#7048e8', Candidate: '#9c36b5', Rejected: '#c2255c', Scope: '#5f3dc4', Tentative: '#868e96', Complete: '#e8590c', Report: '#c92a2a', Resolve: '#2f9e44' };
   R.zoomTo = (b) => {
     if (!b) return; const D = ST.D;
     if (!ST.zoomKey) ST._retypedBefore = ST.showRetyped;
@@ -379,11 +391,11 @@
       if (b2.querySelector('.sep')) { const cap = document.createElement('div'); cap.className = 'jvmcap'; cap.textContent = 'JVM'; b2.append(cap); cap._pos = true; }
     }
     cur = R.curBand();
-    { const vs = R.vers(), mx = Math.max(1, ...vs.map((v) => R.metricVal(R.scoreOf(v)))), top = new Set(R.interesting ? R.interesting().map((x) => x.i) : []);
+    { const vs = R.vers(), mx = Math.max(1, ...vs.map((v) => R.metricVal(R.scoreOf(v)))), top = new Set(R.stars ? R.stars().map((x) => x.i) : []);
       [...b2.children].forEach((el) => { if (!el._b || !el._b.ir) return; const i = vs.findIndex((v) => v.irPseudo && v.phase === el._b.phase), v = vs[i], hv = v ? R.metricVal(R.scoreOf(v)) : 0; el.style.background = i === ST.verIdx ? '' : `rgba(112,72,232,${(0.18 + 0.82 * Math.sqrt(hv / mx)).toFixed(2)})`; el.classList.toggle('star', top.has(i)); });
       const cap = b2.querySelector('.jvmcap'), sp = b2.querySelector('.sep'); if (cap && sp) cap.style.left = (sp.offsetLeft + 2) + 'px'; }
     [...b2.children].forEach((el) => el._b && el.classList.toggle('cur', el._b === cur));
-    const topPh = new Set(R.interesting ? R.interesting().map((x) => x.v.phase) : []);
+    const topPh = new Set(R.stars ? R.stars().map((x) => x.v.phase) : []);
     [...box.children].forEach((el) => { if (el._b) { el.classList.toggle('cur', el._b === cur && !zb); el.classList.toggle('star', topPh.has(el._b.phase)); } });
     box.classList.toggle('zoomed', !!zb);
     const zbar = $('zoombar'); zbar.hidden = !zb;
@@ -408,7 +420,7 @@
     if (vs.length > 12 || D.hasIR) {
       const sel = document.createElement('select'); sel.title = 'phase (picking one shows its output; ⇤ start moves to its beginning)'; sel.setAttribute('aria-label', 'phase');
       const allSc = R.versionScores ? R.versionScores() : []; const tg = document.createElement('optgroup'); tg.label = 'tree phases'; sel.append(tg); let ig = null;
-      vs.forEach((v, k) => { if (v.irPseudo && !ig) { ig = document.createElement('optgroup'); ig.label = 'IR · JVM bytecode'; sel.append(ig); } (v.irPseudo ? ig : tg).append(new Option(`${k + 1}/${vs.length} ${R.verName(v)} ${k > 0 && R.dots ? R.dots(v, allSc) : ''} (${R.newCount(v)} ${v.irPseudo ? 'classes' : 'new'})`, k)); });
+      vs.forEach((v, k) => { if (v.irPseudo && !ig) { ig = document.createElement('optgroup'); ig.label = 'IR · JVM bytecode'; sel.append(ig); } (v.irPseudo ? ig : tg).append(new Option(`${k + 1}/${vs.length} ${R.verName(v)} ${k > 0 && R.dots ? R.dots(v, allSc) : ''} (${R.newCount(v)} ${v.irPseudo ? (R.newCount(v) === 1 ? 'class' : 'classes') : 'new'})`, k)); });
       sel.value = ps; sel.onchange = () => R.setPhase(+sel.value); box.append(sel); return;
     }
     vs.forEach((v, k) => { const b = document.createElement('button'); b.textContent = `${D.phaseName(v.phase)} (${R.newCount(v)})`; b.title = `${R.newCount(v)} new nodes`; b.className = k === ps ? 'on' : ''; b.onclick = () => R.setPhase(k); box.append(b); });
@@ -437,7 +449,7 @@
     document.addEventListener('dragleave', (ev) => { if (!ev.relatedTarget) document.body.classList.remove('dragging'); });
     document.addEventListener('drop', (ev) => { ev.preventDefault(); document.body.classList.remove('dragging'); const fs = [...ev.dataTransfer.files].filter((f) => /\.(jsonl|ndjson|json|txt)$/.test(f.name)); if (fs.length) loadLocal(fs); });
     $('rec-load').onclick = () => { const sel = RECS.filter((r) => r.checked); if (sel.length) loadEntries(sel); };
-    $('cheat').innerHTML = $('cheat2').innerHTML = CHEAT;
+    if ($('cheat')) $('cheat').innerHTML = CHEAT; $('cheat2').innerHTML = CHEAT;
     $('replay').onclick = () => R.replay(); $('animon').onchange = (ev) => { ST.anim = ev.target.checked; }; $('animspeed').title = 'animation speed: 1× or 0.25× for teaching';
     $('structonly').onchange = (ev) => R.set({ structOnly: ev.target.checked });
     $('syntax').onchange = (ev) => R.set({ syntax: ev.target.checked }); $('bykind').onchange = (ev) => { $('text').classList.toggle('bykind', ev.target.checked); };
@@ -489,7 +501,7 @@
       ev.preventDefault();
     });
     window.addEventListener('hashchange', () => {
-      const h = new URLSearchParams(location.hash.slice(1)), src = h.get('src') || '', cur = R.srcUrls ? R.srcUrls.join(',') : '';
+      const h = new URLSearchParams(location.hash.slice(1)), src = h.get('src') || '', cur = R.srcUrls ? R.srcUrls.join(',') : ''; R._navKey = navKey(location.hash);
       if (!ST.D || (src && src !== cur) || (!src && !R.isFixture && location.hash.length > 1)) start(); else if (ST.D) R.applyHash();
     });
     start();
@@ -501,8 +513,8 @@
     <span><kbd>[</kbd> <kbd>]</kbd></span><span>previous / next phase output (cursor at its PhaseEnd)</span>
     <span><kbd>b</kbd> <kbd>e</kbd></span><span>start / end of the current phase (<kbd>e</kbd> again: end of the next phase)</span>
     <span><kbd>p</kbd> <kbd>n</kbd></span><span>previous / next event inside the current phase</span>
-    <span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>0</kbd></span><span>full height: tree / events / graph / all views</span>
-    <span><kbd>i</kbd> <kbd>I</kbd></span><span>next / previous interesting phase (most changed by the chosen metric, ★ on the bands)</span>
+    <span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>0</kbd></span><span>full height: tree / events / dependencies (Deps) / all views</span>
+    <span><kbd>i</kbd> <kbd>I</kbd></span><span>same as <kbd>→</kbd> <kbd>←</kbd>: next / previous page, the dominant phase of the next chapter (★ on the bands); with Pages granularity “★ top 5 + bytecode” the most changed phases</span>
     <span><kbd>⇧P</kbd></span><span>phases table (sortable)</span>
     <span><kbd>r</kbd></span><span>replay the last transition (header: speed 1× / 0.25×)</span>
     <span><kbd>x</kbd></span><span>show / hide the project explorer (Ctrl/Cmd-click or tick boxes: several units or classes at once)</span>
@@ -511,10 +523,15 @@
     <span>Stack: click a line</span><span>trace that node through every version (and select it in the viewer); <kbd>Esc</kbd> clears the trace, then closes</span>
     <span>Stack: <kbd>⌥</kbd>+wheel, <kbd>j</kbd> <kbd>k</kbd></span><span>scroll the text of the front card</span>
     <span>Stack: hover / click a receding card, minimap, <kbd>i</kbd> <kbd>I</kbd></span><span>bring it forward; jump anywhere; next / previous ★ phase</span>
+    <span>Stack: drag over the line numbers</span><span>select a line range; every other card shows where those lines went (side panel, blue band); <kbd>Esc</kbd> clears it first</span>
+    <span><kbd>g</kbd></span><span>control-flow graph (▣ graph button in the bytecode method panel) of the selected / chosen method: <kbd>[</kbd> <kbd>]</kbd> step the method's optimiser phases, <kbd>f</kbd> fit, <kbd>Tab</kbd> and arrows move between blocks, <kbd>Esc</kbd> closes; the header, axis and pager stay usable</span>
+    <span>Bytecode method panel</span><span>the method dropdown, ◀ previous / next change ▶ and ▣ graph share one current method; it follows the selection (an explicit pick sticks until the selection changes)</span>
+    <span>Two-finger swipe</span><span>over the scrubber or explorer: turn pages; when the scrubber text overflows horizontally the swipe scrolls it, hold <kbd>⇧</kbd> to turn pages</span>
     <span><kbd>Esc</kbd></span><span>zoom out of a phase band, else clear the selection / close a dialog</span>
     <span><kbd>?</kbd></span><span>this help</span></div>
     <h3>Mouse</h3><div class="keys"><span>click a span</span><span>select that node (events, lineage, source origin)</span>
     <span>hover a span</span><span>kind, type, symbol and derive ancestry (old text in the previous version)</span>
+    <span><kbd>Alt</kbd>+click a span</span><span>select its parent node</span>
     <span>click a phase band / cell / phase button</span><span>that phase's output (cursor at PhaseEnd); shift-click or <b>⇤</b>: its start</span>
     <span>click a graph node</span><span>jump to the first event that touches it</span>
     <span>click in the source pane</span><span>select the innermost node at that position</span></div>`;
@@ -526,13 +543,13 @@
     const box = $('reclist'); box.innerHTML = '';
     RECS.forEach((r, i) => {
       const d = document.createElement('div'); d.className = 'rec';
-      const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!r.checked }); cb.onchange = () => { r.checked = cb.checked; $('rec-load').disabled = !RECS.some((x) => x.checked); };
+      const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!r.checked, ariaLabel: 'select recording ' + r.name }); cb.onchange = () => { r.checked = cb.checked; $('rec-load').disabled = !RECS.some((x) => x.checked); };
       const cur = resolveRec(r);
       const nm = document.createElement('b'); nm.textContent = r.name; nm.title = cur.url || r.file?.name || '';
       const sz = document.createElement('span'); sz.className = 'dim'; sz.textContent = cur.size ? fmtSize(cur.size) : '';
       const ld = Object.assign(document.createElement('button'), { textContent: 'Load', onclick: () => loadEntries([r]) });
       const chips = document.createElement('span'); chips.className = 'vchips';
-      (r.variants || []).forEach((v) => { const c = Object.assign(document.createElement('button'), { className: 'vchip' + ((r.sel || 'base') === v.label ? ' on' : ''), textContent: v.label, title: `${v.name}\n${v.schema} · ${v.phases} phases · ${v.events} events · ${v.nodes} nodes · ${v.versions} versions${v.jvm ? ` · ${v.classes} classes, ${v.jvm} class versions` : ''} · ${fmtSize(v.size)}${v.args && v.args.length ? '\n' + v.args.join(' ') : ''}` }); c.onclick = () => { r.sel = v.label; renderRecs(); }; chips.append(c); });
+      (r.variants || []).forEach((v) => { const c = Object.assign(document.createElement('button'), { className: 'vchip' + ((r.sel || 'base') === v.label ? ' on' : ''), textContent: v.label, ariaLabel: 'load ' + r.name + ' variant ' + v.label, title: `${v.name}\n${v.schema} · ${v.phases} phases · ${v.events} events · ${v.nodes} nodes · ${v.versions} versions${v.jvm ? ` · ${v.classes} classes, ${v.jvm} class versions` : ''} · ${fmtSize(v.size)}${v.args && v.args.length ? '\n' + v.args.join(' ') : ''}` }); c.onclick = () => { r.sel = v.label; loadEntries([r]); }; chips.append(c); });
       const meta = document.createElement('div'); meta.className = 'meta';
       const rs = cur; meta.textContent = r.fixture ? 'synthetic: hand-written v0 data modelled on Givens.scala, useful as a quick demo only' : rs.events != null ? `${rs.schema} · ${r.units.length} unit${r.units.length > 1 ? 's' : ''} (${r.units.slice(0, 3).join(', ')}${r.units.length > 3 ? ', …' : ''}) · ${rs.phases} phases · ${rs.events} events · ${rs.nodes} nodes${rs.jvm ? ` · + JVM bytecode: ${rs.classes} classes, ${rs.jvm} class versions` : ''}` : 'local file';
       d.append(cb, nm, chips, sz, ld, meta); box.append(d);
@@ -554,7 +571,8 @@
     p.set('variant', t.label); if (ST.skip) p.set('skip', 1);
     location.hash = '#' + p.toString().replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
   };
-  function openRecs() { $('recs').hidden = false; renderRecs(); }
+  function openRecs() {
+    if (!RECS.some((x) => x.fixture)) RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true }); $('recs').hidden = false; renderRecs(); }
   function addLocal(files) { files.forEach((f) => RECS.push({ name: f.name.replace(/\.jsonl$/, ''), file: f, size: f.size, checked: true })); openRecs(); }
   function loadLocal(files) { loadEntries(files.map((f) => ({ name: f.name, file: f, size: f.size }))); }
   async function loadEntries(es) {
@@ -566,13 +584,16 @@
       if (e.file) sources.push({ name: e.file.name, size: e.file.size, open: async () => e.file.stream() });
       else { try { const [s] = await urlSources([e.url]); sources.push(s); } catch (err) { loadError(err, e.url); return; } }
     }
+    // the address bar describes the recording being loaded, not the previous one (no stale pname / seq / node)
+    try { history.replaceState(null, '', sources.every((x) => x.url) ? '#src=' + sources.map((x) => x.url).join(',') : location.pathname + location.search); R._navKey = null; } catch (e) { /* ignore */ }
     loadSources(sources, label);
   }
   async function start() {
     const h = location.hash.slice(1), srcParam = new URLSearchParams(h).get('src');
     if (!RECS.some((x) => !x.fixture)) { try { const r = await fetch('recordings.json'); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); R.recsLoaded = true; } } catch (e) { /* none */ } }
     if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { loadError(e); openRecs(); }); return; }
-    if (h) return loadFixture();                     // deep link without src: the built-in fixture (screenshots)
+    if (h && new URLSearchParams(h).has('fixture')) return loadFixture();                     // the built-in fixture only on request (fixture=1); a link without src names no recording
+    if (h) { $('loadinfo').textContent = 'this link does not name a recording (no src=)'; }
     RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true });
     openRecs();
   }
@@ -582,6 +603,7 @@
   }
   function copyLink() {
     const D = ST.D; if (!D) return;
+    if (!R.srcUrls && !R.isFixture) { flash('a recording loaded from local files cannot be linked'); return; }
     const url = location.origin + location.pathname + '#' + R.buildHash();
     (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => flash('link copied' + (R.srcUrls || R.isFixture ? '' : ' (recording was loaded from local files: the link cannot reload it)')), () => window.prompt('copy this link', url));
   }

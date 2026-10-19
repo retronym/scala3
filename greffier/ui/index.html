@@ -167,6 +167,10 @@
   #cfgmini { position: absolute; right: 10px; bottom: 10px; border: 1px solid #2b3a55; border-radius: 6px; cursor: pointer; }
   .vchips { display: inline-flex; gap: 4px; margin: 0 6px; } .vchip { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; color: inherit; } .vchip.on { background: var(--acc); color: #fff; border-color: var(--acc); } #variant { margin-left: 4px; font-size: 11.5px; max-width: 220px; }
   #loaderr { position: fixed; left: 0; right: 0; top: 0; z-index: 200; background: #7a1f2b; color: #fff; padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.5); } #loaderr[hidden] { display: none; } #loaderr code { background: rgba(0,0,0,.3); padding: 1px 5px; border-radius: 3px; } #loaderr button { margin-left: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; cursor: pointer; }
+  body.multi-on #verinfo, body.multi-on #removed, body.multi-on #expager { display: none; } .vchips .vchip.on { font-weight: 600; }
+  #optchips .ochip { font-size: 10.5px; padding: 1px 7px; margin-left: 5px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); color: #c08a2d; cursor: default; }
+  @media (max-width: 1100px) { #legend-kinds { display: none; } #verinfo { font-size: 11px; } #scrub h2, #insp h2, #proj h2 { padding-top: 2px; padding-bottom: 2px; } }
+  @media (max-width: 700px) { header, #hdr { flex-wrap: wrap; } main { grid-template-columns: 1fr !important; } #work { flex-direction: column; } #explorer { max-height: 30vh; } }
   #srange { position: absolute; right: 96px; top: 56px; z-index: 20003; width: 300px; max-height: 52%; overflow: auto; background: rgba(13,18,28,.92); border: 1px solid #2b4570; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; touch-action: auto; overscroll-behavior: contain; } #srange[hidden] { display: none; }
   #srange .ch { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; } #srange .ch button { margin-left: auto; background: none; border: 0; color: #7f8ba0; cursor: pointer; }
   #srange .ce { display: grid; grid-template-columns: 70px 1fr; column-gap: 6px; padding: 1px 2px; cursor: pointer; border-radius: 3px; white-space: nowrap; } #srange .ce:hover { background: #1a2436; } #srange .ce .cp { overflow: hidden; text-overflow: ellipsis; color: #7f8ba0; } #srange .ce code { overflow: hidden; text-overflow: ellipsis; font: 11px ui-monospace, Menlo, monospace; }
@@ -183,7 +187,7 @@
 <body>
 <header>
   <span class="wordmark" title="Greffier: the clerk's record of a Scala 3 compile">Greffier</span>
-  <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button> <select id="variant" hidden aria-label="recording variant"></select>
+  <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button> <select id="variant" hidden aria-label="recording variant"></select><span id="optchips"></span>
   <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button><button data-v="stack" title="the version stack of this unit, over the viewer (s)">Stack</button></span>
   <span id="mergenote" class="mergenote" hidden></span>
   <button id="btn-exp" title="show or hide the project explorer (x)">☰ explorer</button>
@@ -244,7 +248,7 @@
       <div id="sfront"></div>
       <svg id="thread" xmlns="http://www.w3.org/2000/svg"></svg>
       <div id="srange" hidden></div><div id="schron" hidden></div>
-      <div id="spager" class="pager"></div><div id="slegend">Newest version in front, earlier phases behind. Each card's top strip is a change barcode of its lines (<b style="color:#4cc38a">added</b> / <b style="color:#ff5c7a">removed</b> vs the previous version); <b style="color:#ffd666">★</b> the most changed phases; slivers are phases that printed the same tree. Click a line on the front card to trace its node: <b style="color:#5fd38d">born</b> · <b style="color:#ffb454">rewritten</b> · <b style="color:#c792ea">retyped</b> · <b style="color:#82aaff">reprinted</b> · <b style="color:#6f8196">kept</b> · <b style="color:#ff5370">removed</b></div>
+      <div id="spager" class="pager"></div><div id="slegend">Newest version in front, earlier phases behind. Each card's top strip is a change barcode of its lines (<b style="color:#4cc38a">added</b> / <b style="color:#ff5c7a">removed</b> vs the previous version); <b style="color:#ffd666">★</b> the most changed phases; slivers are phases that printed the same tree. Wheel down goes to older phases; <kbd>Home</kbd> newest, <kbd>End</kbd> oldest. Click a line on the front card to trace its node: <b style="color:#5fd38d">born</b> · <b style="color:#ffb454">rewritten</b> · <b style="color:#c792ea">retyped</b> · <b style="color:#82aaff">reprinted</b> · <b style="color:#6f8196">kept</b> · <b style="color:#ff5370">removed</b></div>
       <aside id="smini"><canvas id="sminic"></canvas><div id="smark"></div></aside>
     </div>
   </div>
@@ -268,7 +272,6 @@
   </div>
   <div id="drop">Drop one or many <code>.jsonl</code> files anywhere on this page
     <span class="dim">· or <label class="lnk">choose files<input type="file" id="file" multiple accept=".jsonl,.json,.ndjson,.txt" hidden></label> · <label class="lnk">choose a folder<input type="file" id="dir" webkitdirectory hidden></label></span></div>
-  <div id="cheat"></div>
 </div></div>
 <div id="phtab" class="pop popwide" hidden><div class="phhead"><b id="phtitle">Phases</b> <label>metric <select id="metric2" aria-label="change metric"></select></label><button class="x" data-close="phtab">×</button></div><div id="phbody"></div></div>
 <div id="about" class="modal" hidden><div class="card"><h2><span class="wordmark big">Greffier</span> <button class="x" data-close="about">×</button></h2><p class="tagline">the clerk's record of a Scala 3 compile: every phase, every decision, replayable</p><div id="aboutbody"></div></div></div>

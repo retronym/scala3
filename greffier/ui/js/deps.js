@@ -83,12 +83,13 @@
     // graph (secondary): rebuild when the centre, filters or level change
     const sig = [D.nodes.size, level, cen.join(',').slice(0, 200), st.gkind, st.gscope, st.ghops, $('minw').value, $('gdet').open].join('|');
     if (sig !== C.sig) { C.sig = sig; if (R.rebuildGraph) R.rebuildGraph(); }
-    $('graphinfo').textContent = `${list.length} dependencies · ${counts.all || 0} total`;
+    $('graphinfo').textContent = `${list.length} ${list.length === 1 ? 'dependency' : 'dependencies'} · ${counts.all || 0} total`;
+    { const one = D.unitsWithVersions.length < 2; $('gscope').disabled = one; $('ghops').disabled = one; $('gscope').title = $('ghops').title = one ? 'only one unit in this recording' : ''; }
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     $('gscope').onchange = (ev) => R.set({ gscope: ev.target.value }); $('ghops').onchange = (ev) => R.set({ ghops: +ev.target.value });
-    $('gdet').addEventListener('toggle', () => { C.sig = null; R.render(); }); $('level').value = R.ST.level;
+    $('gdet').addEventListener('toggle', () => { C.sig = null; R.render(); if ($('gdet').open) setTimeout(() => $('gdet').scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50); }); $('level').value = R.ST.level;
   });
   R.views.push(render);
 })(window.R);

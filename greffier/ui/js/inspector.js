@@ -2,7 +2,7 @@
 (function (R) {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const SHOWN = new Set(['pt', 'step', 'name', 'accepted', 'why', 'reason', 'severity', 'level', 'msg', 'forcedBy', 'tpe', 'ref', 'result', 'ok', 'changed', 'members']);
+  const SHOWN = new Set(['pt', 'step', 'name', 'accepted', 'why', 'reason', 'severity', 'level', 'msg', 'forcedBy', 'tpe', 'ref', 'result', 'ok', 'changed', 'members', 'scope', 'eligible', 'levels', 'ambiguous', 'outcome', 'reports']);
   const CAP = 120;
   const SEV = ['info', 'warning', 'error'];
 
@@ -21,6 +21,9 @@
       case 'Complete': { const f = p.forcedBy; return `${e.syms.length ? sy(e.syms[0]) : ''} <span class="dim">forced by ${esc(typeof f === 'number' ? D.symName(f) : f ?? 'root')}${p.reason ? ' (' + esc(p.reason) + ')' : ''}</span>${p.ok === false ? ' <span class="bad">failed</span>' : ''}`; }
       case 'ImplicitSearch': return `${pt()}${p.result ? ' <span class="' + (p.result === 'success' ? 'ok' : 'bad') + '">' + esc(p.result) + '</span>' : ''}${e.syms.length ? ' → ' + sy(e.syms[0]) : ''}`;
       case 'Candidate': return `<span class="${p.accepted ? 'ok' : 'bad'}">${p.accepted ? '✓ accepted' : '✗ rejected'}</span> ${e.syms.length ? sy(e.syms[0]) : ''}${(() => { const h = p.ref != null ? R.typeHtml(tx(D, p.ref), 80) : null; return h ? ' ' + h : ''; })()} <span class="why">${esc(p.reason ?? p.why ?? '')}</span>`;
+      case 'Rejected': { const nm = p.ref != null ? (D.syms.get(p.ref) ? sy(p.ref) : (R.typeHtml(tx(D, p.ref), 80) || '<span class="dim">#' + p.ref + '</span>')) : (e.syms.length ? sy(e.syms[0]) : ''); return `<span class="bad">✗ rejected</span> ${nm} <span class="why">${esc(({ notEligible: 'not eligible', ambiguous: 'ambiguous' }[p.reason]) ?? p.reason ?? '')}</span>`; }
+      case 'Scope': { const names = (a) => (a || []).map((i) => (D.syms.get(i) ? sy(i) : '#' + i)).join(', ') || '∅'; return `<span class="dim">scope</span> <b>${esc(p.scope ?? '')}</b> <span class="dim">eligible</span> ${names(p.eligible)}${p.levels && p.levels.length ? ' <span class="dim">(level' + (p.levels.length > 1 ? 's ' : ' ') + esc(p.levels.join(', ')) + ')</span>' : ''}${p.result ? ' <span class="' + (p.result === 'success' ? 'ok' : 'bad') + '">' + esc(p.result) + '</span>' : ''}${p.ambiguous && p.ambiguous.length ? ' <span class="bad">ambiguous: ' + names(p.ambiguous) + '</span>' : ''}`; }
+      case 'Tentative': return `<span class="dim">tentative typing</span> <b>${esc(p.outcome ?? '')}</b>${p.reports ? ' <span class="bad">' + p.reports + ' report' + (p.reports > 1 ? 's' : '') + '</span>' : ' <span class="dim">(no reports)</span>'}`;
       case 'Report': { const sev = p.severity ?? SEV[p.level] ?? p.level; return `<span class="sev-${esc(sev)}">${esc(sev ?? '')}</span>${p.reporter ? ' <span class="dim">(' + esc(p.reporter) + ')</span>' : ''}<div class="rmsg">${esc(p.msg ?? '')}</div>`; }
       case 'JvmPhase': return `<span class="dim">JVM phase</span> <b>${esc(p.name ?? D.phaseName(e.phase))}</b> <span class="dim">(synthetic step: bytecode versions of this phase)</span>`;
       case 'PhaseBegin': return `<b>${esc(p.name ?? D.phaseName(e.phase))}</b>`;
@@ -34,7 +37,7 @@
   }
 
   // events worth marking: diagnostics, failed implicit searches, rejected candidates, failed completions, aborted typings
-  R.isProblem = (e) => { const p = e.payload || {}; return e.kind === 'Report' || (e.kind === 'ImplicitSearch' && p.result && p.result !== 'success') || (e.kind === 'Candidate' && p.accepted === false) || (e.kind === 'Complete' && p.ok === false) || (e.kind === 'Typed' && p.aborted === true); };
+  R.isProblem = (e) => { const p = e.payload || {}; return e.kind === 'Report' || (e.kind === 'ImplicitSearch' && p.result && p.result !== 'success') || (e.kind === 'Candidate' && p.accepted === false) || e.kind === 'Rejected' || (e.kind === 'Complete' && p.ok === false) || (e.kind === 'Typed' && p.aborted === true); };
   const visKids = (D, seq) => { const k = D.evChildren.get(seq) || []; return R.ST.showRetyped ? k : k.filter((x) => x.kind !== 'Retyped'); };
 
   function row(e, cursorPath, depth) {
@@ -121,7 +124,7 @@
     }
     let { roots, title, tabs } = selectedRoots(D, v);
     if (tabs) {
-      tb.innerHTML = `<button class="${tabs.tab === 'used' ? 'on' : ''}" data-tab="used">used here (${tabs.used})</button><button class="${tabs.tab === 'defined' ? 'on' : ''}" data-tab="defined">defined (${tabs.defd})</button>`;
+      tb.innerHTML = `<button class="${tabs.tab === 'used' ? 'on' : ''}" data-tab="used" title="events at this use of the symbol: on this node and on its ancestors">used here (${tabs.used})</button><button class="${tabs.tab === 'defined' ? 'on' : ''}" data-tab="defined">defined (${tabs.defd})</button>`;
       tb.querySelectorAll('button').forEach((b) => (b.onclick = () => R.set({ evTab: b.dataset.tab })));
     }
     const set = new Set(roots.map((x) => x.seq));

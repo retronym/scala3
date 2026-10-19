@@ -63,7 +63,7 @@
     for (let i = 0; i < ticks; i++) sim.tick();       // computed once, then frozen
     const layoutMs = Math.round(performance.now() - t0);
     const xs = d3.extent(ns, (n) => n.x), ys = d3.extent(ns, (n) => n.y);
-    const sc = Math.min((W - 60) / (xs[1] - xs[0] || 1), (H - 60) / (ys[1] - ys[0] || 1), 1.6);
+    const sc = Math.min((W - 60) / (xs[1] - xs[0] || 1), (H - 60) / (ys[1] - ys[0] || 1), N < 40 ? 3.2 : 1.6);
     ns.forEach((n) => { n.x = W / 2 + (n.x - (xs[0] + xs[1]) / 2) * sc; n.y = H / 2 + (n.y - (ys[0] + ys[1]) / 2) * sc; });
 
     const svg = d3.select(host).append('svg').attr('viewBox', `0 0 ${W} ${H}`).attr('preserveAspectRatio', 'xMidYMid meet');
@@ -90,7 +90,7 @@
     gN.append('circle').attr('class', 'dot').attr('r', (d) => d.r).attr('fill', (d) => col(d.comm)).attr('stroke', (d) => (d.owner != null ? ownerCol(d.owner) : '#666')).attr('stroke-width', 2.2).attr('opacity', 0.22);
     gN.append('title').text((d) => `${d.name}\n${weighted ? 'incident weight ' + d.deg : d.ev + ' events'} · community ${d.comm}${d.owner != null ? ' · declared in ' + D.symName(d.owner) : ''}`);
     const labelled = new Set(ns.slice().sort((a, b) => b.count - a.count).slice(0, N > 120 ? 40 : N).map((n) => n.id));
-    const gL = gN.append('text').attr('y', (d) => -d.r - 3).attr('text-anchor', 'middle').attr('font-size', 9).text((d) => d.name.replace(/^.*\./, '').replace(/\$\d+$/, '')).attr('opacity', (d) => (labelled.has(d.id) ? 0.7 : 0));
+    const gL = gN.append('text').attr('y', (d) => -d.r - 3).attr('text-anchor', 'middle').attr('font-size', 9).text((d) => d.name.replace(/\.\*$/, '').replace(/^.*\./, '').replace(/\$\d+$/, '') || d.name).attr('opacity', (d) => (labelled.has(d.id) ? 0.7 : 0));
     const order = ns.slice().sort((a, b) => a.first - b.first);
     G = { nodes: ns, flat, nc, gE, gN, gL, order, labelled, level, layoutMs, minw, weighted, eIdx: 0, nIdx: 0, recent: [], active: [], dotSel: gN.select('.dot'), ringSel: gN.select('.ring'), nodeEls: gN.nodes(), edgeEls: gE.nodes(), byId: new Map(ns.map((n) => [n.id, n])), pathMs: Math.round(performance.now() - t0) };
     G.adj = new Map(); flat.forEach((r) => { [[r.a, r.b, 'out', r.b], [r.b, r.a, 'in', r.a]].forEach(([k, , dir, other]) => { let l = G.adj.get(k); if (!l) G.adj.set(k, (l = [])); l.push({ other, dir, kind: r.kind, w: r.w, seq: r.seq }); }); });

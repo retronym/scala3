@@ -41,7 +41,7 @@
     if (X.struct.has(v)) return X.struct.get(v); const D = R.ST.D, out = [];
     (function walk(id, into, depth) {
       const nd = D.nodes.get(id); if (!nd) return;
-      if (DEF.has(nd.kind) && nd.name) {
+      if (DEF.has(nd.kind) && nd.name && nd.name !== '_') {   // the template self ('_') is not a member
         const item = { id, kind: nd.kind, name: nd.name, sym: nd.sym, kids: [], cls: isClassLike(nd) }; into.push(item);
         if (item.cls && depth < 3) nd.children.forEach((c) => walk(c, item.kids, depth + 1)); return;
       }

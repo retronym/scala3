@@ -103,7 +103,7 @@
     const out = new Map();
     c.versions.forEach((cv) => {
       const w = S().viewOf(cv);
-      w.offs.forEach((o) => { const nd = D.nodes.get(o[0]); if (nd && nd.kind === 'MethodNode') { const key = nd.name + nd.desc, h = out.get(key) || []; const t = w.text.slice(o[1], o[2]); if (!h.length || h[h.length - 1].text !== t) h.push({ phase: cv.phase, text: t, node: o[0] }); out.set(key, h); } });
+      w.offs.forEach((o) => { const nd = D.nodes.get(o[0]); if (nd && nd.kind === 'MethodNode') { const key = nd.name + nd.desc, h = out.get(key) || []; const t = w.text.slice(o[1], o[2]), norm = t.replace(/^\s*\/\/ access flags .*$/m, ''); if (!h.length || h[h.length - 1].norm !== norm) h.push({ phase: cv.phase, text: t, norm, node: o[0] }); /* flag-only rewrites (jvm:classfile) are not changes */ out.set(key, h); } });
     });
     c._mt = out; c._mtN = c.versions.length; return out;
   }
@@ -169,6 +169,8 @@
     const rgs = new Set(); { const r = st.range; if (r && !r.ir) { let k = 0; for (const n of r.nodes) { if (k++ > 500) break; irPresent(D, R.irFromTreeNode(n), cv).forEach((x) => rgs.add(x)); } } else if (r && r.ir && r.cls === cls) irPresent(D, [...r.nodes], cv).forEach((x) => rgs.add(x)); }
     const targets = [...sel, ...lnk, ...rgs];
     S().paint(W, clsF, targets, v.phase + ':' + cls + ':' + st.selNode + ':' + (st.range ? st.range.lo + '-' + st.range.hi + ':' + st.range.phase : ''), 'bc', 'ir:' + st.unit + ':' + cls);
+    // overlapping elided ranges of one method count once: keep the maximal ones
+    if (elided.length > 1) { const rg = (id) => (D.nodes.get(id) || {}).range, me = (id) => (D.nodes.get(id) || {}).method; elided = elided.filter((id) => { const r = rg(id); if (!r) return true; return !elided.some((o) => o !== id && me(o) === me(id) && rg(o) && rg(o)[0] <= r[0] && r[1] <= rg(o)[1] && (rg(o)[1] - rg(o)[0] > r[1] - r[0] || (rg(o)[1] - rg(o)[0] === r[1] - r[0] && o < id))); }); }
     // header
     const chips = (changedHere ? (cnt.rewrite ? `<span class="chip2 cs" title="Ranges whose instruction text changed in this step">${cnt.rewrite} rewritten</span>` : '') + (cnt['inlined-from'] ? `<span class="chip2 ci" title="Instructions copied in by the inliner">${cnt['inlined-from']} inlined</span>` : '') + (elided.length ? `<span class="chip2 cm" title="Ranges none of whose instructions survived: listed below, struck through">${elided.length} elided</span>` : '') + (() => { const cl = R.closureCounts(cls, v.phase, elided); return (cl.rewritten ? `<span class="chip2 ci" title="INVOKEDYNAMIC closure call replaced by a direct call whose body was inlined (inlined-from derives of a lambda implementation method)">${cl.rewritten} closure invocation${cl.rewritten > 1 ? 's' : ''} rewritten</span>` : '') + (cl.dead ? `<span class="chip2 cm" title="Closure allocations whose result was only POPped, removed here">${cl.dead} dead allocation${cl.dead > 1 ? 's' : ''} removed</span>` : ''); })() + (cnt.copy ? `<span class="chip2 cc" title="Ranges unchanged in a changed method">${cnt.copy} unchanged ranges</span>` : '') : '') + (v.phase === D.irGenPhase ? '<span class="dim"> straight from the code generator</span>' : '');
     const note = !changedHere ? `<div class="banner">${esc(cls)} was not changed by <b>${esc(R.verName(v))}</b>; showing its text from <b>${esc(R.verName({ irPseudo: true, phase: cv.phase }))}</b>.</div>` : '';
@@ -179,7 +181,7 @@
     // elided ranges, struck through (text from the class version before the step)
     const rl = $('removed');
     if (elided.length && pcv) {
-      rl.hidden = false; const causes = elided.map((id) => R.elisionCause(id)).filter(Boolean), kinds = new Map(); causes.forEach((c) => kinds.set(c.kind, (kinds.get(c.kind) || 0) + 1)); const dead = (kinds.get('dead-closure') || 0) + (kinds.get('dead-allocation') || 0); $('remsum').textContent = `elided in ${R.verName(v)} (${elided.length})` + (dead ? ` · ${dead} dead closure allocation${dead > 1 ? 's' : ''}` : '') + (causes[0] ? ' — ' + causes[0].text : '');
+      rl.hidden = false; const causes = elided.map((id) => R.elisionCause(id)).filter(Boolean), kinds = new Map(); causes.forEach((c) => kinds.set(c.kind, (kinds.get(c.kind) || 0) + 1)); const dead = (kinds.get('dead-closure') || 0) + (kinds.get('dead-allocation') || 0); $('remsum').textContent = `elided in ${R.verName(v)} (${elided.length})` + (dead ? ` · ${dead} dead closure allocation${dead > 1 ? 's' : ''}` : '') + (causes.length === 1 ? ' — ' + causes[0].text : ' (causes under each range)');
       if (rl.open) $('remlist').innerHTML = elided.slice(0, 200).map((id) => { const nd = D.nodes.get(id), m = nd && D.nodes.get(nd.method); const cz = R.elisionCause(id); return `<pre class="old"><span class="dim">${esc(m ? m.name : '')} ${nd && nd.range ? nd.range[0] + '–' + nd.range[1] : ''}</span> <s>${esc(rangeText(pcv, id, 200) || '(instructions of the previous text)')}</s></pre>${cz ? causeHtml(cz) : ''}`; }).join('');
     }
     renderMethodPanel(v, cls, cv, hows);
@@ -220,7 +222,7 @@
     const nameOf = (p) => R.verName({ irPseudo: true, phase: p });
     const dis = (b) => (b ? ' disabled' : '');
     const nextE = hist[idx + 1], pe = idx > 0 ? hist[idx - 1] : null;
-    let h = `<div class="mp-bar"><select id="mpsel" aria-label="method">${opts}</select><button id="mpgraph" title="open the method's control-flow graph in a lightbox (g)">▣ graph</button><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀ previous change</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">next change ▶</button><span class="dim">step ${Math.max(0, idx)}/${hist.length - 1}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
+    let h = `<div class="mp-bar"><select id="mpsel" aria-label="method">${opts}</select><button id="mpgraph" title="open the method's control-flow graph in a lightbox (g)">▣ graph</button><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀ previous change</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">next change ▶</button><span class="dim">step ${Math.max(0, idx) + 1}/${hist.length}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
     if (idx > 0) {
       const a = hist[idx - 1].text.replace(/\n$/, ''), b = curE.text.replace(/\n$/, '');
       h += `<div class="dim">${atThis ? `<b>${esc(nameOf(v.phase))}</b> changed this method:` : `last change was <b>${esc(nameOf(curE.phase))}</b> (not changed by ${esc(nameOf(v.phase))}):`} diff from ${esc(nameOf(hist[idx - 1].phase))}</div><div class="df">${diffHtml(diffLines(a, b))}</div>`;
@@ -233,7 +235,7 @@
     st.irMethod = key;
     $('mpsel').onchange = (ev) => R.set({ irMethod: ev.target.value, _mExplicit: true });
     $('mpgraph').onclick = () => R.cfgOpen && R.cfgOpen(cls, key, v.phase);
-    const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) R.set({ verIdx: k }); };
+    const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) R.setPhase(k); };
     $('mpprev').onclick = () => go(hist[idx - 1]); $('mpnext').onclick = () => nextE && go(nextE);
   }
 
@@ -261,7 +263,7 @@
   function wire() {
     $('splitbc').onchange = (ev) => {
       const st = R.ST; st.splitBc = ev.target.checked;
-      if (st.splitBc && st.D) { const vs = R.vers(); let k = -1; vs.forEach((v, i) => { if (!v.irPseudo) k = i; }); if (k >= 0) { R.setPhase(k); return; } }   // the final tree phase
+      if (st.splitBc && st.D && R.ver() && R.ver().irPseudo) { const vs = R.vers(); let k = -1; vs.forEach((v, i) => { if (!v.irPseudo) k = i; }); if (k >= 0) { R.setPhase(k); return; } }   // from a bytecode phase to the final tree phase; a tree phase stays where it is
       R.render();
     };
     // hover linking across the two panes (and in IR mode, nothing extra: the scrubber shows the tooltip)

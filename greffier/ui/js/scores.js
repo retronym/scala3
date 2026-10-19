@@ -143,20 +143,23 @@
     if (g === 'top') return R.interestingTop();
     const vs = R.versionScores();
     if (g === 'all') return vs.filter((x) => x.i > 0 && (structOf(x.v, x.sc) > 0 || x.sc.retype > 0 || (x.sc.lines || 0) > 0));
-    return R.chapters().map((c) => Object.assign({ ch: c }, vs[c.to]));
+    return R.chapters().map((c) => Object.assign({ ch: c }, vs[c.dom]));   // a page lands on the chapter's dominant phase: that is where its change is visible
   };
   // page position: chapter (or stop) index for the current version, and the stops
+  // ★ markers: the stops that actually changed something (the parser page is a stop but not a ★)
+  R.stars = () => R.interesting().filter((x) => (x.ch ? x.ch.score > 0 : true));
+  R.chapterRange = (ch) => { if (!ch || ch.from === ch.to) return ''; const vs = R.vers(); return `${R.verName(vs[ch.from])} … ${R.verName(vs[ch.to])}`; };
   R.pageInfo = () => {
-    const stops = R.interesting(), cur = R.ST.verIdx; let k = stops.findIndex((x) => x.i >= cur); if (k < 0) k = stops.length - 1;
+    const stops = R.interesting(), cur = R.ST.verIdx; let k = stops.findIndex((x) => (x.ch ? x.ch.from <= cur && cur <= x.ch.to : x.i >= cur)); if (k < 0) k = stops.length - 1;
     const ch = (R.ST.gran || 'chapters') === 'chapters' ? R.chapters() : null;
-    return { stops, k, label: ch ? 'chapter' : 'stop', name: stops[k] && (stops[k].ch ? stops[k].ch.name + ((stops[k].ch.add || stops[k].ch.del) ? ` · +${stops[k].ch.add} −${stops[k].ch.del} ${stops[k].ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].v)), top: new Set(R.interestingTop().map((x) => x.i)) };
+    return { stops, k, range: stops[k] && stops[k].ch ? R.chapterRange(stops[k].ch) : '', label: ch ? 'chapter' : 'stop', name: stops[k] && (stops[k].ch ? stops[k].ch.name + ((stops[k].ch.add || stops[k].ch.del) ? ` · +${stops[k].ch.add} −${stops[k].ch.del} ${stops[k].ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].v)), top: new Set(R.interestingTop().map((x) => x.i)) };
   };
   // ---- pager (◀ ▶ + counter + dots) shared by the explorer panel and the stack overlay ----
   const escH = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   R.pagerHtml = (info) => {
     const n = info.stops.length; if (!n) return '';
     const dots = info.stops.map((x, i) => `<button class="dot${info.top.has(x.i) ? ' star' : ''}${i === info.k ? ' cur' : ''}" data-k="${i}" title="${escH(x.ch ? x.ch.name : R.verName(x.v))}">${info.top.has(x.i) ? '★' : ''}</button>`).join('');
-    return `<div class="prow"><button class="fab" data-act="-1" title="previous ${info.label} (←)">◀</button><div class="pcount"><b>${info.label} ${info.k + 1}/${n} · ${escH(info.name || '')}</b><span>${escH(R.ST.gran === 'top' ? '★ top 5' : R.ST.gran === 'all' ? 'every change' : 'chapters')}</span></div><button class="fab" data-act="1" title="next ${info.label} (→)">▶</button></div><div class="dots">${dots}</div>`;
+    return `<div class="prow"><button class="fab" data-act="-1" title="previous ${info.label} (←)">◀</button><div class="pcount"><b>${info.label} ${info.k + 1}/${n} · ${escH(info.name || '')}</b><span>${escH(info.range || (R.ST.gran === 'top' ? '★ top 5 + bytecode' : R.ST.gran === 'all' ? 'every change' : 'chapters'))}</span></div><button class="fab" data-act="1" title="next ${info.label} (→)">▶</button></div><div class="dots">${dots}</div>`;
   };
   R.wirePager = (el, turn, go) => { el.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('button'); if (!b) return; if (b.dataset.act) turn(+b.dataset.act); else if (b.dataset.k != null) go(+b.dataset.k); }); };
   R.pageTurn = (d) => R.jumpInteresting(d);
@@ -173,7 +176,7 @@
   function renderTable() {
     const D = R.ST.D, box = $('phbody'); if (!D || $('phtab').hidden) return;
     R.computeLines(R.ST.unit);
-    const rows = R.versionScores(), top = new Set(R.interesting().map((x) => x.i)), mv = R.metricVal;
+    const rows = R.versionScores(), top = new Set(R.stars().map((x) => x.i)), mv = R.metricVal;
     const val = { pos: (r) => r.i, name: (r) => R.verName(r.v), struct: (r) => r.sc.struct, removed: (r) => r.sc.removed, retype: (r) => r.sc.retype, rebuilt: (r) => r.sc.rebuilt, lines: (r) => (r.sc.ir ? 0 : r.sc.lines || 0), instr: (r) => (r.sc.ir ? r.sc.lines || 0 : 0), metric: (r) => mv(r.sc) };
     rows.sort((a, b) => { const x = val[sortKey](a), y = val[sortKey](b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
     const max = Math.max(1, ...rows.map((r) => mv(r.sc)));
@@ -190,7 +193,7 @@
   function renderHeat() {
     const D = R.ST.D, box = $('heat'); if (!D || !D.bands.length) { box.hidden = true; return; }
     const zoomed = !!R.ST.zoomKey; box.hidden = zoomed; if (zoomed) return;
-    const W = $('bands').clientWidth || 1000, ax = R.axis(W), top = new Set(R.interesting().map((x) => x.v.phase)); R.computeLines(R.ST.unit);
+    const W = $('bands').clientWidth || 1000, ax = R.axis(W), top = new Set(R.stars().map((x) => x.v.phase)); R.computeLines(R.ST.unit);
     const vals = new Map(); R.versionScores().forEach((x) => { vals.set(x.v.irPseudo ? 'i' + x.v.phase : x.v.phase, R.metricVal(x.sc)); });
     const chs = R.chapters(), vsAll = R.vers(), curCh = chs.find((c) => c.from <= R.ST.verIdx && R.ST.verIdx <= c.to), phIdx = new Map(); vsAll.forEach((v, i) => phIdx.set(v.irPseudo ? 'i' + v.phase : v.phase, i));
     const max = Math.max(1, ...vals.values()), key = [curCh ? curCh.k : -1, R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size, R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct, R.ST.chMode, R.ST.chMetric].join('|'), chStart = new Set(R.chapters().filter((c) => c.from > 0).map((c) => { const v = R.vers()[c.from]; return v.irPseudo ? 'i' + v.phase : v.phase; }));

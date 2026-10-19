@@ -1,20 +1,20 @@
-# Guided tours (updated after the post-evaluation changes)
+# Guided tours (updated after QA round 1)
 
-Base: `http://localhost:8766/ui/index.html` (serve `local/replay/` with `python3 -m http.server 8766`). A `pname=` link now lands on that phase's **output** (cursor at its `PhaseEnd`), the address bar follows what you see (copy it any time), and pasting a link into an open page applies it without a reload. `seq=` alone shows the version visible at that seq (the previous phase's output while a phase is in progress; the banner says so); combine `pname=` and `seq=` to see a phase's tree next to an event in the middle of it. Press `?` for keys; `1`/`2`/`3`/`0` give the tree, events, graph or all views full height. Each link below was opened headless by `tours-check.mjs` and showed the named phase (all steps loaded).
+Base: `https://greffier.zaugg.id.au/` (the deployed site; unhashed `data/<name>.jsonl` names redirect to the current file) or locally `http://localhost:8766/ui/index.html` (serve `local/replay/` with `python3 -m http.server 8766`). A `pname=` link now lands on that phase's **output** (cursor at its `PhaseEnd`), the address bar follows what you see (copy it any time), and pasting a link into an open page applies it without a reload. `seq=` alone shows the version visible at that seq (the previous phase's output while a phase is in progress; the banner says so); combine `pname=` and `seq=` to see a phase's tree next to an event in the middle of it. Press `?` for keys; `1`/`2`/`3`/`0` give the tree, events, graph or all views full height. Each link below was opened headless by `tours-check.mjs` and showed the named phase (all steps loaded).
 
-Prefix for every link: `#src=data/<file>.jsonl&skip=1&collapse=1&`.
+Prefix for every link: `#src=data/<file>.jsonl&skip=1&collapse=1&` (a link without `src=` names no recording and opens the recordings panel). Pages: `→` / `←` turn pages (chapters; each lands on the chapter's dominant phase), `⇧→` small steps.
 
 ## Tour A: implicit resolution (`Givens.jsonl`)
 
 1. `pname=parser`: the parsed source text (`List(1, 2, 3).shown`, `(i: String)`, the local `given` in `pickLocal`).
 2. `pname=typer`: the typed tree: `shown[List[Int]](…)(using Show.given_Show_List[Int](using Show.given_Show_Int))` and `given_Conversion_Int_String.apply(i)`.
-3. `pname=typer&seq=334`: the typed tree with the cursor inside the nested search. Event stack: `Adapt › ImplicitSearch Show[List[Int]] › Candidate given_Show_List › Adapt › Adapt › ImplicitSearch Show[Int] › Candidate given_Show_Int`: the nested search for `using sa: Show[A]`. Select the `given_Show_List` identifier in the tree: tab **used here** shows these search events, tab **defined** its completion. (Drop `pname=` from the link to see the explicit "typer in progress, showing parser output" banner.)
+3. `pname=typer&seq=453`: the typed tree with the cursor inside the nested search. Event stack: `Candidate given_Show_List › Adapt › 399 ImplicitSearch Show[Int] › 453 Scope implicitScope eligible given_Show_Int › 454 Candidate given_Show_Int`: the nested search for `using sa: Show[A]` (at `seq=334` you see a `✗ rejected byte2Byte not eligible` event: rejected candidates are recorded, 209 of them). Select the `given_Show_List` identifier in the tree: tab **used here** shows these search events, tab **defined** its completion. (Drop `pname=` from the link to see the explicit "typer in progress, showing parser output" banner.)
 4. From step 3 press `→` a few times to watch the events that follow the search.
-5. `pname=typer&seq=363`: the `Conversion` search (358–359) and the feature warning `Report` (363); `i` is outlined. The **Reports (1)** chip in the inspector header jumps here from anywhere, and the red tick on the event axis marks it.
-6. `pname=typer&seq=414`: `pickLocal`: the stack shows `DefDef pickLocal`, the winner is the local given (`given_Show_Int.type`, no `Show.` prefix).
+5. `pname=typer&seq=582`: the `Conversion` search and the feature warning `Report` (582); `i` is outlined. The **Reports (1)** chip in the inspector header jumps here from anywhere, and the red tick on the event axis marks it.
+6. `pname=typer&seq=632`: `pickLocal`: its search is at 632–634, the winner is the local given (`given_Show_Int.type`, no `Show.` prefix); the `Rejected` events below the search name the givens that were eligible but lost.
 7. `pname=erasure`: `given_Conversion_Int_String().apply(Int.box(i)).asInstanceOf[String]`; the status line shows structural vs retyped counts, and the lineage on the node links back to the typer tree.
 
-Still breaks: why the local given beats `Show.given_Show_Int` (rejected candidates are not recorded).
+Rejected candidates are recorded and shown as `✗ rejected <given> <reason>` (and counted by “problems only”), so the question “why does the local given beat `Show.given_Show_Int`” can now be followed in the events under step 6.
 
 ## Tour B: for-comprehension desugaring and lowering (`ForDesugar.jsonl`)
 
@@ -25,15 +25,17 @@ Still breaks: why the local given beats `Show.given_Show_Int` (rejected candidat
 5. `pname=vcInlineMethods`: `ArrayOps.foreach$extension(ev$1)(…)`.
 6. `pname=erasure`: `def $anonfun(x: Int)` plus the adapting closure, `Int.box(n + 1)`; blue dotted underlines are retype-only changes, green are structural (toggle "structural only").
 7. `pname=mixin`: the version is labelled **mixin + lazyVals + memoize + nonLocalReturns + capturedVars**; `var acc` becomes `IntRef` (capturedVars).
-8. `pname=lambdaLift`: lifted `pairs$$anonfun$1` etc., `closure(acc | sum$$anonfun$1)`.
+8. `pname=lambdaLift`: lifted `pairs$$anonfun$1` etc., `closure(acc | <empty>.this.sum$$anonfun$1: …)` (the printer adds the prefix and the ascription).
 
 ## Tour C: class/trait lowering (`Mixins.jsonl`)
 
-1. `pname=typer`: traits with `super.log`, `lazy val summary`, `class Service extends Timestamped with Counting`.
+1. `pname=typer`: traits with `super.log`, `lazy val summary`, `class Service() extends Object(), Timestamped, Counting` (the printed form of `extends Timestamped with Counting`).
 2. `pname=getters`: `val prefix` becomes `def prefix`, `lazy val` becomes `lazy def`.
 3. `pname=resolveSuper`: `Timestamped$$super$log` / `Counting$$super$log` and their implementations in `Service`.
 4. `pname=erasure`: `prefix()`, `Int.box`, erased signatures.
 5. `pname=mixin`: the fused group (see label): `Service` gets the `log` forwarder, `Counting$$count`, `$init` calls and the lazy-val holder.
 6. `pname=constructors`: `Service.<init>`.
 
-Same limitation as before: no bytecode, and the five fused miniphases still share one version.
+7. `pname=genBCode&ir=1&cls=Service` (the recording has six classes of bytecode): the generated class; the method panel (`summary$lzyINIT1`) steps the optimiser, ▣ graph shows its control-flow graph with the CAS loop and the exception edge.
+
+The fused miniphases of a megaphase still share one version.

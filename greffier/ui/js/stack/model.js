@@ -9,18 +9,18 @@
   // (genBCode, then every jvm:* phase that changed that class). A version with at most 2 changed lines counts as a no-op (the shared line
   // counts of the heat strip decide, once computed) unless ST.trivialNoop is off.
   M.buildCards = function () {
-    const D = R.ST.D, vs = R.vers().filter((v) => !v.irPseudo), star = new Set(R.interesting ? R.interesting().filter((x) => !x.v.irPseudo).map((x) => x.v) : []);
+    const D = R.ST.D, vs = R.vers().filter((v) => !v.irPseudo), star = new Set(R.stars ? R.stars().filter((x) => !x.v.irPseudo).map((x) => x.v) : []);
     const lines = R.scoreState && R.scoreState.lines, trivial = R.ST.trivialNoop !== false;
     const cards = vs.map((v, i) => {
       const prev = i > 0 ? vs[i - 1] : null;
       // cheap no-op test from the header (the printed text is the same as an earlier version and nothing new); v0 data: compare text
       let noop = !!prev && (v.hdrNew != null && D.schema === 'v1' ? v.hdrNew === 0 && v.textSameAs != null : v.text === prev.text);
       if (!noop && trivial && prev && lines) { const l = lines.get(R.ST.unit + ':' + v.phase); if (l && l.add + l.del <= 2) noop = true; }
-      return { i, v, kind: 'tree', phase: v.phase, name: D.phaseName(v.phase), short: D.phaseShort(v.phase), noop, star: star.has(v), first: i === 0, prevV: prev, ready: false, add: 0, del: 0, rows: null };
+      return { i, v, kind: 'tree', phase: v.phase, name: D.phaseName(v.phase) + (i === 0 ? ' (printed tree)' : ''), short: D.phaseShort(v.phase) + (i === 0 ? ' (printed tree)' : ''), noop, star: star.has(v), first: i === 0, prevV: prev, ready: false, add: 0, del: 0, rows: null };
     });
     const cls = D.hasIR && R.curClass && R.curClass(), c = cls && D.jvmClasses.get(cls);
     if (c && c.unit === R.ST.unit) {
-      const irStar = new Set(R.interesting ? R.interesting().filter((x) => x.v.irPseudo).map((x) => x.v.phase) : []);
+      const irStar = new Set(R.stars ? R.stars().filter((x) => x.v.irPseudo).map((x) => x.v.phase) : []);
       c.versions.forEach((v, k) => {
         const nm = v.phase === D.irGenPhase ? 'genBCode (bytecode)' : D.phaseRaw(v.phase);
         cards.push({ i: cards.length, v, kind: 'ir', cls, phase: v.phase, name: nm, short: nm, noop: false, star: irStar.has(v.phase) || k === 0, first: k === 0, prevV: k > 0 ? c.versions[k - 1] : null, ready: false, add: 0, del: 0, rows: null });

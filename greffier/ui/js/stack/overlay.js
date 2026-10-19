@@ -105,7 +105,7 @@
   const stopCard = (x) => S.cards.find((c) => (x.v.irPseudo ? c.kind === 'ir' && c.phase === x.v.phase : c.v === x.v));
   function pages() {
     const stops = (R.interesting ? R.interesting() : []).map((x) => ({ x, c: stopCard(x) })).filter((p) => p.c).sort((a, b) => a.c.i - b.c.i), f = stack && stack.front, cur = f ? f.i : 0;
-    let k = stops.findIndex((p) => p.c.i >= cur); if (k < 0) k = stops.length - 1; return { stops, k };
+    const vi = f ? viewerIndex(f) : 0; let k = stops.findIndex((p) => (p.x.ch ? p.x.ch.from <= vi && vi <= p.x.ch.to : p.c.i >= cur)); if (k < 0) k = stops.length - 1; return { stops, k };
   }
   function pageTurn(d) {
     const { stops } = pages(); if (!stops.length) return; const f = stack.front, cur = f ? f.i : 0;
@@ -113,7 +113,7 @@
   }
   function renderPager() {
     const el = $('spager'); if (!el || !R.stackOpen) return; const { stops, k } = pages(); if (!el._w) { el._w = 1; R.wirePager(el, pageTurn, (i) => { const p = pages().stops[i]; if (p) stack.flyTo(p.c); }); }
-    const top = new Set(R.interestingTop().map((x) => x.i)), info = { stops: stops.map((p) => p.x), k, label: (R.ST.gran || 'chapters') === 'chapters' ? 'chapter' : 'stop', name: stops[k] && (stops[k].x.ch ? stops[k].x.ch.name + ((stops[k].x.ch.add || stops[k].x.ch.del) ? ` · +${stops[k].x.ch.add} −${stops[k].x.ch.del} ${stops[k].x.ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].x.v)), top };
+    const top = new Set(R.interestingTop().map((x) => x.i)), info = { range: stops[k] && stops[k].x.ch ? R.chapterRange(stops[k].x.ch) : '', stops: stops.map((p) => p.x), k, label: (R.ST.gran || 'chapters') === 'chapters' ? 'chapter' : 'stop', name: stops[k] && (stops[k].x.ch ? stops[k].x.ch.name + ((stops[k].x.ch.add || stops[k].x.ch.del) ? ` · +${stops[k].x.ch.add} −${stops[k].x.ch.del} ${stops[k].x.ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].x.v)), top };
     const h = R.pagerHtml(info); if (el._h !== h) { el._h = h; el.innerHTML = h; }
   }
   // ---- line range: viewer state (R.ST.range) + side panel with the per-phase rows ----

@@ -32,7 +32,7 @@
     const open = (it) => { cur = { id: blocks.length, items: [], labels: [], insns: 0, lo: it.abs, hi: it.end, firstLine: it.i, lastLine: it.i }; blocks.push(cur); };
     for (let k = Math.max(0, first); k < items.length; k++) {
       const it = items[k]; if (it.kind === 'tcb') continue;
-      if (!cur || brk || (it.kind === 'label' && leaders.has(it.label) && cur.insns > 0)) { open(it); brk = false; }
+      if (!cur || (brk && it.kind !== 'case') || (it.kind === 'label' && leaders.has(it.label) && cur.insns > 0)) { open(it); brk = false; }
       cur.items.push(it); cur.hi = it.end; cur.lastLine = it.i; if (it.kind === 'label') cur.labels.push(it.label);
       if (it.kind === 'insn') { cur.insns++; cur.last = it; if (CONDS.has(it.op) || it.op === 'GOTO' || it.op === 'JSR' || isSwitch(it.op) || it.op === 'ATHROW' || isRet(it.op)) brk = true; }
       if (it.kind === 'case' && brk) { /* switch case lines belong to the switch block */ }
@@ -78,7 +78,7 @@
   }
   function historyOf(cls, key) {
     const D = R.ST.D, c = D.jvmClasses.get(cls), out = []; let last = null;
-    c.versions.forEach((cv) => { const W = S().viewOf(cv); for (const id of cv.ids) { const n = D.nodes.get(id); if (n && n.kind === 'MethodNode' && n.name + n.desc === key) { const o = W.byId.get(id); if (o) { const t = W.text.slice(o[1], o[2]); if (t !== last) { out.push(cv.phase); last = t; } } } } });
+    c.versions.forEach((cv) => { const W = S().viewOf(cv); for (const id of cv.ids) { const n = D.nodes.get(id); if (n && n.kind === 'MethodNode' && n.name + n.desc === key) { const o = W.byId.get(id); if (o) { const t = W.text.slice(o[1], o[2]).replace(/^\s*\/\/ access flags .*$/m, ''); if (t !== last) { out.push(cv.phase); last = t; } } } } });
     return out;
   }
   R.cfgOpen = function (cls, key, phase) {
@@ -140,6 +140,7 @@
     if (!C.open || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return; const k = e.key;
     if (k === 'Escape') R.cfgClose(); else if (k === '[') step(-1); else if (k === ']') step(1); else if (k === 'f') fit(true); else if (k === 'g') R.cfgClose();
     else if (k === 'Tab') { const n = C.model.blocks.length; C.focus = C.focus == null ? 0 : (C.focus + (e.shiftKey ? n - 1 : 1)) % n; focusMark(true); }
+    else if ((k === 'ArrowLeft' || k === 'ArrowRight') && C.focus == null) { R.pageTurn(k === 'ArrowRight' ? 1 : -1); }   // ← → turn pages until a block has focus (Tab / click), then they move the focus
     else if (/^Arrow/.test(k)) { moveFocus(k); }
     else if (k === 'Enter' && C.focus != null) { const el = $('cfgcanvas').querySelector(`.cfgb[data-b="${C.focus}"] .n`); if (el) R.set({ selNode: +el.dataset.n }); }
     else return; e.preventDefault(); e.stopPropagation();
@@ -158,7 +159,7 @@
   function apply() { $('cfgcanvas').style.transform = `translate(${C.x}px,${C.y}px) scale(${C.k})`; drawMini(); }
   function fit(anim) {
     const g = $('cfggraph').getBoundingClientRect(), b = C.bbox; if (!b || !g.width) return; const k = Math.min(1, (g.width - 40) / b.w, (g.height - 40) / b.h);
-    const cv = $('cfgcanvas'); cv.style.transition = anim ? 'transform .3s ease' : 'none'; C.k = Math.max(0.08, k); C.x = (g.width - b.w * C.k) / 2 - b.x * C.k; C.y = Math.max(20, (g.height - b.h * C.k) / 2) - b.y * C.k + (g.height - b.h * C.k < 40 ? 0 : 0); apply(); setTimeout(() => { cv.style.transition = ''; }, 320);
+    const cv = $('cfgcanvas'); cv.style.transition = anim ? 'transform .3s ease' : 'none'; C.k = Math.max(0.3, k); /* big graphs start at a readable zoom and are panned / zoomed from the minimap */ C.x = (g.width - b.w * C.k) / 2 - b.x * C.k; C.y = Math.max(20, (g.height - b.h * C.k) / 2) - b.y * C.k + (g.height - b.h * C.k < 40 ? 0 : 0); apply(); setTimeout(() => { cv.style.transition = ''; }, 320);
   }
   function drawMini() {
     const cv = $('cfgmini'), b = C.bbox, g = $('cfggraph').getBoundingClientRect(); if (!b || !C.pos) return;
