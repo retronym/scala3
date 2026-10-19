@@ -4,7 +4,7 @@
 // the viewer's options, rows come lazily from the shared diff, text is windowed so 5,000-line versions stay cheap.
 (function (R) {
   const M = (R.stk = R.stk || {}), { nodeAt, lineOf, trace } = M;
-  const LH = 16, NEAR = 7, KMAX = 30, GAP = 95, RISE = 13, P = 1000, W_NOOP = 0.22, W_STAR = 1.4, HDR = 22, BAR = 9, CW = 7.4;
+  const LH = 18, NEAR = 7, KMAX = 30, GAP = 95, RISE = 13, P = 1000, W_NOOP = 0.16, W_STAR = 1.4, HDR = 28, BAR = 9, CW = 7.4, PADT = 16, PADB = 16;
   const WIN = 24;               // rows built above and below the visible window
   const ROW_BUDGET = 5;         // ms per frame spent on computing rows of cards that come near
   const HOW_COL = (M.HOW_COL = { born: '#5fd38d', same: '#6f8196', copy: '#6f8196', edit: '#82aaff', retype: '#c792ea', rewrite: '#ffb454', gone: '#ff5370' });
@@ -22,9 +22,18 @@
     return out + esc(line.slice(last));
   }
 
+  // bytecode: opcodes coloured, labels / descriptors / directives / comments dim, operands plain
+  const BCT = /(\/\/.*$)|\b(LINENUMBER|LOCALVARIABLE|MAXSTACK|MAXLOCALS|FRAME|TRYCATCHBLOCK)\b|(\bL\d+\b)|(\b[A-Z][A-Z0-9_]{2,}\b)|(\(?\[*L[\w/$]+;\)?|\([\w/$;\[]*\)[\w/$;\[]+)/g;
+  function tintBc(line) {
+    let out = '', last = 0, m; BCT.lastIndex = 0;
+    while ((m = BCT.exec(line))) { out += esc(line.slice(last, m.index)); last = BCT.lastIndex; const e = esc(m[0]); out += m[4] ? `<i class=op>${e}</i>` : `<i class=dm>${e}</i>`; }
+    return out + esc(line.slice(last));
+  }
+
   class Stack {
     constructor(el, opts) {
-      this.el = el; this.opts = opts; this.svg = el.querySelector('#thread'); this.active = false;
+      this.el = el; this.opts = opts; this.svg = el.querySelector('#thread'); this.active = false; this.marks = []; this.groups = [];
+      this.lbl = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.thr = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.svg.append(this.lbl, this.thr);
       this.u = 0; this.target = 0; this.lastWheel = 0; this.hover = null; this.tr = null;
       this.frames = []; this.works = []; this.textBuilt = 0; this.all = []; this.list = [];
       this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {});
@@ -32,6 +41,12 @@
       el.addEventListener('pointermove', (e) => this.pmove(e));
       el.addEventListener('pointerleave', () => { this.hover = null; });
       el.addEventListener('click', (e) => this.click(e));
+      el.addEventListener('pointerdown', (e) => {   // drag the scrollbar thumb of the front card
+        const sb = e.target.closest && e.target.closest('.sb'), card = sb && sb.closest('.card'), c = card && card._card; if (!c || c !== this.front || !c.rows) return;
+        e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); const tr = this.bodyH - 8, n = Math.max(1, c.rows.length);
+        const sy = e.clientY, top0 = c.top; const mv = (m) => { c.top = Math.max(0, Math.min(this.maxTop(c), top0 + ((m.clientY - sy) / tr) * n * (card.getBoundingClientRect().height ? this.H / card.getBoundingClientRect().height : 1))); c.phDirty = true; this.placeText(c); this.syncTops(); this.kick(); };
+        const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); }; el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
+      });
       addEventListener('keydown', (e) => this.active && this.key(e));
       addEventListener('resize', () => { if (this.active) { this.layout(); this.kick(); } });
       this.raf = null; this.tPrev = performance.now();
@@ -53,45 +68,51 @@
       this.list = this.all.slice(); let s = 0;
       for (let k = this.list.length - 1; k >= 0; k--) { const c = this.list[k]; c.s = s; s += c.noop ? W_NOOP : c.star ? W_STAR : 1; }
       this.sMax = this.list.length ? this.list[0].s : 0; this.opts.onList && this.opts.onList(this.list);
+      this.groups = []; for (let k = 0; k < this.list.length; k++) { if (!this.list[k].noop) continue; let e = k; while (e + 1 < this.list.length && this.list[e + 1].noop) e++; this.groups.push({ anchor: this.list[k], n: e - k + 1 }); k = e; }
     }
     layout() {
       const r = this.el.getBoundingClientRect(); this.Sw = r.width; this.Sh = r.height;
       const left = this.Sw >= 1200 ? 300 : 0, side = 96;
       this.W = Math.max(300, Math.min(1040, this.Sw - left - side - 48)); this.L = Math.round(left + (this.Sw - left - side - this.W) / 2);
-      this.T = Math.round(this.Sh * 0.34); this.H = this.Sh - this.T - 14; this.bodyH = this.H - HDR - BAR; this.VR = Math.max(4, Math.floor(this.bodyH / LH));
+      this.T = Math.round(this.Sh * 0.34); this.H = this.Sh - this.T - 14; this.bodyH = this.H - HDR - BAR; this.VR = Math.max(4, Math.floor((this.bodyH - PADT - PADB) / LH));
       this.ox = this.L + this.W / 2; this.oy = Math.round(this.Sh * 0.015);
       this.el.style.perspective = P + 'px'; this.el.style.perspectiveOrigin = `${this.ox}px ${this.oy}px`; this.svg.setAttribute('viewBox', `0 0 ${this.Sw} ${this.Sh}`);
       this.all.forEach((c) => { if (c.el) this.size(c); c.phDirty = true; });
     }
     size(c) {
-      const st = c.el.style; st.left = this.L + 'px'; st.top = this.T + 'px'; st.width = this.W + 'px'; st.height = (c.noop ? HDR : this.H) + 'px';
+      const st = c.el.style; st.left = this.L + 'px'; st.top = this.T + 'px'; st.width = this.W + 'px'; st.height = this.H + 'px';  // slivers get their height from CSS (.card.noop:not(.front))
       if (c.ph) { c.ph.width = Math.round(this.W / 2); c.ph.height = Math.round(this.bodyH / 2); }
       if (c.bar) { c.bar.width = this.W; c.bar.height = BAR; if (c.ready) this.drawBar(c); }
     }
 
     // ---- card DOM ----
-    hdrCount(c) { return !c.ready ? '…' : c.noop ? 'no change' : c.i === 0 ? c.lines.length + ' lines' : `<b class=a>+${c.add}</b> <b class=d>−${c.del}</b>`; }
+    hdrCount(c) { return !c.ready ? '…' : c.noop ? 'no change' : c.first ? (c.kind === 'ir' ? c.ops + ' instructions' : c.lines.length + ' lines') : `<b class=a>+${c.add}</b> <b class=d>−${c.del}</b>${c.kind === 'ir' ? ' <span class=u>instr</span>' : ''}`; }
     make(c) {
       const el = document.createElement('div');
-      el.className = 'card' + (c.noop ? ' noop' : '') + (c.star ? ' star' : '');
+      el.className = 'card' + (c.noop ? ' noop' : '') + (c.star ? ' star' : '') + (c.kind === 'ir' ? ' ir' : '');
       el.innerHTML = `<div class=hdr><span class=ix>${c.i + 1}</span><span class=ph title="${esc(c.name)}">${c.star ? '★ ' : ''}${esc(c.short)}</span><span class=tr></span><span class=ct>${c.noop ? 'no change' : '…'}</span></div>`
-        + (c.noop ? '' : `<canvas class=bar></canvas><div class=body><canvas class=phc></canvas><div class=txt></div></div>`) + `<div class=dim></div>`;
-      c.el = el; c.dim = el.querySelector('.dim'); c.trEl = el.querySelector('.tr'); c.ctEl = el.querySelector('.ct'); c.bar = el.querySelector('.bar'); c.ph = el.querySelector('.phc'); c.txtEl = el.querySelector('.txt'); el._card = c;
+        + `<canvas class=bar></canvas><div class=body><canvas class=phc></canvas><div class=txt></div><div class=sb><i></i></div></div>` + `<div class=dim></div>`;
+      c.el = el; c.dim = el.querySelector('.dim'); c.trEl = el.querySelector('.tr'); c.ctEl = el.querySelector('.ct'); c.bar = el.querySelector('.bar'); c.ph = el.querySelector('.phc'); c.txtEl = el.querySelector('.txt'); c.sbEl = el.querySelector('.sb i'); c.hx = c.hx || 0; el._card = c;
       this.el.insertBefore(el, this.svg); this.size(c); if (c.ready) this.rowsReady(c);
     }
     rowsReady(c) { if (c.ctEl) c.ctEl.innerHTML = this.hdrCount(c); if (c.bar) this.drawBar(c); this.paintTrace(c); c.phDirty = true; }
     ensure(c) { if (c.ready) return true; const t0 = performance.now(); M.ensureRows(c); this.rowMs = performance.now() - t0; if (c.el) this.rowsReady(c); return true; }
     buildText(c) {
-      if (c.noop || !c.ready) return; const t0 = performance.now();
+      if (!c.ready) return; const t0 = performance.now();
       const n = c.rows.length, a = Math.max(0, Math.floor(c.top) - WIN), b = Math.min(n, Math.floor(c.top) + this.VR + WIN);
-      let h = ''; for (let k = a; k < b; k++) { const r = c.rows[k]; h += `<div class="r ${r.k}${r.w ? ' w' : ''}" data-r="${k}"><span class=ln>${r.nl >= 0 ? r.nl + 1 : ''}</span>${tint(r.t) || ' '}</div>`; }
+      let h = ''; for (let k = a; k < b; k++) { const r = c.rows[k]; h += `<div class="r ${r.k}${r.w ? ' w' : ''}${r.mu ? ' mu' : ''}" data-r="${k}"><span class=ln>${r.nl >= 0 ? r.nl + 1 : ''}</span>${(c.kind === 'ir' ? tintBc : tint)(r.t) || ' '}</div>`; }
       c.txtEl.innerHTML = h; c.txt = true; c.win = [a, b]; c.txtEl.style.paddingTop = a * LH + 'px'; this.textBuilt++;
       this.paintTrace(c); this.placeText(c); this.lastBuildMs = performance.now() - t0;
     }
     dropText(c) { if (!c.txt) return; c.txtEl.innerHTML = ''; c.txt = false; c.win = null; }
     placeText(c) {
-      if (!c.txtEl) return; c.txtEl.style.transform = `translate3d(0,${-c.top * LH}px,0)`;
+      if (!c.txtEl) return; c.txtEl.style.transform = `translate3d(${-(c.hx || 0)}px,${PADT - c.top * LH}px,0)`; this.thumb(c);
       if (c.txt && c.win && (c.top < c.win[0] + 4 || c.top + this.VR > c.win[1] - 4) && !(c.win[0] === 0 && c.top < 4) && !(c.win[1] >= c.rows.length)) { c.winDirty = true; }
+    }
+    // scrollbar thumb: position of the visible rows within the card; thumbs of all cards move together (syncTops links the scroll positions)
+    thumb(c) {
+      if (!c.sbEl || !c.rows) return; const n = Math.max(1, c.rows.length), h = Math.min(1, this.VR / n), tr = this.bodyH - 8;
+      c.sbEl.style.height = Math.max(18, h * tr) + 'px'; c.sbEl.style.transform = `translateY(${Math.min(1 - h, c.top / n) * tr}px)`; c.sbEl.parentNode.style.display = h >= 1 ? 'none' : '';
     }
     drawBar(c) {
       const g = c.bar.getContext('2d'), n = c.rows.length, w = c.bar.width;
@@ -103,7 +124,7 @@
       const g = c.ph.getContext('2d'), sx = c.ph.width / this.W, sy = c.ph.height / this.bodyH, t = this.tr && this.tr.per[c.i];
       g.clearRect(0, 0, c.ph.width, c.ph.height); const r0 = Math.floor(c.top), off = (c.top - r0) * LH;
       for (let k = 0; k <= this.VR + 1; k++) {
-        const r = c.rows[r0 + k]; if (!r) break; const y = (k * LH - off) * sy;
+        const r = c.rows[r0 + k]; if (!r) break; const y = (k * LH - off + PADT) * sy;
         if (r.k !== 's' && !r.w) { g.fillStyle = r.k === 'a' ? 'rgba(76,195,138,0.22)' : 'rgba(255,92,122,0.18)'; g.fillRect(0, y, c.ph.width, LH * sy); }
         if (t && t.rows && t.rows.has(r0 + k)) { g.fillStyle = 'rgba(255,214,102,0.30)'; g.fillRect(0, y, c.ph.width, LH * sy); }
         const ind = r.t.length - r.t.trimStart().length, len = r.t.trim().length; if (!len) continue;
@@ -129,7 +150,7 @@
     clearTrace() { if (this.tr) this.setTrace(null); }
     maxTop(c) { return Math.max(0, c.rows.length - this.VR + 2); }
     syncTops() {
-      const f = this.front; if (!f || f.noop || !f.ready) return;
+      const f = this.front; if (!f || !f.ready) return;
       const ft = this.tr && this.tr.per[f.i], anchor = ft && ft.row >= 0 ? ft.row - f.top : null;
       this.all.forEach((c) => {
         if (c === f || c.noop || !c.ready) return; const t = this.tr && this.tr.per[c.i];
@@ -137,9 +158,9 @@
         top = Math.max(0, Math.min(this.maxTop(c), top)); if (top !== c.top) { c.top = top; c.phDirty = true; this.placeText(c); }
       });
     }
-    scrollFront(dr) { const f = this.front; if (!f || f.noop || !f.ready) return; f.top = Math.max(0, Math.min(this.maxTop(f), f.top + dr)); f.phDirty = true; this.placeText(f); this.syncTops(); this.kick(); }
+    scrollFront(dr) { const f = this.front; if (!f || !f.ready) return; f.top = Math.max(0, Math.min(this.maxTop(f), f.top + dr)); f.phDirty = true; this.placeText(f); this.syncTops(); this.kick(); }
     revealTraceRow() {
-      const f = this.front, t = this.tr && f && this.tr.per[f.i]; if (!t || t.row < 0 || f.noop || !f.ready) return;
+      const f = this.front, t = this.tr && f && this.tr.per[f.i]; if (!t || t.row < 0 || !f.ready) return;
       if (t.row < f.top + 2 || t.row > f.top + this.VR - 3) { f.top = Math.max(0, Math.min(this.maxTop(f), t.row - Math.floor(this.VR * 0.4))); f.phDirty = true; this.placeText(f); }
       this.syncTops();
     }
@@ -147,6 +168,7 @@
     // ---- input ----
     wheel(e) {
       e.preventDefault(); const d = (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1) * (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX);
+      const f = this.front; if (f && f.ready && Math.abs(e.deltaX) > Math.abs(e.deltaY)) { f.hx = Math.max(0, Math.min(3000, (f.hx || 0) + e.deltaX)); this.placeText(f); return; }
       if (e.altKey || e.shiftKey) { this.scrollFront(d / LH); return; }
       this.target = Math.max(0, Math.min(this.sMax, this.target + d / 110)); this.lastWheel = performance.now(); this.kick();
     }
@@ -192,7 +214,7 @@
         if (!c.el) this.make(c);
         if (c.el.style.display === 'none') c.el.style.display = '';
         if (!c.ready && !c.noop && performance.now() - tStart < ROW_BUDGET) this.ensure(c);
-        if (!c.ready && !c.noop) pending = true;
+        if (!c.ready && (!c.noop || c === front)) pending = true;
         const hvT = c === this.hover ? 1 : 0; if (c.hv !== hvT) { c.hv = reduced ? hvT : c.hv + (hvT - c.hv) * Math.min(1, dt * 14); if (Math.abs(c.hv - hvT) < 0.01) c.hv = hvT; else moving = true; }
         const ke = k - c.hv * 0.45; let z, y, op = 1;
         if (ke >= 0) { z = -ke * GAP; y = -ke * RISE - c.hv * 26; op = k > KMAX - 6 ? Math.max(0, (KMAX - k) / 6) : 1; } else { z = -ke * GAP * 3; y = -ke * 40; op = Math.max(0, 1 + ke * 4.5); }
@@ -200,7 +222,7 @@
         st.transform = `translate3d(0,${y.toFixed(1)}px,${z.toFixed(1)}px)`; st.opacity = op.toFixed(3); st.zIndex = String(10000 - Math.round(k * 100)); st.pointerEvents = k < -0.3 ? 'none' : '';
         c.el.classList.toggle('front', c === front);
         c.dim.style.opacity = (ke <= 0 ? 0 : Math.min(0.78, ke * (c.star ? 0.045 : 0.075)) * (1 - c.hv * 0.85)).toFixed(3);
-        if (!c.noop && c.ready) {
+        if ((!c.noop || c === front) && c.ready) {
           const ak = Math.abs(k);
           if (ak < NEAR + 1 && !c.txt && built < 2) { this.buildText(c); built++; } else if (c.txt && ak > NEAR + 4) this.dropText(c);
           if (c.txt && c.winDirty) { c.winDirty = false; this.buildText(c); built++; }
@@ -209,21 +231,21 @@
         }
       }
       if (built || pending) moving = true;
-      this.drawThread(); this.opts.onFrame && this.opts.onFrame(this.u, this.sMax);
+      this.drawThread(); this.drawLabels(); this.opts.onFrame && this.opts.onFrame(this.u, this.sMax);
       this.lastFrameWork = performance.now() - tStart; this.works.push(this.lastFrameWork); if (this.works.length > 600) this.works.shift();
       if (moving || this.all.some((c) => c.el && c.el.style.display !== 'none' && !c.noop && c.ready && !c.txt && Math.abs(c.s - this.u) < NEAR + 1)) this.kick();
     }
     nearest(u) { let best = null, bd = Infinity; for (const c of this.list) { const d = Math.abs(c.s - u); if (d < bd) { bd = d; best = c; } } return best; }
     proj(c, px, py) { const X = this.L + px, Y = this.T + c.y + py, f = P / (P - c.z); return [this.ox + (X - this.ox) * f, this.oy + (Y - this.oy) * f]; }
     drawThread() {
-      if (!this.tr) { if (this.svg.firstChild) this.svg.innerHTML = ''; return; }
+      if (!this.tr) { if (this.thr.firstChild) this.thr.innerHTML = ''; return; }
       const pts = [], cards = this.list.filter((c) => c.el && c.el.style.display !== 'none' && c.ready && c.s - this.u > -0.35).sort((a, b) => a.s - b.s); let prev = null;
       for (const c of cards) {
         const t = this.tr.per[c.i]; if (!t || !t.how) { prev = null; continue; }
         const op = +c.el.style.opacity, ty = c.noop ? (c === this.front ? HDR / 2 : 2) : HDR + BAR / 2;
         if (t.how === 'gone') { const [sx, sy] = this.proj(c, prev ? prev.x : this.W / 2, ty); pts.push({ sx, sy, how: 'gone', op, c }); prev = null; continue; }
         const n = c.rows.length || 1, x = c.noop ? (prev ? prev.x : this.W / 2) : ((t.row + 0.5) / n) * this.W, [sx, sy] = this.proj(c, x, ty);
-        if (c === this.front && !c.noop) { const ry = HDR + BAR + (t.row - c.top) * LH + LH / 2; if (ry > HDR + BAR && ry < this.H) { const [ax, ay] = this.proj(c, 40, ry); pts.push({ sx: ax, sy: ay, how: 'anchor', op, c }); } }
+        if (c === this.front && c.ready) { const ry = HDR + BAR + PADT + (t.row - c.top) * LH + LH / 2; if (ry > HDR + BAR && ry < this.H - PADB) { const [ax, ay] = this.proj(c, 40, ry); pts.push({ sx: ax, sy: ay, how: 'anchor', op, c }); } }
         pts.push({ sx, sy, how: t.how, op, c, x }); prev = { x };
       }
       let h = '';
@@ -237,7 +259,25 @@
         if (p.how === 'gone') h += `<path d="M${p.sx - 5},${p.sy - 5}L${p.sx + 5},${p.sy + 5}M${p.sx + 5},${p.sy - 5}L${p.sx - 5},${p.sy + 5}" stroke="${HOW_COL.gone}" stroke-width="2.5" opacity="${o}"/>`;
         else h += `<circle cx="${p.sx.toFixed(1)}" cy="${p.sy.toFixed(1)}" r="${r}" fill="${p.how === 'anchor' ? '#ffd666' : HOW_COL[p.how]}" opacity="${o}" ${p.how === 'born' ? 'stroke="#fff" stroke-width="1.2"' : ''}/>`;
       }
-      this.svg.innerHTML = h;
+      this.thr.innerHTML = h;
+    }
+    // labels: one thin label per run of no-change phases, and the marks set by the overlay (e.g. where the bytecode segment starts)
+    drawLabels() {
+      let h = '';
+      for (const g of this.groups) {
+        const c = g.anchor; if (g.n < 2 || !c.el || c.el.style.display === 'none' || c === this.front || c.s - this.u < -0.3) continue;
+        const [sx, sy] = this.proj(c, 6, -2); h += `<text x="${sx.toFixed(1)}" y="${(sy - 3).toFixed(1)}" fill="#7f8ba0" font-size="9" opacity="${(0.8 * +c.el.style.opacity).toFixed(2)}">${g.n} phase${g.n > 1 ? 's' : ''}, no change</text>`;
+      }
+      for (const m of this.marks) {
+        const c = m.card; if (!c.el || c.el.style.display === 'none' || c.s - this.u < -0.3) continue;
+        const [sx, sy] = this.proj(c, this.W - 8, -2); h += `<text x="${sx.toFixed(1)}" y="${(sy - 4).toFixed(1)}" text-anchor="end" fill="#b197fc" font-size="10" font-weight="600" opacity="${(0.95 * +c.el.style.opacity).toFixed(2)}">${m.text}</text>`;
+      }
+      this.lbl.innerHTML = h;
+    }
+    // flags changed underneath (trivial no-op option, line counts arriving): recompute the layout in place, keep the front card
+    relayout(flags) {
+      const f = this.front; this.all.forEach((c, i) => { if (flags && flags[i] != null && flags[i] !== c.noop) { c.noop = flags[i]; c.ready = false; c.rows = null; if (c.el) { c.el.classList.toggle('noop', c.noop); this.dropText(c); c.el.remove(); c.el = null; } } });
+      this.rebuild(); this.layout(); if (f) { this.u = this.target = f.s; } this.front = null; this.kick();
     }
   }
   M.Stack = Stack;

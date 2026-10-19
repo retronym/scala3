@@ -3,14 +3,14 @@
 // rebuild the cards), plus the minimap and the lineage chronicle. The viewer's heavy views do not render while the overlay is open.
 (function (R) {
   const M = (R.stk = R.stk || {}), $ = (id) => document.getElementById(id), esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  let stack = null; const S = { cards: [], list: [], sig: null, timer: null, last: null };
+  let stack = null; const S = { cards: [], list: [], sig: null, timer: null, last: null }; R._stk = S;
   R.stackOpen = false;
 
   function ensure() {
     if (stack) return stack;
-    stack = new M.Stack($('sstage'), {
+    stack = R._stk.st = new M.Stack($('sstage'), {
       onList: (list) => { S.list = list; drawMini(); },
-      onFront: (c) => { $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
+      onFront: (c) => { $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.kind === 'ir' ? ' <span class=dimt>· ' + esc(c.cls.replace(/^.*\//, '')) + '</span>' : ''}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
       onTrace: (tr) => { renderChron(tr); drawMini(); },
       onSelect: (n) => { const nd = R.ST.D.nodes.get(n); R.set({ selNode: n, selSym: nd ? nd.sym : null }); },
       onFrame: (u, sMax) => { const h = $('smini').clientHeight; $('smark').style.transform = `translateY(${(sMax ? u / sMax : 0) * (h - 16) + 8}px)`; },
@@ -18,29 +18,43 @@
     R.stackObj = stack; return stack;
   }
 
+  const viewerIndex = (c) => (c.kind === 'ir' ? R.vers().findIndex((v) => v.irPseudo && v.phase === c.phase) : R.vers().indexOf(c.v));
   // the front card moves the viewer's phase (and cursor to that version's seq): throttled, trailing
   function syncViewer(c) {
     if (!c || !R.stackOpen || S.opening) return; S.last = c;
     if (S.timer) return;
-    S.timer = setTimeout(() => { S.timer = null; const c2 = S.last; if (!c2 || !R.stackOpen) return; const k = R.vers().indexOf(c2.v); if (k >= 0 && k !== R.ST.verIdx) { R.ST.follow = true; R.setPhase(k); } }, 90);
+    S.timer = setTimeout(() => { S.timer = null; const c2 = S.last; if (!c2 || !R.stackOpen) return; const k = viewerIndex(c2); if (k >= 0 && k !== R.ST.verIdx) { R.ST.follow = true; if (c2.kind === 'ir') R.ST.cls = c2.cls; R.setPhase(k); } }, 90);
   }
 
+  const status = () => { const D = R.ST.D;
+  const nn = S.cards.filter((c) => c.noop).length, ns = S.cards.filter((c) => c.star).length;
+  $('sstatus').textContent = `${((D.units.get(R.ST.unit) || {}).path || '').replace(/^.*\//, '')} · ${S.cards.length} versions (${nn} no change, ${ns} ★)${R.ST.skip ? ' · skipping no-ops' : ''}${R.ST.structOnly ? ' · structural lines only' : ''}`;
+  };
   function build(keepPhase) {
     const D = R.ST.D, st = ensure(); S.cards = M.buildCards(); S.sig = sig();
     const units = D.unitsWithVersions.filter((u) => D.versionsOf(u).some((v) => !v.ir));
     const us = $('sunit'); us.innerHTML = units.map((u) => `<option value="${u}">${esc(((D.units.get(u) || {}).path || 'unit ' + u).replace(/^.*\//, ''))}</option>`).join(''); us.value = R.ST.unit; us.disabled = units.length < 2;
     st.setData(D, S.cards); renderChron(null);
-    // front: the viewer's current version (or the last tree version when bytecode is shown)
-    const cur = R.ver(); let k = cur && !cur.irPseudo ? S.cards.findIndex((c) => c.v === cur) : -1;
-    if (k < 0 && cur && !cur.irPseudo) { S.cards.forEach((c, i) => { if (c.phase <= cur.phase) k = i; }); }
+    // class selector for the JVM segment
+    const cl = D.hasIR ? [...D.jvmClasses.values()].filter((c) => c.unit === R.ST.unit) : [], cs = $('sclass'); $('sclslab').hidden = !cl.length;
+    cs.innerHTML = cl.map((c) => `<option${c.name === R.curClass() ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    const firstIR = S.cards.find((c) => c.kind === 'ir'); st.marks = firstIR ? [{ card: firstIR, text: `JVM bytecode · class ${esc(firstIR.cls.replace(/^.*\//, ''))}` }] : [];
+    // front: the viewer's current version (bytecode shown: the card of that JVM phase), or the card that was in front before a rebuild
+    const cur = R.ver(); let k = -1;
+    if (keepPhase === false && S.keep) { S.cards.forEach((c, i) => { if (c.kind === S.keep.kind && c.phase <= S.keep.phase) k = i; }); if (k < 0) k = S.cards.findIndex((c) => c.kind === S.keep.kind); }
+    else if (cur && cur.irPseudo) S.cards.forEach((c, i) => { if (c.kind === 'ir' && c.phase <= cur.phase) k = i; });
+    else if (cur) { k = S.cards.findIndex((c) => c.v === cur); if (k < 0) S.cards.forEach((c, i) => { if (c.kind === 'tree' && c.phase <= cur.phase) k = i; }); }
     if (k < 0) k = S.cards.length - 1; if (k < 0) return;
-    st.ensure && S.cards[k] && st.ensure(S.cards[k]); st.jumpTo(S.cards[k].s, true); st.u = st.target = S.cards[k].s;
-    const nn = S.cards.filter((c) => c.noop).length, ns = S.cards.filter((c) => c.star).length;
-    $('sstatus').textContent = `${((D.units.get(R.ST.unit) || {}).path || '').replace(/^.*\//, '')} · ${S.cards.length} versions (${nn} no change, ${ns} ★)${R.ST.skip ? ' · skipping no-ops' : ''}${R.ST.structOnly ? ' · structural lines only' : ''}`;
+    st.ensure && S.cards[k] && st.ensure(S.cards[k]); st.jumpTo(S.cards[k].s, true); st.u = st.target = S.cards[k].s; S.fsig = fsig();
+    if (R.computeLines) R.computeLines(R.ST.unit);
+    status();
     // the selected node is traced right after opening (its thread appears without a click)
-    if (R.ST.selNode != null && keepPhase !== false) setTimeout(() => { if (!R.stackOpen) return; const c = S.cards[k], n = [...R.present(R.ST.selNode, c.v)][0] ?? (c.v.ids.has(R.ST.selNode) ? R.ST.selNode : null); if (n != null) st.traceNode(c, n); }, 0);
+    if (R.ST.selNode != null && keepPhase !== false) setTimeout(() => { if (!R.stackOpen) return; const sel = R.ST.selNode, isIR = !!(R.ST.D.nodes.get(sel) || {}).ir; let c = S.cards[k], n = null;
+      if (isIR) { c = S.cards.find((x) => x.kind === 'ir' && x.v.ids.has(sel)) || c; if (c.v.ids.has(sel)) n = sel; } else if (c.kind === 'tree') n = [...R.present(sel, c.v)][0] ?? (c.v.ids.has(sel) ? sel : null); else { const t = S.cards.filter((x) => x.kind === 'tree').pop(); if (t) { c = t; n = [...R.present(sel, t.v)][0] ?? null; } }
+      if (n != null && c) st.traceNode(c, n); }, 0);
   }
-  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length].join('|');
+  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass()].join('|');
+  const fsig = () => [R.ST.trivialNoop !== false, R.scoreState && R.scoreState.lines.size].join('|');
 
   R.openStack = function () {
     const D = R.ST.D; if (!D || R.stackOpen) return;
@@ -51,7 +65,7 @@
   };
   R.closeStack = function () {
     if (!R.stackOpen) return; R.stackOpen = false; $('stackov').hidden = true; if (stack) stack.stop();
-    if (S.timer) { clearTimeout(S.timer); S.timer = null; const c = S.last, k = c ? R.vers().indexOf(c.v) : -1; if (k >= 0 && k !== R.ST.verIdx) { R.ST.follow = true; R.setPhase(k); } }
+    if (S.timer) { clearTimeout(S.timer); S.timer = null; const c = S.last, k = c ? viewerIndex(c) : -1; if (k >= 0 && k !== R.ST.verIdx) { R.ST.follow = true; if (c.kind === 'ir') R.ST.cls = c.cls; R.setPhase(k); } }
     document.querySelectorAll('#viewtabs button').forEach((b) => b.classList.remove('on')); if (R.setView) R.setView(document.querySelector('main').classList.contains('max-scrub') ? 'scrub' : document.querySelector('main').classList.contains('max-insp') ? 'insp' : document.querySelector('main').classList.contains('max-proj') ? 'proj' : 'all'); R.render();
   };
   // Esc: first drop an active trace, then close
@@ -83,6 +97,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     $('sclose').onclick = () => R.closeStack(); $('sbd').onclick = () => R.closeStack();
     $('sunit').onchange = (ev) => { R.selectUnit(+ev.target.value); };
+    $('sclass').onchange = (ev) => { R.set({ cls: ev.target.value }); }; $('strivial').onchange = (ev) => { R.set({ trivialNoop: ev.target.checked }); };
     const box = $('smini'); let drag = false; const at = (e) => { const r = box.getBoundingClientRect(); stack.jumpTo(Math.max(0, Math.min(1, (e.clientY - r.top - 8) / (r.height - 16))) * stack.sMax, false); };
     box.addEventListener('pointerdown', (e) => { drag = true; box.setPointerCapture(e.pointerId); at(e); }); box.addEventListener('pointerup', () => { drag = false; });
     box.addEventListener('pointermove', (e) => { if (drag) at(e); const r = box.getBoundingClientRect(), c = stack && stack.nearest(((e.clientY - r.top - 8) / (r.height - 16)) * stack.sMax); box.title = c ? `${c.i + 1}. ${c.name}${c.noop ? ' (no change)' : c.ready ? ` +${c.add} −${c.del}` : ''}` : ''; });
@@ -90,6 +105,10 @@
     setInterval(() => { if (!R.stackOpen || !stack) return; const f = stack.frames.slice(-60); if (!f.length) return; const avg = f.reduce((a, b) => a + b, 0) / f.length; $('sfps').textContent = `${(1000 / avg).toFixed(0)} fps · work ${(stack.lastFrameWork || 0).toFixed(1)} ms`; }, 500);
   });
   // a view of the viewer (light: runs while the overlay is open): rebuild the cards when unit or options changed underneath
-  const view = () => { if (R.stackOpen && R.ST.D && sig() !== S.sig) { const c = stack && stack.front; build(false); if (c) { const k = R.ver() ? S.cards.findIndex((x) => x.v === R.ver()) : -1; if (k >= 0) { stack.jumpTo(S.cards[k].s, true); } } } };
+  const view = () => {
+    if (!R.stackOpen || !R.ST.D) return;
+    if (sig() !== S.sig) { const f = stack && stack.front; S.keep = f ? { kind: f.kind, phase: f.phase } : null; build(false); }
+    else if (fsig() !== S.fsig) { S.fsig = fsig(); const fresh = M.buildCards(); if (fresh.length === S.cards.length) { stack.relayout(fresh.map((c) => c.noop)); fresh.forEach((c, i) => { S.cards[i].noop = c.noop; }); status(); } }
+  };
   view.light = true; R.views.push(view);
 })(window.R);

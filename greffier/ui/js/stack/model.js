@@ -4,15 +4,28 @@
 (function (R) {
   const M = (R.stk = R.stk || {});
 
-  // cards of the viewer's current version list (skip no-ops applies): tree versions only
+  const isOp = (t) => /^\s+[A-Z][A-Z0-9_]+\b/.test(t) && !/^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/.test(t);
+  // cards of the viewer's current version list (skip no-ops applies): the tree versions, then the JVM class versions of the chosen class
+  // (genBCode, then every jvm:* phase that changed that class). A version with at most 2 changed lines counts as a no-op (the shared line
+  // counts of the heat strip decide, once computed) unless ST.trivialNoop is off.
   M.buildCards = function () {
     const D = R.ST.D, vs = R.vers().filter((v) => !v.irPseudo), star = new Set(R.interesting ? R.interesting().filter((x) => !x.v.irPseudo).map((x) => x.v) : []);
+    const lines = R.scoreState && R.scoreState.lines, trivial = R.ST.trivialNoop !== false;
     const cards = vs.map((v, i) => {
       const prev = i > 0 ? vs[i - 1] : null;
       // cheap no-op test from the header (the printed text is the same as an earlier version and nothing new); v0 data: compare text
-      const noop = !!prev && (v.hdrNew != null && D.schema === 'v1' ? v.hdrNew === 0 && v.textSameAs != null : v.text === prev.text);
-      return { i, v, phase: v.phase, name: D.phaseName(v.phase), short: D.phaseShort(v.phase), noop, star: star.has(v), prevV: prev, ready: false, add: 0, del: 0, rows: null };
+      let noop = !!prev && (v.hdrNew != null && D.schema === 'v1' ? v.hdrNew === 0 && v.textSameAs != null : v.text === prev.text);
+      if (!noop && trivial && prev && lines) { const l = lines.get(R.ST.unit + ':' + v.phase); if (l && l.add + l.del <= 2) noop = true; }
+      return { i, v, kind: 'tree', phase: v.phase, name: D.phaseName(v.phase), short: D.phaseShort(v.phase), noop, star: star.has(v), first: i === 0, prevV: prev, ready: false, add: 0, del: 0, rows: null };
     });
+    const cls = D.hasIR && R.curClass && R.curClass(), c = cls && D.jvmClasses.get(cls);
+    if (c && c.unit === R.ST.unit) {
+      const irStar = new Set(R.interesting ? R.interesting().filter((x) => x.v.irPseudo).map((x) => x.v.phase) : []);
+      c.versions.forEach((v, k) => {
+        const nm = v.phase === D.irGenPhase ? 'genBCode (bytecode)' : D.phaseRaw(v.phase);
+        cards.push({ i: cards.length, v, kind: 'ir', cls, phase: v.phase, name: nm, short: nm, noop: false, star: irStar.has(v.phase) || k === 0, first: k === 0, prevV: k > 0 ? c.versions[k - 1] : null, ready: false, add: 0, del: 0, rows: null });
+      });
+    }
     return cards;
   };
 
@@ -27,6 +40,15 @@
       const prev = c.prevV, off = v.byId, struct = new Set(), fake = v;
       v.ids.forEach((n) => { if (!prev.ids.has(n) && R._s.classOf(D, n, fake) === 'struct') { const o = off.get(n); if (o) struct.add(M.lineOf(c, o[1])); } });
       c.rows = d.rows.map((r) => (r.k === 'a' && !struct.has(r.nl) ? { k: 'a', t: r.t, nl: r.nl, w: true } : r)); c.add = c.rows.reduce((a, r) => a + (r.k === 'a' && !r.w ? 1 : 0), 0);
+    }
+    if (c.kind === 'ir') {   // instructions added / removed; rows of methods this step did not touch are muted
+      let add = 0, del = 0; c.rows.forEach((r) => { if (r.k !== 's' && isOp(r.t)) { if (r.k === 'a') add++; else del++; } }); c.add = add; c.del = del; c.ops = lines.filter(isOp).length;
+      if (!c.first) {
+        const mOf = new Int32Array(lines.length).fill(-1); let mi = 0;
+        v.offsets.forEach(([id, st, en]) => { const nd = D.nodes.get(id); if (nd && nd.kind === 'MethodNode') { const a = M.lineOf(c, st), b = M.lineOf(c, Math.max(st, en - 1)); for (let l = a; l <= b && l < lines.length; l++) mOf[l] = mi; mi++; } });
+        const changed = new Set(); let carry = 0; c.rows.forEach((r) => { if (r.nl >= 0) carry = r.nl; if (r.k !== 's' && mOf[carry] >= 0) changed.add(mOf[carry]); });
+        carry = 0; c.rows = c.rows.map((r) => { if (r.nl >= 0) carry = r.nl; return r.k === 's' && mOf[carry] >= 0 && !changed.has(mOf[carry]) ? { k: 's', t: r.t, nl: r.nl, mu: true } : r; });
+      }
     }
     c.rowOfLine = new Int32Array(lines.length); c.rows.forEach((r, k) => { if (r.nl >= 0) c.rowOfLine[r.nl] = k; });
     c.score = c.add + c.del; c.ready = true; return true;
@@ -46,14 +68,16 @@
     return best ? best[0] : null;
   };
 
-  const RANK = { same: 0, copy: 1, retype: 2, rewrite: 3, split: 3, synth: 3, elide: 3 };
-  function step(D, set, to, back) {
-    const map = back ? D.deriveByNew : D.deriveByOld, side = back ? 'old' : 'new', out = new Set(); let how = 'same';
+  const RANK = { same: 0, copy: 1, retype: 2, rewrite: 3, split: 3, synth: 3, elide: 3, 'inlined-from': 3 };
+  // one step of lineage between the node sets of two cards: ids present in both carry over, else follow derive records (tree: D.derive*, bytecode: D.ir*)
+  function step(D, set, to, back, ir) {
+    const map = ir ? (back ? D.irByNew : D.irByOld) : (back ? D.deriveByNew : D.deriveByOld), side = back ? 'old' : 'new', out = new Set(); let how = 'same';
     for (const m of set) {
       if (to.v.ids.has(m)) { out.add(m); continue; }
       const q = [m], seen = new Set(q);
       for (let qi = 0; qi < q.length && qi < 300; qi++) {
         for (const d of map.get(q[qi]) || []) {
+          if (ir && d.how === 'codegen') continue;
           const h = d.how === 'copy' ? 'copy' : d.how === 'retype' ? 'retype' : 'rewrite'; if (RANK[h] > RANK[how]) how = h;
           for (const o of d[side]) { if (seen.has(o)) continue; seen.add(o); if (to.v.ids.has(o)) out.add(o); else q.push(o); }
         }
@@ -62,20 +86,35 @@
     }
     return { out, how };
   }
-  // trace node n of card j through all cards: per card the node set, primary node (earliest start), its line/row and how it got there
+  // trace node n of card j through all cards. Tree cards follow derive records; the thread continues into the JVM cards through codegen
+  // derives (tree node -> InsnRange) and back (instruction -> tree node). Per card: node set, primary node, its line/row, how it got there.
   M.trace = function (D, cards, j, n) {
     cards.forEach((c) => M.ensureRows(c));
-    const N = cards.length, sets = new Array(N).fill(null), how = new Array(N).fill(null);
+    const N = cards.length, Nt = cards.findIndex((c) => c.kind === 'ir') < 0 ? N : cards.findIndex((c) => c.kind === 'ir');
+    const sets = new Array(N).fill(null), how = new Array(N).fill(null), E = () => new Set();
     sets[j] = new Set([n]);
-    for (let i = j - 1; i >= 0; i--) { if (!sets[i + 1].size) { sets[i] = new Set(); continue; } const r = step(D, sets[i + 1], cards[i], true); sets[i] = r.out; how[i + 1] = r.how; }
-    for (let i = j + 1; i < N; i++) { if (!sets[i - 1].size) { sets[i] = new Set(); continue; } const r = step(D, sets[i - 1], cards[i], false); sets[i] = r.out; how[i] = r.how; }
+    const backTree = (from) => { for (let i = from; i >= 0; i--) { if (!sets[i + 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i + 1], cards[i], true, false); sets[i] = r.out; how[i + 1] = r.how; } };
+    const fwdIR = (from) => { for (let i = from; i < N; i++) { if (!sets[i - 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i - 1], cards[i], false, true); sets[i] = r.out; how[i] = r.how; } };
+    if (j < Nt) {
+      backTree(j - 1);
+      for (let i = j + 1; i < Nt; i++) { if (!sets[i - 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i - 1], cards[i], false, false); sets[i] = r.out; how[i] = r.how; }
+      if (Nt < N) {   // into bytecode: the codegen ranges of the final tree nodes that exist in this class
+        const gen = E(); if (Nt > 0) sets[Nt - 1].forEach((t) => (D.irFromTree.get(t) || []).forEach((x) => { if (cards[Nt].v.ids.has(x)) gen.add(x); }));
+        sets[Nt] = gen; how[Nt] = 'born'; fwdIR(Nt + 1);
+      }
+    } else {   // started on an instruction: back through the JVM cards, then through codegen to the tree
+      for (let i = j - 1; i >= Nt; i--) { if (!sets[i + 1].size) { sets[i] = E(); continue; } const r = step(D, sets[i + 1], cards[i], true, true); sets[i] = r.out; how[i + 1] = r.how; }
+      fwdIR(j + 1);
+      if (Nt > 0) { const t = E(); (sets[Nt] || []).forEach((x) => (D.irToTree.get(x) || []).forEach((tn) => { if (cards[Nt - 1].v.ids.has(tn)) t.add(tn); })); sets[Nt - 1] = t; how[Nt] = how[Nt] || 'born'; backTree(Nt - 2); }
+    }
+    for (let i = 0; i < N; i++) if (!sets[i]) sets[i] = E();
     const res = cards.map((c, i) => {
       const s = sets[i]; if (!s.size) return { set: s, primary: null, line: -1, row: -1, how: i > 0 && sets[i - 1].size ? 'gone' : null };
       let pr = null; for (const id of s) { const o = c.v.byId.get(id); if (o && (!pr || o[1] < pr[1])) pr = o; }
       const line = pr ? M.lineOf(c, pr[1]) : -1, rows = new Set(); for (const id of s) { const o = c.v.byId.get(id); if (o) rows.add(c.rowOfLine[M.lineOf(c, o[1])]); }
-      return { set: s, primary: pr ? pr[0] : null, line, row: line >= 0 ? c.rowOfLine[line] : -1, rows, how: i === 0 || !sets[i - 1].size ? 'born' : how[i] };
+      return { set: s, primary: pr ? pr[0] : null, line, row: line >= 0 ? c.rowOfLine[line] : -1, rows, how: i === 0 || !sets[i - 1].size ? 'born' : how[i] || 'same' };
     });
-    for (let i = 1; i < N; i++) { const a = res[i - 1], b = res[i]; if (b.line >= 0 && a.line >= 0 && (b.how === 'same' || b.how === 'copy') && cards[i].lines[b.line].trim() !== cards[i - 1].lines[a.line].trim()) b.how = 'edit'; }
+    for (let i = 1; i < N; i++) { const a = res[i - 1], b = res[i]; if (b.line >= 0 && a.line >= 0 && cards[i].kind === cards[i - 1].kind && (b.how === 'same' || b.how === 'copy') && cards[i].lines[b.line].trim() !== cards[i - 1].lines[a.line].trim()) b.how = 'edit'; }
     const nd = D.nodes.get(n); return { node: n, kind: nd ? nd.kind : '?', from: j, per: res };
   };
 })(window.R);
