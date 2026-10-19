@@ -34,6 +34,21 @@ public interface Observer {
   /** {@code TreeCopier.finalize}; the stock method has no Context. */
   void copied(Object tree, Object copy);
 
+  // ---- JVM backend (the fork's backend hooks; option `nojvm` turns them off) ----
+
+  /** {@code CodeGen.generateClassNodes} returned {@code nodes}: (ClassNode, metadata) pairs, the mirror second. */
+  void classNodes(Object typeDef, Object nodes, Object ctx);
+  /** {@code genDefDef} created {@code method} for {@code dd} ({@code initJMethod} returned). */
+  void genMethod(Object dd, Object method, Object ctx);
+  void genLoadEnter(Object tree, Object method, Object ctx);
+  void genLoadExit(Object tree, Object method, Object ctx);
+  /** {@code traceIfChanged(pass)} in {@code LocalOptimizer.methodOptimizations}. No Context. */
+  void optimizerPass(String owner, Object method, String pass);
+  /** {@code inlineCallsite(callsite)} called from {@code GlobalOptimizer}'s {@code doInline} into {@code method}. */
+  void inlined(Object method, Object callsite, Object insnMap);
+  /** {@code CodeGen.serializeClassNode(classNode)} (after the ClassWriter, which does not change the node). */
+  void classWritten(Object classNode);
+
   // ---- not in the fork (agent options `rejected`, `tentative`) ----
 
   /** An implicit reference was dropped before {@code tryImplicit} ({@code ref}: TermRef or Candidate). */

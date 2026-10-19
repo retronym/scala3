@@ -33,6 +33,13 @@ public final class Hooks {
   /** Armed by {@code Typer.tryEither}, consumed by {@code FreshContext.setNewTyperState}. */
   public static boolean armTyperState;
 
+  /** Set by {@code genDefDef}'s advice for {@code initJMethod}'s (genDefDef does not nest). */
+  public static Object genDefDef;
+  /** {@code ownerClassName} of the innermost {@code LocalOptimizer.methodOptimizations}; {@code traceIfChanged} lacks it. */
+  public static String optOwner;
+  /** Armed by {@code GlobalOptimizer}'s {@code doInline} with its target method, consumed by {@code inlineCallsite}. */
+  public static Object armInline;
+
   /** Installed by the agent: forces loading of every target class in the given loader and
    *  returns the join-point table, or throws if a site was not found. */
   public static Function<ClassLoader, String> verifier;

@@ -36,7 +36,7 @@ import replay.agent.api.Hooks;
  * {@code Install}). Options, comma-separated: {@code fixTypeApply} (the fork's TypeApply copier fix),
  * {@code rejected} (implicit scope, ranking and rejected-candidate hooks, not in the fork),
  * {@code tentative} (tryEither and TyperState-buffered reports, not in the fork), {@code nonames} (skip the Name
- * hashes), {@code verbose} (print the join-point table on verify).
+ * hashes), {@code nojvm} (skip the JVM backend hooks), {@code verbose} (print the join-point table on verify).
  *
  * The Name hashes add a method, so they need the class before it is loaded: premain only.
  */
@@ -66,6 +66,7 @@ public final class ReplayAgent {
     for (JoinPoint jp : JoinPoints.ALL) {
       boolean on = switch (jp.group()) {
         case "fork" -> true;
+        case "jvm" -> !opts.contains("nojvm");
         case "fix" -> opts.contains("fixTypeApply");
         case "extra" -> opts.contains("rejected");
         case "tentative" -> opts.contains("tentative");
@@ -103,7 +104,7 @@ public final class ReplayAgent {
     AgentBuilder ab = new AgentBuilder.Default()
       .disableClassFormatChanges()
       .with(listener)
-      .ignore(not(nameStartsWith("dotty.tools.dotc.")));
+      .ignore(not(nameStartsWith("dotty.tools.dotc.").or(nameStartsWith("dotty.tools.backend.jvm."))));
     if (dynamic) ab = ab.with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION);
     ab.type(namedOneOf(adviceClasses.toArray(String[]::new)))
       .transform(ReplayAgent::transformAdvice)

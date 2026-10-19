@@ -11,6 +11,7 @@ import dotty.tools.dotc.reporting.{Diagnostic, Reporter}
 import dotty.tools.dotc.core.TyperState
 import dotty.tools.dotc.typer.Implicits.{Candidate, SearchResult}
 import dotty.tools.dotc.util.Spans.Span
+import org.objectweb.asm.tree.{AbstractInsnNode, ClassNode, MethodNode}
 
 /** Hook delivery by the bytecode agent (../agent): the observer goes into the bootstrap-loaded
  *  `replay.agent.api.Hooks.observer`, which the inlined advice reads.
@@ -93,3 +94,21 @@ final class AgentBridge(val o: Observer) extends replay.agent.api.Observer:
   def typerStateCommit(ts: Object) = o.commit(ts.asInstanceOf[TyperState])
   def bufferedReport(dia: Object, reporter: Object, ctx: Object) =
     o.bufferedReport(dia.asInstanceOf[Diagnostic], reporter.asInstanceOf[Reporter])(using c(ctx))
+
+  // JVM backend
+  def classNodes(typeDef: Object, nodes: Object, ctx: Object) =
+    nodes.asInstanceOf[List[(ClassNode, ?)]] match
+      case Nil =>
+      case main :: rest => o.classNodes(typeDef.asInstanceOf[tpd.TypeDef], main._1, rest.headOption.map(_._1).orNull)(using c(ctx))
+  def genMethod(dd: Object, method: Object, ctx: Object) =
+    o.genMethod(dd.asInstanceOf[tpd.DefDef], method.asInstanceOf[MethodNode])(using c(ctx))
+  def genLoadEnter(tree: Object, method: Object, ctx: Object) =
+    o.genLoadEnter(tree.asInstanceOf[tpd.Tree], method.asInstanceOf[MethodNode])(using c(ctx))
+  def genLoadExit(tree: Object, method: Object, ctx: Object) =
+    o.genLoadExit(tree.asInstanceOf[tpd.Tree], method.asInstanceOf[MethodNode])(using c(ctx))
+  def optimizerPass(owner: String, method: Object, pass: String) = o.optimizerPass(owner, method.asInstanceOf[MethodNode], pass)
+  def inlined(method: Object, callsite: Object, insnMap: Object) =
+    val cs = callsite.asInstanceOf[dotty.tools.backend.jvm.opt.KnownCallsite]
+    o.inlined(cs.callsiteClass.internalName, method.asInstanceOf[MethodNode], cs.callee.calleeDeclarationClass.internalName,
+      cs.callee.callee, insnMap.asInstanceOf[Map[AbstractInsnNode, AbstractInsnNode]])
+  def classWritten(classNode: Object) = o.classWritten(classNode.asInstanceOf[ClassNode])

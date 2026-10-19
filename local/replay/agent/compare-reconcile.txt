@@ -1,0 +1,12 @@
+Closures       461838     461840    294  identical
+ForDesugar     345420     345422    168  identical
+Givens         946410     946412    696  identical
+Mixins         524999     525001    490  identical
+Patmat        1289070    1289072   1091  identical
+util         84777905   84777907  48614  identical
+Closures-opt     610990     610992    950  identical
+ForDesugar-opt     360246     360248    187  identical
+Givens-opt    1510237    1510239   3288  identical
+Mixins-opt     662290     662292   1219  identical
+Patmat-opt    2067879    2067881   4716  identical
+util-opt    136096224  136096226 244357  identical

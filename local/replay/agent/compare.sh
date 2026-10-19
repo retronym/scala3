@@ -2,10 +2,12 @@
 # LLM-assisted (Claude), see LLM_POLICY.md.
 # Acceptance experiment: record the corpus and dotc/util with the fork and with stock+agent, and
 # compare the streams after the `meta` line (which holds the output path and compiler git hash).
-# usage: compare.sh [agent opts, default fixTypeApply]   outputs in ../out-fork, ../out-agent[-<opts>]
+# usage: compare.sh [agent opts, default fixTypeApply] [-opt]   outputs in ../out-fork, ../out-agent[-<opts>]
+# -opt compiles with -opt -opt-inline:<sources> (JVM optimiser phases in the stream); file names get -opt.
 set -uo pipefail
 R=$(cd "$(dirname "$0")/.." && pwd)
 OPTS=${1-fixTypeApply}
+M=${2:-}; OPT=(); [ "$M" = -opt ] && OPT=(-opt '-opt-inline:<sources>')
 OUTA=$R/out-agent${OPTS:+-${OPTS//,/-}}; [ "$OPTS" = fixTypeApply ] && OUTA=$R/out-agent
 mkdir -p "$R/out-fork" "$OUTA"
 UTIL=$(ls "$R"/../../compiler/src/dotty/tools/dotc/util/*.scala)
@@ -16,14 +18,14 @@ run() { # variant out srcs... -- args
   REPLAY_VARIANT=$v REPLAY_AGENT_OPTS=$OPTS "$R/plugin/record.sh" "$out" "$@" >/dev/null 2>&1 || echo "  ($v exit $?)"
 }
 for f in Closures ForDesugar Givens Mixins Patmat; do
-  [ -n "${SKIP_FORK:-}" ] || run fork "$R/out-fork/$f.jsonl" "$R/corpus/$f.scala"
-  run agent "$OUTA/$f.jsonl" "$R/corpus/$f.scala"
+  [ -n "${SKIP_FORK:-}" ] || run fork "$R/out-fork/$f$M.jsonl" "$R/corpus/$f.scala" -- ${OPT[@]+"${OPT[@]}"}
+  run agent "$OUTA/$f$M.jsonl" "$R/corpus/$f.scala" -- ${OPT[@]+"${OPT[@]}"}
 done
-[ -n "${SKIP_FORK:-}" ] || DOTC_USER_CP=$UCP run fork "$R/out-fork/util.jsonl" $UTIL -- -Yexplicit-nulls -nowarn
-DOTC_USER_CP=$UCP run agent "$OUTA/util.jsonl" $UTIL -- -Yexplicit-nulls -nowarn
+[ -n "${SKIP_FORK:-}" ] || DOTC_USER_CP=$UCP run fork "$R/out-fork/util$M.jsonl" $UTIL -- -Yexplicit-nulls -nowarn ${OPT[@]+"${OPT[@]}"}
+DOTC_USER_CP=$UCP run agent "$OUTA/util$M.jsonl" $UTIL -- -Yexplicit-nulls -nowarn ${OPT[@]+"${OPT[@]}"}
 for f in Closures ForDesugar Givens Mixins Patmat util; do
-  a=$R/out-fork/$f.jsonl; b=$OUTA/$f.jsonl
+  a=$R/out-fork/$f$M.jsonl; b=$OUTA/$f$M.jsonl
   if cmp -s <(tail -n +2 "$a") <(tail -n +2 "$b"); then r=identical
   else r="DIFFER: $(diff <(tail -n +2 "$a") <(tail -n +2 "$b") | grep -c '^[<>]') lines"; fi
-  printf '%-10s %9d %9d  %s\n' "$f" "$(wc -c < "$a")" "$(wc -c < "$b")" "$r"
+  printf '%-10s %10d %10d %6d  %s\n' "$f$M" "$(wc -c < "$a")" "$(wc -c < "$b")" "$(grep -c '"ir":"jvm"' "$b")" "$r"
 done

@@ -15,7 +15,8 @@ final class JoinPoints {
 
   /** {@code fork}: the TyperObserver fork's hooks. {@code fix}: the fork's TypeApply behaviour fix.
    *  {@code names}: the fork's Name/NameKind content hashes. {@code extra} (option {@code rejected}) and
-   *  {@code tentative} (option {@code tentative}): hooks the fork does not have. */
+   *  {@code tentative} (option {@code tentative}): hooks the fork does not have. {@code jvm}: the fork's
+   *  JVM backend hooks (on unless option {@code nojvm}). */
   record JoinPoint(String group, Kind kind, String owner, String method, String descriptor,
                    Class<?> advice, String requiredField, String forkSite) {
     String key() { return owner + "." + method + descriptor; }
@@ -29,6 +30,9 @@ final class JoinPoints {
   private static final String CAND = "Ldotty/tools/dotc/typer/Implicits$Candidate;";
   private static final String RESULT = "Ldotty/tools/dotc/typer/Implicits$SearchResult;";
   private static final String LIST = "Lscala/collection/immutable/List;";
+
+  private static final String BJ = "dotty.tools.backend.jvm.";
+  private static final String MNODE = "Lorg/objectweb/asm/tree/MethodNode;";
 
   static final String RUN = "dotty.tools.dotc.Run";
   static final String PHASE = "dotty.tools.dotc.core.Phases$Phase";
@@ -64,6 +68,34 @@ final class JoinPoints {
     new JoinPoint("fork", Kind.ADVICE, "dotty.tools.dotc.ast.Trees$Instance$TreeCopier", "finalize",
       "(" + TREE + "Ldotty/tools/dotc/ast/Trees$MemberDef;)Ldotty/tools/dotc/ast/Trees$MemberDef;", Advices.Finalize.class, null,
       "Trees.scala:1289 copied"),
+
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "CodeGen", "generateClassNodes",
+      "(Ldotty/tools/dotc/ast/Trees$TypeDef;" + CTX + ")" + LIST, Advices.GenerateClassNodes.class, null,
+      "CodeGen.scala:162 classNodes (fires on return, after atPhase(sbtExtractDependencies))"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeSkelBuilder$PlainSkelBuilder", "genDefDef",
+      "(Ldotty/tools/dotc/ast/Trees$DefDef;" + CTX + ")V", Advices.GenDefDef.class, null, "BCodeSkelBuilder.scala:929 genMethod (stashes dd)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeSkelBuilder$PlainSkelBuilder", "initJMethod",
+      "(I" + LIST + CTX + ")V", Advices.InitJMethod.class, "mnode", "BCodeSkelBuilder.scala:929 genMethod (fires)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genStat",
+      "(" + TREE + CTX + ")V", Advices.GenStat.class, null, "BCodeBodyBuilder.scala:91 genLoadEnter/Exit"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genLoadTo",
+      "(" + TREE + "L" + "dotty/tools/backend/jvm/BType;Ldotty/tools/backend/jvm/BCodeSkelBuilder$LoadDestination;" + CTX + ")V",
+      Advices.GenLoadTo.class, null, "BCodeBodyBuilder.scala:320 genLoadEnter/Exit"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.LocalOptimizer", "methodOptimizations",
+      "(" + MNODE + "Ljava/lang/String;)Z", Advices.MethodOptimizations.class, null, "LocalOptimizer.scala:219 optimizerPass (stashes owner)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.LocalOptimizer", "traceIfChanged$1",
+      "(Z" + MNODE + "Lscala/runtime/ObjectRef;Ljava/lang/String;)V", Advices.TraceIfChanged.class, null,
+      "LocalOptimizer.scala:219 optimizerPass (fires)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.GlobalOptimizer", "doInline$1",
+      "(" + MNODE + "Ldotty/tools/backend/jvm/opt/MethodInlinerState;Lscala/runtime/BooleanRef;"
+        + "Ldotty/tools/backend/jvm/opt/InlineRequest;Ldotty/tools/backend/jvm/analysis/AliasingFrame;Lscala/Option;)"
+        + "Lscala/collection/immutable/Map;", Advices.DoInline.class, null, "Inliner.scala:127 inlined (arms)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.GlobalOptimizer", "inlineCallsite",
+      "(Ldotty/tools/backend/jvm/opt/KnownCallsite;Lscala/Option;Z)Lscala/collection/immutable/Map;", Advices.InlineCallsite.class, null,
+      "Inliner.scala:127 inlined (fires)"),
+    new JoinPoint("jvm", Kind.ADVICE, BJ + "CodeGen", "serializeClassNode",
+      "(Lorg/objectweb/asm/tree/ClassNode;)[B", Advices.SerializeClassNode.class, null,
+      "CodeGen.scala:250 classWritten (fires on return, after the ClassWriter)"),
 
     new JoinPoint("fix", Kind.ADVICE, "dotty.tools.dotc.ast.tpd$TimeTravellingTreeCopier", "TypeApply",
       "(" + TREE + TREE + LIST + CTX + ")Ldotty/tools/dotc/ast/Trees$TypeApply;", Advices.TypeApplyFix.class, null,

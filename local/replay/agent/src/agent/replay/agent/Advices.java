@@ -193,6 +193,133 @@ public final class Advices {
     }
   }
 
+  // ---- JVM backend (the fork's backend hooks) ------------------------------------------------
+  // The optimiser's sites have no Context; the static observer needs none.
+
+  /** {@code CodeGen.generateClassNodes(typeDef)}: the fork fires just before the method's last step
+   *  (sbt class names under atPhase, which does not touch the ClassNodes), so fire on return. */
+  public static final class GenerateClassNodes {
+    @Advice.OnMethodExit
+    static void exit(@Advice.Argument(0) Object typeDef, @Advice.Argument(1) Object ctx, @Advice.Return Object nodes) {
+      Observer o = Hooks.observer;
+      if (o != null) o.classNodes(typeDef, nodes, ctx);
+    }
+  }
+
+  /** {@code PlainSkelBuilder.genDefDef(dd)}: stashes dd for {@link InitJMethod}. */
+  public static final class GenDefDef {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(0) Object dd) { Hooks.genDefDef = dd; }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit() { Hooks.genDefDef = null; }
+  }
+
+  /** {@code initJMethod}, called only by genDefDef: the fork's hook follows it, if mnode was set. */
+  public static final class InitJMethod {
+    @Advice.OnMethodExit
+    static void exit(@Advice.FieldValue("mnode") Object mnode, @Advice.Argument(2) Object ctx) {
+      Object dd = Hooks.genDefDef;
+      Hooks.genDefDef = null;
+      Observer o = Hooks.observer;
+      if (o != null && dd != null && mnode != null) o.genMethod(dd, mnode, ctx);
+    }
+  }
+
+  /** {@code PlainBodyBuilder.genStat(tree)} and {@code genLoadTo(tree, expected, dest)}. As in the fork,
+   *  mnode is read once on entry and a throw skips the exit (the compilation is over anyway). */
+  public static final class GenStat {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.This dotty.tools.backend.jvm.BCodeSkelBuilder.PlainSkelBuilder self,
+                      @Advice.Argument(0) Object tree, @Advice.Argument(1) Object ctx,
+                      @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      o = Hooks.observer;
+      if (o != null) { m = self.mnode(); o.genLoadEnter(tree, m, ctx); }
+    }
+
+    @Advice.OnMethodExit
+    static void exit(@Advice.Argument(0) Object tree, @Advice.Argument(1) Object ctx,
+                     @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      if (o != null) o.genLoadExit(tree, m, ctx);
+    }
+  }
+
+  public static final class GenLoadTo {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.This dotty.tools.backend.jvm.BCodeSkelBuilder.PlainSkelBuilder self,
+                      @Advice.Argument(0) Object tree, @Advice.Argument(3) Object ctx,
+                      @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      o = Hooks.observer;
+      if (o != null) { m = self.mnode(); o.genLoadEnter(tree, m, ctx); }
+    }
+
+    @Advice.OnMethodExit
+    static void exit(@Advice.Argument(0) Object tree, @Advice.Argument(3) Object ctx,
+                     @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      if (o != null) o.genLoadExit(tree, m, ctx);
+    }
+  }
+
+  /** {@code LocalOptimizer.methodOptimizations(method, ownerClassName)}: stashes the owner, which the
+   *  lambda-lifted {@code traceIfChanged$1} does not capture. */
+  public static final class MethodOptimizations {
+    @Advice.OnMethodEnter
+    static String enter(@Advice.Argument(1) String owner) {
+      String prev = Hooks.optOwner;
+      Hooks.optOwner = owner;
+      return prev;
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter String prev) { Hooks.optOwner = prev; }
+  }
+
+  /** {@code traceIfChanged$1(doTrace, method, currentTrace, optName)}: every local pass calls it. */
+  public static final class TraceIfChanged {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(1) Object method, @Advice.Argument(3) String pass) {
+      Observer o = Hooks.observer;
+      if (o != null) o.optimizerPass(Hooks.optOwner, method, pass);
+    }
+  }
+
+  /** {@code GlobalOptimizer}'s local {@code doInline(r, aliasFrame, w)}: arms {@link InlineCallsite}
+   *  with its target method; {@code inlineCallsites} (closure optimiser) stays unobserved, as in the fork. */
+  public static final class DoInline {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(0) Object method) { Hooks.armInline = method; }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit() { Hooks.armInline = null; }
+  }
+
+  public static final class InlineCallsite {
+    @Advice.OnMethodEnter
+    static Object enter() {
+      Object m = Hooks.armInline;
+      Hooks.armInline = null;
+      return m;
+    }
+
+    @Advice.OnMethodExit
+    static void exit(@Advice.Enter Object method, @Advice.Argument(0) Object callsite, @Advice.Return Object insnMap) {
+      if (method != null) {
+        Observer o = Hooks.observer;
+        if (o != null) o.inlined(method, callsite, insnMap);
+      }
+    }
+  }
+
+  /** {@code CodeGen.serializeClassNode(classNode)}. The fork fires before {@code classNode.accept(writer)};
+   *  the ClassWriter reads the node without changing it, so firing on exit (also on a throw) sees the same state. */
+  public static final class SerializeClassNode {
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Argument(0) Object classNode) {
+      Observer o = Hooks.observer;
+      if (o != null) o.classWritten(classNode);
+    }
+  }
+
   // ---- not in the fork -----------------------------------------------------------------------
 
   /** {@code ImplicitRefs.filterMatching}'s local {@code candidateKind}: kind None drops the ref. */
