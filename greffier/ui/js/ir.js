@@ -55,6 +55,44 @@
     for (let i = vs.length - 1, c = 0; i >= 0 && c < 6; i--, c++) if (vs[i].ids.has(n)) return S().snip(vs[i], n, max);
     return null;
   }
+  // ---- why was a range elided? walk its earlier derives; find the phase at which a POP first followed it and, for a closure allocation (INVOKEDYNAMIC),
+  // the inlined-from ranges whose callee is the lambda's implementation method ----
+  const isInsn = (l) => /^\s{4}[A-Z][A-Z0-9_]*\b/.test(l) && !/^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/.test(l);
+  const spanOf = (cls, phase, id) => { const cv = R.ST.D.irClassVersion(cls, phase); if (!cv) return null; const W = S().viewOf(cv), o = W.byId.get(id); return o ? { W, o, cv } : null; };
+  R.elisionCause = (id) => {
+    const D = R.ST.D, nd = D.nodes.get(id); if (!nd || !nd.ir) return null; const cls = D.irClassOf.get(id), m = D.nodes.get(nd.method), mkey = m ? m.name + m.desc : null;
+    const elide = (D.irByOld.get(id) || []).find((d) => d.how === 'elide'); if (!elide) return null;
+    // earlier life of the range: [{phase, id, how}] oldest first
+    const chain = []; let cur = id, hops = 0;
+    for (;;) { const d = (D.irByNew.get(cur) || []).find((x) => x.old.length && x.how !== 'elide'); const sp = spanOf(cls, d ? d.phase : D.irGenPhase, cur); chain.unshift({ phase: d ? d.phase : D.irGenPhase, id: cur, how: d ? d.how : 'codegen', callee: d && d.callee }); if (!d || d.how === 'codegen' || ++hops > 40) break; cur = d.old[0]; }
+    // text of the range and what follows it, at each stage
+    chain.forEach((c) => { const sp = spanOf(cls, c.phase, c.id); if (!sp) return; const t = sp.W.text.slice(sp.o[1], sp.o[2]); c.text = t; const after = sp.W.text.slice(sp.o[2]).split('\n').find((l) => isInsn(l)); c.after = after ? after.trim() : ''; });
+    const popAt = chain.find((c) => /^POP2?\b/.test(c.after || ''));
+    const firstText = (chain.find((c) => c.text) || {}).text || '';
+    const indy = /INVOKEDYNAMIC/.test(firstText);
+    // the lambda's implementation method: a non-JDK handle in the indy's arguments
+    let impl = null; if (indy) { const re = /([A-Za-z0-9_$\/]+)\.([A-Za-z0-9_$<>]+)\(([^)]*)\)/g; let mm; while ((mm = re.exec(firstText))) { if (/^java\/lang\/invoke|LambdaMetafactory/.test(mm[1]) || mm[2] === 'altMetafactory' || mm[2] === 'metafactory') continue; if (/\$anonfun\$|\$lambda/i.test(mm[2])) { impl = { owner: mm[1].replace(/\//g, '.'), name: mm[2], key: mm[1].replace(/\//g, '.') + '.' + mm[2] + '(' }; break; } } }
+    let sites = 0, where = null, inlinePhase = null;
+    if (impl) {
+      const ds = D.irDerives.filter((d) => d.how === 'inlined-from' && d.callee && d.callee.replace(/\//g, '.').startsWith(impl.key) && D.irClassOf.get(d.new[0]) === cls && (() => { const n = D.nodes.get(d.new[0]), mm2 = n && D.nodes.get(n.method); return mm2 && mm2.name + mm2.desc === mkey; })());
+      if (ds.length) { inlinePhase = ds[0].phase; const olds = new Set(); ds.forEach((d) => d.old.forEach((o) => olds.add(o))); sites = Math.max(1, Math.round(ds.length / Math.max(1, olds.size))); let lo = Infinity, hi = -Infinity; ds.forEach((d) => d.new.forEach((n) => { const r = (D.nodes.get(n) || {}).range; if (r) { lo = Math.min(lo, r[0]); hi = Math.max(hi, r[1]); } })); if (lo < hi) where = [lo, hi]; }
+    }
+    const pn = (p) => R.verName({ irPseudo: true, phase: p }), since = popAt ? popAt.phase : null;
+    let text, kind;
+    if (indy && impl && sites) { kind = 'dead-closure'; text = `dead since ${since != null ? pn(since) : pn(inlinePhase)}: its result was POPped after \`${impl.name}\` was inlined${where ? ` at instructions ${where[0]}–${where[1]}` : ''} (${sites} site${sites > 1 ? 's' : ''}) by ${pn(inlinePhase)}; ${pn(elide.phase)} removed the dead allocation`; }
+    else if (since != null) { kind = indy ? 'dead-allocation' : 'dead-push'; text = `dead since ${pn(since)}: its result was POPped; ${pn(elide.phase)} removed the push/pop pair`; }
+    else { kind = 'other'; text = `removed by ${pn(elide.phase)} (no earlier POP or inlining cause found in the derives)`; }
+    return { id, kind, text, chain, since, impl, sites, where, elidePhase: elide.phase, indy, pn };
+  };
+  const causeHtml = (c) => `<div class="cause"><b>${esc(c.text)}</b><div class="dim">${c.chain.map((x) => `${esc(c.pn(x.phase))}: ${x.how}${x.callee ? ' (' + esc(x.callee.replace(/\(.*$/, '')) + ')' : ''}${/^POP2?\b/.test(x.after || '') ? ' · followed by POP' : ''}`).join(' → ')} → <b>${esc(c.pn(c.elidePhase))}: elided</b></div></div>`;
+  // closure bookkeeping for a phase: invocations rewritten by the inliner (distinct lambda call sites) vs dead allocations removed (elided INVOKEDYNAMIC ranges)
+  R.closureCounts = (cls, phase, elided, method) => {
+    const D = R.ST.D, out = { rewritten: 0, dead: 0 }; if (!D || !D.irDerives) return out; const per = new Map();
+    D.irDerives.forEach((d) => { if (d.phase !== phase || d.how !== 'inlined-from' || !d.callee || !/\$anonfun\$|\$lambda/i.test(d.callee) || D.irClassOf.get(d.new[0]) !== cls) return; if (method) { const n = D.nodes.get(d.new[0]), mm = n && D.nodes.get(n.method); if (!mm || mm.name + mm.desc !== method) return; } const k = d.callee, o = per.get(k) || { n: 0, olds: new Set() }; o.n++; d.old.forEach((x) => o.olds.add(x)); per.set(k, o); });
+    per.forEach((o) => { out.rewritten += Math.max(1, Math.round(o.n / Math.max(1, o.olds.size))); });
+    (elided || []).forEach((id) => { const nd = D.nodes.get(id); if (method) { const mm = nd && D.nodes.get(nd.method); if (!mm || mm.name + mm.desc !== method) return; } const c = R.elisionCause(id); if (c && (c.kind === 'dead-closure' || c.kind === 'dead-allocation')) out.dead++; });
+    return out;
+  };
   const rangeText = (cv, id, max = 140) => { const w = S().viewOf(cv), o = w.byId.get(id); if (!o) return ''; const t = w.text.slice(o[1], o[2]).split('\n').map((x) => x.trim()).filter((x) => x && !/^(LINENUMBER|FRAME|L\d+$)/.test(x)).join(' ; '); return t.length > max ? t.slice(0, max) + '…' : t; };
   const deriveAt = (D, id, phase) => (D.irByNew.get(id) || []).find((d) => d.phase === phase);
 
@@ -132,7 +170,7 @@
     const targets = [...sel, ...lnk, ...rgs];
     S().paint(W, clsF, targets, v.phase + ':' + cls + ':' + st.selNode + ':' + (st.range ? st.range.lo + '-' + st.range.hi + ':' + st.range.phase : ''), 'bc', 'ir:' + st.unit + ':' + cls);
     // header
-    const chips = (changedHere ? (cnt.rewrite ? `<span class="chip2 cs" title="Ranges whose instruction text changed in this step">${cnt.rewrite} rewritten</span>` : '') + (cnt['inlined-from'] ? `<span class="chip2 ci" title="Instructions copied in by the inliner">${cnt['inlined-from']} inlined</span>` : '') + (elided.length ? `<span class="chip2 cm" title="Ranges none of whose instructions survived: listed below, struck through">${elided.length} elided</span>` : '') + (cnt.copy ? `<span class="chip2 cc" title="Ranges unchanged in a changed method">${cnt.copy} unchanged ranges</span>` : '') : '') + (v.phase === D.irGenPhase ? '<span class="dim"> straight from the code generator</span>' : '');
+    const chips = (changedHere ? (cnt.rewrite ? `<span class="chip2 cs" title="Ranges whose instruction text changed in this step">${cnt.rewrite} rewritten</span>` : '') + (cnt['inlined-from'] ? `<span class="chip2 ci" title="Instructions copied in by the inliner">${cnt['inlined-from']} inlined</span>` : '') + (elided.length ? `<span class="chip2 cm" title="Ranges none of whose instructions survived: listed below, struck through">${elided.length} elided</span>` : '') + (() => { const cl = R.closureCounts(cls, v.phase, elided); return (cl.rewritten ? `<span class="chip2 ci" title="INVOKEDYNAMIC closure call replaced by a direct call whose body was inlined (inlined-from derives of a lambda implementation method)">${cl.rewritten} closure invocation${cl.rewritten > 1 ? 's' : ''} rewritten</span>` : '') + (cl.dead ? `<span class="chip2 cm" title="Closure allocations whose result was only POPped, removed here">${cl.dead} dead allocation${cl.dead > 1 ? 's' : ''} removed</span>` : ''); })() + (cnt.copy ? `<span class="chip2 cc" title="Ranges unchanged in a changed method">${cnt.copy} unchanged ranges</span>` : '') : '') + (v.phase === D.irGenPhase ? '<span class="dim"> straight from the code generator</span>' : '');
     const note = !changedHere ? `<div class="banner">${esc(cls)} was not changed by <b>${esc(R.verName(v))}</b>; showing its text from <b>${esc(R.verName({ irPseudo: true, phase: cv.phase }))}</b>.</div>` : '';
     const ops = cv.text.split('\n').filter((t) => /^\s+[A-Z][A-Z0-9_]+\b/.test(t) && !/^\s+(LINENUMBER|FRAME|LOCALVARIABLE|MAXSTACK|MAXLOCALS)\b/.test(t)).length;
     const clsSel = `<select id="irclass" aria-label="class">${[...D.jvmClasses.values()].filter((c) => c.unit === st.unit).map((c) => `<option${c.name === cls ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
@@ -141,8 +179,8 @@
     // elided ranges, struck through (text from the class version before the step)
     const rl = $('removed');
     if (elided.length && pcv) {
-      rl.hidden = false; $('remsum').textContent = `elided in ${R.verName(v)} (${elided.length})`;
-      if (rl.open) $('remlist').innerHTML = elided.slice(0, 200).map((id) => { const nd = D.nodes.get(id), m = nd && D.nodes.get(nd.method); return `<pre class="old"><span class="dim">${esc(m ? m.name : '')} ${nd && nd.range ? nd.range[0] + '–' + nd.range[1] : ''}</span> <s>${esc(rangeText(pcv, id, 200) || '(instructions of the previous text)')}</s></pre>`; }).join('');
+      rl.hidden = false; const causes = elided.map((id) => R.elisionCause(id)).filter(Boolean), kinds = new Map(); causes.forEach((c) => kinds.set(c.kind, (kinds.get(c.kind) || 0) + 1)); const dead = (kinds.get('dead-closure') || 0) + (kinds.get('dead-allocation') || 0); $('remsum').textContent = `elided in ${R.verName(v)} (${elided.length})` + (dead ? ` · ${dead} dead closure allocation${dead > 1 ? 's' : ''}` : '') + (causes[0] ? ' — ' + causes[0].text : '');
+      if (rl.open) $('remlist').innerHTML = elided.slice(0, 200).map((id) => { const nd = D.nodes.get(id), m = nd && D.nodes.get(nd.method); const cz = R.elisionCause(id); return `<pre class="old"><span class="dim">${esc(m ? m.name : '')} ${nd && nd.range ? nd.range[0] + '–' + nd.range[1] : ''}</span> <s>${esc(rangeText(pcv, id, 200) || '(instructions of the previous text)')}</s></pre>${cz ? causeHtml(cz) : ''}`; }).join('');
     }
     renderMethodPanel(v, cls, cv, hows);
     // side panel
