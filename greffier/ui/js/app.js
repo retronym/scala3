@@ -209,6 +209,7 @@
       if (k >= 0) { patch.verIdx = k; if (!h.has('seq')) { const v = R.vers()[k]; if (v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); } }   // pname alone lands on that phase's output
     } else if (h.has('phase') && !h.has('seq')) { const v = R.vers()[patch.verIdx]; if (v && v.seq != null) patch.evIdx = R.evIndexAtOrAfter(v.seq); }
     if (h.has('node')) patch.selNode = +h.get('node');
+    if (h.has('gran')) { patch.gran = h.get('gran'); $('gran').value = patch.gran; } if (h.has('chn')) { patch.chThrNodes = +h.get('chn'); $('chnodes').value = h.get('chn'); } if (h.has('chm')) { patch.chMetric = h.get('chm'); $('chmetric').value = patch.chMetric; } if (h.has('chp')) { patch.chThrPct = +h.get('chp'); $('chpct').value = h.get('chp'); }
     if (h.has('range')) {   // range=<phase>:<lo>-<hi> (1-based lines of that phase's tree text, in the selected unit)
       const m = /^(.+):(\d+)-(\d+)$/.exec(h.get('range')), v = m && R.stk && D.versionsOf(ST.unit).find((x) => !x.ir && D.phaseRaw(x.phase) === m[1]);
       if (v) patch.range = { unit: ST.unit, phase: v.phase, lo: +m[2] - 1, hi: +m[3] - 1, nodes: R.stk.nodesInLines(v, +m[2] - 1, +m[3] - 1), ir: false, cls: null };
@@ -226,6 +227,7 @@
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
     if (ST.level !== 'file') p.set('level', ST.level);
     if (R.stackOpen) p.set('stack', 1);
+    if (ST.gran && ST.gran !== 'chapters') p.set('gran', ST.gran); if (ST.chThrNodes != null && ST.chThrNodes !== 6) p.set('chn', ST.chThrNodes); if (ST.chThrPct != null && ST.chThrPct !== 4) p.set('chp', ST.chThrPct); if (ST.chMetric && ST.chMetric !== 'lines') p.set('chm', ST.chMetric);
     if (ST.range && !ST.range.ir && ST.range.unit === ST.unit) p.set('range', D.phaseRaw(ST.range.phase) + ':' + (ST.range.lo + 1) + '-' + (ST.range.hi + 1));
     if (ST.skip) p.set('skip', 1); if (ST.collapse) p.set('collapse', 1); if (ST.showRetyped) p.set('retyped', 1);
     return p.toString().replace(/%2C/g, ',').replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
@@ -434,6 +436,7 @@
     $('collapse').onchange = (ev) => R.set({ collapse: ev.target.checked, verIdx: 0 });
     $('retyped').onchange = (ev) => { const seq = R.seq(); ST.showRetyped = ev.target.checked; R.set({ evIdx: R.evIndexAtOrAfter(seq) }); };
     $('bytime').onchange = (ev) => R.set({ byTime: ev.target.checked });
+    $('gran').onchange = (ev) => R.set({ gran: ev.target.value }); $('chnodes').onchange = (ev) => R.set({ chThrNodes: Math.max(1, +ev.target.value || 8) }); $('chpct').onchange = (ev) => R.set({ chThrPct: Math.max(0, +ev.target.value || 0) }); $('chmetric').onchange = (ev) => R.set({ chMetric: ev.target.value });
     $('follow').onchange = (ev) => { ST.follow = ev.target.checked; };
     document.addEventListener('keydown', (ev) => {
       if (R.stackOpen) { if (ev.key === 'Escape') { R.stackEsc(); ev.preventDefault(); } else if (ev.key === 's' && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) { R.closeStack(); ev.preventDefault(); } else if (ev.key === '?') { $('help').hidden = !$('help').hidden; } return; }
@@ -444,8 +447,8 @@
       if (ev.key === '?' || (ev.key === 'Escape' && (!$('help').hidden || (!$('recs').hidden && ST.D)))) { if (true) { const open = ev.key === '?' ? $('help').hidden : false; $('help').hidden = !open; if (ST.D) $('recs').hidden = true; ev.preventDefault(); return; } }
       const t = ev.target; if (!ST.D || ev.metaKey || ev.ctrlKey || ev.altKey || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.tagName === 'INPUT' && /^(text|search|number|url|email)$/.test(t.type))) return;
       const step = ev.shiftKey ? 10 : 1;
-      if (ev.key === 'ArrowRight') R.stepEvent(step);
-      else if (ev.key === 'ArrowLeft') R.stepEvent(-step);
+      if (ev.key === 'ArrowRight') { if (ev.shiftKey) R.stepEvent(1); else R.pageTurn(1); }   // ← → turn pages (chapters), ⇧ ← ⇧ → small steps: one event
+      else if (ev.key === 'ArrowLeft') { if (ev.shiftKey) R.stepEvent(-1); else R.pageTurn(-1); }
       else if (ev.key === ']' || ev.key === '.') { if (!(ST.follow && R.stepPhase(1))) R.setPhase(ST.verIdx + 1); }
       else if (ev.key === '[' || ev.key === ',') { if (!(ST.follow && R.stepPhase(-1))) R.setPhase(ST.verIdx - 1); }
       else if (ev.key === 'e') R.phaseEnd();
@@ -469,7 +472,7 @@
 
   // ---- recordings panel -------------------------------------------------------------------------------------------------------------
   const CHEAT = `<h3>Keys</h3><div class="keys">
-    <span><kbd>←</kbd> <kbd>→</kbd></span><span>previous / next event (<kbd>⇧</kbd> ×10); a phase with no visible events is stepped over by version</span>
+    <span><kbd>←</kbd> <kbd>→</kbd></span><span>previous / next page (chapter, ★ or change, per Pages granularity); <kbd>⇧</kbd> <kbd>←</kbd> <kbd>→</kbd> small steps: one event (stack: one version)</span>
     <span><kbd>[</kbd> <kbd>]</kbd></span><span>previous / next phase output (cursor at its PhaseEnd)</span>
     <span><kbd>b</kbd> <kbd>e</kbd></span><span>start / end of the current phase (<kbd>e</kbd> again: end of the next phase)</span>
     <span><kbd>p</kbd> <kbd>n</kbd></span><span>previous / next event inside the current phase</span>

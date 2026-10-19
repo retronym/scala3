@@ -36,8 +36,10 @@
       this.lbl = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.thr = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.svg.append(this.lbl, this.thr);
       this.u = 0; this.target = 0; this.lastWheel = 0; this.hover = null; this.tr = null;
       this.frames = []; this.works = []; this.textBuilt = 0; this.all = []; this.list = [];
-      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {}); this.onSwitchClass = opts.onSwitchClass || null; this.onRange = opts.onRange || (() => {}); this.rg = null;
+      this.onFront = opts.onFront || (() => {}); this.onTrace = opts.onTrace || (() => {}); this.onSelect = opts.onSelect || (() => {}); this.onSwitchClass = opts.onSwitchClass || null; this.onRange = opts.onRange || (() => {}); this.onPage = opts.onPage || (() => {}); this.rg = null;
       el.addEventListener('wheel', (e) => this.active && this.wheel(e), { passive: false });
+      el.addEventListener('touchstart', (e) => { const t = e.touches[0]; this._ts = t ? [t.clientX, t.clientY, performance.now()] : null; }, { passive: true });
+      el.addEventListener('touchend', (e) => { const t = e.changedTouches[0], a = this._ts; this._ts = null; if (!t || !a) return; const dx = t.clientX - a[0], dy = t.clientY - a[1]; if (Math.abs(dx) > 60 && Math.abs(dy) < 40 && performance.now() - a[2] < 700) this.onPage(dx < 0 ? 1 : -1); }, { passive: true });
       el.addEventListener('pointermove', (e) => this.pmove(e));
       el.addEventListener('pointerleave', () => { this.hover = null; });
       el.addEventListener('click', (e) => this.click(e));
@@ -215,7 +217,15 @@
     // ---- input ----
     wheel(e) {
       e.preventDefault(); const d = (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1) * (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX);
-      const f = this.front; if (f && f.ready && Math.abs(e.deltaX) > Math.abs(e.deltaY)) { f.hx = Math.max(0, Math.min(3000, (f.hx || 0) + e.deltaX)); this.placeText(f); return; }
+      const f = this.front;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        if (e.altKey && f && f.ready) { f.hx = Math.max(0, Math.min(3000, (f.hx || 0) + e.deltaX)); this.placeText(f); return; }
+        // two-finger horizontal swipe: accumulate, turn one page past the threshold, then ignore the trackpad's inertia for a while
+        const now = performance.now(); if (now - (this.swipeT || 0) < 450) { this.swipeT = now - 300; return; }
+        this.swipeAcc = (now - (this.swipeLast || 0) > 200 ? 0 : this.swipeAcc || 0) + e.deltaX; this.swipeLast = now;
+        if (Math.abs(this.swipeAcc) > 60) { const d = this.swipeAcc > 0 ? 1 : -1; this.swipeAcc = 0; this.swipeT = now; this.onPage(d); }
+        return;
+      }
       if (e.altKey || e.shiftKey) { this.scrollFront(d / LH); return; }
       this.target = Math.max(0, Math.min(this.sMax, this.target + d / 110)); this.lastWheel = performance.now(); this.kick();
     }
@@ -225,7 +235,8 @@
       if (k === 'ArrowDown' || k === 'PageDown') go(idx - (k === 'PageDown' ? 10 : 1)); else if (k === 'ArrowUp' || k === 'PageUp') go(idx + (k === 'PageUp' ? 10 : 1));
       else if (k === 'Home') go(this.list.length - 1); else if (k === 'End') go(0);
       else if (k === 'j') this.scrollFront(3); else if (k === 'k') this.scrollFront(-3);
-      else if (k === 'i' || k === 'I') { const st = this.list.filter((c) => c.star); const nx = k === 'i' ? [...st].reverse().find((c) => c.s > this.front.s + 1e-6) : st.find((c) => c.s < this.front.s - 1e-6); if (nx) this.flyTo(nx); }
+      else if (k === 'ArrowRight' && e.shiftKey) go(idx + 1); else if (k === 'ArrowLeft' && e.shiftKey) go(idx - 1);   // small step: one version (later phase = next card)
+      else if (k === 'ArrowRight' || k === 'i') this.onPage(1); else if (k === 'ArrowLeft' || k === 'I') this.onPage(-1);
       else return;
       e.preventDefault(); e.stopPropagation();
     }

@@ -10,10 +10,10 @@
     if (stack) return stack;
     stack = R._stk.st = new M.Stack($('sstage'), {
       onList: (list) => { S.list = list; drawMini(); },
-      onFront: (c) => { $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.kind === 'ir' ? ' <span class=dimt>· ' + esc(c.cls.replace(/^.*\//, '')) + '</span>' : ''}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
+      onFront: (c) => { setTimeout(renderPager, 0); $('sfront').innerHTML = c ? `<b>${c.i + 1}/${S.cards.length}</b> ${esc(c.name)}${c.kind === 'ir' ? ' <span class=dimt>· ' + esc(c.cls.replace(/^.*\//, '')) + '</span>' : ''}${c.noop ? ' <span class=dimt>(no change)</span>' : ''}` : ''; document.querySelectorAll('#schron .ce').forEach((e) => e.classList.toggle('cur', c && +e.dataset.i === c.i)); syncViewer(c); },
       onTrace: (tr) => { renderChron(tr); drawMini(); },
       // the traced code lives in another class than the selected one: switch the JVM segment there and trace again
-      onRange: (g) => onRange(g),
+      onRange: (g) => onRange(g), onPage: (d) => pageTurn(d),
       onSwitchClass: (cls, c, n) => {
         const prev = R.curClass(); R.ST.cls = cls; S.keep = { kind: c.kind, phase: c.phase }; build(false); S.note = `bytecode is in class ${cls.replace(/^.*\//, '')} (was ${(prev || '').replace(/^.*\//, '')})`;
         const tc = S.cards.find((x) => x.kind === c.kind && x.phase === c.phase) || S.cards[0]; if (tc) stack.traceNode(tc, n);
@@ -60,7 +60,7 @@
       if (isIR) { c = S.cards.find((x) => x.kind === 'ir' && x.v.ids.has(sel)) || c; if (c.v.ids.has(sel)) n = sel; } else if (c.kind === 'tree') n = [...R.present(sel, c.v)][0] ?? (c.v.ids.has(sel) ? sel : null); else { const t = S.cards.filter((x) => x.kind === 'tree').pop(); if (t) { c = t; n = [...R.present(sel, t.v)][0] ?? null; } }
       if (n != null && c) st.traceNode(c, n); }, 0);
   }
-  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass()].join('|');
+  const sig = () => [R.ST.D && R.ST.D.nodes.size, R.ST.unit, R.ST.skip, R.ST.collapse, R.ST.structOnly, R.vers().filter((v) => !v.irPseudo).length, R.curClass && R.curClass(), R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct, R.ST.chMetric].join('|');
   const fsig = () => [R.ST.trivialNoop !== false, R.scoreState && R.scoreState.lines.size].join('|');
 
   // the overlay owns wheel/touch input while open: the page behind must not scroll, even when the stack cannot move further
@@ -99,6 +99,22 @@
       const t = tr && tr.per[c.i];
       if (t && t.how && t.how !== 'same' && t.how !== 'copy') { g.fillStyle = M.HOW_COL[t.how]; g.beginPath(); g.arc(w - 4, yy, 2.5, 0, 7); g.fill(); } else if (t && t.how) { g.fillStyle = 'rgba(111,129,150,0.8)'; g.fillRect(w - 5, yy - 0.5, 2, 1); }
     }
+    if (R.chapters) { g.fillStyle = 'rgba(110,170,255,0.7)'; R.chapters().forEach((ch) => { if (ch.from <= 0) return; const v = R.vers()[ch.from], c = S.cards.find((x) => (v.irPseudo ? x.kind === 'ir' && x.phase === v.phase : x.v === v)); if (c) g.fillRect(w - 52, y(c) - 6, 46, 1); }); }
+  }
+  // ---- pages: chapter stops (R.interesting) mapped onto the cards; ◀ ▶ fly to the previous / next one ----
+  const stopCard = (x) => S.cards.find((c) => (x.v.irPseudo ? c.kind === 'ir' && c.phase === x.v.phase : c.v === x.v));
+  function pages() {
+    const stops = (R.interesting ? R.interesting() : []).map((x) => ({ x, c: stopCard(x) })).filter((p) => p.c).sort((a, b) => a.c.i - b.c.i), f = stack && stack.front, cur = f ? f.i : 0;
+    let k = stops.findIndex((p) => p.c.i >= cur); if (k < 0) k = stops.length - 1; return { stops, k };
+  }
+  function pageTurn(d) {
+    const { stops } = pages(); if (!stops.length) return; const f = stack.front, cur = f ? f.i : 0;
+    const t = d > 0 ? stops.find((p) => p.c.i > cur) || stops[0] : [...stops].reverse().find((p) => p.c.i < cur) || stops[stops.length - 1]; if (t) stack.flyTo(t.c);
+  }
+  function renderPager() {
+    const el = $('spager'); if (!el || !R.stackOpen) return; const { stops, k } = pages(); if (!el._w) { el._w = 1; R.wirePager(el, pageTurn, (i) => { const p = pages().stops[i]; if (p) stack.flyTo(p.c); }); }
+    const top = new Set(R.interestingTop().map((x) => x.i)), info = { stops: stops.map((p) => p.x), k, label: (R.ST.gran || 'chapters') === 'chapters' ? 'chapter' : 'stop', name: stops[k] && (stops[k].x.ch ? stops[k].x.ch.name + ((stops[k].x.ch.add || stops[k].x.ch.del) ? ` · +${stops[k].x.ch.add} −${stops[k].x.ch.del} ${stops[k].x.ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].x.v)), top };
+    const h = R.pagerHtml(info); if (el._h !== h) { el._h = h; el.innerHTML = h; }
   }
   // ---- line range: viewer state (R.ST.range) + side panel with the per-phase rows ----
   const lineSpan = (c, sp) => { let a = sp[0][0], b = sp[sp.length - 1][1]; while (a <= b && c.rows[a] && c.rows[a].nl < 0) a++; while (b >= a && c.rows[b] && c.rows[b].nl < 0) b--; return [c.rows[a] ? c.rows[a].nl + 1 : 0, c.rows[b] ? c.rows[b].nl + 1 : 0]; };
@@ -149,5 +165,6 @@
     if (sig() !== S.sig) { const f = stack && stack.front; S.keep = f ? { kind: f.kind, phase: f.phase } : null; build(false); }
     else if (fsig() !== S.fsig) { S.fsig = fsig(); const fresh = M.buildCards(); if (fresh.length === S.cards.length) { stack.relayout(fresh.map((c) => c.noop)); fresh.forEach((c, i) => { S.cards[i].noop = c.noop; }); status(); } }
   };
-  view.light = true; R.views.push(view);
+  { const v0 = view; var view2 = () => { v0(); renderPager(); }; }
+  const viewP = () => { view(); renderPager(); }; viewP.light = true; R.views.push(viewP);
 })(window.R);

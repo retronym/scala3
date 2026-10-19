@@ -65,13 +65,70 @@
   // ---- interesting phases ----
   const N_TOP = 5;
   R.versionScores = () => { const vs = R.vers(); return vs.map((v, i) => ({ v, i, sc: R.scoreOf(v) })); };
-  R.interesting = () => {
+  R.interestingTop = () => {
     const D = R.ST.D, vs = R.versionScores().filter((x) => x.i > 0), top = vs.slice().sort((a, b) => R.metricVal(b.sc) - R.metricVal(a.sc)).filter((x) => R.metricVal(x.sc) > 0).slice(0, N_TOP);
     const stops = new Set(top.map((x) => x.i));
     // where bytecode first appears and the final class state are always stops, whatever the metric
     vs.forEach((x) => { if (x.v.irPseudo && (x.v.phase === D.irGenPhase || D.phaseRaw(x.v.phase) === 'jvm:classfile')) stops.add(x.i); });
     return vs.filter((x) => stops.has(x.i)).sort((a, b) => a.i - b.i);
   };
+  // ---- chapters: consecutive versions coalesced until the accumulated change reaches max(MIN, PCT % of the unit's size) ----
+  // metric 'lines' (default): changed printed lines (added + removed, from the line diff); bytecode phases: ranges rewritten + elided + inlined-from (range derives, not the text diff),
+  // measured against the ranges emitted at genBCode. metric 'nodes': new / rewritten / removed nodes (rebuilt spine nodes and retypes excluded).
+  // parser, typer, erasure, genBCode and jvm:classfile are chapters on their own (the coalescing restarts after them); a chapter that ends under the threshold,
+  // or a forced phase with a score under 2 (except parser), joins the previous chapter. Named by the dominant phase.
+  const scoreOf2 = (v, sc, metric) => (v.irPseudo ? sc.struct + sc.removed : metric === 'nodes' ? sc.struct + sc.removed : (sc.lines || 0));
+  let chCache = null;
+  R.chapters = () => {
+    const D = R.ST.D; if (!D) return [];
+    const vs = R.versionScores(), mn = R.ST.chThrNodes ?? 6, pct = R.ST.chThrPct ?? 4, metric = R.ST.chMetric || 'lines', key = [R.ST.unit, vs.length, mn, pct, metric, S.lines.size, R.curClass && R.curClass()].join('|');
+    if (chCache && chCache.key === key) return chCache.val;
+    const gen = vs.find((x) => x.v.irPseudo && x.v.phase === D.irGenPhase), irBase = gen ? Math.max(1, gen.sc.struct) : 1;
+    const forced = new Set(); vs.forEach((x) => { const r = D.phaseRaw(x.v.phase); if (x.i === 0 || (!x.v.irPseudo && (r === 'typer' || r === 'erasure')) || (x.v.irPseudo && (x.v.phase === D.irGenPhase || r === 'jvm:classfile'))) forced.add(x.i); });
+    const sizeAt = (x) => { if (x.v.irPseudo) return irBase; const tv = vs.slice(0, x.i + 1).filter((y) => !y.v.irPseudo).pop(); return metric === 'nodes' ? (tv && tv.v.ids ? tv.v.ids.size : 0) : (tv ? R.linesOf(tv.v).length : 0); };
+    const out = []; let cur = null, acc = 0, lastThr = mn;
+    const mk = (x) => ({ from: x.i, to: x.i, members: [], forced: forced.has(x.i), add: 0, del: 0, ir: !!x.v.irPseudo });
+    const close = () => { if (!cur) return; cur.score = acc; if (!cur.forced && acc < lastThr && out.length) { const p = out[out.length - 1]; p.to = cur.to; p.members.push(...cur.members); p.score += acc; p.add += cur.add; p.del += cur.del; p.ir = cur.ir; } else out.push(cur); cur = null; acc = 0; };
+    vs.forEach((x) => {
+      const sc = scoreOf2(x.v, x.sc, metric), thr = Math.max(mn, Math.ceil(sizeAt(x) * pct / 100)); lastThr = thr;
+      if (forced.has(x.i)) {
+        close();
+        if (x.i > 0 && sc < 2 && out.length) { const p = out[out.length - 1]; p.to = x.i; p.members.push({ i: x.i, sc }); p.score += sc; p.add += x.sc.add || 0; p.del += x.sc.del || 0; p.ir = !!x.v.irPseudo; return; }
+        cur = mk(x); cur.members.push({ i: x.i, sc }); cur.dom = x.i; cur.domScore = sc; acc = sc; cur.add += x.sc.add || 0; cur.del += x.sc.del || 0; close(); return;
+      }
+      if (!cur) { cur = mk(x); cur.dom = x.i; cur.domScore = -1; }
+      cur.to = x.i; cur.members.push({ i: x.i, sc }); acc += sc; cur.add += x.sc.add || 0; cur.del += x.sc.del || 0; if (sc > cur.domScore) { cur.domScore = sc; cur.dom = x.i; }
+      if (acc >= thr) close();
+    });
+    close();
+    // dominant phase of merged chapters: the member with the largest score
+    out.forEach((c, k) => { c.k = k; let d = c.members[0]; c.members.forEach((m) => { if (m.sc > d.sc) d = m; }); c.dom = d.i; const v = vs[c.dom].v, minor = c.members.filter((m) => m.i !== c.dom && m.sc > 0).length; c.name = R.verName(v) + (minor ? ` (+ ${minor} minor phase${minor > 1 ? 's' : ''})` : ''); c.short = R.verName(v); c.v = vs[c.to].v; });
+    chCache = { key, val: out }; return out;
+  };
+  // the page stops for the current granularity: chapter ends, ★ top-N, or every version with a change
+  R.interesting = () => {
+    const g = R.ST.gran || 'chapters';
+    if (g === 'top') return R.interestingTop();
+    const vs = R.versionScores();
+    if (g === 'all') return vs.filter((x) => x.i > 0 && (structOf(x.v, x.sc) > 0 || x.sc.retype > 0 || (x.sc.lines || 0) > 0));
+    return R.chapters().map((c) => Object.assign({ ch: c }, vs[c.to]));
+  };
+  // page position: chapter (or stop) index for the current version, and the stops
+  R.pageInfo = () => {
+    const stops = R.interesting(), cur = R.ST.verIdx; let k = stops.findIndex((x) => x.i >= cur); if (k < 0) k = stops.length - 1;
+    const ch = (R.ST.gran || 'chapters') === 'chapters' ? R.chapters() : null;
+    return { stops, k, label: ch ? 'chapter' : 'stop', name: stops[k] && (stops[k].ch ? stops[k].ch.name + ((stops[k].ch.add || stops[k].ch.del) ? ` · +${stops[k].ch.add} −${stops[k].ch.del} ${stops[k].ch.ir ? 'instr' : 'lines'}` : '') : R.verName(stops[k].v)), top: new Set(R.interestingTop().map((x) => x.i)) };
+  };
+  // ---- pager (◀ ▶ + counter + dots) shared by the explorer panel and the stack overlay ----
+  const escH = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  R.pagerHtml = (info) => {
+    const n = info.stops.length; if (!n) return '';
+    const dots = info.stops.map((x, i) => `<button class="dot${info.top.has(x.i) ? ' star' : ''}${i === info.k ? ' cur' : ''}" data-k="${i}" title="${escH(x.ch ? x.ch.name : R.verName(x.v))}">${info.top.has(x.i) ? '★' : ''}</button>`).join('');
+    return `<div class="prow"><button class="fab" data-act="-1" title="previous ${info.label} (←)">◀</button><div class="pcount"><b>${info.label} ${info.k + 1}/${n} · ${escH(info.name || '')}</b><span>${escH(R.ST.gran === 'top' ? '★ top 5' : R.ST.gran === 'all' ? 'every change' : 'chapters')}</span></div><button class="fab" data-act="1" title="next ${info.label} (→)">▶</button></div><div class="dots">${dots}</div>`;
+  };
+  R.wirePager = (el, turn, go) => { el.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('button'); if (!b) return; if (b.dataset.act) turn(+b.dataset.act); else if (b.dataset.k != null) go(+b.dataset.k); }); };
+  R.pageTurn = (d) => R.jumpInteresting(d);
+  R.pageGo = (k) => { const st = R.interesting()[k]; if (st) R.setPhase(st.i); };
   R.isBytecodeStart = (v) => !!(v && v.irPseudo && v.phase === R.ST.D.irGenPhase);
   R.dots = (v, all) => { const m = Math.max(1, ...all.map((x) => R.metricVal(x.sc))), r = R.metricVal(R.scoreOf(v)) / m; return r <= 0 ? '' : r < 0.08 ? '●' : r < 0.25 ? '●●' : r < 0.55 ? '●●●' : '●●●●'; };
   R.jumpInteresting = (d) => {
@@ -103,10 +160,10 @@
     const zoomed = !!R.ST.zoomKey; box.hidden = zoomed; if (zoomed) return;
     const W = $('bands').clientWidth || 1000, ax = R.axis(W), top = new Set(R.interesting().map((x) => x.v.phase)); R.computeLines(R.ST.unit);
     const vals = new Map(); R.versionScores().forEach((x) => { vals.set(x.v.irPseudo ? 'i' + x.v.phase : x.v.phase, R.metricVal(x.sc)); });
-    const max = Math.max(1, ...vals.values()), key = [R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size].join('|');
+    const max = Math.max(1, ...vals.values()), key = [R.ST.D.bands.length, R.ST.unit, R.ST.metric, ax.key, R.ST.collapse, R.ST.skip, S.lines.size, R.ST.gran, R.ST.chThrNodes, R.ST.chThrPct].join('|'), chStart = new Set(R.chapters().filter((c) => c.from > 0).map((c) => { const v = R.vers()[c.from]; return v.irPseudo ? 'i' + v.phase : v.phase; }));
     if (box._key !== key) {
       box._key = key; box.innerHTML = '';
-      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR && !b.ir) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.ir ? 'i' + b.phase : b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (b.phase === D.irGenPhase && D.hasIR && !b.ir ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
+      ax.segs.forEach(({ b, a0, a1 }) => { if (b.phase === D.irGenPhase && D.hasIR && !b.ir) { const tg = document.createElement('div'); tg.className = 'bctag'; tg.textContent = '⟐ bytecode'; tg.style.left = Math.min(a0 * 100, 92) + '%'; box.append(tg); } const v = vals.get(b.ir ? 'i' + b.phase : b.phase) || 0; const el = document.createElement('div'); el.className = 'hc' + (top.has(b.phase) ? ' star' : '') + (chStart.has(b.ir ? 'i' + b.phase : b.phase) ? ' chb' : '') + (b.phase === D.irGenPhase && D.hasIR && !b.ir ? ' bc' : ''); el.style.left = a0 * 100 + '%'; el.style.width = Math.max(2, (a1 - a0) * W) + 'px'; el.style.background = v ? `rgba(214,51,108,${(0.15 + 0.85 * Math.sqrt(v / max)).toFixed(2)})` : 'transparent'; el.title = `${D.phaseName(b.phase)}: ${v} (${R.ST.metric || 'struct'})`; box.append(el); });
     }
   }
   R.renderHeat = renderHeat;
@@ -116,5 +173,5 @@
     const m1 = $('metric'), m2 = $('metric2'); m2.innerHTML = m1.innerHTML; const setM = (v) => { m1.value = m2.value = v; R.set({ metric: v }); }; m1.onchange = (ev) => setM(ev.target.value); m2.onchange = (ev) => setM(ev.target.value);
     document.querySelector('[data-close="phtab"]').onclick = () => { $('phtab').hidden = true; };
   });
-  R.views.push(() => { renderHeat(); if (!$('phtab').hidden) renderTable(); });
+  R.views.push(() => { renderHeat(); { const el = document.getElementById('expager'); if (el) { if (!el._w) { el._w = 1; R.wirePager(el, (d) => R.pageTurn(d), (k) => R.pageGo(k)); } if (R.ST.D) { const h = R.pagerHtml(R.pageInfo()); if (el._h !== h) { el._h = h; el.innerHTML = h; } } } } if (!$('phtab').hidden) renderTable(); });
 })(window.R);
