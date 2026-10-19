@@ -345,4 +345,56 @@ class ExtractAPISpecification {
          |A.runSub 1562250696""".stripMargin
     assertEquals(expected, markers.mkString("\n"))
   }
+
+  /** The name hash Zinc computes for the constructor of `cls`, if it is part of the API. */
+  private def ctorNameHash(src: String, cls: String, defType: DefinitionType): Option[Int] = {
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val api = compilerForTesting.extractApiFromSrc(src).find(c => c.name == cls && c.definitionType == defType).get
+    val ctorName = if (defType == DefinitionType.Module) s"$cls$$;init;" else s"$cls;init;"
+    new xsbt.api.NameHashing(false).nameHashes(api).find(_.name == ctorName).map(_.hash)
+  }
+
+  /** Clients elide `new B` and references to `O` if they have no initialization
+   *  code, direct or inherited. Changes to that status must change the API of
+   *  the constructor even when no signature changes.
+   */
+  @Test
+  def constructorPurityIsPartOfTheApi = {
+    def src(t: String, a: String) =
+      s"""|trait T { $t }
+          |class A extends T { $a }
+          |class B extends A
+          |object O extends A
+          |""".stripMargin
+    val base = src("def t = 1", "def a = 1")
+    val unrelated = List(
+      src("def t = 2", "def a = 1"),
+      src("def t = 1", "def a = 2; def b = 3"),
+      src("def t = 1", "def a = 1; private def c = 3"),
+    )
+    val impure = List(
+      src("def t = 1", "def a = 1; println()"),
+      src("def t = 1", "def a = 1; private val x = 1"),
+      src("val t = 1", "def a = 1"),
+    )
+    for ((cls, defType) <- List("B" -> DefinitionType.ClassDef, "O" -> DefinitionType.Module)) {
+      val before = ctorNameHash(base, cls, defType)
+      assertTrue(s"$cls has a pure constructor", before.isDefined)
+      for (v <- unrelated)
+        assertEquals(s"$cls\n$v", before, ctorNameHash(v, cls, defType))
+      for (v <- impure)
+        assertNotEquals(s"$cls\n$v", before, ctorNameHash(v, cls, defType))
+    }
+  }
+
+  /** A trait is not instantiated itself, but `new T {}` is pure iff all its base
+   *  classes are free of initialization code.
+   */
+  @Test
+  def traitConstructorPurityIncludesAncestors = {
+    def src(u: String) = s"trait U { $u }\ntrait T extends U\n"
+    val before = ctorNameHash(src("def u = 1"), "T", DefinitionType.Trait)
+    assertEquals(before, ctorNameHash(src("def u = 2"), "T", DefinitionType.Trait))
+    assertNotEquals(before, ctorNameHash(src("val u = 1"), "T", DefinitionType.Trait))
+  }
 }

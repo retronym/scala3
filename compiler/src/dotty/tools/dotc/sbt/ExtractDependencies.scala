@@ -178,6 +178,7 @@ trait AbstractExtractDependenciesCollector(rec: DependencyRecorder) extends tpd.
         assert(enclOrModuleClass.isClass, s"$enclOrModuleClass, $sym")
 
         rec.addClassDependency(enclOrModuleClass, DependencyByMemberRef)
+        addPureInitDependency(sym)
       }
     }
 
@@ -199,6 +200,22 @@ trait AbstractExtractDependenciesCollector(rec: DependencyRecorder) extends tpd.
   private def addPackageMembersInScope(pkg: Symbol)(using Context): Unit =
     if pkg.is(Package) && !pkg.isEffectiveRoot then
       rec.addUsedRawName(ExtractDependencies.packageWildcardName(pkg))
+
+  /** Whether a reference to `sym` is pure can depend on whether a class has
+   *  initialization code: an object (`TreeInfo.refPurity`) or the companion of a
+   *  synthetic case class `apply` (`TreeInfo.isPureSyntheticCaseApply`).
+   *  `ExtractAPI` marks the primary constructor of such classes when they have no
+   *  initialization code (see `ExtractAPICollector#hasPureInit`), so record the
+   *  name of that constructor. An instantiation `new C` already uses it.
+   */
+  private def addPureInitDependency(sym: Symbol)(using Context): Unit =
+    val cls =
+      if sym.is(ModuleVal) then sym.moduleClass
+      else if sym.isAllOf(SyntheticMethod) && sym.name == nme.apply && sym.owner.is(ModuleClass) then
+        sym.owner.companionClass.filter(_.is(Case))
+      else NoSymbol
+    if cls.isClass && !cls.is(JavaDefined) && cls.primaryConstructor.exists then
+      rec.addUsedName(cls.primaryConstructor)
 
   private def addInheritanceDependencies(tree: Closure)(using Context): Unit =
     // If the tpt is empty, this is a non-SAM lambda, so no need to register
