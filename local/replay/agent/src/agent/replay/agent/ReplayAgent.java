@@ -50,15 +50,18 @@ public final class ReplayAgent {
   private static List<JoinPoint> active = List.of();
   private static boolean verbose;
   private static boolean dynamic;
+  private static Instrumentation instrumentation;
 
   public static void premain(String args, Instrumentation inst) { install(args, inst, false); }
   public static void agentmain(String args, Instrumentation inst) { install(args, inst, true); }
 
   private static synchronized void install(String args, Instrumentation inst, boolean isDynamic) {
     if (Hooks.verifier != null) return;
+    if (args != null) args = args.replace('+', ','); // `+` separates options inside a -P: value
     Set<String> opts = new HashSet<>(Arrays.asList((args == null ? "" : args).split(",")));
     verbose = opts.contains("verbose");
     dynamic = isDynamic;
+    instrumentation = inst;
     List<JoinPoint> jps = new ArrayList<>();
     for (JoinPoint jp : JoinPoints.ALL) {
       boolean on = switch (jp.group()) {
@@ -269,8 +272,16 @@ public final class ReplayAgent {
   /** Force-load every target class in {@code cl}, then fail unless every active site was found. */
   private static String verify(ClassLoader cl) {
     for (JoinPoint jp : active) {
-      try { Class.forName(jp.owner(), false, cl); }
+      try {
+        Class<?> c = Class.forName(jp.owner(), false, cl);
+        if (dynamic && status.get(jp.key()) == Status.NOT_LOADED) {
+          // loaded before the attach but not picked up by installOn's retransformation pass
+          System.err.println("[replay-agent] retransforming " + jp.owner() + " explicitly");
+          instrumentation.retransformClasses(c);
+        }
+      }
       catch (ClassNotFoundException e) { missing(jp, "class not found"); }
+      catch (Exception e) { missing(jp, "retransform failed: " + e); }
     }
     StringBuilder sb = new StringBuilder();
     sb.append(String.format("%-8s %-10s %-45s %-26s %s%n", "group", "status", "class", "method", "descriptor"));
