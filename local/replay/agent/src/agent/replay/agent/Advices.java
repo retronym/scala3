@@ -206,6 +206,60 @@ public final class Advices {
     }
   }
 
+  /** {@code CodeGen.genUnit}'s local {@code genClassDef(cd)} on 3.3 to 3.7: {@code genClassDef$1(ctx, unit,
+   *  generatedClasses, generatedTasty, cd)}. Like {@code generateClassNodes} it builds the main and mirror ClassNodes
+   *  and adds the TASTy attribute; it appends them to {@code generatedClasses} (GeneratedClass(classNode, ...)) instead
+   *  of returning them, so fire on exit with the appended nodes as (ClassNode, null) pairs, the shape
+   *  {@link GenerateClassNodes} passes. The backend methods below it take no Context: publish this one. */
+  public static final class GenClassDef {
+    @Advice.OnMethodEnter
+    static int enter(@Advice.Argument(0) Object ctx, @Advice.Argument(2) scala.collection.mutable.ListBuffer<?> classes,
+                     @Advice.Local("prev") Object prev) {
+      prev = Hooks.backendCtx;
+      Hooks.backendCtx = ctx;
+      return classes.length();
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    static void exit(@Advice.Enter int n0, @Advice.Argument(0) Object ctx,
+                     @Advice.Argument(2) scala.collection.mutable.ListBuffer<?> classes, @Advice.Argument(4) Object cd,
+                     @Advice.Local("prev") Object prev, @Advice.Thrown Throwable t) {
+      Hooks.backendCtx = prev;
+      Observer o = Hooks.observer;
+      int n = classes.length();
+      if (o != null && t == null && n > n0) {
+        // Allocates, but only with an observer installed. GeneratedClass is a case class: element 0 is classNode.
+        scala.collection.immutable.List nodes = scala.collection.immutable.Nil$.MODULE$;
+        for (int i = n - 1; i >= n0; i--)
+          nodes = new scala.collection.immutable.$colon$colon(
+            new scala.Tuple2(((scala.Product) classes.apply(i)).productElement(0), null), nodes);
+        o.classNodes(cd, nodes, ctx);
+      }
+    }
+  }
+
+  /** {@link GenClassDef} for 3.8 to 3.10: {@code genClassDef$1(ctx, generatedClasses, generatedTasty, cd)}. */
+  public static final class GenClassDef310 {
+    @Advice.OnMethodEnter
+    static int enter(@Advice.Argument(1) scala.collection.mutable.ListBuffer<?> classes) { return classes.length(); }
+
+    @Advice.OnMethodExit
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    static void exit(@Advice.Enter int n0, @Advice.Argument(0) Object ctx,
+                     @Advice.Argument(1) scala.collection.mutable.ListBuffer<?> classes, @Advice.Argument(3) Object cd) {
+      Observer o = Hooks.observer;
+      int n = classes.length();
+      if (o != null && n > n0) {
+        scala.collection.immutable.List nodes = scala.collection.immutable.Nil$.MODULE$;
+        for (int i = n - 1; i >= n0; i--)
+          nodes = new scala.collection.immutable.$colon$colon(
+            new scala.Tuple2(((scala.Product) classes.apply(i)).productElement(0), null), nodes);
+        o.classNodes(cd, nodes, ctx);
+      }
+    }
+  }
+
   /** {@code PlainSkelBuilder.genDefDef(dd)}: stashes dd for {@link InitJMethod}. */
   public static final class GenDefDef {
     @Advice.OnMethodEnter
@@ -260,6 +314,33 @@ public final class Advices {
     }
   }
 
+  /** {@link InitJMethod} on 3.3 to 3.7: {@code initJMethod(flags, params)} has no Context; use {@link GenClassDef}'s. */
+  public static final class InitJMethodNoCtx {
+    @Advice.OnMethodExit
+    static void exit(@Advice.FieldValue("mnode") Object mnode) {
+      Object dd = Hooks.genDefDef;
+      Hooks.genDefDef = null;
+      Observer o = Hooks.observer;
+      if (o != null && dd != null && mnode != null) o.genMethod(dd, mnode, Hooks.backendCtx);
+    }
+  }
+
+  /** {@link GenStat} and {@link GenLoadTo} on 3.3 to 3.7: {@code genStat(tree)}, {@code genLoadTo(tree, expected, dest)}
+   *  have no Context; use {@link GenClassDef}'s. */
+  public static final class GenLoadNoCtx {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.This dotty.tools.backend.jvm.BCodeSkelBuilder.PlainSkelBuilder self,
+                      @Advice.Argument(0) Object tree, @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      o = Hooks.observer;
+      if (o != null) { m = self.mnode(); o.genLoadEnter(tree, m, Hooks.backendCtx); }
+    }
+
+    @Advice.OnMethodExit
+    static void exit(@Advice.Argument(0) Object tree, @Advice.Local("o") Observer o, @Advice.Local("m") Object m) {
+      if (o != null) o.genLoadExit(tree, m, Hooks.backendCtx);
+    }
+  }
+
   /** {@code LocalOptimizer.methodOptimizations(method, ownerClassName)}: stashes the owner, which the
    *  lambda-lifted {@code traceIfChanged$1} does not capture. */
   public static final class MethodOptimizations {
@@ -292,6 +373,21 @@ public final class Advices {
     @Advice.OnMethodExit(onThrowable = Throwable.class)
     static void exit() { Hooks.armInline = null; }
   }
+
+  /** {@link DoInline} on released 3.8 to 3.10, whose own optimiser inlined {@code doInline} (and so left
+   *  {@code doInline$1} dead) into the per-request lambda {@code runInliner$$anonfun$1(rolledBack, state, method, ...)};
+   *  in 3.10 every {@code inlineCallsite} call comes from that lambda. */
+  public static final class DoInlineLambda {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(2) Object method) { Hooks.armInline = method; }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit() { Hooks.armInline = null; }
+  }
+
+  /** Not an advice: marks the alternative of {@code traceIfChanged$1} whose inlined call sites (the pass name
+   *  constants in {@code methodOptimizations} and {@code removalRound$1}) get a {@link Hooks#optimizerPass} call. */
+  public static final class InlinedTraceIfChanged { private InlinedTraceIfChanged() {} }
 
   public static final class InlineCallsite {
     @Advice.OnMethodEnter
