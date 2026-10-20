@@ -1,0 +1,17 @@
+{
+  "name": "smoke-opt-noopt-xctrace",
+  "trees": {
+    "opt": ".",
+    "noopt": "../compiler-perf-testing-plan-14aa8c-noopt"
+  },
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "xctrace": "ipc"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M -XX:+AlwaysPreTouch",
+  "rounds": 1,
+  "corpora": {
+    "dottyUtil": "-f 1 -wi 5 -w 2 -i 3 -r 2"
+  }
+}

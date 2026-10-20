@@ -1,0 +1,23 @@
+{
+  "name": "opt-noopt",
+  "trees": {
+    "opt": ".",
+    "noopt": "../compiler-perf-testing-plan-14aa8c-noopt"
+  },
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "xctrace": "ipc"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M -XX:+AlwaysPreTouch",
+  "rounds": 6,
+  "corpora": {
+    "re2s": "-wi 15 -i 8 -w 5 -r 5",
+    "scalaz": "-wi 12 -i 8 -w 5 -r 5"
+  },
+  "loadgate": {
+    "maxCores": 0.8,
+    "quietSecs": 30
+  },
+  "gcLog": true
+}
