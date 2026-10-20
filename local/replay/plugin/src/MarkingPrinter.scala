@@ -32,7 +32,8 @@ object MarkingPrinter:
    *  (splittable) `Fluid`; that affects line breaking, so we must do the same.
    */
   def stripPrefixPastMarkers(t: Text, pre: String): Text = t match
-    case Str(s) =>
+    case str: Str =>
+      val s = str.s
       val m = leadingMarkers.findPrefixOf(s).getOrElse("")
       if s.startsWith(pre, m.length) then Str(m + s.substring(m.length + pre.length)) else Str(s)
     case Fluid(relems) =>
@@ -52,14 +53,14 @@ object MarkingPrinter:
   // `relems` are in reverse order: head is the last element, last is the first.
   // Markers go into the first/last *non-empty* leaf so emptiness tests in `layout`/`~` are unchanged.
   private def prefix(t: Text, m: String): Text = t match
-    case Str(s) => Str(m + s)
+    case str: Str => Str(m + str.s)
     case _ =>
       val elems = t.relems.reverse
       val i = elems.indexWhere(!_.isEmpty)
       rebuild(t, elems.updated(i, prefix(elems(i), m)).reverse)
 
   private def suffix(t: Text, m: String): Text = t match
-    case Str(s) => Str(s + m)
+    case str: Str => Str(str.s + m)
     case _ =>
       val i = t.relems.indexWhere(!_.isEmpty)
       rebuild(t, t.relems.updated(i, suffix(t.relems(i), m)))

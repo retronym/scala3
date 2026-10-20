@@ -8,5 +8,5 @@ v=$REPLAY_VARIANT; [ "$v" = stock ] && v=agent
 extra=""; [ "$v" = agent ] && extra=":$REPLAY_HOME/../agent/target/replay-agent-api.jar:$REPLAY_HOME/../agent/target/byte-buddy-agent.jar"
 rm -rf "$PLUGIN_CLASSES"; mkdir -p "$PLUGIN_CLASSES"
 "$JAVA_HOME/bin/java" -cp "$DOTC_CP" dotty.tools.dotc.Main -color:never -classpath "$DOTC_CP$extra" \
-  -d "$PLUGIN_CLASSES" "$REPLAY_HOME"/src/*.scala "$REPLAY_HOME"/src-$v/*.scala
+  -d "$PLUGIN_CLASSES" "$REPLAY_HOME"/src/*.scala "$REPLAY_HOME"/src-$v/*.scala "$REPLAY_HOME"/compat/opt/*.scala "$REPLAY_HOME"/compat/skipIfJava/*.scala
 cp "$REPLAY_HOME/plugin.properties" "$PLUGIN_CLASSES/"
