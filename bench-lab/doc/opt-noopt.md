@@ -9,7 +9,7 @@ The build compiles the compiler with `-opt -opt-inline:dotty.**` and the library
 Two worktrees at the same commit (bench-lab-perflab, 0c8314024c), each with its own sbt server (JDK 21.0.12-tem):
 
 - `opt`: `compiler-perf-testing-plan-14aa8c`, the default build.
-- `noopt`: `compiler-perf-testing-plan-14aa8c-noopt`, the sbt server started with `SCALA3_BUILD_OPTIMIZE=false`, which drops the optimizer options from `scala3-compiler-bootstrapped`, `scala-library-{non,}bootstrapped` and `scala2-library`. Checked with `show Global/optimize` and `show scala3-compiler-bootstrapped/Compile/compile/scalacOptions` in each server.
+- `noopt`: `compiler-perf-testing-plan-14aa8c-noopt`, the sbt server started with `SCALA3_BUILD_OPTIMIZE=false`, which drops the optimizer options from `scala3-compiler-bootstrapped`, `scala-library-{non,}bootstrapped` and `scala2-library`. The env var only reaches the server that was started with it, and sbt servers here stop after 10 idle minutes (`~/.sbt/1.0/global.sbt`), so a later `sbt --client` started a fresh server with the optimizer on. The noopt tree therefore also has an untracked `noopt.sbt` with `Global / Build.optimize := false`, which every server reads. Checked with `show Global/optimize` and `show scala3-compiler-bootstrapped/Compile/compile/scalacOptions` in each server.
 
 The benchmark JVM is the patched JDK 26 for both. The corpora are compiled against each build's own library jar; dotc reads it as TASTy, so the corpus input is the same.
 

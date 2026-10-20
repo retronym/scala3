@@ -16,7 +16,7 @@
     "scalaz": "-wi 12 -i 8 -w 5 -r 5"
   },
   "loadgate": {
-    "maxCores": 0.8,
+    "maxCores": 1.5,
     "quietSecs": 30
   },
   "gcLog": true
