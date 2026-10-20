@@ -54,6 +54,8 @@ python3 coverage-corpus/harness.py report corpus --out corpus
 python3 coverage-corpus/harness.py annotate --campaign corpus --pool vulpix syn variants
 ```
 
+The report for the current corpus is published at https://scala3-compiler-coverage.jzaugg.workers.dev (deployed with `npx wrangler deploy --assets coverage-corpus/.work/reports/attrib --name scala3-compiler-coverage`).
+
 This works because JaCoCo line coverage is a union over probes: `driver/ProbeLines.java` analyses each probe of each class on its own once per compiler build, and per-job probe bitsets then give exact per-line attribution. `annotate` checks its result against JaCoCo's own report line by line.
 
 For writing new cases, keep a warm compiler running and send cases to it:

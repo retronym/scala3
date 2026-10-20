@@ -124,6 +124,7 @@ def run(a):
         cands = index.get(src.rsplit("/", 1)[-1], [])
         return cands[0] if len(cands) == 1 else None
 
+    prov = provenance(tc, a, len(jobs))
     out = h.WORK / "reports" / a.out
     (out / "src").mkdir(parents=True, exist_ok=True)
     (out / "job").mkdir(parents=True, exist_ok=True)
@@ -172,7 +173,7 @@ def run(a):
             rows.append(f'<tr class="{cls}" data-l="{n}"><td class="n">{n}</td><td class="b">{badge}</td><td class="s">{html.escape(t) or " "}</td></tr>')
         depth = src.count("/") + 1
         up = "../" * depth
-        page = PAGE.format(title=html.escape(src), up=up, css=up + "style.css", jobs=up + "jobs.js",
+        page = PAGE.format(prov=prov, title=html.escape(src), up=up, css=up + "style.css", jobs=up + "jobs.js",
                            head=f'<a href="{up}index.html">index</a> / {html.escape(src)} &nbsp; {cov}/{exe} lines'
                                 f' ({pct(cov, exe)}) covered by the corpus, {poolonly} more by the wider pool'
                                 + ("" if path else " &nbsp; <b>source not found</b>"),
@@ -198,7 +199,7 @@ def run(a):
         case_dir = h.CASES / r["case"]
         srcs = [case_dir] if case_dir.is_file() else sorted(p for p in case_dir.rglob("*") if p.suffix in h.SOURCE_EXTS) if case_dir.exists() else []
         code = "".join(f"<h3>{html.escape(str(p.relative_to(h.CASES)))}</h3><pre>{html.escape(p.read_text(errors='replace'))}</pre>" for p in srcs)
-        (out / "job" / f"{i}.html").write_text(PAGE.format(
+        (out / "job" / f"{i}.html").write_text(PAGE.format(prov=prov, 
             title=html.escape(job_names[i]), up="../", css="../style.css", jobs="../jobs.js",
             head=f'<a href="../index.html">index</a> / {html.escape(job_names[i])} &nbsp; covers {covered_by[i]} lines, {len(u)} of them covered by no other job',
             body=(f"<h2>Lines only this job covers</h2><table class=\"list\"><tr><th>File</th><th>Lines</th><th></th></tr>{''.join(items)}</table>" if items else "<p>No line is covered by this job alone.</p>")
@@ -233,9 +234,26 @@ JaCoCo's own report agrees on every line but {mismatch}.</p>
 <h2>Corpus jobs, by lines no other job covers</h2><table class="list"><tr><th>Job</th><th>Lines covered</th><th>Only this job</th></tr>{jrows}</table>
 <h2>Source files, by uncovered lines</h2><table class="list"><tr><th>File</th><th>Lines</th><th>Corpus</th><th></th><th>Pool only</th><th></th></tr>{frows}</table>
 """
-    (out / "index.html").write_text(PAGE.format(title="Compiler coverage attribution", up="", css="style.css", jobs="jobs.js",
+    (out / "index.html").write_text(PAGE.format(prov=prov, title="Compiler coverage attribution", up="", css="style.css", jobs="jobs.js",
                                                 head="Compiler coverage attribution", body=body, data="{}", nbytes=nbytes))
     h.log(f"report: {out / 'index.html'}")
+
+
+def provenance(tc, a, njobs):
+    """One line saying what was measured: compiler commit, campaign, date, and where the corpus lives."""
+    import datetime
+    git = lambda *args: subprocess.run(["git", "-C", str(h.REPO), *args], capture_output=True, text=True).stdout.strip()
+    commit = git("log", "-1", "--format=%H", "--", "compiler", "tasty", "library")
+    date = git("log", "-1", "--format=%cs", commit)
+    measured = datetime.date.fromtimestamp((h.campaign_dir(tc, a.campaign) / "results.jsonl").stat().st_mtime).isoformat()
+    gh = "https://github.com/retronym/scala3"
+    build = "nonbootstrapped build" if tc.name == "local" else f"release {html.escape(tc.name)}"
+    return (f'Scala 3 compiler ({build}, '
+            f'<a href="https://github.com/scala/scala3/commit/{commit}">{commit[:10]}</a> of {date}), '
+            f'coverage by the {njobs} jobs of campaign <code>{html.escape(a.campaign)}</code>, measured {measured} with JaCoCo {h.JACOCO_VERSION}. '
+            f'Corpus and harness: <a href="{gh}/pull/54">retronym/scala3#54</a>, an experiment not intended for upstream in its current state. '
+            f'<a href="https://claude.ai/artifact/XXiTmv7dfyhw4v8hQPuW6J">Dashboard</a>. '
+            f'Crashes found: <a href="{gh}/pull/46">retronym/scala3#46</a>.')
 
 
 def iter_bits(x):
@@ -263,6 +281,7 @@ CSS = """
   --pool:#3d3214; --miss:#46201f; --bar-c:#4fbf72; --bar-p:#e0b43c; --bar-bg:#2b2f33; --link:#7fb0ff; --panel:#1c1f22; color-scheme: dark; } }
 body { background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin:0; padding:16px 20px 80px; }
 a { color:var(--link); text-decoration:none } a:hover { text-decoration:underline }
+.prov { color:var(--muted); font-size:12px; margin:6px 0 10px; max-width:110ch; }
 header { position:sticky; top:0; background:var(--bg); padding:8px 0; border-bottom:1px solid var(--line); z-index:2; }
 h2 { font-size:15px; margin:24px 0 8px; }
 code, pre, table.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
@@ -288,6 +307,7 @@ tr.c, tr.u { cursor:pointer } tr.sel td { outline:1px solid var(--link); }
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title><link rel="stylesheet" href="{css}"><script src="{jobs}"></script></head><body>
 <header>{head}</header>
+<p class="prov">{prov}</p>
 {body}
 <div id="panel" hidden></div>
 <script>
