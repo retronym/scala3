@@ -44,6 +44,10 @@ class LazyVals extends MiniPhase with IdentityDenotTransformer {
   override def changesMembers: Boolean = true  // the phase adds lazy val accessors
 
   val containerFlags: FlagSet = Synthetic | Mutable | Lazy
+  /** Flags of the holder of a local lazy val. It is initialised once and never assigned, so it
+   *  is not Mutable; otherwise CapturedVars would box it in a `Ref` when it is captured.
+   */
+  val localHolderFlags: FlagSet = Synthetic | Lazy
   val initFlags: FlagSet      = Synthetic | Method
 
   val containerFlagsMask: FlagSet = Method | Lazy | Accessor | Module
@@ -167,7 +171,7 @@ class LazyVals extends MiniPhase with IdentityDenotTransformer {
     // val x$lzy = new scala.runtime.LazyInt()
     val holderName = LazyLocalName.fresh(xname)
     val holderImpl = defn.LazyHolder()(tpe.typeSymbol)
-    val holderSymbol = newSymbol(x.symbol.owner, holderName, containerFlags, holderImpl.typeRef, coord = x.span)
+    val holderSymbol = newSymbol(x.symbol.owner, holderName, localHolderFlags, holderImpl.typeRef, coord = x.span)
     val holderTree = ValDef(holderSymbol, New(holderImpl.typeRef, Nil))
 
     val holderRef = ref(holderSymbol)
@@ -200,10 +204,11 @@ class LazyVals extends MiniPhase with IdentityDenotTransformer {
     // backend requires field usage to be after field definition
     // need to bring containers to start of method
     val (holders, stats) =
-      trees.partition {
-        _.symbol.flags.&~(Touched) == containerFlags
+      trees.partition { tree =>
         // Filtering out Touched is not required currently, as there are no LazyTypes involved here
         // but just to be more safe
+        val flags = tree.symbol.flags.&~(Touched)
+        flags == containerFlags || flags == localHolderFlags
       }
     holders:::stats
   }
