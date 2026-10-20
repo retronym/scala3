@@ -1,5 +1,7 @@
 package dotty.tools.benchlab;
 
+import io.github.retronym.perflab.jmh.Announce;
+
 import org.openjdk.jmh.annotations.*;
 
 import javax.tools.*;

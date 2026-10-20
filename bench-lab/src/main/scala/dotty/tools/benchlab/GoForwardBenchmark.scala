@@ -1,5 +1,6 @@
 package dotty.tools.benchlab
 
+import io.github.retronym.perflab.jmh.Announce
 import java.util.concurrent.TimeUnit
 
 import org.openjdk.jmh.annotations.*

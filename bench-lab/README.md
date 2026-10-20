@@ -30,51 +30,48 @@ That question needs a different instrument:
 
 ## Running
 
-Needs a [lampepfl/scala3-benchmarks](https://github.com/lampepfl/scala3-benchmarks) checkout, by default beside this one; otherwise set `SCALA3_BENCHMARKS` before starting sbt.
+bench-lab keeps the compiler-specific parts (in-memory compile, parser and pickler benchmarks, corpora, the cost listener, audit predicates, compiler comparison tools); running, comparing and profiling are [retronym/jvm-perf-lab](https://github.com/retronym/jvm-perf-lab)'s, through its JMH driver and the `perflab` CLI, which scala/scala's compiler-lab uses too.
+
+Setup:
+
+- A [lampepfl/scala3-benchmarks](https://github.com/lampepfl/scala3-benchmarks) checkout for the corpora, by default beside this one; otherwise set `SCALA3_BENCHMARKS` before starting sbt.
+- jvm-perf-lab: `mise run install` there puts perflab-jmh, perflab-spans and the audit agent in `~/.m2` (`-Dperflab.version=` picks another version), and `mise run cli` installs `perflab`.
+- An sbt server in this checkout (`sbt --client`), which `perflab` drives. `perflab.toml` at the root of the checkout says how: it runs `scala3-bench-lab/Jmh/run` with its arguments in a file, so profiler options containing `;` never reach sbt's command parser.
 
 ```bash
-sbt "scala3-bench-lab/Jmh/run -p corpus=dottyUtil CompileBenchmark"
+perflab serve    # the live index of runs and campaigns; open its URL first
+perflab run -- -p corpus=dottyUtil CompileBenchmark
 ```
 
-Every run has two profilers on by default (`-noDefaultProf` turns them off): `gc`, for allocation per op (`gc.alloc.rate.norm`, the benchmark thread only) and GC count and time; and `JitProfiler`, for JIT stability: compilations, compile time and deoptimizations while measuring and in the last warmup iteration (`jit.*`), with per-iteration counts and the methods still being compiled or deoptimized in the fork's output. A steady state has next to none; if `jit.compilations` is large, warm up longer.
+Every run has perflab's default profilers (`-noDefaultProf` turns them off): `gc`, for allocation per op (`gc.alloc.rate.norm`, the benchmark thread only) and GC count and time; and `JitProfiler`, for JIT stability: compilations, compile time and deoptimizations while measuring and in the last warmup iteration (`jit.*`). A steady state has next to none; if `jit.compilations` is large, warm up longer.
 
-Counters on Apple Silicon (needs Xcode's `xctrace`): `benchLabXctrace <template> <jmh args>` runs JMH under `XctraceProfiler` and keeps the traces and `result.json` in `out/bench-lab/<template>`. The template is `cpu-counters` (Instruments' stock CPU Counters: Apple's top-down breakdown per thread group) or an event-sampling template from `templates/` (`ipc`, `frontend`, `mem-l1d`: event counts per op and per-method attribution); `templates/make_template.py` makes one for other events. It is a command rather than a `-prof` argument because sbt splits a typed command line at the `;` between profiler options.
+Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees), `JavacBenchmark` (javac on a Java corpus, as a yardstick). `-p corpus=/abs/path` compiles the `.scala` files under any directory (with a known corpus's options when the directory name matches one). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options; `-p variants='base=|new=-Yfoo'` compares settings within one fork ([paired A/B](doc/paired-ab.md)). `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
 
-```bash
-sbt "benchLabXctrace cpu-counters -p corpus=dottyUtil CompileBenchmark"
-```
+Profiles (`perflab run --profile <p>`), with results in `out/bench-lab/runs`:
 
-async-profiler: `benchLabAsync <events> <jmh args>` records JFR over the measurement iterations and converts it with `jfrconv` into flame graphs in `out/bench-lab/async-<events>`: the benchmark threads only (stacks through the JMH stub), the same reversed, and all threads split by thread. `<events>` is a comma-separated list of `cpu`, `wall`, `alloc`, `lock` or any async-profiler event (hardware events such as `cycles` or `cache-misses` on Linux). The library is `$ASYNC_PROFILER_LIB`, else the Homebrew or `/usr/local` install.
+- `xctrace:<template>`: counters on Apple Silicon (needs Xcode's `xctrace`), for the benchmark thread separately from JIT and GC: `cpu-counters` (Instruments' stock template: Apple's top-down breakdown per thread group) or perflab's event-sampling templates `ipc`, `frontend`, `mem-l1d` (event counts per op and per-method attribution).
+- `async:<events>`: async-profiler JFR over the measurement iterations and flame graphs: the benchmark threads, reversed, and every thread by category. `<events>` is `cpu`, `wall`, `alloc`, `lock`, or PMU events joined by `+` with `--kperf`. With `-p scalacOptions=-Yprofile-defs-listener:dotty.tools.benchlab.SpanCostListener` the compiler records its cost frames as spans, and the bench graphs get a span panel grouped as `span-config.json` says ([cost per definition](doc/def-costs.md)).
+- `audit:<spec file>`: a caller audit with the probes of a spec, e.g. `bench-lab/audit/positioned-envelope.audit` (below).
 
-```bash
-sbt "benchLabAsync cpu,alloc -p corpus=dottyUtil CompileBenchmark"
-```
-
-Benchmarks: `CompileBenchmark` (full compilation), `ParserBenchmark` (parsing only), `PicklerBenchmark` (TASTy pickling of typed trees). `-p corpus=/abs/path` compiles the `.scala` files under any directory (with a known corpus's options when the directory name matches one). `-p scalacOptions=-Ystop-after:typer` passes extra compiler options. `CompileLoop` compiles a corpus in a loop outside JMH, for attaching other tools.
+`perflab analyze` splits async-profiler samples by dotc's phases (`perflab-phases.toml`); `perflab regraph`, `profdiff`, `frameweight` and `subtree` work on any async-profiler run or campaign cell.
 
 ### A/B campaigns
 
-`scripts/ab.py` runs a campaign described by a JSON spec (`ab/*.json`): a benchmark under one profile (an xctrace template, or async-profiler events, with kperf if given), over corpora and JVM-flag variants, round by round with the variants interleaved, so drift hits all of them alike. It is resumable (cells with a `result.json` are skipped), waits for a quiet machine (`loadgate`) and for any other JMH run, and checks that each run measured what it claims: the JVM, the JVM arguments (JMH's `-jvmArgsAppend` replaces the benchmark's `@Fork(jvmArgsAppend)`, so every variant gets the spec's `jvmArgs`), and, for kperf, that samples were not lost. `ab.py report` prints a table per corpus (ms/op, instructions, cycles, IPC, allocation, each against the first variant) and, for async-profiler campaigns, an index of every cell's flame graphs. A variant can also add JMH arguments (`variantJmhArgs`, e.g. `-p scalacOptions=...`), so it can be a compiler setting; these are checked against the run too. Results go to `out/ab/<name>/<corpus>/<variant>/<round>`. `abtrees.py` does the same across builds: each variant is a worktree with its own sbt server (spec key `"trees"`), and the results are gathered and reported together.
+`perflab ab run|report <spec>` runs a campaign described by a JSON spec (`ab/*.json`): a benchmark under one profile, over corpora and variants, round by round with the variants interleaved, resumable, waiting for a quiet machine, and checking that each run measured what it claims. A variant is JVM flags, JMH arguments (`variantJmhArgs`, e.g. a compiler setting), or, in a `"paired"` spec, compiler settings compared within each fork. `perflab trees` does the same across builds, each variant a worktree with its own sbt server. Results go to `out/ab/<name>/<corpus>/<variant>/<round>`, and the index shows each campaign's summary, cells and graphs.
 
 ```bash
-python3 -I bench-lab/scripts/ab.py run bench-lab/ab/<spec>.json
-python3 -I bench-lab/scripts/ab.py report bench-lab/ab/<spec>.json
+perflab ab run bench-lab/ab/<spec>.json
+perflab ab report bench-lab/ab/<spec>.json
 ```
 
-Profile tools, for any `benchLabAsync` profile directory or async-profiler `ab.py` cell:
-
-- `regraph.py`: (re)renders the flame graphs with a chosen `jfrconv` (`--jfrconv`, `$JFRCONV`, else a build of retronym/async-profiler's integration branch if present, which has `--hw` for kperf events and the extended flame graph controls), adding classified forward and reverse graphs of the benchmark threads. Up-to-date graphs are skipped (a `.regraph` stamp records the `jfrconv` build and `--minwidth`).
-- `profdiff.py`: two runs compared per op (ops counted from each iteration's mean): a differential flame graph and the methods whose self time changed most.
-- `abindex.py`: `out/ab/index.html`, every campaign with a summary (mean ms/op, cycles/op and instructions/op per corpus and variant, their spread over rounds and the change against the first variant), its cells, flame graphs and differential graphs, filterable, with each campaign's `NOTES.md` and a findings log from `out/ab/FINDINGS.md`.
-- `frameweight.py`: the weight of frames matching a regex across runs: self, self plus the itable/vtable stubs it calls, inclusive, and inclusive short of frames matching `--until`.
-- `subtree.py`: one frame's subtree: its callers, and where the time inside it goes, by categories (`-c name=regex`).
+Compiler comparisons, here rather than in perflab: `scripts/samebytes.py` compares two builds' `OutputDigest` output modulo the git hash in TASTy headers; `scripts/compare.py` sets dotc on re2s against javac on re2j, normalized by source size.
 
 ### Caller audits
 
-"Which callers rely on X, and how often?" `benchLabAudit <spec> <jmh args>` runs the benchmark with an agent that weaves probes into the compiler as it loads, with no compiler change: counts at a method's entry or exit, the distinct call sites reaching it, and tags pairing the code that made an object with the code that later relies on it. Specs are in `audit/`; reports are merged and folded with `scripts/auditfold.py`. See `doc/caller-audit.md`.
+"Which callers rely on X, and how often?" `perflab run --profile audit:<spec>` runs the benchmark with perflab's agent, which weaves probes into the compiler as it loads, with no compiler change: counts at a method's entry or exit, the distinct call sites reaching it, and tags pairing the code that made an object with the code that later relies on it. Specs are in `audit/`, with predicates compiled against the compiler in `audit/Predicates.scala`; `perflab auditfold` merges and folds reports. See [doc/caller-audit.md](doc/caller-audit.md).
 
 ```bash
-sbt "benchLabAudit positioned-envelope -p corpus=dottyUtil -wi 1 -i 1 -w 1 -r 1 CompileBenchmark"
+perflab run --profile audit:bench-lab/audit/positioned-envelope.audit -- -p corpus=dottyUtil -wi 1 -i 1 -w 1 -r 1 CompileBenchmark
 ```
 
 ### Variance reduction
@@ -84,7 +81,7 @@ What makes a difference between variants stand out from the noise, with the evid
 - **A/B within one JVM where the change allows it.** Feature flags compared in the same fork share its compiled code, so the fork's JIT luck cancels in the difference (see Plan, paired A/B).
 - **Microbenchmarks for a local change.** A benchmark of the changed operation (e.g. copying a tree with the tree copier) isolates it far better than a whole compilation, where it is a fraction of a percent.
 - **No optional parallelism.** The pickler runs on an executor, a fresh thread per op, invisible to the benchmark thread's counters: on re2s 12% of the process's cycles. `-Yno-parallel-pickling` (retronym/scala3#15) moves it onto the benchmark thread (from 83% to 93% of cycles; instructions/op 4.47G → 4.88G). Use it when counting the benchmark thread, or count all compiler threads; `<trace>.threads.txt` shows what is outside the benchmark thread. The backend is already serial (`-Ybackend-parallelism` is 1).
-- **Watch the machine.** `ab.py` waits for a quiet machine and reruns a cell whose competing load averaged too high. A limit of 1.5 cores still admits about one core of other work.
+- **Watch the machine.** `perflab ab` waits for a quiet machine and reruns a cell whose competing load averaged too high. A limit of 1.5 cores still admits about one core of other work.
 - **A better-lit metric.** On re2s, instructions/op varied 0.2–1.3% between rounds where ms/op varied 1–7%, and allocation per op is steadier still. They are proxies, though: priming spans cut instructions by about 1% on scalaz but cycles by only 0.6%.
 - **JIT determinism.** Forks of the same variant differ by 0.5–1% in instructions, and one re2s fork was 3% off (and the slowest). Options: `-Xbatch`, a fixed `-XX:CICompilerCount`, longer warmup, and `JitProfiler`'s check that nothing is compiled while measuring.
 - **Paired, interleaved designs.** Variants alternate within each round; report the spread of the paired differences, not of the absolute values.
@@ -105,14 +102,15 @@ Checked on `dottyUtil` with JFR file events (`jdk.FileRead`, `jdk.FileWrite`, no
 ## Plan
 
 - DONE 0. Scratch project: `XctraceProfiler` attaching only for the measurement iterations, per-thread counters, calibrated on kernels with known bottlenecks.
-- DONE 1. Skeleton: one macro benchmark on scala3-benchmarks corpora, in-memory I/O, runs under `XctraceProfiler` (`benchLabXctrace`). I/O claim checked (above).
-- DONE 1b. async-profiler (`benchLabAsync`); phase benchmarks for parsing (`ParserBenchmark`) and TASTy pickling (`PicklerBenchmark`, compiled up to the pickler in setup, re-pickling the same trees per op).
+- DONE 1. Skeleton: one macro benchmark on scala3-benchmarks corpora, in-memory I/O, runs under `XctraceProfiler` (now `perflab run --profile xctrace:<template>`). I/O claim checked (above).
+- DONE 1b. async-profiler (now `--profile async:<events>`); phase benchmarks for parsing (`ParserBenchmark`) and TASTy pickling (`PicklerBenchmark`, compiled up to the pickler in setup, re-pickling the same trees per op).
 - TODO 2. Phase attribution of the counters.
 - TODO 3. Operation-level micro benchmarks with recorded inputs and cache control.
 - TODO 3b. Optimizer benchmark: compile with `-opt` in setup, capture the class nodes before global optimization, and per op run `GlobalOptimizer` and `LocalOptimizer` on copies with fresh optimizer state (the call graph is keyed on node identity). Needs compiler refactoring: the optimizer wiring moved out of `GenBCode.getCodeGen` into a factory, and a hook to capture the pending class nodes at the start of `CodeGen.finish` (e.g. a `GenBCode` subclass installed via `Compiler.phases`). Re-reading unoptimized class files instead would lack the inline info attribute and differ from the in-compiler input.
-- DONE 4. Variant driver: `ab.py` (JVM flags and compiler settings, interleaved, with deltas), `abtrees.py` (builds).
-- TODO 4b. Paired A/B within one fork (`doc/paired-ab.md`): variants alternate by iteration, sharing the fork's compiled code.
-- DONE 7. Caller audits (`benchLabAudit`, `doc/caller-audit.md`).
+- DONE 4. Variant driver: campaigns (JVM flags and compiler settings, interleaved, with deltas) and across builds (now `perflab ab` and `perflab trees`).
+- DONE 4b. Paired A/B within one fork (`doc/paired-ab.md`): variants alternate by iteration, sharing the fork's compiled code.
+- DONE 7. Caller audits (`doc/caller-audit.md`).
+- DONE 8. The general tooling moved to retronym/jvm-perf-lab, which scala/scala's compiler-lab uses too; bench-lab depends on it and keeps the compiler-specific parts. Checked: the envelope audit gives the same counts, and paired variants and cost-frame spans work through `perflab`.
 - TODO 5. Linux parity.
 - TODO 6. First experiment: JIT inlining limits on the compiler, with the stalls before and after and where they moved.
 - Future work: PMI-sampled templates (instruction-level attribution, needs a one-off template saved in Instruments), Processor Trace for exact control flow on M4/M5, a non-bootstrapped variant.

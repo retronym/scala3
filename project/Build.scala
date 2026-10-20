@@ -124,7 +124,6 @@ object Build {
 
   // Settings shared globally (scoped in Global). Used in build.sbt
   lazy val globalSettings = Def.settings(
-    commands ++= BenchLab.commands,
     onLoad := (Global / onLoad).value andThen { state =>
       def exists(submodule: String) = {
         val path = Paths.get(submodule)
@@ -2408,9 +2407,15 @@ object Build {
     .settings(commonBootstrappedSettings)
     .settings(
       publish / skip := true,
-      // JMH with bench-lab's default profilers (allocation, JIT activity)
-      Jmh / run / mainClass := Some("dotty.tools.benchlab.Main"),
-      BenchLab.benchLabAuditAgent := BenchLab.auditAgentJar.value,
+      // retronym/jvm-perf-lab: its JMH driver and profilers, and async-profiler's Span API for SpanCostListener; a
+      // snapshot in ~/.m2 (`mise run install` there), or -Dperflab.version=<version>
+      resolvers += Resolver.mavenLocal,
+      libraryDependencies ++= {
+        val v = sys.props.getOrElse("perflab.version", "0.1.0-SNAPSHOT")
+        Seq("io.github.retronym.perflab" % "perflab-jmh" % v, "io.github.retronym.perflab" % "perflab-spans" % v)
+      },
+      // JMH with perflab's default profilers (allocation, JIT activity) and @file arguments
+      Jmh / run / mainClass := Some("io.github.retronym.perflab.jmh.Main"),
       // Corpora live in a lampepfl/scala3-benchmarks checkout, beside this one by default.
       // The worktree's .jvmopts (e.g. -XX:+DebugNonSafepoints for profilers) reaches the benchmark forks too: JMH starts
       // them with its launcher's JVM options, then the benchmark's @Fork(jvmArgsAppend), which win (heap, stack size).

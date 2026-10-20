@@ -1,0 +1,32 @@
+# retronym/jvm-perf-lab's `perflab` runs bench-lab's benchmarks (bench-lab/README.md)
+[build]
+# perflab passes its JMH arguments as @<file> to perflab's JMH driver, bench-lab's main class
+jmh = "sbt --client 'scala3-bench-lab/Jmh/run {args}'"
+server = "sbt"
+
+[benchmark]
+default = "CompileBenchmark"
+corpus = "corpus"
+variants = "variants"
+jvmArgs = "-Xms4G -Xmx4G -Xss2M"
+
+[paths]
+runs = "out/bench-lab/runs"
+campaigns = "out/ab"
+
+[index]
+flags = "^-D|^-XX"
+
+[agent]
+# `mise run install` in jvm-perf-lab
+jar = "~/.m2/repository/io/github/retronym/perflab/perflab-agent/0.1.0-SNAPSHOT/perflab-agent-0.1.0-SNAPSHOT.jar"
+
+[async]
+# $ASYNC_PROFILER_LIB, else the usual install locations; retronym/async-profiler's integration branch
+# (`mise run tools:async-profiler` in jvm-perf-lab) adds kperf events and jfrconv --spans
+graphs = ["bench", "reverse", "classify"]
+# the span panel's groupings for the compiler's cost frames (SpanCostListener)
+span_config = "bench-lab/span-config.json"
+
+[analyze]
+phases = "bench-lab/perflab-phases.toml"

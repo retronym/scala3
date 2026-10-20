@@ -50,7 +50,7 @@ async-profiler's Span API ([#1755](https://github.com/async-profiler/async-profi
 
 ## Results so far
 
-- Overhead (scalaz, paired within forks, xctrace): the cost stack with a listener and no recording, +3.5% ± 0.9 time and +3.1% ± 1.6 instructions; writing the table each op, +14%. `bench-lab/ab/def-costs-overhead-5.json`. The hooks' cost with profiling off is not yet measured (needs an A/B across builds, `abtrees.py`).
+- Overhead (scalaz, paired within forks, xctrace): the cost stack with a listener and no recording, +3.5% ± 0.9 time and +3.1% ± 1.6 instructions; writing the table each op, +14%. `bench-lab/ab/def-costs-overhead-5.json`. The hooks' cost with profiling off is not yet measured (needs an A/B across builds, `perflab trees`).
 - On scalaz the top definitions were dominated by `Uniques` table growth (`WeakHashSet.resize`), which landed on whichever definition's lookup crossed the threshold, the same one in every op since each op compiles in the same order. Growth is amortized over every lookup, so it is now a `rehash` frame keyed by the table, outside the definition. Per scalaz op: 14 resizes, 89 ms, 42 MB (Uniques 32K → 1M buckets in 5 resizes, 16 ms; AppliedUniques 64K → 4M in 6, 62 ms; NamedTypeUniques 128K → 1M in 3, 12 ms). The last AppliedUniques doublings come in the first MegaPhase, 47 ms of it, and were most of `MaybeT$.monadTell`'s and `Bind.product`'s self time there.
 
 ## Future work

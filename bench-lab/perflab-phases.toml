@@ -1,0 +1,66 @@
+# dotc's phases (and javac's, for JavacBenchmark) by stack frame, for `perflab analyze`: the first match from the root
+# of the stack wins
+
+[[phase]]
+label = "parser"
+pattern = 'dotty/tools/dotc/parsing/Parser\.|dotty/tools/dotc/parsing/Parsers'
+
+[[phase]]
+label = "typer"
+pattern = 'dotty/tools/dotc/typer/TyperPhase\.'
+
+[[phase]]
+label = "posttyper"
+pattern = 'dotty/tools/dotc/transform/PostTyper\.'
+
+[[phase]]
+label = "sbt-api/deps"
+pattern = 'dotty/tools/dotc/sbt/'
+
+[[phase]]
+label = "pickler"
+pattern = 'dotty/tools/dotc/transform/Pickler\.'
+
+[[phase]]
+label = "inlining"
+pattern = 'dotty/tools/dotc/transform/(Inlining|PostInlining)\.'
+
+[[phase]]
+label = "erasure"
+pattern = 'dotty/tools/dotc/transform/Erasure\.'
+
+[[phase]]
+label = "megaphases"
+pattern = 'dotty/tools/dotc/transform/MegaPhase\.'
+
+[[phase]]
+label = "genBCode"
+pattern = 'dotty/tools/backend/jvm/'
+
+[[phase]]
+label = "javac parse"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.parse'
+
+[[phase]]
+label = "javac enter"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.(enterTrees|enterDone)'
+
+[[phase]]
+label = "javac attribute"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.attribute'
+
+[[phase]]
+label = "javac flow"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.flow'
+
+[[phase]]
+label = "javac desugar"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.desugar'
+
+[[phase]]
+label = "javac generate"
+pattern = 'com/sun/tools/javac/main/JavaCompiler\.generate'
+
+[[phase]]
+label = "other phases"
+pattern = 'dotty/tools/dotc/core/Phases\$Phase\.runOn'
