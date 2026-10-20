@@ -920,13 +920,21 @@ object RefChecks {
           for (name <- membersToCheck)
             for (mbrd <- self.member(name).alternatives) {
               val mbr = mbrd.symbol
-              val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
-              if (!mbrType.overrides(mbrd.info, matchLoosely = true))
-                report.errorOrMigrationWarning(
-                  em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
-                      |  its type             $mbrType
-                      |  does not conform to  ${mbrd.info}""",
-                  (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+              mbrd match
+                case mbrd: JointRefDenotation =>
+                  val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
+                  if (!mbrType.overrides(mbrd.info, matchLoosely = true))
+                    report.errorOrMigrationWarning(
+                      em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
+                          |  its type             $mbrType
+                          |  does not conform to  ${mbrd.info}""",
+                      (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+                case _ =>
+                  // Not a merge of several members, so `member` derived it from `mbr` alone: either `mbr`'s own
+                  // denotation, or `mbr.info.asSeenFrom(self, mbr.owner)` with prefix `self`. Its info is then the
+                  // type the check above would compute, and comparing a type with a rebuilt copy of itself can't fail.
+                  assert(mbrd.isInstanceOf[SymDenotation] || (mbrd.prefix eq self),
+                    i"unexpected member denotation $mbrd: ${mbrd.getClass}, prefix ${mbrd.prefix}, self $self")
           }
         }
       }
