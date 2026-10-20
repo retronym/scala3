@@ -38,8 +38,11 @@ abstract class MacroTransform extends Phase {
         tree match {
           case EmptyValDef =>
             tree
-          case _: PackageDef | _: MemberDef =>
+          case _: PackageDef =>
             super.transform(tree)(using localCtx(tree))
+          case tree: MemberDef =>
+            ctx.profiler.onTransform(tree.symbol, tree.span):
+              super.transform(tree)(using localCtx(tree))
           case impl @ Template(constr, _, self, _) =>
             cpy.Template(tree)(
               transformSub(constr),

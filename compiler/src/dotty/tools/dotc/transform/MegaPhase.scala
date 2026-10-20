@@ -244,7 +244,7 @@ class MegaPhase(val miniPhases: Array[MiniPhase]) extends Phase {
           val qual = transformTree(tree.qualifier, start)
           goSelect(cpy.Select(tree)(qual, tree.name), start)
         }
-      case tree: ValDef =>
+      case tree: ValDef => outerCtx.profiler.onTransform(tree.symbol(using outerCtx), tree.span)(using outerCtx):
         inContext(prepValDef(tree, start)(using outerCtx)) {
           def mapValDef(using Context) = {
             val tpt = transformTree(tree.tpt, start)
@@ -256,7 +256,7 @@ class MegaPhase(val miniPhases: Array[MiniPhase]) extends Phase {
             if tree.symbol.exists then inLocalContext(mapValDef) else mapValDef,
             start)
         }
-      case tree: DefDef =>
+      case tree: DefDef => outerCtx.profiler.onTransform(tree.symbol(using outerCtx), tree.span)(using outerCtx):
         inContext(prepDefDef(tree, start)(using outerCtx)) {
           def mapDefDef(using Context) = {
             val paramss = tree.paramss.mapConserve(transformSpecificTrees(_, start))
@@ -267,7 +267,7 @@ class MegaPhase(val miniPhases: Array[MiniPhase]) extends Phase {
           }
           goDefDef(inLocalContext(mapDefDef), start)
         }
-      case tree: TypeDef =>
+      case tree: TypeDef => outerCtx.profiler.onTransform(tree.symbol(using outerCtx), tree.span)(using outerCtx):
         inContext(prepTypeDef(tree, start)(using outerCtx)) {
           val rhs = inLocalContext(transformTree(tree.rhs, start))
           goTypeDef(cpy.TypeDef(tree)(tree.name, rhs), start)

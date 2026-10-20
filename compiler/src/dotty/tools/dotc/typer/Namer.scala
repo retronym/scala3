@@ -2,6 +2,7 @@ package dotty.tools
 package dotc
 package typer
 
+import profile.CostKind
 import core.*
 import ast.*
 import Trees.*, StdNames.*, Scopes.*, Denotations.*, NamerOps.*, ContextOps.*
@@ -937,7 +938,8 @@ class Namer { typer: Typer =>
         denot.info = UnspecifiedErrorType
       else
         try
-          completeInCreationContext(denot)
+          ctx.profiler.onCompletion(denot.symbol, Some(creationContext.source.name), CostKind.Completion):
+            completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
         catch
           case ex: CompilationUnit.SuspendException =>

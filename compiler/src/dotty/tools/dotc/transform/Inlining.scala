@@ -127,8 +127,9 @@ class Inlining extends MacroTransform, IdentityDenotTransformer {
         try
           tree match
             case tree: MemberDef =>
-              // Fetch the latest tracked tree (It might have already been transformed by its companion)
-              transformMemberDef(getTracked(tree.symbol).getOrElse(tree))
+              ctx.profiler.onTransform(tree.symbol, tree.span):
+                // Fetch the latest tracked tree (It might have already been transformed by its companion)
+                transformMemberDef(getTracked(tree.symbol).getOrElse(tree))
             case _: Typed | _: Block =>
               super.transform(tree)
             case _: PackageDef =>
