@@ -28,6 +28,8 @@ body { background: var(--bg); color: var(--fg); font-family: var(--body); font-s
 h1 { font-family: var(--display); font-weight: 500; font-size: clamp(28px, 5vw, 40px); margin: 0; text-wrap: balance; }
 .rules { color: var(--muted); max-width: 70ch; margin: 6px 0 0; }
 .rules code { font-family: var(--mono); font-size: 13px; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 10px 0 0; font-size: 13px; }
+.links a { color: var(--accent); }
 .score { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: baseline; }
 .score .big { font-family: var(--display); font-size: 56px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--accent); }
 .score .lab { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
@@ -82,6 +84,11 @@ table.diff tr.del td.ln { background: var(--diff-del-ln); }
   <header>
     <h1>256-Line Compiler Golf</h1>
     <p class="rules">How much of the Scala 3 compiler can one source file make run? Rules: a single <code>.scala</code> file of at most 256 lines, ordinary formatting, no semicolons, compiled with plain <code>scalac</code> (no options, no <code>//&gt; using</code> directives). Score: JaCoCo line coverage of the whole compiler for that one compilation, including the code every compilation runs.</p>
+    <p class="links">
+      <a href="https://claude.ai/artifact/XXiTmv7dfyhw4v8hQPuW6J" target="_blank" rel="noopener">Compiler Coverage Corpus dashboard</a>
+      <a href="https://scala3-compiler-coverage.jzaugg.workers.dev" target="_blank" rel="noopener">Annotated compiler source</a>
+      <a href="https://github.com/retronym/scala3/pull/54" target="_blank" rel="noopener">retronym/scala3#54</a>
+    </p>
   </header>
 
   <section class="score" id="score" aria-live="polite">
