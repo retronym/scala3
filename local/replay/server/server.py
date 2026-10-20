@@ -24,7 +24,10 @@ LOG_TAIL = 8000
 FILE_NAME = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}\.(scala|java)$')
 # options the server sets itself, or that would read or write outside the job directory
 FORBIDDEN_OPTION = re.compile(r'^(@|-d$|-d:|-Xplugin|-P:|-classpath|-cp$|-cp:|-sourcepath|-bootclasspath|-javabootclasspath|'
-                              r'-extdirs|-javaextdirs|-semanticdb-target|-Xmain-class|-Ysave|-Yreplay|-Ydump|-Xpickle-write|-o$|-out)')
+                              r'-extdirs|-javaextdirs|-semanticdb-target|-Xmain-class|-Ysave|-Yreplay|-Ydump|-Xpickle-write|-o$|-out|'
+                              # nsc: options that write files or load code
+                              r'-Ypickle-write|-Yprofile-destination|-Ygen-asmp|-Ygen-javap|-Xgenerate-phase-graph|-Vphase-graph|'
+                              r'-Ymacro-classpath|-Yrepl-outdir|-Xsource-reader|-toolcp|-Xshow-class|-Vshow-class|-Xshow-object|-Vshow-object)')
 
 
 # ---- version catalogue -----------------------------------------------------------------------------------------------------------------
@@ -36,7 +39,7 @@ def known_released():
         if time.time() - os.path.getmtime(cache) < 86400:
             with open(cache) as f: return json.load(f)
     except OSError: pass
-    fallback = {'lts': '3.3.8', '3.7': '3.7.4', 'latest': None}
+    fallback = {'lts': '3.3.8', '3.7': '3.7.4', 'latest': None, 'scala2': V.SCALA2_PINNED}
     try:
         out = subprocess.run(['coursier', 'complete-dep', 'org.scala-lang:scala3-compiler_3:'], capture_output=True, text=True, timeout=60).stdout
         vs = [tuple(map(int, v.split('.'))) for v in out.split() if re.fullmatch(r'3\.\d+\.\d+', v)]
@@ -45,6 +48,9 @@ def known_released():
             return '.'.join(map(str, c[-1])) if c else None
         res = {'lts': latest(lambda v: v[1] == 3) or fallback['lts'], '3.7': latest(lambda v: v[1] == 7) or fallback['3.7'],
                'latest': latest(lambda v: True)}
+        out2 = subprocess.run(['coursier', 'complete-dep', 'org.scala-lang:scala-compiler:2.13.'], capture_output=True, text=True, timeout=60).stdout
+        v2 = sorted(tuple(map(int, v.split('.'))) for v in out2.split() if re.fullmatch(r'2\.13\.\d+', v))
+        res['scala2'] = '.'.join(map(str, v2[-1])) if v2 else fallback['scala2']
     except Exception:
         return fallback
     os.makedirs(V.VERSIONS, exist_ok=True)
@@ -55,7 +61,8 @@ def known_released():
 def version_list(default):
     labels = V.all_labels()
     k = known_released()
-    wanted = [l for l in labels if l.startswith('main-')] + [k['lts'], k['3.7']] + ([k['latest']] if k.get('latest') else [])
+    wanted = ([l for l in labels if l.startswith('main-')] + [k['lts'], k['3.7']] + ([k['latest']] if k.get('latest') else [])
+              + [k.get('scala2') or V.SCALA2_PINNED])
     seen, res = set(), []
     for l in wanted + labels:
         if not l or l in seen: continue
@@ -71,7 +78,7 @@ def version_list(default):
 
 
 def valid_version(v):
-    return V.load(v) is not None or re.fullmatch(r'3\.\d+\.\d+(-RC\d+)?', v or '') is not None
+    return V.load(v) is not None or re.fullmatch(r'3\.\d+\.\d+(-RC\d+)?', v or '') is not None or V.SCALA2.fullmatch(v or '') is not None
 
 
 # ---- jobs ------------------------------------------------------------------------------------------------------------------------------
@@ -204,6 +211,40 @@ def parse_diagnostics(stderr, srcdir):
     return diags
 
 
+# nsc's ConsoleReporter: `/path/A.scala:3: error: message`, continuation lines, the source line and a caret line;
+# `error: message` without a position; a summary `2 errors`, `1 warning`.
+NSC_HEADER = re.compile(r'^(?:(?P<file>.+?):(?P<line>\d+): )?(?P<sev>error|warning|info): (?P<msg>.*)$')
+NSC_SUMMARY = re.compile(r'^\d+ (errors?|warnings?)( found)?$')
+
+
+def parse_diagnostics_nsc(output, srcdir):
+    diags, cur = [], None
+    def done():
+        if cur is None: return
+        lines = cur.pop('_lines')
+        # a positioned message ends with the source echo and the caret line; the caret gives the column
+        if cur['line'] is not None and len(lines) >= 2 and re.fullmatch(r'\s*\^\s*', lines[-1]):
+            cur['column'] = lines[-1].index('^') + 1
+            lines = lines[:-2]
+        cur['message'] = '\n'.join(lines).strip()
+        diags.append(cur)
+    for line in output.splitlines():
+        m = NSC_HEADER.match(line)
+        if m and (m['file'] is None or m['file'].endswith(('.scala', '.java'))):
+            done()
+            f = m['file']
+            if f and os.path.isabs(f) and os.path.dirname(f) == srcdir: f = os.path.basename(f)
+            cur = {'severity': m['sev'], 'kind': 'nsc' if f else 'nopos', 'file': f, 'line': int(m['line']) if m['line'] else None,
+                   'column': None, '_lines': [m['msg']]}
+            continue
+        if cur is None: continue
+        if NSC_SUMMARY.match(line.strip()) or line.startswith(('Exception in thread', '[replay')):
+            done(); cur = None; continue
+        cur['_lines'].append(line)
+    done()
+    return diags
+
+
 def stream_stats(p):
     """gen_index.py's per-recording counts."""
     c = {'ev': 0, 'node': 0, 'version': 0, 'phase': 0, 'edge': 0}; meta = {}; jvm = 0; classes = set()
@@ -258,7 +299,7 @@ def run_job(i):
         proc.kill(); output, _ = proc.communicate(); timed_out = True
     ms = int((time.time() - t0) * 1000)
     with open(path(i, '.log'), 'w') as f: f.write(' '.join(cmd) + '\n\n' + output)
-    diags = parse_diagnostics(output, srcdir)
+    diags = parse_diagnostics_nsc(output, srcdir) if V.is_scala2(req['scala']) else parse_diagnostics(output, srcdir)
     rec = None
     if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
         os.replace(tmp, out); rec = f'/api/recordings/{i}.jsonl'
@@ -429,7 +470,12 @@ def main():
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--ui', help='serve this viewer directory at /')
     ap.add_argument('--default', default=None, help='default Scala version (default: the latest 3.7.x)')
+    ap.add_argument('--versions', default=None, help='use this workspace directory instead of versions/ (shared with another checkout)')
+    ap.add_argument('--recordings', default=None, help='use this recordings directory instead of recordings/')
     a = ap.parse_args()
+    global RECORDINGS
+    if a.versions: V.VERSIONS = os.path.realpath(a.versions)
+    if a.recordings: RECORDINGS = os.path.realpath(a.recordings)
     os.makedirs(RECORDINGS, exist_ok=True)
     Handler.ui = os.path.realpath(a.ui) if a.ui else None
     Handler.default = a.default or known_released()['3.7']

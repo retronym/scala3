@@ -2,7 +2,7 @@
 
 Written with LLM assistance (Claude), see `LLM_POLICY.md`.
 
-A local HTTP server that compiles Scala sources with a chosen Scala 3 version, with the recorder attached (the plugin in `../plugin`, hooks delivered by the agent in `../agent`), and serves the recordings to the viewer. Python 3 standard library only; the JDK is `JAVA_HOME_REPLAY` or SDKMAN's 21.0.12+1.1-tem; compiler artifacts come from `coursier`.
+A local HTTP server that compiles Scala sources with a chosen Scala 3 or Scala 2.13 version, with the recorder attached (for Scala 3 the plugin in `../plugin` and the agent in `../agent`; for 2.13 the nsc plugin and agent in `../scala2`, see `../scala2/DESIGN.md`), and serves the recordings to the viewer. Python 3 standard library only; the JDK is `JAVA_HOME_REPLAY` or SDKMAN's 21.0.12+1.1-tem; compiler artifacts come from `coursier`.
 
 ## Run
 
@@ -10,7 +10,7 @@ A local HTTP server that compiles Scala sources with a chosen Scala 3 version, w
 python3 local/replay/server/server.py --ui <viewer dir>
 ```
 
-Listens on `127.0.0.1:8777` (`--port`, `--host`). With `--ui`, the viewer is served at `/` from the same origin, and `/recordings.json` is the viewer's own index followed by everything compiled here. Open a recording with `http://127.0.0.1:8777/#src=/api/recordings/<id>.jsonl`. `--default` sets the default version (otherwise the latest 3.7.x).
+Listens on `127.0.0.1:8777` (`--port`, `--host`). With `--ui`, the viewer is served at `/` from the same origin, and `/recordings.json` is the viewer's own index followed by everything compiled here. Open a recording with `http://127.0.0.1:8777/#src=/api/recordings/<id>.jsonl`. `--default` sets the default version (otherwise the latest 3.7.x). `--versions <dir>` and `--recordings <dir>` use another checkout's workspaces and recordings (e.g. when restarting the server from a different worktree).
 
 `client.py` compiles files through the API and waits, e.g. `client.py --scala 3.3.8 --each --download out/ corpus/*.scala`.
 
@@ -18,8 +18,8 @@ Listens on `127.0.0.1:8777` (`--port`, `--host`). With `--ui`, the viewer is ser
 
 Every response carries `Access-Control-Allow-Origin: *`; `OPTIONS` is answered for preflight.
 
-- `GET /api/versions` → `{"versions":[{"scala","ready","notes", "kind","state","joinPoints","warmupMs"}…],"default"}`. Listed: the local `main-<sha>` workspaces, the latest 3.3.x (LTS), the latest 3.7.x and the latest 3.x (from Maven Central, cached a day), and any other workspace. `ready` means the compiler is fetched, the agent and plugin are built for it, and the warm-up compile passed. `notes` names the source overlays and the join points that are missing.
-- `POST /api/compile` with `{"scala","options":[…],"files":[{"name","text"}],"label"?}` → `202 {"id"}`. The id is a hash of (scala, options, files): an identical request returns the existing compile. Any exact `3.x.y` version is accepted; the first compile for a version without a workspace builds it (about 10 s plus the download). Limits: 256 KiB of source, 32 files, plain `*.scala`/`*.java` names, 64 options; options the server sets or that reach outside the job directory (`-d`, `-classpath`, `-Xplugin`, `-P:`, `@argfile`, …) are rejected with 400.
+- `GET /api/versions` → `{"versions":[{"scala","ready","notes", "kind","state","joinPoints","warmupMs"}…],"default"}`. Listed: the local `main-<sha>` workspaces, the latest 3.3.x (LTS), the latest 3.7.x, the latest 3.x and the latest 2.13.x (from Maven Central, cached a day), and any other workspace. `ready` means the compiler is fetched, the agent and plugin are built for it, and the warm-up compile passed. `notes` names the source overlays and the join points that are missing.
+- `POST /api/compile` with `{"scala","options":[…],"files":[{"name","text"}],"label"?}` → `202 {"id"}`. The id is a hash of (scala, options, files): an identical request returns the existing compile. Any exact `3.x.y` or `2.13.x` version is accepted; the first compile for a version without a workspace builds it (about 10 s plus the download). Limits: 256 KiB of source, 32 files, plain `*.scala`/`*.java` names, 64 options; options the server sets or that reach outside the job directory (`-d`, `-classpath`, `-Xplugin`, `-P:`, `@argfile`, …) are rejected with 400.
 - `GET /api/compile/<id>` → `{"id","status":"queued|running|done|error","log","elapsedMs","recording","diagnostics":[{"severity","message","file","line","column","kind"}],"exitCode","scala"}`. Compile errors are `done`, with diagnostics and the stream the recorder wrote (it stops after typer). `error` means no recording: the 120 s timeout (`GREFFIER_TIMEOUT_S`), a crash, or a version that could not be prepared. `log` is the last 8 kB of the compiler's output. Diagnostics are parsed from dotc's `-color:never` output; messages without a position (`bad option '-opt' was ignored`, the recorder's plan warnings) have `file: null`.
 - `GET /api/recordings` → the viewer's `recordings.json` format (`gen_index.py`'s fields: name, url, size, units, phases, events, nodes, versions, edges, jvm, classes, schema, compiler), plus `id`, `scala`, `when`, `options`, `label`, `elapsedMs`, `errors`. Compiles of the same files with the same version are one entry with `variants` (base = fewest options; label = the extra options). Newest first.
 - `GET /api/recordings/<id>.jsonl` → the stream, `application/x-ndjson`.
@@ -31,6 +31,16 @@ java -javaagent:versions/<v>/agent/replay-agent.jar=fixTypeApply,rejected,tentat
      -cp <compiler classpath> dotty.tools.dotc.Main -color:never -classpath <library>
      -Xplugin:versions/<v>/plugin -P:replay-record:out=<id>.jsonl <options> -d <tmp> <files>
 ```
+
+and for a 2.13 version (no `-color`, nsc prints plain text to a pipe):
+
+```
+java -javaagent:versions/<v>/nsc/agent/replay-nsc-agent.jar=[lenient]
+     -cp <scala-compiler classpath> scala.tools.nsc.Main -classpath <scala-library>
+     -Xplugin:versions/<v>/nsc/plugin -P:replay-record:out=<id>.jsonl <options> -d <tmp> <files>
+```
+
+Diagnostics of a 2.13 compile are parsed from nsc's `file:line: error: message` blocks (the caret line gives the column).
 
 `recordings/` holds `<id>.jsonl`, `<id>.request.json`, `<id>.result.json` and `<id>.log` (command line and full output).
 
@@ -56,6 +66,8 @@ A local workspace is *pinned*: the join-point table was written against it, and 
 - **Join points.** A site may list alternatives (another method, descriptor, class, advice or field) for other versions; the table says `as …` when one matched. Added: `Run.runPhases$1$$anonfun$1` (3.4 to 3.7 put the per-phase loop in a lambda, and Byte Buddy skips synthetic methods unless told otherwise), 3.3's `inferImplicit` without `ignored`, `ImplicitSearch` with its Context in `x$4`, 3.3's `rank$1`, and `tryEither` on class `Typer`.
 - **Plugin sources.** The ASM package (`scala.tools.asm` in released compilers up to 3.7, `org.objectweb.asm` on main and 3.10) is rewritten in the copied agent and plugin sources. `../plugin/compat/` holds the overlays: `opt` or `noopt` (the JVM optimiser API, 3.8+) and `skipIfJava` or `noSkipIfJava` (`Phase.skipIfJava`, 3.4+), chosen by feature tests on the compiler's class files. The shared sources became version-neutral (`Text.Str` by type pattern, `Phase.run` public, `javaSimpleName` via the name).
 
+- **Scala 2.13.** `setup 2.13.x` fetches `scala-compiler` (with library and reflect) and `scala-library`, runs `../scala2/build.sh` into `versions/<v>/nsc/` (agent compiled against that compiler, plugin compiled by it) and warms up. The nsc join-point table was written against 2.13.18 (pinned); other 2.13 versions run `lenient`. 2.13.12, 2.13.16 and 2.13.18 match all 36 sites. nsc has no MegaPhases, so a recording has one tree version per phase (23 phases) and the viewer's chapters are phases.
+
 ### Status (October 2026)
 
 | version | join points | missing | tree versions per unit (corpus) | compile (corpus file, fresh JVM) |
@@ -64,6 +76,7 @@ A local workspace is *pinned*: the join-point table was written against it, and 
 | 3.10.0 | 41/42 | `SimpleName.hashCode` (releases hash by table offset, so streams may differ run to run) | 86 | 1.9 s |
 | 3.7.4 | 37/42 | optimiser (4, no optimiser before 3.8), `SimpleName.hashCode` | 81 | 2.2–3.1 s |
 | 3.3.8 | 36/42 | optimiser (4, no optimiser before 3.8), `SimpleName.hashCode`, `comesTooLate$1` | 79 | 1.8–2.9 s |
+| 2.13.18 | 36/36 (nsc table) | – | 23 | 1.6–3.8 s, 1.6–4.4 s with `-opt:local -opt:inline:<sources>` |
 
 - So released versions have the tree versions, all typer events (Typed, Adapt, Complete, ImplicitSearch, Candidate, Scope, Rejected except `comesTooLate` on 3.3, Tentative, Report) and the JVM records (bytecode versions per class, tree→instruction lineage, class-file state). The backend join points differ per version and the agent lists alternatives: before 3.8 the backend methods take no `Context` (the `genClassDef$1` advice stashes it in `Hooks.backendCtx`), `generateClassNodes` does not exist (the advice reads the `GeneratedClass` buffer), and serialization is `PostProcessor.serializeClass`. 3.10.0 has the optimiser under `opt.LocalOpt`/`opt.Inliner` and its release jar was compiled with `-opt`, so `traceIfChanged`/`doInline` are inlined away: the agent hooks the inlined pass sites with an ASM visitor (13 sites) and arms through `runInliner$$anonfun$1`. Before 3.8 there is no optimiser, so no optimiser phases.
 - The Name content hashes only partly apply: `SimpleName` already declares `hashCode` (= `start`) before main, and 3.7's enum cases are numbered differently. Streams on those versions may not be reproducible run to run (implicit candidate order follows identity hashes).
