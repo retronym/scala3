@@ -11,7 +11,7 @@ import util.Util.bestFit
 import config.Printers.pickling
 import java.util.Arrays
 
-class TreeBuffer extends TastyBuffer(50000) {
+class CompactableTastyBuffer extends TastyBuffer(50000) {
 
   private inline val ItemsOverOffsets = 2
   private val initialOffsetSize = bytes.length / (AddrWidth * ItemsOverOffsets)

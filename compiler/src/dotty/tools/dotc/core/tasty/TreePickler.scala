@@ -21,7 +21,7 @@ import dotty.tools.tasty.TastyFormat.ASTsSection
 import scala.util.control.NonFatal
 
 class TreePickler(pickler: TastyPickler, attributes: Attributes) {
-  val buf: TreeBuffer = new TreeBuffer
+  val buf: CompactableTastyBuffer = new CompactableTastyBuffer
   pickler.newSection(ASTsSection, buf)
   import buf.*
   import pickler.nameBuffer.nameIndex
