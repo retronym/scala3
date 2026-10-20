@@ -45,6 +45,7 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
   private val withEvents = !options.contains("noevents")
   private val noTypeText = options.contains("notypetext") // reproducibility experiment: print no type text at all
   private val check = options.contains("check") // verify offsets: slice == node's own show
+  private val recordAtBoundary = options.contains("boundary") // record trees in phaseEnd instead of Record phases
   private val jvm: JvmRecorder | Null = if options.contains("nojvm") then null else JvmRecorder(this)
 
   private val out = new BufferedWriter(new FileWriter(outPath), 1 << 16)
@@ -308,6 +309,20 @@ final class Recorder(outPath: String, groupName: Map[Phase, String], options: Li
       lastEnd = (phase, s)
       flush(phase)
       running = null
+      if recordAtBoundary && !closed then recordAtPhaseEnd(phase, units)
+
+  /** Boundary recording (no Record phases, see ReplayPlugin): record every unit's tree as the next phase
+   *  will see it, with events suspended as a Record phase would have them; close after the last live phase.
+   */
+  private def recordAtPhaseEnd(phase: Phase, units: List[CompilationUnit])(using Context): Unit =
+    suspended += 1
+    try
+      for unit <- units do
+        val printCtx = ctx.fresh.setPhase(phase.next).setCompilationUnit(unit)
+        recordUnit(phase, unit)(using printCtx)
+    finally suspended -= 1
+    val live = ctx.base.allPhases.filter(p => p.exists && p.phaseName != "terminal")
+    if live.nonEmpty && (phase eq live.last) then close()
 
   /** Write everything buffered: definitions, then events in seq order, then edges. */
   def flush(printPhase: Phase | Null = running)(using Context): Unit =
