@@ -18,8 +18,10 @@ public final class Hooks {
 
   /** The DefDef of the running {@code genDefDef}, for {@code initJMethod}'s advice (genDefDef does not nest). */
   public static Object genDefDef;
-  /** {@code ownerClassName} of the innermost {@code LocalOpt.methodOptimizations}; {@code traceIfChanged} lacks it. */
+  /** {@code ownerClassName} of the innermost {@code LocalOpt.methodOptimizations}; the pass methods are called without it in reach. */
   public static String optOwner;
+  /** Depth of {@code removalRound} (recursive: one level per round) and of hooked optimiser passes. */
+  public static int optRound, optPass;
 
   /** Installed by the agent: forces loading of every target class in the given loader and returns the
    *  join-point table, or throws if a site was not found. */

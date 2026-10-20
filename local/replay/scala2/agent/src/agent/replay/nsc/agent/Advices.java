@@ -180,7 +180,7 @@ public final class Advices {
     }
   }
 
-  /** {@code genStat(tree)} and {@code genLoad(tree, expectedType)}. {@code mnode} is private to the superclass
+  /** {@code genStat(tree)} and {@code genLoadTo(tree, expectedType, dest)}. {@code mnode} is private to the superclass
    *  {@code PlainSkelBuilder}, so read it through its accessor. */
   public static final class GenLoad {
     @Advice.OnMethodEnter
@@ -211,12 +211,42 @@ public final class Advices {
     static void exit(@Advice.Enter String prev) { Hooks.optOwner = prev; }
   }
 
-  /** The static {@code traceIfChanged$1(optName, doTrace, method, currentTrace)}: fires whether or not tracing is on. */
-  public static final class TraceIfChanged {
+  /** {@code removalRound} (local to {@code methodOptimizations}): one round of the local optimiser. */
+  public static final class RemovalRound {
     @Advice.OnMethodEnter
-    static void enter(@Advice.Argument(0) String pass, @Advice.Argument(2) Object method) {
+    static void enter(@Advice.Argument(9) Object method) {
+      Hooks.optRound++;
       Observer o = Hooks.observer;
-      if (o != null) o.optimizerPass(Hooks.optOwner, method, pass);
+      if (o != null && Hooks.optOwner != null) o.optimizerPass(Hooks.optOwner, method, "beforeMethodOpt");
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit() { Hooks.optRound--; }
+  }
+
+  /** A pass of {@code removalRound}: fires on exit, named by the method, unless nested in another pass. */
+  public static final class OptRoundPass {
+    @Advice.OnMethodEnter
+    static boolean enter() { return Hooks.optPass++ == 0; }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter boolean outer, @Advice.Origin("#m") String name, @Advice.Argument(0) Object method) {
+      Hooks.optPass--;
+      Observer o = Hooks.observer;
+      if (outer && o != null && Hooks.optOwner != null && Hooks.optRound > 0) o.optimizerPass(Hooks.optOwner, method, name);
+    }
+  }
+
+  /** A final pass of {@code methodOptimizations}, after the rounds (local variables, line numbers). */
+  public static final class OptPostPass {
+    @Advice.OnMethodEnter
+    static boolean enter() { return Hooks.optPass++ == 0; }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter boolean outer, @Advice.Origin("#m") String name, @Advice.Argument(0) Object method) {
+      Hooks.optPass--;
+      Observer o = Hooks.observer;
+      if (outer && o != null && Hooks.optOwner != null && Hooks.optRound == 0) o.optimizerPass(Hooks.optOwner, method, name);
     }
   }
 

@@ -60,7 +60,7 @@ public final class NscAgent {
 
     Set<String> classes = new LinkedHashSet<>();
     for (JoinPoint jp : active) for (JoinPoints.Alt a : jp.candidates()) classes.add(a.owner());
-    // ignore(none()): Byte Buddy skips synthetic methods by default, and traceIfChanged$1 is one.
+    // ignore(none()): Byte Buddy skips synthetic methods by default; only the pinned sites are visited either way.
     new AgentBuilder.Default(new net.bytebuddy.ByteBuddy().ignore(none()))
       .disableClassFormatChanges()
       .with(new Listener())

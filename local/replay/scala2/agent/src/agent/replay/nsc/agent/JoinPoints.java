@@ -51,6 +51,13 @@ final class JoinPoints {
   private static final String CNODE = "Lscala/tools/asm/tree/ClassNode;";
   private static final String MNODE = "Lscala/tools/asm/tree/MethodNode;";
 
+  private static JoinPoint pass(String cls, String m, String desc, String site) {
+    return new JoinPoint("jvm", BJ + cls, m, desc, Advices.OptRoundPass.class, null, site);
+  }
+  private static JoinPoint post(String cls, String m, String desc, String site) {
+    return new JoinPoint("jvm", BJ + cls, m, desc, Advices.OptPostPass.class, null, site);
+  }
+
   static final List<JoinPoint> ALL = List.of(
     new JoinPoint("core", "scala.tools.nsc.profile.NoOpProfiler$", "beforePhase", "(" + PHASE + ")" + SNAP,
       Advices.BeforePhase.class, null, "Global.scala:1558 profiler.beforePhase(phase)"),
@@ -93,12 +100,32 @@ final class JoinPoints {
       Advices.InitJMethod.class, "mnode", "BCodeSkelBuilder.scala:584 initJMethod (fires)"),
     new JoinPoint("jvm", BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genStat", "(" + TREE + ")V",
       Advices.GenLoad.class, null, "BCodeBodyBuilder.scala:67 genStat"),
-    new JoinPoint("jvm", BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genLoad",
-      "(" + TREE + "Lscala/tools/nsc/backend/jvm/BTypes$BType;)V", Advices.GenLoad.class, null, "BCodeBodyBuilder.scala:274 genLoad"),
+    new JoinPoint("jvm", BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genLoadTo",
+      "(" + TREE + "Lscala/tools/nsc/backend/jvm/BTypes$BType;Lscala/tools/nsc/backend/jvm/BCodeSkelBuilder$LoadDestination;)V",
+      Advices.GenLoad.class, null, "BCodeBodyBuilder.scala:278 genLoadTo (genLoad and the method body)"),
     new JoinPoint("jvm", BJ + "opt.LocalOpt", "methodOptimizations", "(" + MNODE + "Ljava/lang/String;)Z",
       Advices.MethodOptimizations.class, null, "LocalOpt.scala:224 methodOptimizations (stashes owner)"),
-    new JoinPoint("jvm", BJ + "opt.LocalOpt", "traceIfChanged$1", "(Ljava/lang/String;Z" + MNODE + "Lscala/runtime/ObjectRef;)V",
-      Advices.TraceIfChanged.class, null, "LocalOpt.scala:261 traceIfChanged (one pass)"),
+    // traceIfChanged(pass) is inlined away in the 2.13 compiler jar (it is built with the optimiser), so each pass
+    // is hooked at its own method: round passes inside removalRound, the final ones after it.
+    new JoinPoint("jvm", BJ + "opt.LocalOpt", "removalRound$2",
+      "(ZZZZZZZZI" + MNODE + "Ljava/lang/String;ZLscala/runtime/ObjectRef;)Lscala/Tuple2;",
+      Advices.RemovalRound.class, null, "LocalOpt.scala:276 removalRound (one round: beforeMethodOpt)"),
+    pass("opt.LocalOpt", "nullnessOptimizations", "(" + MNODE + "Ljava/lang/String;)Z", "LocalOpt.scala:292 nullness"),
+    pass("opt.LocalOpt", "removeUnreachableCodeImpl", "(" + MNODE + "Ljava/lang/String;)Z", "LocalOpt.scala:300 dce"),
+    pass("opt.BoxUnbox", "boxUnboxElimination", "(" + MNODE + "Ljava/lang/String;)Z", "LocalOpt.scala:306 boxUnbox"),
+    pass("opt.CopyProp", "copyPropagation", "(" + MNODE + "Ljava/lang/String;)Z", "LocalOpt.scala:311 copyProp"),
+    pass("opt.CopyProp", "eliminateStaleStoresAndRewriteSomeIntrinsics", "(" + MNODE + "Ljava/lang/String;)Lscala/Tuple3;",
+      "LocalOpt.scala:316 staleStores"),
+    pass("opt.LocalOpt", "eliminateRedundantCastsAndRewriteSomeIntrinsics", "(" + MNODE + "Ljava/lang/String;)Lscala/Tuple2;",
+      "LocalOpt.scala:321 redundantCasts"),
+    pass("opt.CopyProp", "eliminatePushPop", "(" + MNODE + "Ljava/lang/String;)Lscala/Tuple3;", "LocalOpt.scala:326 pushPop"),
+    pass("opt.CopyProp", "eliminateStoreLoad", "(" + MNODE + ")Z", "LocalOpt.scala:331 storeLoadPairs"),
+    pass("opt.LocalOptImpls$", "removeEmptyExceptionHandlers", "(" + MNODE + ")Lscala/tools/nsc/backend/jvm/opt/LocalOptImpls$RemoveHandlersResult;",
+      "LocalOpt.scala:335 staleHandlers"),
+    pass("opt.LocalOptImpls$", "simplifyJumps", "(" + MNODE + ")Z", "LocalOpt.scala:341 simplifyJumps"),
+    post("opt.LocalOptImpls$", "compactLocalVariables", "(" + MNODE + ")Z", "LocalOpt.scala:389 localVariables"),
+    post("opt.LocalOptImpls$", "removeUnusedLocalVariableNodes", "(" + MNODE + "ILscala/Function1;)Z", "LocalOpt.scala:390 localVariables"),
+    post("opt.LocalOptImpls$", "removeEmptyLineNumbers", "(" + MNODE + ")Z", "LocalOpt.scala:397 lineNumbers"),
     new JoinPoint("jvm", BJ + "opt.Inliner", "inlineCallsite",
       "(Lscala/tools/nsc/backend/jvm/opt/CallGraph$Callsite;Lscala/Option;Z)Lscala/collection/immutable/Map;",
       Advices.InlineCallsite.class, null, "Inliner.scala:686 inlineCallsite"),

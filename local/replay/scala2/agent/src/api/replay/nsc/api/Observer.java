@@ -47,10 +47,11 @@ public interface Observer {
   void mirrorNode(Object moduleClass, Object classNode);
   /** {@code genDefDef(dd)} created {@code method} ({@code initJMethod} returned). */
   void genMethod(Object dd, Object method);
-  /** {@code genStat(tree)} and {@code genLoad(tree, expectedType)}, with the method being emitted. */
+  /** {@code genStat(tree)} and {@code genLoadTo(tree, expectedType, dest)}, with the method being emitted. */
   void genLoadEnter(Object tree, Object method);
   void genLoadExit(Object tree, Object method);
-  /** {@code traceIfChanged(pass)} in {@code LocalOpt.methodOptimizations(method, owner)}. */
+  /** A local optimiser pass on {@code method} returned, inside {@code LocalOpt.methodOptimizations(method, owner)}:
+   *  {@code beforeMethodOpt} at each round, else the pass method's name (the plugin maps it to the trace name). */
   void optimizerPass(String owner, Object method, String pass);
   /** {@code Inliner.inlineCallsite(callsite, ...)} returned the instruction map. */
   void inlined(Object callsite, Object insnMap);

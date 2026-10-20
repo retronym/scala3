@@ -45,7 +45,7 @@ nsc's GenBCode is what Scala 3's backend was ported from, so the JVM recorder po
 |---|---|
 | class nodes | `CodeGen.genClass(ClassDef, CompilationUnit)` returns the ClassNode; `genMirrorClass(Symbol, CompilationUnit)` the mirror |
 | method | `BCodeSkelBuilder$PlainSkelBuilder.genDefDef(DefDef)` (stashes `dd`), `initJMethod(int, List)` (fires, reads `mnode`) |
-| ranges | `BCodeBodyBuilder$PlainBodyBuilder.genStat(Tree)` and `genLoad(Tree, BType)` enter/exit: instruction index range in `mnode` |
+| ranges | `BCodeBodyBuilder$PlainBodyBuilder.genStat(Tree)` and `genLoadTo(Tree, BType, LoadDestination)` (which `genLoad` and the method body call) enter/exit: instruction index range in `mnode` |
 | optimiser passes | `opt.LocalOpt.methodOptimizations(MethodNode, String)` (owner), `traceIfChanged$1` per pass, only when `-opt` is on |
 | inliner | `opt.Inliner`'s `inlineCallsite` (callee, instruction map) |
 | class written | `PostProcessor.serializeClass(ClassNode)` (after the ClassWriter) |
