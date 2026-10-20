@@ -253,7 +253,8 @@ def provenance(tc, a, njobs):
             f'coverage by the {njobs} jobs of campaign <code>{html.escape(a.campaign)}</code>, measured {measured} with JaCoCo {h.JACOCO_VERSION}. '
             f'Corpus and harness: <a href="{gh}/pull/54">retronym/scala3#54</a>, an experiment not intended for upstream in its current state. '
             f'<a href="https://claude.ai/artifact/XXiTmv7dfyhw4v8hQPuW6J">Dashboard</a>. '
-            f'Crashes found: <a href="{gh}/pull/46">retronym/scala3#46</a>.')
+            f'Crashes found: <a href="{gh}/pull/46">retronym/scala3#46</a>. '
+            f'<a href="https://claude.ai/artifact/Y61TEDGtTUf1CuySkzJEse">256-Line Compiler Golf</a>.')
 
 
 def iter_bits(x):
