@@ -150,7 +150,7 @@
   function renderIR(v) {
     const D = R.ST.D, st = R.ST, vs = R.vers(), k = vs.indexOf(v), prevPseudo = k > 0 && vs[k - 1].irPseudo ? vs[k - 1] : null;
     const cls = R.curClass(), cv = cls && D.irClassVersion(cls, v.phase), pane = $('text');
-    $('removed').hidden = true; $('mpanel').hidden = !cv;
+    $('removed').hidden = true; $('mpanel').hidden = true;   /* the method section lives in the node panel now */
     if (!cv) { pane.className = ''; pane.textContent = 'This class has no bytecode version at this phase (choose a class).'; $('verinfo').innerHTML = `<b>${esc(R.verName(v))}</b>`; return; }
     const pcv = prevPseudo ? D.irClassVersion(cls, prevPseudo.phase) : null, W = S().viewOf(cv);
     // what happened to this class at this step
@@ -184,15 +184,20 @@
       rl.hidden = false; const causes = elided.map((id) => R.elisionCause(id)).filter(Boolean), kinds = new Map(); causes.forEach((c) => kinds.set(c.kind, (kinds.get(c.kind) || 0) + 1)); const dead = (kinds.get('dead-closure') || 0) + (kinds.get('dead-allocation') || 0); $('remsum').textContent = `elided in ${R.verName(v)} (${elided.length})` + (dead ? ` · ${dead} dead closure allocation${dead > 1 ? 's' : ''}` : '') + (causes.length === 1 ? ' — ' + causes[0].text : ' (causes under each range)');
       if (rl.open) $('remlist').innerHTML = elided.slice(0, 200).map((id) => { const nd = D.nodes.get(id), m = nd && D.nodes.get(nd.method); const cz = R.elisionCause(id); return `<pre class="old"><span class="dim">${esc(m ? m.name : '')} ${nd && nd.range ? nd.range[0] + '–' + nd.range[1] : ''}</span> <s>${esc(rangeText(pcv, id, 200) || '(instructions of the previous text)')}</s></pre>${cz ? causeHtml(cz) : ''}`; }).join('');
     }
-    renderMethodPanel(v, cls, cv, hows);
+    const msec = methodSection(v, cls, cv);   // the selected method (if any): picker, stepper, graph, diff: first in the node panel
     // side panel
     const bc = $('crumbs'), nd = $('nodeinfo');
     const shown = [...sel][0];
     if (shown != null) {
       const chain = []; for (let x = shown, i = 0; x != null && i < 20; x = S().parentMap(cv).get(x), i++) chain.unshift(x);
       bc.innerHTML = chain.map((id) => { const n = D.nodes.get(id); return `<a class="crumb${id === shown ? ' on' : ''}" data-n="${id}">${esc(n ? n.kind + (n.name ? ' ' + n.name : n.range ? ' ' + n.range.join('–') : '') : '#' + id)}</a>`; }).join('<span class="dim"> › </span>');
-      nd.innerHTML = irInfo(shown, true);
-    } else { bc.innerHTML = ''; nd.innerHTML = st.selNode != null && !isIR(D, st.selNode) ? '<span class="dim">A tree node is selected: its bytecode ranges are outlined (dashed). Select a range here for its origin.</span>' : '<span class="dim">Click an instruction range (Alt+click: parent). Hover for origin and history. The method panel steps the optimiser per method.</span>'; }
+      nd.innerHTML = msec.html + irInfo(shown, true);
+    } else { bc.innerHTML = ''; nd.innerHTML = msec.html + (st.selNode != null && !isIR(D, st.selNode) ? '<span class="dim">A tree node is selected: its bytecode ranges are outlined (dashed). Select a range here for its origin.</span>' : '<span class="dim">Click an instruction range or a method (Alt+click: parent). Hover for origin and history. Selecting a method, or anything inside one, shows its optimiser steps and control-flow graph here.</span>'); }
+    msec.wire();
+    // scroll the text to the selected method when it was chosen (picker, ◀ ▶, explorer row), and flash it
+    { const nd0 = st.selNode != null ? D.nodes.get(st.selNode) : null, methodish = !!(nd0 && (nd0.kind === 'MethodNode' || (!nd0.ir && nd0.kind === 'DefDef'))), selChanged = st.selNode !== st._scrSel; st._scrSel = st.selNode;
+      const want = st._scrollMethod || (selChanged && methodish); st._scrollMethod = false;
+      if (want && msec.mid != null) setTimeout(() => { const els = [...$('text').querySelectorAll(`[data-n="${msec.mid}"]`)]; if (!els.length) return; const body = $('text').parentNode, top = els[0].getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop; body.scrollTo({ top: Math.max(0, top - 6), behavior: 'smooth' }); els.forEach((e) => e.classList.add('mflash')); setTimeout(() => els.forEach((e) => e.classList.remove('mflash')), 1400); }, 30); }
     $('srcpane').hidden = true;
     renderSplit(v, new Set());
   }
@@ -206,37 +211,39 @@
     if (n.ir) return n.kind === 'MethodNode' ? { cls: D.irClassOf.get(n.id), key: n.name + n.desc } : n.kind === 'InsnRange' ? of(n) : null;
     const rs = R.irFromTreeNode(id) || []; for (const r of rs) { const x = D.nodes.get(r), m = x && x.kind === 'MethodNode' ? { cls: D.irClassOf.get(x.id), key: x.name + x.desc } : of(x); if (m && m.cls) return m; } return null;
   };
-  function renderMethodPanel(v, cls, cv, hows) {
-    const D = R.ST.D, st = R.ST, mp = $('mpanel'), box = $('mpbody'), texts = methodTexts(cls);
-    // methods present in this class version
-    const mn = [...texts.keys()]; if (!mn.length) { box.innerHTML = '<span class="dim">no methods</span>'; return; }
-    // default method: selected node's method, else the first method changed at this step
-    // st.irMethod is the one current method; a *new* selection moves it, a dropdown choice sticks until the selection changes
-    let key = st.irMethod && texts.has(st.irMethod) ? st.irMethod : null;
-    if (st.selNode !== st._mSel) { st._mSel = st.selNode; const mo = R.methodOfNode(st.selNode); if (mo && mo.cls === cls && texts.has(mo.key)) { key = mo.key; st._mExplicit = false; } }
+  const methodNodeOf = (cls, key, phase) => { const D = R.ST.D, cv = D.irClassVersion(cls, phase); if (!cv) return null; for (const id of cv.ids) { const n = D.nodes.get(id); if (n && n.kind === 'MethodNode' && n.name + n.desc === key) return n.id; } return null; };
+  R.methodNodeId = methodNodeOf;
+  // choosing a method anywhere selects its MethodNode: the node panel, breadcrumb, highlighting and the method section all follow ST.irMethod
+  R.selectMethod = (key, cls) => {
+    const D = R.ST.D, st = R.ST, v = R.ver(), c = cls || R.curClass(), phase = v && v.irPseudo ? v.phase : D.irGenPhase, id = methodNodeOf(c, key, phase);
+    st._scrollMethod = true; R.set(Object.assign({ irMethod: key, _mExplicit: true, selSym: null }, id != null ? { selNode: id } : {}));
+  };
+  // the method section of the node panel: shown when the selection is a method or something inside one. Returns {html, wire, mid}.
+  function methodSection(v, cls, cv) {
+    const D = R.ST.D, st = R.ST, none = { html: '', wire: () => {}, mid: null }, texts = methodTexts(cls), mo = R.methodOfNode(st.selNode);
+    if (!mo || mo.cls !== cls || !texts.has(mo.key)) return none;
+    const key = mo.key; st.irMethod = key;   // ST.irMethod follows the selection: one state for the picker, the graph and the URL
+    const mn = [...texts.keys()], hist = texts.get(key);
     const changedAt = (kk) => (texts.get(kk) || []).some((e) => e.phase === v.phase);
-    if (!key) key = mn.find(changedAt) || mn[0];
-    const hist = texts.get(key), idx = (() => { let i = -1; hist.forEach((e, j) => { if (e.phase <= v.phase) i = j; }); return i; })();
-    const prevE = idx > 0 ? hist[idx - 1] : null, curE = hist[Math.max(0, idx)], atThis = hist[idx] && hist[idx].phase === v.phase && idx > 0;
+    const idx = (() => { let i = -1; hist.forEach((e, j) => { if (e.phase <= v.phase) i = j; }); return i; })();
+    const curE = hist[Math.max(0, idx)], atThis = hist[idx] && hist[idx].phase === v.phase && idx > 0;
     const opts = mn.map((kk) => `<option value="${esc(kk)}"${kk === key ? ' selected' : ''}>${changedAt(kk) ? '● ' : ''}${esc(kk)}${(texts.get(kk).length > 1 ? ` (${texts.get(kk).length - 1} change${texts.get(kk).length > 2 ? 's' : ''})` : '')}</option>`).join('');
-    const nameOf = (p) => R.verName({ irPseudo: true, phase: p });
-    const dis = (b) => (b ? ' disabled' : '');
-    const nextE = hist[idx + 1], pe = idx > 0 ? hist[idx - 1] : null;
-    let h = `<div class="mp-bar"><select id="mpsel" aria-label="method">${opts}</select><button id="mpgraph" title="open the method's control-flow graph in a lightbox (g)">▣ graph</button><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀ previous change</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">next change ▶</button><span class="dim">step ${Math.max(0, idx) + 1}/${hist.length}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
+    const nameOf = (p) => R.verName({ irPseudo: true, phase: p }), dis = (b) => (b ? ' disabled' : ''), nextE = hist[idx + 1];
+    let h = `<div class="msec"><div class="mp-bar"><b>method</b> <select id="mpsel" aria-label="method">${opts}</select><button id="mpgraph" title="open the method's control-flow graph in a lightbox (g)">▣ graph</button><button id="mpprev"${dis(!(idx > 0))} title="jump to the step before this method's latest change">◀</button><button id="mpnext"${dis(!nextE)} title="jump to the next step that changed this method">▶</button><span class="dim">step ${Math.max(0, idx) + 1}/${hist.length}${hist.length > 1 ? ' · changed at ' + hist.slice(1).map((e) => esc(nameOf(e.phase))).join(', ') : ' · never changed by the optimiser'}</span></div>`;
     if (idx > 0) {
       const a = hist[idx - 1].text.replace(/\n$/, ''), b = curE.text.replace(/\n$/, '');
-      h += `<div class="dim">${atThis ? `<b>${esc(nameOf(v.phase))}</b> changed this method:` : `last change was <b>${esc(nameOf(curE.phase))}</b> (not changed by ${esc(nameOf(v.phase))}):`} diff from ${esc(nameOf(hist[idx - 1].phase))}</div><div class="df">${diffHtml(diffLines(a, b))}</div>`;
-    } else h += '<div class="dim">This is the generated text of the method (no optimiser change yet). Step with ▶.</div>';
-    // inlined instructions in this method at or before this phase
+      h += `<details class="mdiff" open><summary>${atThis ? `<b>${esc(nameOf(v.phase))}</b> changed this method` : `last change was <b>${esc(nameOf(curE.phase))}</b> (not changed by ${esc(nameOf(v.phase))})`}: diff from ${esc(nameOf(hist[idx - 1].phase))}</summary><div class="df">${diffHtml(diffLines(a, b))}</div></details>`;
+    } else h += '<div class="dim">The generated text of the method (no optimiser change yet). Step with ▶.</div>';
     const inl = []; const mnode = [...cv.ids].map((i) => D.nodes.get(i)).find((n) => n && n.kind === 'MethodNode' && n.name + n.desc === key);
     if (mnode) cv.ids.forEach((id) => { const n = D.nodes.get(id); if (n && n.kind === 'InsnRange' && n.method === mnode.id) (D.irByNew.get(id) || []).forEach((d) => { if (d.how === 'inlined-from' && d.phase <= v.phase) inl.push([id, d]); }); });
     if (inl.length) h += '<div class="anc"><span class="dim">inlined into this method</span>' + inl.slice(0, 20).map(([id, d]) => `<div class="ar"><a class="lk-sel" data-n="${id}" title="select the copied range">range ${(D.nodes.get(id).range || []).join('–')}</a> ← <b>${esc(d.callee || '(unnamed)')}</b>${d.old.length ? ` <a class="lk-ir" data-ir="${d.old[0]}" title="open the callee's bytecode (genBCode)">show callee</a>` : ' <span class="dim">(not compiled in this run)</span>'}</div>`).join('') + (inl.length > 20 ? `<div class="dim">… ${inl.length - 20} more</div>` : '') + '</div>';
-    box.innerHTML = h;
-    st.irMethod = key;
-    $('mpsel').onchange = (ev) => R.set({ irMethod: ev.target.value, _mExplicit: true });
-    $('mpgraph').onclick = () => R.cfgOpen && R.cfgOpen(cls, key, v.phase);
-    const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) R.setPhase(k); };
-    $('mpprev').onclick = () => go(hist[idx - 1]); $('mpnext').onclick = () => nextE && go(nextE);
+    h += '</div>';
+    return { html: h, mid: mnode ? mnode.id : null, wire: () => {
+      $('mpsel').onchange = (ev) => R.selectMethod(ev.target.value, cls);
+      $('mpgraph').onclick = () => R.cfgOpen && R.cfgOpen(cls, key, v.phase);
+      const go = (e) => { const vs = R.vers(), k = vs.findIndex((x) => x.irPseudo && x.phase === e.phase); if (k >= 0) { st._scrollMethod = true; R.setPhase(k); } };
+      $('mpprev').onclick = () => go(hist[idx - 1]); $('mpnext').onclick = () => nextE && go(nextE);
+    } };
   }
 
   // ---- split view: tree (final phase) | bytecode (genBCode), linked ----

@@ -89,7 +89,7 @@
     if (!C.built) { build(); C.built = true; } if (!C.open) { C.open = true; document.addEventListener('keydown', onKey, true); }
     $('cfgov').hidden = false; place(); render(false); { const v0 = R.ver(); C.seen = v0 && v0.irPseudo ? v0.phase : C.hist[C.hi]; }
     // the viewer follows the lightbox: put it on the JVM phase being shown (opening from a tree version moves it to bytecode)
-    C.syncing = true; try { R.ST.irMethod = key; R.ST.cls = cls; const k = R.vers().findIndex((x) => x.irPseudo && x.phase === C.hist[C.hi]); const v = R.ver(); if (k >= 0 && !(v && v.irPseudo)) R.setPhase(k); else R.set({ irMethod: key, cls }); } finally { C.syncing = false; } R.ST._mExplicit = true; R.scheduleHash && R.scheduleHash();
+    C.syncing = true; try { R.ST.irMethod = key; R.ST.cls = cls; const k = R.vers().findIndex((x) => x.irPseudo && x.phase === C.hist[C.hi]); const v = R.ver(); if (k >= 0 && !(v && v.irPseudo)) R.setPhase(k); else R.set({ irMethod: key, cls }); } finally { C.syncing = false; } R.ST._mExplicit = true; { const mo = R.methodOfNode(R.ST.selNode); if (!mo || mo.key !== key || mo.cls !== cls) { const id = R.methodNodeId(cls, key, C.hist[C.hi]); if (id != null) R.set({ selNode: id, selSym: null }); } } R.scheduleHash && R.scheduleHash();
   };
   // the lightbox covers the main panes only: header, timeline (axis, bands, phase select) and the explorer with the chapter pager stay operable
   function place() { const m = document.querySelector('main'), ov = $('cfgov'); if (!m) return; const r = m.getBoundingClientRect(); Object.assign(ov.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' }); }

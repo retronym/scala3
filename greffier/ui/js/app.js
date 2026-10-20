@@ -225,6 +225,7 @@
     if (h.get('stack') === '1') setTimeout(() => R.openStack && R.openStack(), 0);
     if (h.has('sym')) patch.selSym = +h.get('sym');
     R.set(patch);
+    if (h.has('method') && !h.has('node')) setTimeout(() => { if (R.selectMethod && ST.D) { const v = R.ver(); if (v && v.irPseudo) R.selectMethod(h.get('method'), R.curClass()); } }, 40);
     if (h.has('cfg')) setTimeout(() => { if (!R.cfgOpen || !ST.D) return; const v = R.ver(), cls = R.curClass(); if (cls) R.cfgOpen(cls, h.get('cfg'), v && v.irPseudo ? v.phase : ST.D.irGenPhase); }, 60);
   };
   // current state as hash parameters (used for the address bar, `copy link` and tours)
