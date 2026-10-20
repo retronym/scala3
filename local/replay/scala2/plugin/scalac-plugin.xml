@@ -1,0 +1,4 @@
+<plugin>
+  <name>replay-record</name>
+  <classname>replay.nsc.ReplayPlugin</classname>
+</plugin>
