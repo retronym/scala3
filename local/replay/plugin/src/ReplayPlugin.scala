@@ -51,8 +51,14 @@ class ReplayPlugin extends ResearchPlugin:
     val maxIds = dotty.tools.dotc.core.Periods.MaxPossiblePhaseId - 1 // the terminal phase takes one more
     def ids(gs: List[List[Phase]]) = gs.map(_.length).sum + (if record then gs.length else 0)
     val unfused = if unfuse then plan.flatMap(split) else plan
+    // Boundary recording: when the observer's phaseEnd hook is installed (agent and fork variants, see
+    // Install), trees can be recorded there instead of in Record phases. That needs no phase ids beyond
+    // the unfused plan itself, which is what makes per-miniphase versions fit into the 127 ids of
+    // compilers before 3.8.
+    val boundary = record && !options.contains("recordphases") &&
+      (options.contains("boundary") || ids(unfused) > maxIds) && unfused.map(_.length).sum + 1 <= maxIds
     val groups =
-      if ids(unfused) <= maxIds then unfused
+      if boundary || ids(unfused) <= maxIds then unfused
       else
         var spare = maxIds - ids(plan)
         var n = 0
@@ -70,7 +76,7 @@ class ReplayPlugin extends ResearchPlugin:
     val recordAfter: Set[Int] =
       val all = groups.indices.toSet
       val budget = maxIds - groups.map(_.length).sum
-      if !record || all.size <= budget then all
+      if !record || boundary || all.size <= budget then all
       else
         // Keep: the last group (closes the recorder), MegaPhases, the single phases most likely to change
         // trees in this order, then the others from the front, while the budget lasts.
@@ -101,11 +107,11 @@ class ReplayPlugin extends ResearchPlugin:
           else
             dotty.tools.dotc.report.warning("replay-record: JVM recording needs -Ybackend-parallelism:1, skipping it")
             List("nojvm")
-        val rec = Recorder(out, groupName, options ++ jvmOpts)
+        val rec = Recorder(out, groupName, options ++ jvmOpts ++ (if boundary then List("boundary") else Nil))
         Install.install(rec, options)
         val n = groups.length
         var segment = List.empty[Phase] // the phases since the last Record phase
-        groups.zipWithIndex.flatMap: (g, i) =>
+        if boundary then groups else groups.zipWithIndex.flatMap: (g, i) =>
           segment = segment ::: g
           if !recordAfter(i) then List(g)
           else
