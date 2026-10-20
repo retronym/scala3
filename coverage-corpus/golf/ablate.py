@@ -5,7 +5,7 @@ src = Path(sys.argv[1]).read_text()
 lines = src.split("\n")
 # top-level blocks: start at a non-indented, non-blank line
 starts = [i for i, l in enumerate(lines) if l and not l[0].isspace() and not l.startswith(("import", "package", ")"))]
-main_i = next(i for i in starts if lines[i].startswith("@main"))
+main_i = next(i for i in starts if lines[i].startswith("@main def run"))
 def block(i):
     k = starts.index(i)
     end = starts[k + 1] if k + 1 < len(starts) else len(lines)
@@ -24,7 +24,7 @@ for d in [None] + [i for i in starts if i != main_i]:
     p = Path(f"/tmp/ablate_{d}.scala") if False else Path(__file__).parent / "ablate" / f"a_{d}.scala"
     p.parent.mkdir(exist_ok=True)
     p.write_text(variant(d))
-    r = subprocess.run([sys.executable, str(Path(__file__).parent / "golf.py"), str(p), f"ab{d}", "ablation"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(Path(__file__).parent / "golf.py"), "--track", "standard", str(p), f"ab{d}", "ablation"], capture_output=True, text=True)
     m = re.search(r"(OK|FAIL)\s+([\d.]+)%\s+\((\d+)/", r.stdout)
     status, pct, cov = (m.group(1), float(m.group(2)), int(m.group(3))) if m else ("ERR", 0, 0)
     label = "main emptied" if d is None else lines[d][:60]

@@ -2,88 +2,108 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&family=Fraunces:opsz,wght@9..144,500&display=swap">
 <style>
-/* Layout: one column; scoreboard, chart, then the iteration log with each source file expandable. */
+/* Layout: header, per-track score cards, tabs; under the tabs a multi-series chart, a sortable table and a detail panel,
+   all driven by one selection (track tab + selected iteration). */
 :root {
-  --bg: #f7f6f2; --panel: #ffffff; --fg: #1c1d1f; --muted: #6a6d72; --line: #e2e0d9;
-  --accent: #b23a1e; --accent-soft: #f6e1da; --good: #2f7d4a; --code-bg: #fbfaf7;
+  --bg: #f7f6f2; --panel: #ffffff; --fg: #1c1d1f; --muted: #6a6d72; --line: #e2e0d9; --hover: #f1efe8;
+  --accent: #b23a1e; --accent-soft: #f6e1da; --good: #2f7d4a; --bad: #b23a1e; --code-bg: #fbfaf7;
+  --s-standard: #1f6fb2; --s-experimental: #b23a1e; --s-other: #6b4fa8;
   --diff-add-bg: #e6ffec; --diff-add-ln: #ccffd8; --diff-add-fg: #1a7f37;
   --diff-del-bg: #ffebe9; --diff-del-ln: #ffd7d5; --diff-del-fg: #cf222e; --diff-hunk-bg: #ddf4ff;
   --display: "Fraunces", Georgia, serif; --body: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #141517; --panel: #1b1d20; --fg: #e9e8e4; --muted: #9a9da3; --line: #2c2f33;
-  --accent: #f0805f; --accent-soft: #3a231c; --good: #6cc68b; --code-bg: #17191b;
+  --bg: #141517; --panel: #1b1d20; --fg: #e9e8e4; --muted: #9a9da3; --line: #2c2f33; --hover: #23262a;
+  --accent: #f0805f; --accent-soft: #3a231c; --good: #6cc68b; --bad: #f0805f; --code-bg: #17191b;
+  --s-standard: #6aa9e6; --s-experimental: #f0805f; --s-other: #b39ddb;
   --diff-add-bg: #12261a; --diff-add-ln: #1a3a26; --diff-add-fg: #56d364;
   --diff-del-bg: #2d1416; --diff-del-ln: #451c20; --diff-del-fg: #f47067; --diff-hunk-bg: #142235; color-scheme: dark; } }
 :root[data-theme="dark"] {
-  --bg: #141517; --panel: #1b1d20; --fg: #e9e8e4; --muted: #9a9da3; --line: #2c2f33;
-  --accent: #f0805f; --accent-soft: #3a231c; --good: #6cc68b; --code-bg: #17191b;
+  --bg: #141517; --panel: #1b1d20; --fg: #e9e8e4; --muted: #9a9da3; --line: #2c2f33; --hover: #23262a;
+  --accent: #f0805f; --accent-soft: #3a231c; --good: #6cc68b; --bad: #f0805f; --code-bg: #17191b;
+  --s-standard: #6aa9e6; --s-experimental: #f0805f; --s-other: #b39ddb;
   --diff-add-bg: #12261a; --diff-add-ln: #1a3a26; --diff-add-fg: #56d364;
   --diff-del-bg: #2d1416; --diff-del-ln: #451c20; --diff-del-fg: #f47067; --diff-hunk-bg: #142235; color-scheme: dark; }
 body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5; }
-.wrap { max-width: 1000px; margin: 0 auto; padding-block: 28px 64px;
+.wrap { max-width: 1100px; margin: 0 auto; padding-block: 28px 64px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  display: grid; gap: 24px; }
+  display: grid; gap: 20px; }
 h1 { font-family: var(--display); font-weight: 500; font-size: clamp(28px, 5vw, 40px); margin: 0; text-wrap: balance; }
-.rules { color: var(--muted); max-width: 70ch; margin: 6px 0 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+.rules { color: var(--muted); max-width: 75ch; margin: 6px 0 0; }
 .rules code { font-family: var(--mono); font-size: 13px; }
 .links { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 10px 0 0; font-size: 13px; }
-.links a { color: var(--accent); }
-.score { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: baseline; }
-.score .big { font-family: var(--display); font-size: 56px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--accent); }
-.score .lab { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-.score .val { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; min-width: 0; }
-.chart { position: relative; min-height: 260px; }
+.links a, .detail a { color: var(--accent); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 12px; }
+.tcard { text-align: left; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; cursor: pointer; min-width: 0; border-top: 4px solid var(--c); }
+.tcard[aria-pressed="true"] { outline: 2px solid var(--c); outline-offset: -1px; }
+.tcard:focus-visible { outline: 2px solid var(--accent); }
+.tcard .lab { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.tcard .big { font-family: var(--display); font-size: 40px; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--c); }
+.tcard .sub { font-size: 12.5px; color: var(--muted); }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs button { font: 14px var(--body); color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--c, var(--fg)); font-weight: 600; }
+.tabs button:focus-visible { outline: 2px solid var(--accent); }
+.tabs .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: 1px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; min-width: 0; }
+.trackrule { color: var(--muted); font-size: 13.5px; margin: 0 0 10px; }
+.chart { position: relative; min-height: 280px; }
 .chart svg { display: block; width: 100%; height: auto; }
-.empty { color: var(--muted); padding: 24px 0; }
-.log { display: grid; gap: 10px; }
-details { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
-details[open] { border-color: var(--accent); }
-summary { list-style: none; cursor: pointer; padding: 12px 14px; display: grid; grid-template-columns: 3.5em 6.5em 5.5em 1fr; gap: 12px; align-items: baseline; }
-summary::-webkit-details-marker { display: none; }
-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-summary .n { font-family: var(--mono); color: var(--muted); }
-summary .pct { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
-summary .d { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
-summary .d.up { color: var(--good); } summary .d.down { color: var(--accent); }
-summary .note { min-width: 0; }
-summary .meta { grid-column: 4; color: var(--muted); font-size: 12px; font-family: var(--mono); }
-.best summary .pct::after { content: " best"; font-size: 11px; font-weight: 400; color: var(--accent); }
-pre { margin: 0; border-top: 1px solid var(--line); background: var(--code-bg); overflow: auto; max-height: 70vh;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.5; padding: 10px 0; counter-reset: ln; }
-pre span.l { display: block; padding: 0 14px 0 0; white-space: pre; }
-pre span.l::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 3.2em; padding-right: 1em; text-align: right; color: var(--muted); user-select: none; }
-.viewbar { display: flex; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); }
-.viewbar button { font: 12px var(--body); color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+.chart .pt { cursor: pointer; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.12); padding: 6px 9px; font-size: 12.5px; max-width: 320px; }
+.tip .k { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 14px; height: 3px; background: var(--c); vertical-align: 3px; margin-right: 6px; }
+.legend i.dash { background: repeating-linear-gradient(90deg, var(--muted) 0 4px, transparent 4px 7px); }
+.tbl { overflow: auto; max-height: 26rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+table.it { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+table.it th { position: sticky; top: 0; background: var(--panel); text-align: left; border-bottom: 1px solid var(--line); padding: 0; z-index: 1; }
+table.it th button { font: 600 12.5px var(--body); color: var(--muted); background: none; border: 0; padding: 8px 10px; cursor: pointer; width: 100%; text-align: inherit; white-space: nowrap; }
+table.it th.n, table.it td.n { text-align: right; }
+table.it th button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.it td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.it td.note { min-width: 18rem; }
+table.it tbody tr { cursor: pointer; }
+table.it tbody tr:hover, table.it tbody tr.hl { background: var(--hover); }
+table.it tbody tr[aria-selected="true"] { background: var(--accent-soft); }
+table.it td.track { white-space: nowrap; }
+table.it td.track i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 6px; }
+.up { color: var(--good); } .down { color: var(--bad); }
+.best-tag { font-size: 11px; color: var(--c); border: 1px solid var(--c); border-radius: 3px; padding: 0 4px; margin-left: 6px; }
+.detail .head { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+.detail .title { font-family: var(--display); font-size: 22px; }
+.detail .metrics { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.detail .note { margin: 6px 0 10px; }
+.viewbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.viewbar button, .viewbar select { font: 12.5px var(--body); color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
 .viewbar button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
-.viewbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.diffwrap { border-top: 1px solid var(--line); }
-.diffstat { font-family: var(--mono); font-size: 12px; padding: 6px 14px; color: var(--muted); }
-.diffstat .add { color: var(--diff-add-fg); font-weight: 600; }
-.diffstat .del { color: var(--diff-del-fg); font-weight: 600; }
-.nochange { padding: 0 14px 12px; color: var(--muted); }
+.viewbar label { font-size: 12.5px; color: var(--muted); margin-left: 8px; }
+.empty { color: var(--muted); padding: 18px 0; }
+pre.src { margin: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); overflow: auto; max-height: 70vh;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5; padding: 10px 0; counter-reset: ln; }
+pre.src span.l { display: block; padding: 0 14px 0 0; white-space: pre; }
+pre.src span.l::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 3.2em; padding-right: 1em; text-align: right; color: var(--muted); user-select: none; }
+.diffwrap { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.diffstat { font-family: var(--mono); font-size: 12px; padding: 6px 12px; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--code-bg); }
+.diffstat .add { color: var(--diff-add-fg); font-weight: 600; } .diffstat .del { color: var(--diff-del-fg); font-weight: 600; }
+.nochange { padding: 10px 12px; color: var(--muted); }
 .diffscroll { overflow: auto; max-height: 70vh; }
 table.diff { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
 table.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
 table.diff td.ln { width: 1%; text-align: right; color: var(--muted); user-select: none; min-width: 3em; }
 table.diff tr.hunk td { background: var(--diff-hunk-bg); color: var(--muted); padding: 2px 10px; }
-table.diff tr.add td { background: var(--diff-add-bg); }
-table.diff tr.add td.ln { background: var(--diff-add-ln); }
-table.diff tr.del td { background: var(--diff-del-bg); }
-table.diff tr.del td.ln { background: var(--diff-del-ln); }
-@media (max-width: 560px) {
-  summary { grid-template-columns: 3em 6em 1fr; }
-  summary .d { display: none; }
-  summary .note, summary .meta { grid-column: 1 / -1; }
-}
+table.diff tr.add td { background: var(--diff-add-bg); } table.diff tr.add td.ln { background: var(--diff-add-ln); }
+table.diff tr.del td { background: var(--diff-del-bg); } table.diff tr.del td.ln { background: var(--diff-del-ln); }
+@media (max-width: 640px) { table.it .opt { display: none; } }
+@media (prefers-reduced-motion: no-preference) { table.it tbody tr { transition: background-color .12s; } }
 </style>
 
 <div class="wrap">
   <header>
     <h1>256-Line Compiler Golf</h1>
-    <p class="rules">How much of the Scala 3 compiler can one source file make run? Rules: a single <code>.scala</code> file of at most 256 lines, ordinary formatting, no semicolons, compiled with plain <code>scalac</code> (no options, no <code>//&gt; using</code> directives). Score: JaCoCo line coverage of the whole compiler for that one compilation, including the code every compilation runs.</p>
+    <p class="rules">How much of the Scala 3 compiler can one source file make run? Every track: a single <code>.scala</code> file of at most 256 lines, ordinary formatting, no semicolons, compiled with plain <code>scalac</code> (no options, no <code>//&gt; using</code> directives). Score: JaCoCo line coverage of the whole compiler for that one compilation, including the code every compilation runs.</p>
     <p class="links">
       <a href="https://claude.ai/artifact/XXiTmv7dfyhw4v8hQPuW6J" target="_blank" rel="noopener">Compiler Coverage Corpus dashboard</a>
       <a href="https://scala3-compiler-coverage.jzaugg.workers.dev" target="_blank" rel="noopener">Annotated compiler source</a>
@@ -91,81 +111,263 @@ table.diff tr.del td.ln { background: var(--diff-del-ln); }
     </p>
   </header>
 
-  <section class="score" id="score" aria-live="polite">
-    <div><div class="lab">Best so far</div><div class="big" id="best">–</div></div>
-    <div><div class="lab">Compiler lines run</div><div class="val" id="bestLines">–</div></div>
-    <div><div class="lab">Iterations</div><div class="val" id="count">–</div></div>
-    <div><div class="lab">Hello world baseline</div><div class="val" id="base">–</div></div>
-  </section>
+  <section class="cards" id="cards" aria-label="Best score per track"></section>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Tracks"></nav>
 
   <section class="card">
+    <p class="trackrule" id="trackrule"></p>
     <div class="chart" id="chart"><div class="empty">Iterations appear here as they are measured.</div></div>
+    <div class="legend" id="legend"></div>
   </section>
 
-  <section class="log" id="log"></section>
+  <section>
+    <h2>Iterations</h2>
+    <div class="tbl">
+      <table class="it" id="table">
+        <thead><tr>
+          <th><button type="button" data-k="track">Track</button></th>
+          <th class="n"><button type="button" data-k="n">#</button></th>
+          <th class="n"><button type="button" data-k="line_pct">Coverage</button></th>
+          <th class="n"><button type="button" data-k="delta">Change</button></th>
+          <th class="n opt"><button type="button" data-k="lines_covered">Compiler lines</button></th>
+          <th class="n opt"><button type="button" data-k="file_lines">File lines</button></th>
+          <th class="n opt"><button type="button" data-k="compile_ms">Compile ms</button></th>
+          <th><button type="button" data-k="note">What changed</button></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card detail" id="detail" aria-live="polite"><div class="empty">Select an iteration in the chart or the table.</div></section>
 </div>
 
 <script>
-let rows = [];
+// Track metadata: colour token and the rule that distinguishes the track.
+const TRACKS = {
+  standard: { label: "Standard", color: "var(--s-standard)", rule: "No experimental or preview features: no language.experimental imports and no @experimental, so the file compiles on any release with the same rules." },
+  experimental: { label: "Experimental", color: "var(--s-experimental)", rule: "Experimental and preview language features allowed. This is a SNAPSHOT build, where they need no -experimental flag, so a language import can turn on capture and separation checking for the whole file." },
+};
+const trackMeta = (t) => TRACKS[t] || { label: t, color: "var(--s-other)", rule: "" };
 const fmtPct = (v) => v.toFixed(2) + "%";
-const fmtInt = (v) => v.toLocaleString("en");
+const fmtInt = (v) => Number(v).toLocaleString("en");
+
+const state = { rows: [], tab: "all", sel: null, hover: null, sort: { k: "default", dir: 1 }, view: "diff", base: null };
+try { const h = location.hash.slice(1); if (h) state.tab = h; } catch (e) {}
+
+const key = (r) => r.track + ":" + r.n;
+const its = () => state.rows.filter((r) => !r.baseline);
+const baseline = () => state.rows.find((r) => r.baseline);
+const tracks = () => [...new Set(its().map((r) => r.track || "experimental"))].sort((a, b) => (a === "standard" ? -1 : b === "standard" ? 1 : a.localeCompare(b)));
+const inTrack = (t) => its().filter((r) => (r.track || "experimental") === t).sort((a, b) => a.n - b.n);
+const prevOf = (r) => { const l = inTrack(r.track); const i = l.indexOf(r); return i > 0 ? l[i - 1] : baseline(); };
+const bestOf = (t) => inTrack(t).reduce((m, r) => (!m || r.line_pct > m.line_pct ? r : m), null);
 
 function render() {
-  const its = rows.filter((r) => !r.baseline).sort((a, b) => a.n - b.n);
-  const base = rows.find((r) => r.baseline);
-  document.getElementById("count").textContent = its.length ? String(its.length) : "–";
-  document.getElementById("base").textContent = base ? fmtPct(base.line_pct) : "–";
-  const best = its.reduce((m, r) => (!m || r.line_pct > m.line_pct ? r : m), null);
-  document.getElementById("best").textContent = best ? fmtPct(best.line_pct) : "–";
-  document.getElementById("bestLines").textContent = best ? fmtInt(best.lines_covered) + " / " + fmtInt(best.lines_total) : "–";
-  drawChart(its, base, best);
-  drawLog(its, best);
+  for (const r of state.rows) if (!r.track) r.track = r.baseline ? "baseline" : "experimental";
+  if (state.tab !== "all" && !tracks().includes(state.tab)) state.tab = "all";
+  if (state.sel && !its().some((r) => key(r) === state.sel)) state.sel = null;
+  drawCards(); drawTabs(); drawChart(); drawTable(); drawDetail();
 }
 
-function drawChart(its, base, best) {
-  const box = document.getElementById("chart");
-  if (!its.length) { box.innerHTML = '<div class="empty">Iterations appear here as they are measured.</div>'; return; }
-  const W = Math.max(320, box.clientWidth), H = 260, m = { t: 14, r: 16, b: 34, l: 52 };
-  const ys = its.map((r) => r.line_pct).concat(base ? [base.line_pct] : []);
+function drawCards() {
+  const box = document.getElementById("cards");
+  box.replaceChildren();
+  const base = baseline();
+  for (const t of tracks()) {
+    const b = bestOf(t), m = trackMeta(t);
+    const c = document.createElement("button");
+    c.type = "button"; c.className = "tcard"; c.style.setProperty("--c", m.color);
+    c.setAttribute("aria-pressed", String(state.tab === t));
+    const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = m.label + " · best";
+    const big = document.createElement("div"); big.className = "big"; big.textContent = b ? fmtPct(b.line_pct) : "–";
+    const sub = document.createElement("div"); sub.className = "sub";
+    sub.textContent = b ? `#${b.n} of ${inTrack(t).length} · ${fmtInt(b.lines_covered)} lines` + (base ? ` · +${(b.line_pct - base.line_pct).toFixed(2)} over hello world` : "") : "";
+    c.append(lab, big, sub);
+    c.addEventListener("click", () => { setTab(state.tab === t ? "all" : t); if (b) select(key(b)); });
+    box.appendChild(c);
+  }
+  if (base) {
+    const c = document.createElement("div");
+    c.className = "tcard"; c.style.setProperty("--c", "var(--muted)"); c.style.cursor = "default";
+    c.innerHTML = '<div class="lab">Hello world baseline</div><div class="big"></div><div class="sub">every compilation runs at least this much</div>';
+    c.querySelector(".big").textContent = fmtPct(base.line_pct);
+    box.appendChild(c);
+  }
+}
+
+function setTab(t) {
+  state.tab = t;
+  try { history.replaceState(null, "", t === "all" ? location.pathname + location.search : "#" + t); } catch (e) {}
+  render();
+}
+
+function drawTabs() {
+  const nav = document.getElementById("tabs");
+  nav.replaceChildren();
+  for (const t of ["all", ...tracks()]) {
+    const b = document.createElement("button");
+    b.type = "button"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(state.tab === t));
+    if (t !== "all") { b.style.setProperty("--c", trackMeta(t).color); const d = document.createElement("span"); d.className = "dot"; b.appendChild(d); }
+    b.append(t === "all" ? "All tracks" : trackMeta(t).label);
+    b.addEventListener("click", () => setTab(t));
+    nav.appendChild(b);
+  }
+  document.getElementById("trackrule").textContent = state.tab === "all"
+    ? "Each line is a track; the dashed line is plain hello world. Click a point to inspect that iteration."
+    : trackMeta(state.tab).rule;
+}
+
+function drawChart() {
+  const box = document.getElementById("chart"), legend = document.getElementById("legend");
+  const all = its(), base = baseline();
+  legend.replaceChildren();
+  if (!all.length) { box.innerHTML = '<div class="empty">Iterations appear here as they are measured.</div>'; return; }
+  const W = Math.max(320, box.clientWidth), H = 280, m = { t: 14, r: 18, b: 34, l: 54 };
+  const ys = all.map((r) => r.line_pct).concat(base ? [base.line_pct] : []);
   const lo = Math.floor(Math.min(...ys) / 5) * 5, hi = Math.ceil(Math.max(...ys) / 5) * 5 || lo + 5;
-  const nMax = Math.max(2, its[its.length - 1].n);
+  const nMax = Math.max(2, ...all.map((r) => r.n));
   const x = (n) => m.l + (n - 1) / (nMax - 1) * (W - m.l - m.r);
   const y = (v) => m.t + (hi - v) / (hi - lo) * (H - m.t - m.b);
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Line coverage per iteration");
-  const el = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; svg.appendChild(e); return e; };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Line coverage per iteration, by track");
+  const el = (tag, attrs, text, parent = svg) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; parent.appendChild(e); return e; };
   for (let v = lo; v <= hi; v += 5) {
     el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: "var(--line)" });
     el("text", { x: m.l - 8, y: y(v) + 4, "text-anchor": "end", fill: "var(--muted)", "font-size": 11, "font-family": "var(--mono)" }, v + "%");
   }
   const step = Math.max(1, Math.ceil(nMax / 10));
-  for (let n = 1; n <= nMax; n += step)
-    el("text", { x: x(n), y: H - m.b + 16, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11, "font-family": "var(--mono)" }, String(n));
-  el("text", { x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 }, "iteration");
-  if (base) {
-    el("line", { x1: m.l, x2: W - m.r, y1: y(base.line_pct), y2: y(base.line_pct), stroke: "var(--muted)", "stroke-dasharray": "4,4" });
-    el("text", { x: W - m.r, y: y(base.line_pct) - 6, "text-anchor": "end", fill: "var(--muted)", "font-size": 11 }, "hello world " + fmtPct(base.line_pct));
+  for (let n = 1; n <= nMax; n += step) el("text", { x: x(n), y: H - m.b + 16, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11, "font-family": "var(--mono)" }, String(n));
+  el("text", { x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 }, "iteration within track");
+  if (base) el("line", { x1: m.l, x2: W - m.r, y1: y(base.line_pct), y2: y(base.line_pct), stroke: "var(--muted)", "stroke-dasharray": "4,4" });
+  const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true;
+  for (const t of tracks()) {
+    const pts = inTrack(t), col = trackMeta(t).color, dim = state.tab !== "all" && state.tab !== t;
+    const g = el("g", { opacity: dim ? 0.18 : 1 });
+    el("polyline", { points: pts.map((r) => x(r.n) + "," + y(r.line_pct)).join(" "), fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, null, g);
+    const best = bestOf(t);
+    for (const r of pts) {
+      const sel = state.sel === key(r), hov = state.hover === key(r);
+      const c = el("circle", { cx: x(r.n), cy: y(r.line_pct), r: sel ? 7 : hov ? 6 : r === best ? 5 : 3.5, fill: sel || r === best ? col : "var(--panel)", stroke: sel ? "var(--fg)" : col, "stroke-width": 2, class: "pt", tabindex: dim ? -1 : 0, role: "button", "aria-label": `${trackMeta(t).label} #${r.n}: ${fmtPct(r.line_pct)}` }, null, g);
+      if (!dim) {
+        c.addEventListener("click", () => select(key(r)));
+        c.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(key(r)); } });
+        c.addEventListener("pointerenter", () => { setHover(key(r)); showTip(tip, box, W, x(r.n), y(r.line_pct), r); });
+        c.addEventListener("pointerleave", () => { setHover(null); tip.hidden = true; });
+      }
+    }
+    const li = document.createElement("span"); li.style.setProperty("--c", col);
+    const sw = document.createElement("i"); li.append(sw, trackMeta(t).label); legend.appendChild(li);
   }
-  el("polyline", { points: its.map((r) => x(r.n) + "," + y(r.line_pct)).join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
-  for (const r of its) {
-    const c = el("circle", { cx: x(r.n), cy: y(r.line_pct), r: r === best ? 5 : 3.5, fill: r === best ? "var(--accent)" : "var(--panel)", stroke: "var(--accent)", "stroke-width": 2 });
-    const t = document.createElementNS(ns, "title"); t.textContent = `#${r.n}: ${fmtPct(r.line_pct)} — ${r.note}`; c.appendChild(t);
+  if (base) { const li = document.createElement("span"); const sw = document.createElement("i"); sw.className = "dash"; li.append(sw, "hello world " + fmtPct(base.line_pct)); legend.appendChild(li); }
+  box.replaceChildren(svg, tip);
+}
+
+function showTip(tip, box, W, px, py, r) {
+  tip.replaceChildren();
+  const a = document.createElement("div"); a.className = "k"; a.textContent = `${trackMeta(r.track).label} #${r.n}`;
+  const b = document.createElement("div"); b.textContent = `${fmtPct(r.line_pct)} · ${fmtInt(r.lines_covered)} lines`;
+  const c = document.createElement("div"); c.className = "k"; c.textContent = r.note || "";
+  tip.append(a, b, c); tip.hidden = false;
+  const s = box.clientWidth / W, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, px * s + 10), box.clientWidth - tw) + "px";
+  tip.style.top = Math.max(0, py * s - tip.offsetHeight - 8) + "px";
+}
+
+function setHover(k) {
+  state.hover = k;
+  document.querySelectorAll("#table tbody tr").forEach((tr) => tr.classList.toggle("hl", tr.dataset.k === k));
+  document.querySelectorAll("#chart circle.pt").forEach((c) => {});
+}
+
+function rowsForTable() {
+  const list = its().filter((r) => state.tab === "all" || r.track === state.tab).map((r) => {
+    const p = prevOf(r);
+    return Object.assign({}, r, { delta: p ? r.line_pct - p.line_pct : 0, _ref: r });
+  });
+  const { k, dir } = state.sort;
+  const cmp = k === "default"
+    ? (a, b) => tracks().indexOf(a.track) - tracks().indexOf(b.track) || b.n - a.n
+    : (a, b) => (typeof a[k] === "string" ? String(a[k]).localeCompare(String(b[k])) : (a[k] ?? 0) - (b[k] ?? 0)) * dir;
+  return list.sort(cmp);
+}
+
+function drawTable() {
+  const tb = document.querySelector("#table tbody");
+  tb.replaceChildren();
+  for (const r of rowsForTable()) {
+    const tr = document.createElement("tr"); tr.dataset.k = key(r._ref);
+    tr.setAttribute("aria-selected", String(state.sel === tr.dataset.k));
+    if (state.hover === tr.dataset.k) tr.classList.add("hl");
+    tr.style.setProperty("--c", trackMeta(r.track).color);
+    const td = (cls, text) => { const c = document.createElement("td"); if (cls) c.className = cls; if (text != null) c.textContent = text; tr.appendChild(c); return c; };
+    const t = td("track"); t.append(document.createElement("i"), trackMeta(r.track).label);
+    td("n", "#" + r.n);
+    const pc = td("n", fmtPct(r.line_pct));
+    if (bestOf(r.track) === r._ref) { const s = document.createElement("span"); s.className = "best-tag"; s.textContent = "best"; pc.appendChild(s); }
+    td("n " + (r.delta > 0 ? "up" : r.delta < 0 ? "down" : ""), (r.delta >= 0 ? "+" : "") + r.delta.toFixed(2));
+    td("n opt", fmtInt(r.lines_covered)); td("n opt", String(r.file_lines)); td("n opt", fmtInt(r.compile_ms ?? 0));
+    td("note", r.note || "");
+    tr.addEventListener("click", () => select(tr.dataset.k));
+    tr.addEventListener("pointerenter", () => { state.hover = tr.dataset.k; drawChart(); });
+    tr.addEventListener("pointerleave", () => { state.hover = null; drawChart(); });
+    tb.appendChild(tr);
   }
-  box.replaceChildren(svg);
+  document.querySelectorAll("#table th button").forEach((b) => {
+    const k = b.dataset.k;
+    b.closest("th").setAttribute("aria-sort", state.sort.k === k ? (state.sort.dir > 0 ? "ascending" : "descending") : "none");
+    b.onclick = () => { state.sort = { k, dir: state.sort.k === k ? -state.sort.dir : (k === "note" || k === "track" ? 1 : -1) }; drawTable(); };
+  });
+}
+
+function select(k) {
+  state.sel = k; state.base = null; state.view = "diff";
+  render();
+  document.querySelector(`#table tbody tr[data-k="${CSS.escape(k)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function drawDetail() {
+  const box = document.getElementById("detail");
+  const r = its().find((x) => key(x) === state.sel);
+  if (!r) { box.innerHTML = '<div class="empty">Select an iteration in the chart or the table.</div>'; return; }
+  box.replaceChildren();
+  box.style.borderTop = "4px solid " + trackMeta(r.track).color;
+  const head = document.createElement("div"); head.className = "head";
+  const t = document.createElement("span"); t.className = "title"; t.textContent = `${trackMeta(r.track).label} #${r.n}: ${fmtPct(r.line_pct)}`;
+  const mt = document.createElement("span"); mt.className = "metrics";
+  mt.textContent = `${fmtInt(r.lines_covered)} / ${fmtInt(r.lines_total)} compiler lines · ${r.file_lines} source lines · ${fmtInt(r.compile_ms ?? 0)} ms · ${r.status || "OK"}`;
+  head.append(t, mt);
+  const note = document.createElement("p"); note.className = "note"; note.textContent = r.note || "";
+  const bar = document.createElement("div"); bar.className = "viewbar";
+  const candidates = [baseline(), ...its()].filter((c) => c && c !== r);
+  const defBase = prevOf(r);
+  const baseK = state.base ?? (defBase ? (defBase.baseline ? "baseline" : key(defBase)) : null);
+  const btn = (v, label) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.setAttribute("aria-pressed", String(state.view === v)); b.onclick = () => { state.view = v; drawDetail(); }; bar.appendChild(b); };
+  btn("diff", "Diff"); btn("full", "Full file");
+  const lab = document.createElement("label"); lab.htmlFor = "diffbase"; lab.textContent = "against";
+  const selEl = document.createElement("select"); selEl.id = "diffbase";
+  for (const c of candidates) {
+    const o = document.createElement("option");
+    o.value = c.baseline ? "baseline" : key(c);
+    o.textContent = c.baseline ? "hello world" : `${trackMeta(c.track).label} #${c.n} (${fmtPct(c.line_pct)})`;
+    if (o.value === baseK) o.selected = true;
+    selEl.appendChild(o);
+  }
+  selEl.onchange = () => { state.base = selEl.value; state.view = "diff"; drawDetail(); };
+  bar.append(lab, selEl);
+  const other = baseK === "baseline" ? baseline() : its().find((x) => key(x) === baseK);
+  const body = state.view === "full" || !other ? fullSource(r.source) : diffTable(other.source || "", r.source || "");
+  box.append(head, note, bar, body);
 }
 
 // Line diff by longest common subsequence (files are at most a few hundred lines).
 function diffLines(a, b) {
   const n = a.length, m = b.length;
   const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
-  const ops = [];
-  let i = 0, j = 0;
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const ops = []; let i = 0, j = 0;
   while (i < n || j < m) {
     if (i < n && j < m && a[i] === b[j]) { ops.push({ t: " ", a: i + 1, b: j + 1, s: a[i] }); i++; j++; }
     else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) { ops.push({ t: "+", b: j + 1, s: b[j] }); j++; }
@@ -177,108 +379,48 @@ function diffLines(a, b) {
 // GitHub-style unified diff: hunks with 3 lines of context, old/new line numbers.
 function diffTable(oldSrc, newSrc) {
   const ops = diffLines(oldSrc.replace(/\n$/, "").split("\n"), newSrc.replace(/\n$/, "").split("\n"));
-  const changed = ops.map((o, k) => o.t !== " " ? k : -1).filter((k) => k >= 0);
-  const wrap = document.createElement("div");
-  wrap.className = "diffwrap";
-  const added = ops.filter((o) => o.t === "+").length, removed = ops.filter((o) => o.t === "-").length;
-  const stat = document.createElement("div");
-  stat.className = "diffstat";
-  const plus = document.createElement("span"); plus.className = "add"; plus.textContent = "+" + added;
-  const minus = document.createElement("span"); minus.className = "del"; minus.textContent = "−" + removed;
-  stat.append(plus, " ", minus, " lines");
-  wrap.appendChild(stat);
+  const changed = ops.map((o, k) => (o.t !== " " ? k : -1)).filter((k) => k >= 0);
+  const wrap = document.createElement("div"); wrap.className = "diffwrap";
+  const stat = document.createElement("div"); stat.className = "diffstat";
+  const plus = document.createElement("span"); plus.className = "add"; plus.textContent = "+" + ops.filter((o) => o.t === "+").length;
+  const minus = document.createElement("span"); minus.className = "del"; minus.textContent = "−" + ops.filter((o) => o.t === "-").length;
+  stat.append(plus, " ", minus, " lines"); wrap.appendChild(stat);
   if (!changed.length) { const p = document.createElement("div"); p.className = "nochange"; p.textContent = "No source changes."; wrap.appendChild(p); return wrap; }
   const ctx = 3, hunks = [];
-  for (const k of changed) {
-    const lo = Math.max(0, k - ctx), hi = Math.min(ops.length - 1, k + ctx);
-    const h = hunks[hunks.length - 1];
-    if (h && lo <= h.hi + 1) h.hi = Math.max(h.hi, hi); else hunks.push({ lo, hi });
-  }
-  const table = document.createElement("table");
-  table.className = "diff";
+  for (const k of changed) { const lo = Math.max(0, k - ctx), hi = Math.min(ops.length - 1, k + ctx); const h = hunks[hunks.length - 1]; if (h && lo <= h.hi + 1) h.hi = Math.max(h.hi, hi); else hunks.push({ lo, hi }); }
+  const table = document.createElement("table"); table.className = "diff";
   for (const h of hunks) {
     const slice = ops.slice(h.lo, h.hi + 1);
     const a0 = slice.find((o) => o.a)?.a ?? 0, b0 = slice.find((o) => o.b)?.b ?? 0;
-    const ac = slice.filter((o) => o.t !== "+").length, bc = slice.filter((o) => o.t !== "-").length;
-    const hr = table.insertRow();
-    hr.className = "hunk";
-    const hc = hr.insertCell(); hc.colSpan = 3; hc.textContent = `@@ -${a0},${ac} +${b0},${bc} @@`;
+    const hr = table.insertRow(); hr.className = "hunk";
+    const hc = hr.insertCell(); hc.colSpan = 3; hc.textContent = `@@ -${a0},${slice.filter((o) => o.t !== "+").length} +${b0},${slice.filter((o) => o.t !== "-").length} @@`;
     for (const o of slice) {
-      const tr = table.insertRow();
-      tr.className = o.t === "+" ? "add" : o.t === "-" ? "del" : "ctx";
-      tr.insertCell().textContent = o.a ?? "";
-      tr.insertCell().textContent = o.b ?? "";
-      const c = tr.insertCell(); c.textContent = o.t + " " + o.s;
-      tr.cells[0].className = tr.cells[1].className = "ln";
-      c.className = "code";
+      const tr = table.insertRow(); tr.className = o.t === "+" ? "add" : o.t === "-" ? "del" : "ctx";
+      const c1 = tr.insertCell(), c2 = tr.insertCell(), c3 = tr.insertCell();
+      c1.className = c2.className = "ln"; c3.className = "code";
+      c1.textContent = o.a ?? ""; c2.textContent = o.b ?? ""; c3.textContent = o.t + " " + o.s;
     }
   }
-  const scroller = document.createElement("div");
-  scroller.className = "diffscroll";
-  scroller.appendChild(table);
-  wrap.appendChild(scroller);
+  const sc = document.createElement("div"); sc.className = "diffscroll"; sc.appendChild(table); wrap.appendChild(sc);
   return wrap;
 }
 
 function fullSource(src) {
-  const pre = document.createElement("pre");
-  for (const line of String(src || "").replace(/\n$/, "").split("\n")) {
-    const sp = document.createElement("span"); sp.className = "l"; sp.textContent = line || " "; pre.appendChild(sp);
-  }
+  const pre = document.createElement("pre"); pre.className = "src";
+  for (const line of String(src || "").replace(/\n$/, "").split("\n")) { const sp = document.createElement("span"); sp.className = "l"; sp.textContent = line || " "; pre.appendChild(sp); }
   return pre;
-}
-
-const viewMode = {};
-function drawLog(its, best) {
-  const log = document.getElementById("log");
-  const open = new Set([...log.querySelectorAll("details[open]")].map((d) => d.dataset.n));
-  const base = rows.find((r) => r.baseline);
-  log.replaceChildren();
-  for (const r of [...its].reverse()) {
-    const idx = its.indexOf(r);
-    const prev = idx > 0 ? its[idx - 1] : base;
-    const d = document.createElement("details");
-    d.dataset.n = String(r.n);
-    if (r === best) d.className = "best";
-    if (open.has(d.dataset.n)) d.open = true;
-    const s = document.createElement("summary");
-    const cell = (cls, text) => { const e = document.createElement("span"); e.className = cls; e.textContent = text; s.appendChild(e); return e; };
-    cell("n", "#" + r.n);
-    cell("pct", fmtPct(r.line_pct));
-    const delta = prev ? r.line_pct - prev.line_pct : null;
-    cell("d" + (delta == null ? "" : delta >= 0 ? " up" : " down"), delta == null ? "" : (delta >= 0 ? "+" : "") + delta.toFixed(2));
-    cell("note", r.note || "");
-    cell("meta", `${r.file_lines} lines · ${fmtInt(r.lines_covered)} compiler lines · ${r.status || "OK"}`);
-    d.appendChild(s);
-    const bar = document.createElement("div");
-    bar.className = "viewbar";
-    const body = document.createElement("div");
-    const mode = viewMode[r.n] || "diff";
-    const btn = (m, label) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = label;
-      b.setAttribute("aria-pressed", String(mode === m));
-      b.addEventListener("click", () => { viewMode[r.n] = m; drawLog(its, best); });
-      bar.appendChild(b);
-    };
-    btn("diff", prev ? (prev.baseline ? "Diff vs hello world" : `Diff vs #${prev.n}`) : "Diff");
-    btn("full", "Full file");
-    body.appendChild(mode === "full" || !prev ? fullSource(r.source) : diffTable(prev.source || "", r.source || ""));
-    d.append(bar, body);
-    log.appendChild(d);
-  }
 }
 
 render();
 let lastW = 0;
-new ResizeObserver(() => { const w = document.getElementById("chart").clientWidth; if (w !== lastW) { lastW = w; render(); } }).observe(document.getElementById("chart"));
+new ResizeObserver(() => { const w = document.getElementById("chart").clientWidth; if (w !== lastW) { lastW = w; drawChart(); } }).observe(document.getElementById("chart"));
 
 (async () => {
   const db = await window.claude?.use?.("db");
   if (!db) return;
   db.collection("iterations").onSnapshot((snap) => {
-    rows = snap.docs.map((d) => d.data());
+    state.rows = snap.docs.map((d) => Object.assign({}, d.data()));
+    if (!state.sel) { const b = tracks().map(bestOf).filter(Boolean).sort((a, c) => c.line_pct - a.line_pct)[0]; if (b) state.sel = key(b); }
     render();
   }, () => {});
 })();
