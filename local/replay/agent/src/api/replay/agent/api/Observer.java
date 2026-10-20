@@ -36,7 +36,8 @@ public interface Observer {
 
   // ---- JVM backend (the fork's backend hooks; option `nojvm` turns them off) ----
 
-  /** {@code CodeGen.generateClassNodes} returned {@code nodes}: (ClassNode, metadata) pairs, the mirror second. */
+  /** {@code CodeGen.generateClassNodes} returned {@code nodes}: a {@code List} of (ClassNode, metadata) pairs, the mirror
+   *  second. On 3.3 to 3.10 ({@code genClassDef}) the metadata is null. */
   void classNodes(Object typeDef, Object nodes, Object ctx);
   /** {@code genDefDef} created {@code method} for {@code dd} ({@code initJMethod} returned). */
   void genMethod(Object dd, Object method, Object ctx);
@@ -46,7 +47,7 @@ public interface Observer {
   void optimizerPass(String owner, Object method, String pass);
   /** {@code inlineCallsite(callsite)} called from {@code GlobalOptimizer}'s {@code doInline} into {@code method}. */
   void inlined(Object method, Object callsite, Object insnMap);
-  /** {@code CodeGen.serializeClassNode(classNode)} (after the ClassWriter, which does not change the node). */
+  /** {@code CodeGen.serializeClassNode(classNode)}, {@code PostProcessor.serializeClass} on 3.3 to 3.10 (after the ClassWriter, which does not change the node). */
   void classWritten(Object classNode);
 
   // ---- not in the fork (agent options `rejected`, `tentative`) ----

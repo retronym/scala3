@@ -37,8 +37,18 @@ public final class Hooks {
   public static Object genDefDef;
   /** {@code ownerClassName} of the innermost {@code LocalOptimizer.methodOptimizations}; {@code traceIfChanged} lacks it. */
   public static String optOwner;
+  /** 3.3 to 3.7, whose backend methods take no Context: the Context of the running {@code CodeGen.genClassDef}. */
+  public static Object backendCtx;
   /** Armed by {@code GlobalOptimizer}'s {@code doInline} with its target method, consumed by {@code inlineCallsite}. */
   public static Object armInline;
+
+  /** A {@code traceIfChanged(pass)} call site that the compiler's own optimiser inlined (released 3.8+ are built
+   *  with {@code -opt}, so {@code LocalOpt.traceIfChanged$1} is dead code there): the agent inserts a call of this
+   *  at each inlined copy, see {@code ReplayAgent.InlinedTraceSites}. */
+  public static void optimizerPass(Object method, String pass) {
+    Observer o = observer;
+    if (o != null) o.optimizerPass(optOwner, method, pass);
+  }
 
   /** Installed by the agent: forces loading of every target class in the given loader and
    *  returns the join-point table, or throws if a site was not found. */
