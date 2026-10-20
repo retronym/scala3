@@ -43,7 +43,51 @@ class ReplayPlugin extends ResearchPlugin:
       keep.collectFirst { case (a, b) if names.contains(a) && names.contains(b) => (names.indexOf(a), names.indexOf(b)) } match
         case Some((i, j)) if i < j => g.take(i).map(List(_)) ::: List(g.slice(i, j + 1)) ::: split(g.drop(j + 1))
         case _ => g.map(List(_))
-    val groups = if unfuse then plan.flatMap(split) else plan
+    // Every miniphase and every Record phase takes a phase id. Before 3.8 there are only 127 ids
+    // (Periods.PhaseWidth = 7): too few for a Record phase per miniphase, or even per fused group.
+    // Then unfuse MegaPhases from the front of the plan while the ids last, and if a Record phase per group
+    // still does not fit, record after fewer groups (see `recordAfter`). (An inline val, so this is the
+    // limit of the compiler the plugin was compiled against.)
+    val maxIds = dotty.tools.dotc.core.Periods.MaxPossiblePhaseId - 1 // the terminal phase takes one more
+    def ids(gs: List[List[Phase]]) = gs.map(_.length).sum + (if record then gs.length else 0)
+    val unfused = if unfuse then plan.flatMap(split) else plan
+    val groups =
+      if ids(unfused) <= maxIds then unfused
+      else
+        var spare = maxIds - ids(plan)
+        var n = 0
+        val gs = plan.flatMap { g =>
+          val s = split(g)
+          val more = ids(s) - ids(List(g))
+          if s.length > 1 && more <= spare then { spare -= more; n += 1; s } else List(g)
+        }
+        dotty.tools.dotc.report.warning(
+          s"replay-record: unfusing every MegaPhase needs ${ids(unfused)} phase ids, this compiler has $maxIds; " +
+          s"unfused the first $n of ${plan.count(_.length > 1)} MegaPhases")
+        gs
+    // The groups followed by a Record phase. A Record phase after a group records the trees after it and
+    // after every group since the previous Record phase.
+    val recordAfter: Set[Int] =
+      val all = groups.indices.toSet
+      val budget = maxIds - groups.map(_.length).sum
+      if !record || all.size <= budget then all
+      else
+        // Keep: the last group (closes the recorder), MegaPhases, the single phases most likely to change
+        // trees in this order, then the others from the front, while the budget lasts.
+        val preferred = List("typer", "inlining", "posttyper", "staging", "splicing", "pickleQuotes", "postInlining",
+          "erasure", "genBCode")
+        def rank(i: Int) =
+          val g = groups(i)
+          if i == groups.length - 1 then 0
+          else if g.length > 1 then 1
+          else preferred.indexOf(g.head.phaseName) match
+            case -1 => 100 + i // then the rest, from the front
+            case k => 2 + k
+        val kept = groups.indices.sortBy(rank).take(budget).toSet
+        dotty.tools.dotc.report.warning(
+          s"replay-record: ${groups.length} groups but phase ids for only $budget Record phases; recording after " +
+          groups.indices.filter(kept).map(i => groups(i).last.phaseName).mkString(", "))
+        kept
     val newPlan =
       if !record then groups
       else
@@ -60,21 +104,27 @@ class ReplayPlugin extends ResearchPlugin:
         val rec = Recorder(out, groupName, options ++ jvmOpts)
         Install.install(rec, options)
         val n = groups.length
-        groups.zipWithIndex.flatMap((g, i) => List(g, List(RecordPhase(rec, g, i == n - 1))))
+        var segment = List.empty[Phase] // the phases since the last Record phase
+        groups.zipWithIndex.flatMap: (g, i) =>
+          segment = segment ::: g
+          if !recordAfter(i) then List(g)
+          else
+            val seg = segment
+            segment = Nil
+            List(g, List(RecordPhase(rec, seg, i == n - 1)))
     // -Vphases prints `new Compiler().phases`, ignoring plugins, so print the plan we hand back.
     if options.contains("showplan") then
       for g <- newPlan do
         System.err.println(if g.length == 1 then g.head.phaseName else g.map(_.phaseName).mkString("{ ", ", ", " }"))
     newPlan
 
-/** Runs after `group`; records each unit's tree as seen by the following phase. The recorder
+/** Runs after `group` (the phases since the previous RecordPhase); records each unit's tree as seen by the following phase. The recorder
  *  suspends event recording while a RecordPhase runs (it sees its PhaseBegin/End).
  */
-class RecordPhase(rec: Recorder, group: List[Phase], isLast: Boolean) extends Phase:
+class RecordPhase(rec: Recorder, group: List[Phase], isLast: Boolean) extends CompatPhase:
   val phaseName = "record:" + group.last.phaseName
   override def description = "replay: record trees after " + group.map(_.phaseName).mkString(",")
   override def isCheckable = false
-  override def skipIfJava(using Context) = false
   // `isRunnable` is left at the default (stop after errors), matching -Xprint.
 
   /** The group may have been dropped by fusePhases (disabled / -Yskip / -Ystop-before). */
@@ -89,9 +139,9 @@ class RecordPhase(rec: Recorder, group: List[Phase], isLast: Boolean) extends Ph
       if isLast then rec.close()
       res
 
-  protected def run(using Context): Unit =
+  def run(using Context): Unit = // public: Phase.run is public before 3.8
     val live = flatPhases
-    rec.recordUnit(rec.groupOf(group.filter(g => live.exists(_ eq g)).head), ctx.compilationUnit)
+    rec.recordUnit(rec.groupOf(group.filter(g => live.exists(_ eq g)).last), ctx.compilationUnit)
 end RecordPhase
 
 /** The phases of this run with MegaPhases expanded, as `base.phases` (private[dotc]) has them. */

@@ -108,7 +108,6 @@ final class AgentBridge(val o: Observer) extends replay.agent.api.Observer:
     o.genLoadExit(tree.asInstanceOf[tpd.Tree], method.asInstanceOf[MethodNode])(using c(ctx))
   def optimizerPass(owner: String, method: Object, pass: String) = o.optimizerPass(owner, method.asInstanceOf[MethodNode], pass)
   def inlined(method: Object, callsite: Object, insnMap: Object) =
-    val cs = callsite.asInstanceOf[dotty.tools.backend.jvm.opt.KnownCallsite]
-    o.inlined(cs.callsiteClass.internalName, method.asInstanceOf[MethodNode], cs.callee.calleeDeclarationClass.internalName,
-      cs.callee.callee, insnMap.asInstanceOf[Map[AbstractInsnNode, AbstractInsnNode]])
+    val (owner, calleeOwner, callee) = Compat.callsite(callsite)
+    o.inlined(owner, method.asInstanceOf[MethodNode], calleeOwner, callee, insnMap.asInstanceOf[Map[AbstractInsnNode, AbstractInsnNode]])
   def classWritten(classNode: Object) = o.classWritten(classNode.asInstanceOf[ClassNode])

@@ -232,7 +232,7 @@ final class JvmRecorder(rec: Recorder):
     if start != null && end != null && (prevLast ne end) then jmethod(mn).raw += ((tree, start, end))
 
   def classNodes(typeDef: tpd.TypeDef, cn: ClassNode, mirror: ClassNode | Null)(using Context): Unit = timed:
-    globalOpt = ctx.settings.optInlineEnabled || ctx.settings.optClosureInvocations
+    globalOpt = Compat.globalOptimizer
     globalPending = globalOpt
     val u = rec.unitIdOf(ctx.compilationUnit.source)
     val main = addClass(cn, u, typeDef, null)
@@ -520,7 +520,7 @@ final class JvmRecorder(rec: Recorder):
           else
             // statified trait methods (`$init$`) and trait static forwarders (`m$`) get fresh symbols: match by name
             memberDefs(c).collectFirst {
-              case d: tpd.DefDef if { val n = d.symbol.denot.javaSimpleName; n == jm.mn.name || n + "$" == jm.mn.name
+              case d: tpd.DefDef if { val n = Compat.javaSimpleName(d.symbol); n == jm.mn.name || n + "$" == jm.mn.name
                   || jm.mn.name == "$init$" && d.symbol.isConstructor } => d
             }.map(d => (resolve(d, c.unit)._1, false)).getOrElse((-1, false))
 
@@ -566,9 +566,9 @@ final class JvmRecorder(rec: Recorder):
       case _ => Nil
 
     def field(c: JClass, name: String): (Int, Boolean) =
-      memberDefs(c).collectFirst { case v: tpd.ValDef if v.symbol.denot.javaSimpleName == name => v } match
+      memberDefs(c).collectFirst { case v: tpd.ValDef if Compat.javaSimpleName(v.symbol) == name => v } match
         case Some(v) => resolve(v, c.unit)
         case None => (-1, false)
     def fieldSym(c: JClass, name: String): Any =
-      memberDefs(c).collectFirst { case v: tpd.ValDef if v.symbol.denot.javaSimpleName == name => symId(v.symbol) }.orNull
+      memberDefs(c).collectFirst { case v: tpd.ValDef if Compat.javaSimpleName(v.symbol) == name => symId(v.symbol) }.orNull
 end JvmRecorder

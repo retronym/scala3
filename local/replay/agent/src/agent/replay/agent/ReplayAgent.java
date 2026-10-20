@@ -36,7 +36,10 @@ import replay.agent.api.Hooks;
  * {@code Install}). Options, comma-separated: {@code fixTypeApply} (the fork's TypeApply copier fix),
  * {@code rejected} (implicit scope, ranking and rejected-candidate hooks, not in the fork),
  * {@code tentative} (tryEither and TyperState-buffered reports, not in the fork), {@code nonames} (skip the Name
- * hashes), {@code nojvm} (skip the JVM backend hooks), {@code verbose} (print the join-point table on verify).
+ * hashes), {@code nojvm} (skip the JVM backend hooks), {@code research} (lift the research-plugin gate of a
+ * released compiler, see {@link replay.agent.api.Gate}), {@code lenient} (a MISSING site is reported in the table
+ * but does not fail verify: for compilers the table was not pinned against), {@code verbose} (print the
+ * join-point table on verify).
  *
  * The Name hashes add a method, so they need the class before it is loaded: premain only.
  */
@@ -47,8 +50,11 @@ public final class ReplayAgent {
 
   private static final Map<String, Status> status = new ConcurrentHashMap<>();
   private static final Map<String, String> detail = new ConcurrentHashMap<>();
+  /** The alternative a site matched, when it is not the pinned one. */
+  private static final Map<String, JoinPoints.Alt> matched = new ConcurrentHashMap<>();
   private static List<JoinPoint> active = List.of();
   private static boolean verbose;
+  private static boolean lenient;
   private static boolean dynamic;
   private static Instrumentation instrumentation;
 
@@ -60,6 +66,7 @@ public final class ReplayAgent {
     if (args != null) args = args.replace('+', ','); // `+` separates options inside a -P: value
     Set<String> opts = new HashSet<>(Arrays.asList((args == null ? "" : args).split(",")));
     verbose = opts.contains("verbose");
+    lenient = opts.contains("lenient");
     dynamic = isDynamic;
     instrumentation = inst;
     List<JoinPoint> jps = new ArrayList<>();
@@ -71,6 +78,7 @@ public final class ReplayAgent {
         case "extra" -> opts.contains("rejected");
         case "tentative" -> opts.contains("tentative");
         case "names" -> !opts.contains("nonames");
+        case "gate" -> opts.contains("research");
         default -> false;
       };
       if (on) { jps.add(jp); status.put(jp.key(), Status.NOT_LOADED); }
@@ -80,7 +88,7 @@ public final class ReplayAgent {
 
     Set<String> nameClasses = new LinkedHashSet<>();
     Set<String> adviceClasses = new LinkedHashSet<>();
-    for (JoinPoint jp : active) (isNames(jp) ? nameClasses : adviceClasses).add(jp.owner());
+    for (JoinPoint jp : active) for (JoinPoints.Alt a : jp.candidates()) (isNames(jp) ? nameClasses : adviceClasses).add(a.owner());
 
     AgentBuilder.Listener listener = new Listener();
     if (!nameClasses.isEmpty()) {
@@ -101,7 +109,9 @@ public final class ReplayAgent {
           .installOn(inst);
       }
     }
-    AgentBuilder ab = new AgentBuilder.Default()
+    // ignore(none()): Byte Buddy skips synthetic methods by default, and before 3.8 Run's per-phase loop body
+    // is a lambda (runPhases$1$$anonfun$1, ACC_SYNTHETIC). Only the pinned sites are visited either way.
+    AgentBuilder ab = new AgentBuilder.Default(new net.bytebuddy.ByteBuddy().ignore(none()))
       .disableClassFormatChanges()
       .with(listener)
       .ignore(not(nameStartsWith("dotty.tools.dotc.").or(nameStartsWith("dotty.tools.backend.jvm."))));
@@ -117,22 +127,39 @@ public final class ReplayAgent {
 
   private static List<JoinPoint> sitesOf(TypeDescription td) {
     List<JoinPoint> res = new ArrayList<>();
-    for (JoinPoint jp : active) if (jp.owner().equals(td.getName())) res.add(jp);
+    for (JoinPoint jp : active)
+      if (jp.candidates().stream().anyMatch(a -> a.owner().equals(td.getName()))) res.add(jp);
     return res;
   }
 
-  private static MethodDescription.InDefinedShape find(TypeDescription td, JoinPoint jp) {
-    MethodList<MethodDescription.InDefinedShape> ms =
-      td.getDeclaredMethods().filter(named(jp.method()).and(hasDescriptor(jp.descriptor())));
-    if (ms.size() != 1) {
-      missing(jp, "no method " + jp.method() + jp.descriptor() + " in " + td.getName());
-      return null;
+  /** The pinned site or the first alternative that matches in {@code td}. If none does and no candidate is in
+   *  another class, the site is MISSING now; otherwise {@link #verify} decides once every class has loaded. */
+  private static JoinPoints.Alt find(TypeDescription td, JoinPoint jp) {
+    String why = null;
+    boolean elsewhere = false;
+    for (JoinPoints.Alt a : jp.candidates()) {
+      if (!a.owner().equals(td.getName())) { elsewhere = true; continue; }
+      MethodList<MethodDescription.InDefinedShape> ms =
+        td.getDeclaredMethods().filter(named(a.method()).and(hasDescriptor(a.descriptor())));
+      if (ms.size() != 1) { if (why == null) why = "no method " + a.method() + a.descriptor() + " in " + td.getName(); continue; }
+      if (a.requiredField() != null && td.getDeclaredFields().filter(named(a.requiredField())).isEmpty()) {
+        if (why == null) why = "no field " + a.requiredField() + " in " + td.getName();
+        continue;
+      }
+      if (!a.owner().equals(jp.owner()) || !a.method().equals(jp.method()) || !a.descriptor().equals(jp.descriptor())
+          || a.advice() != jp.advice()) {
+        matched.put(jp.key(), a);
+        detail.put(jp.key(), "as " + a.show());
+      } else detail.remove(jp.key());
+      return a;
     }
-    if (jp.requiredField() != null && td.getDeclaredFields().filter(named(jp.requiredField())).isEmpty()) {
-      missing(jp, "no field " + jp.requiredField() + " in " + td.getName());
-      return null;
-    }
-    return ms.getOnly();
+    if (!elsewhere) missing(jp, why);
+    else if (status.get(jp.key()) != Status.FOUND) detail.putIfAbsent(jp.key(), why);
+    return null;
+  }
+
+  private static MethodDescription.InDefinedShape method(TypeDescription td, JoinPoints.Alt a) {
+    return td.getDeclaredMethods().filter(named(a.method()).and(hasDescriptor(a.descriptor()))).getOnly();
   }
 
   private static void missing(JoinPoint jp, String why) {
@@ -144,10 +171,18 @@ public final class ReplayAgent {
   private static DynamicType.Builder<?> transformAdvice(DynamicType.Builder<?> builder, TypeDescription td,
       ClassLoader cl, JavaModule module, java.security.ProtectionDomain pd) {
     for (JoinPoint jp : sitesOf(td)) {
-      MethodDescription.InDefinedShape md = find(td, jp);
-      if (md == null) continue;
+      JoinPoints.Alt site = find(td, jp);
+      if (site == null) continue;
+      MethodDescription.InDefinedShape md = method(td, site);
       if (jp.kind() == Kind.ADVICE) {
-        builder = builder.visit(Advice.to(jp.advice()).on(is(md)));
+        builder = builder.visit(Advice.to(site.advice()).on(is(md)));
+      } else if (jp.kind() == Kind.GATE) {
+        builder = builder.visit(MemberSubstitution.relaxed()
+          .method(named("researchPluginEnabled").and(takesArguments(0)).and(isDeclaredBy(named("dotty.tools.dotc.config.Properties$"))))
+          .replaceWith(gate("researchPluginEnabled"))
+          .method(named("isExperimentalEnabled").and(takesArguments(1)).and(isDeclaredBy(named("dotty.tools.dotc.config.Feature$"))))
+          .replaceWith(gate("isExperimentalEnabled"))
+          .on(is(md)));
       } else if (jp.kind() == Kind.SUBSTITUTE) {
         // RunHook names compiler types, so the compiler's loader must see it; describe it without loading.
         if (cl == null || cl.getResource("replay/agent/RunHook.class") == null) {
@@ -164,6 +199,10 @@ public final class ReplayAgent {
       status.put(jp.key(), Status.FOUND); // SUBSTITUTE is re-checked against the emitted bytes below
     }
     return builder;
+  }
+
+  private static MethodDescription gate(String name) {
+    return TypeDescription.ForLoadedType.of(replay.agent.api.Gate.class).getDeclaredMethods().filter(named(name)).getOnly();
   }
 
   private static DynamicType.Builder<?> transformNames(DynamicType.Builder<?> builder, TypeDescription td,
@@ -236,6 +275,7 @@ public final class ReplayAgent {
     @Override
     public void onTransformation(TypeDescription td, ClassLoader cl, JavaModule module, boolean loaded, DynamicType dt) {
       if (td.getName().equals(JoinPoints.RUN)) checkRunSubstitution(dt.getBytes());
+      if (td.getName().equals(JoinPoints.PLUGINS)) checkGate(dt.getBytes());
     }
 
     @Override
@@ -249,6 +289,11 @@ public final class ReplayAgent {
     }
   }
 
+  private static boolean isSite(JoinPoint jp, String name, String desc) {
+    JoinPoints.Alt m = matched.get(jp.key());
+    return m == null ? name.equals(jp.method()) && desc.equals(jp.descriptor()) : name.equals(m.method()) && desc.equals(m.descriptor());
+  }
+
   /** MemberSubstitution does not say whether it replaced anything: count in the emitted method. */
   private static void checkRunSubstitution(byte[] bytes) {
     for (JoinPoint jp : active) if (jp.kind() == Kind.SUBSTITUTE) {
@@ -256,7 +301,7 @@ public final class ReplayAgent {
       new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
         @Override
         public MethodVisitor visitMethod(int acc, String name, String desc, String sig, String[] ex) {
-          if (!(name.equals(jp.method()) && desc.equals(jp.descriptor()))) return null;
+          if (!isSite(jp, name, desc)) return null;
           return new MethodVisitor(Opcodes.ASM9) {
             @Override
             public void visitMethodInsn(int op, String owner, String n, String d, boolean itf) {
@@ -270,26 +315,53 @@ public final class ReplayAgent {
     }
   }
 
+  /** The gate substitution must replace exactly one flag read and leave none. */
+  private static void checkGate(byte[] bytes) {
+    for (JoinPoint jp : active) if (jp.kind() == Kind.GATE) {
+      int[] hooked = {0}, left = {0};
+      new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+        @Override
+        public MethodVisitor visitMethod(int acc, String name, String desc, String sig, String[] ex) {
+          if (!(name.equals(jp.method()) && desc.equals(jp.descriptor()))) return null;
+          return new MethodVisitor(Opcodes.ASM9) {
+            @Override
+            public void visitMethodInsn(int op, String owner, String n, String d, boolean itf) {
+              if (owner.equals("replay/agent/api/Gate")) hooked[0]++;
+              else if (n.equals("researchPluginEnabled") || n.equals("isExperimentalEnabled")) left[0]++;
+            }
+          };
+        }
+      }, 0);
+      if (hooked[0] != 1 || left[0] != 0) missing(jp, "gate reads replaced: " + hooked[0] + ", left: " + left[0]);
+    }
+  }
+
   /** Force-load every target class in {@code cl}, then fail unless every active site was found. */
   private static String verify(ClassLoader cl) {
     for (JoinPoint jp : active) {
-      try {
-        Class<?> c = Class.forName(jp.owner(), false, cl);
-        if (dynamic && status.get(jp.key()) == Status.NOT_LOADED) {
-          // loaded before the attach but not picked up by installOn's retransformation pass
-          System.err.println("[replay-agent] retransforming " + jp.owner() + " explicitly");
-          instrumentation.retransformClasses(c);
+      boolean anyClass = false;
+      for (JoinPoints.Alt a : jp.candidates()) {
+        try {
+          Class<?> c = Class.forName(a.owner(), false, cl);
+          anyClass = true;
+          if (dynamic && status.get(jp.key()) == Status.NOT_LOADED) {
+            // loaded before the attach but not picked up by installOn's retransformation pass
+            System.err.println("[replay-agent] retransforming " + a.owner() + " explicitly");
+            instrumentation.retransformClasses(c);
+          }
         }
+        catch (ClassNotFoundException e) { /* an alternative's class: another version */ }
+        catch (Exception e) { missing(jp, "retransform failed: " + e); }
       }
-      catch (ClassNotFoundException e) { missing(jp, "class not found"); }
-      catch (Exception e) { missing(jp, "retransform failed: " + e); }
+      if (!anyClass) missing(jp, "class not found");
+      else if (status.get(jp.key()) == Status.NOT_LOADED) missing(jp, detail.getOrDefault(jp.key(), "no candidate matched"));
     }
     StringBuilder sb = new StringBuilder();
     sb.append(String.format("%-8s %-10s %-45s %-26s %s%n", "group", "status", "class", "method", "descriptor"));
     boolean ok = true;
     for (JoinPoint jp : active) {
       Status s = status.get(jp.key());
-      if (s != Status.FOUND && s != Status.LOST) ok = false;
+      if (s != Status.FOUND && s != Status.LOST && !(lenient && s == Status.MISSING)) ok = false;
       sb.append(String.format("%-8s %-10s %-45s %-26s %s%s%n", jp.group(), s, jp.owner(), jp.method(), jp.descriptor(),
         detail.containsKey(jp.key()) ? "  (" + detail.get(jp.key()) + ")" : ""));
     }

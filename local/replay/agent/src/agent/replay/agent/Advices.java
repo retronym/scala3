@@ -345,6 +345,24 @@ public final class Advices {
     }
   }
 
+  /** {@link InferImplicit} for 3.3, whose {@code inferImplicit} has no {@code ignored} parameter. */
+  public static final class InferImplicit33 {
+    @Advice.OnMethodEnter
+    static Observer enter(@Advice.Argument(0) Object pt, @Advice.Argument(1) Object arg,
+                          @Advice.Argument(2) long span, @Advice.Argument(3) Object ctx) {
+      Observer o = Hooks.observer;
+      if (o != null) o.implicitSearchEnter(pt, arg, span, ctx);
+      return o;
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter Observer o, @Advice.Argument(0) Object pt, @Advice.Argument(1) Object arg,
+                     @Advice.Argument(2) long span, @Advice.Argument(3) Object ctx,
+                     @Advice.Return Object res, @Advice.Thrown Throwable t) {
+      if (o != null) o.implicitSearchExit(pt, arg, span, t == null ? res : null, ctx);
+    }
+  }
+
   /** {@code ImplicitSearch.searchImplicit(eligible, contextual)} (private). */
   public static final class SearchImplicit {
     @Advice.OnMethodEnter
@@ -367,6 +385,32 @@ public final class Advices {
   public static final class Rank {
     @Advice.OnMethodEnter
     static void enter(@Advice.Argument(4) Object pending, @Advice.Argument(5) Object found, @Advice.FieldValue("x$5") Object ctx) {
+      Observer o = Hooks.observer;
+      if (o != null) o.rankStep(pending, found, ctx);
+    }
+  }
+
+  /** {@link SearchImplicit} for 3.3: the Context field is {@code x$4}. */
+  public static final class SearchImplicit33 {
+    @Advice.OnMethodEnter
+    static Observer enter(@Advice.Argument(0) Object eligible, @Advice.Argument(1) boolean contextual,
+                          @Advice.FieldValue("x$4") Object ctx) {
+      Observer o = Hooks.observer;
+      if (o != null) o.scopeEnter(eligible, contextual, ctx);
+      return o;
+    }
+
+    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    static void exit(@Advice.Enter Observer o, @Advice.Argument(0) Object eligible, @Advice.Argument(1) boolean contextual,
+                     @Advice.FieldValue("x$4") Object ctx, @Advice.Return Object res, @Advice.Thrown Throwable t) {
+      if (o != null) o.scopeExit(eligible, contextual, t == null ? res : null, ctx);
+    }
+  }
+
+  /** {@link Rank} for 3.3: {@code rank$1(contextual, pending, found, rfailures)}, Context field {@code x$4}. */
+  public static final class Rank33 {
+    @Advice.OnMethodEnter
+    static void enter(@Advice.Argument(1) Object pending, @Advice.Argument(2) Object found, @Advice.FieldValue("x$4") Object ctx) {
       Observer o = Hooks.observer;
       if (o != null) o.rankStep(pending, found, ctx);
     }
