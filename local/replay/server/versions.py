@@ -5,12 +5,15 @@
 A workspace holds the compiler classpath (coursier-fetched for a released version, copied for a local build),
 the agent and the plugin compiled against that compiler, and the join-point table of a warm-up compile.
 
-  versions.py setup <scala-version>                       fetch with coursier, build, warm up
+  versions.py setup <scala-version>                       fetch with coursier, build, warm up (3.x.y or 2.13.x)
   versions.py add-local <label> <compiler-classes> <cp-file>  snapshot a local nonbootstrapped build
   versions.py rebuild <label>                              rebuild agent+plugin (after editing their sources)
   versions.py list
 
-Two source-level differences between compilers are handled when the agent and plugin are built:
+A Scala 2.13 version (kind `scala2`) uses the nsc recorder in ../scala2 instead: its own agent and plugin, built by
+../scala2/build.sh against that scala-compiler, and `scala.tools.nsc.Main`.
+
+Two source-level differences between Scala 3 compilers are handled when the agent and plugin are built:
   - `asm`: main uses org.ow2.asm (`org.objectweb.asm`), released 3.x compilers the shaded scala-asm
     (`scala.tools.asm`); the copied sources are rewritten to the compiler's package.
   - `compat`: the plugin/compat/ overlays: `opt` (compilers with the JVM optimiser, `dotty.tools.backend.jvm.opt`,
@@ -28,6 +31,15 @@ BB_VERSION = '1.17.5'
 # `lenient` (unpinned versions only) reports a MISSING join point instead of failing the compile.
 AGENT_OPTS = ['fixTypeApply', 'rejected', 'tentative', 'research']
 WARMUP = 'object Hi:\n  def inc(x: Int): Int =\n    val y = x\n    y + 1\n'
+WARMUP2 = 'object Hi {\n  def inc(x: Int): Int = {\n    val y = x\n    y + 1\n  }\n}\n'
+SCALA2 = re.compile(r'2\.13\.\d+')
+# The nsc join-point table (../scala2/agent) was written against this version; others run `lenient`.
+SCALA2_PINNED = '2.13.18'
+
+
+def is_scala2(label):
+    i = load(label)
+    return (i or {}).get('kind') == 'scala2' or (i is None and SCALA2.fullmatch(label or '') is not None)
 
 
 def ws(label): return os.path.join(VERSIONS, label)
@@ -93,9 +105,17 @@ def copy_rewrite(srcs, dst, asm):
         with open(out, 'w') as f: f.write(s)
 
 
+def build_scala2(label, log):
+    """The nsc agent and plugin (../scala2/build.sh), into <workspace>/nsc/."""
+    info = load(label)
+    run(['bash', os.path.join(REPLAY, 'scala2', 'build.sh'), info['scala'], os.path.join(ws(label), 'nsc')], log,
+        env=dict(os.environ, JAVA_HOME_REPLAY=JAVA_HOME))
+
+
 def build(label, log):
     """Build the agent and the plugin against the workspace's compiler."""
     info = load(label); w = ws(label)
+    if info.get('kind') == 'scala2': return build_scala2(label, log)
     cp = info['compilerCp']
     asm, compat = info['asm'], info['compat']
     src = os.path.join(w, 'src'); shutil.rmtree(src, ignore_errors=True)
@@ -130,9 +150,22 @@ def build(label, log):
     shutil.copy(os.path.join(p, 'plugin.properties'), pc)
 
 
+def scalac_cmd(label, out, classes, options, files, table=None, extra_agent=()):
+    """nsc: fresh JVM, the nsc agent, the nsc plugin, `scala.tools.nsc.Main` (no -color: nsc prints no colours to a pipe)."""
+    info = load(label); n = os.path.join(ws(label), 'nsc')
+    opts = ([] if info.get('pinned') else ['lenient']) + list(extra_agent)
+    cmd = [JAVA, '-Xss8m', '-Xmx3g', f'-javaagent:{n}/agent/replay-nsc-agent.jar=' + ','.join(opts)]
+    if table: cmd.append(f'-Dreplay.agent.table={table}')
+    cmd += ['-cp', ':'.join(info['compilerCp']), 'scala.tools.nsc.Main',
+            '-classpath', ':'.join(info['libraryCp']), f'-Xplugin:{n}/plugin', f'-P:replay-record:out={out}',
+            *options, '-d', classes, *files]
+    return cmd
+
+
 def dotc_cmd(label, out, classes, options, files, table=None, extra_agent=()):
     """The command line of one recorded compile: fresh JVM, -javaagent, the plugin."""
     info = load(label); w = ws(label)
+    if info.get('kind') == 'scala2': return scalac_cmd(label, out, classes, options, files, table, extra_agent)
     opts = AGENT_OPTS + ([] if info.get('pinned') else ['lenient']) + list(extra_agent)
     cmd = [JAVA, '-Xss8m', '-Xmx3g', f'-javaagent:{w}/agent/replay-agent.jar=' + ','.join(opts)]
     if table: cmd.append(f'-Dreplay.agent.table={table}')
@@ -145,7 +178,7 @@ def dotc_cmd(label, out, classes, options, files, table=None, extra_agent=()):
 def warmup(label, log):
     """Compile a tiny file with the recorder: checks the gate, the plugin and the join points, and keeps the table."""
     w = ws(label); d = os.path.join(w, 'warmup'); shutil.rmtree(d, ignore_errors=True); os.makedirs(os.path.join(d, 'classes'))
-    with open(os.path.join(d, 'Hi.scala'), 'w') as f: f.write(WARMUP)
+    with open(os.path.join(d, 'Hi.scala'), 'w') as f: f.write(WARMUP2 if load(label).get('kind') == 'scala2' else WARMUP)
     out, table = os.path.join(d, 'Hi.jsonl'), os.path.join(w, 'jointable.txt')
     t0 = time.time()
     run(dotc_cmd(label, out, os.path.join(d, 'classes'), [], [os.path.join(d, 'Hi.scala')], table=table), log)
@@ -170,7 +203,7 @@ def jointable(label):
 
 def finish(label, log):
     info = load(label)
-    info['asm'], info['compat'] = detect(info['compilerCp'])
+    if info.get('kind') != 'scala2': info['asm'], info['compat'] = detect(info['compilerCp'])
     info['state'] = 'building'; save(label, info)
     try:
         build(label, log)
@@ -179,7 +212,8 @@ def finish(label, log):
         missing = [f"{r['class'].rsplit('.', 1)[-1]}.{r['method']}" for r in rows if r['status'] != 'FOUND']
         info['joinPoints'] = {'found': sum(r['status'] == 'FOUND' for r in rows), 'total': len(rows), 'missing': missing}
         info['state'] = 'ready'; info['error'] = None
-        info['notes'] = (f"{info['asm']}, compat {'+'.join(info['compat'])}" + (f"; {len(missing)} join points missing: " + ', '.join(missing) if missing else '; all join points found'))
+        head = 'nsc recorder' if info.get('kind') == 'scala2' else f"{info['asm']}, compat {'+'.join(info['compat'])}"
+        info['notes'] = head + (f"; {len(missing)} join points missing: " + ', '.join(missing) if missing else '; all join points found')
     except Exception as e:
         info['state'] = 'error'; info['error'] = str(e)[-2000:]
     info['built'] = time.strftime('%Y-%m-%dT%H:%M:%S')
@@ -187,8 +221,19 @@ def finish(label, log):
     return info
 
 
+def setup_scala2(version, log=sys.stderr):
+    """A released Scala 2.13 version: scala-compiler (with library and reflect) and scala-library with coursier."""
+    os.makedirs(ws(version), exist_ok=True)
+    cp = coursier(f'org.scala-lang:scala-compiler:{version}', log=log)
+    lib = coursier(f'org.scala-lang:scala-library:{version}', log=log)
+    save(version, {'scala': version, 'kind': 'scala2', 'compilerCp': cp, 'libraryCp': lib,
+                   'pinned': version == SCALA2_PINNED, 'state': 'fetched'})
+    return finish(version, log)
+
+
 def setup(version, log=sys.stderr):
     """A released Scala 3 version: fetch the compiler and library with coursier, then build and warm up."""
+    if SCALA2.fullmatch(version): return setup_scala2(version, log)
     if not re.fullmatch(r'3\.\d+\.\d+(-RC\d+)?', version): raise ValueError(f'not a Scala 3 version: {version}')
     os.makedirs(ws(version), exist_ok=True)
     cp = coursier(f'org.scala-lang:scala3-compiler_3:{version}', log=log)
