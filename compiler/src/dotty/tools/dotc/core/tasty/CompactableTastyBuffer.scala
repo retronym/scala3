@@ -45,6 +45,11 @@ class CompactableTastyBuffer extends TastyBuffer(50000) {
     fillAddr(reserveAddr(), target)
   }
 
+  /** Drop everything written from `addr` on. The addresses handed out since must not be used again. */
+  def truncate(addr: Addr): Unit =
+    length = addr.index
+    while numOffsets > 0 && offsets(numOffsets - 1) >= length do numOffsets -= 1
+
   /** Fill previously reserved field with a reference */
   def fillRef(at: Addr, target: Addr, relative: Boolean): Unit = {
     val addr = if (relative) target.relativeTo(at) else target
