@@ -75,6 +75,7 @@
         const sv = versionFor(u, phase), items = structure(sv);
         const emit = (it, d) => { const c = cur.sym.get(it.sym) || 0, t = tot.sym.get(it.sym) || 0; h += `<div ${rowCls(it.id === R.ST.selNode, d)} data-n="${it.id}" data-u="${u}" data-s="${it.sym ?? ''}"><span class="tg">${it.kids.length ? '▾' : ''}</span><span class="kd">${it.cls ? '◼' : '◦'}</span><span class="nm">${esc(it.name)}</span>${cnt(c, t)}</div>`; it.kids.slice(0, 200).forEach((k) => emit(k, d + 1)); };
         items.forEach((it) => emit(it, 1));
+        if (!D.hasIR && R.curCompile) h += `<div class="xr sub dim" style="padding-left:18px" title="released compilers lack the backend join points of the recorder">no bytecode: this version's backend hooks are not available</div>`;
         if (D.hasIR) { const cl = [...D.jvmClasses.values()].filter((c) => c.unit === u); if (cl.length) { h += `<div class="xr sub" style="padding-left:18px">bytecode classes</div>`; cl.forEach((c) => { const ck2 = multi().has('c:' + c.name); h += `<div ${rowCls(R.curClass() === c.name && R.ver() && R.ver().irPseudo, 1)} data-c="${esc(c.name)}" data-u="${u}"><input type="checkbox" class="mc" data-mk="c:${esc(c.name)}" ${ck2 ? 'checked' : ''} aria-label="select class ${esc(c.name)}"><span class="kd">⬡</span><span class="nm" title="${esc(c.name)}">${esc(c.name.replace(/^.*\//, ''))}</span><span class="dim">${c.versions.length} v</span></div>`; }); } }
       }
     });

@@ -173,6 +173,14 @@
   @media (max-width: 1100px) { #legend-kinds { display: none; } #verinfo { font-size: 11px; } #scrub h2, #insp h2, #proj h2 { padding-top: 2px; padding-bottom: 2px; } }
   @media (max-width: 700px) { header, #hdr { flex-wrap: wrap; } }
   .msec { border: 1px solid #2f4263; border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; background: rgba(40,70,120,.10); } .msec .mp-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } .msec select { max-width: 100%; } .mflash { background: rgba(255,214,102,.28) !important; transition: background 1.2s; } .msec .df { max-height: 220px; overflow: auto; }
+  #cdrawer { --cw: 480px; position: fixed; left: 0; top: 40px; bottom: 0; width: var(--cw); z-index: 25; background: #131a26; color: #d4deef; border-right: 1px solid #2b3a55; box-shadow: 6px 0 24px rgba(0,0,0,.45); display: flex; flex-direction: column; font-size: 12px; } #cdrawer[hidden] { display: none; } #cdrawer.collapsed { bottom: auto; height: auto; } #cdrawer.collapsed #cbody, #cdrawer.collapsed #cresize { display: none; }
+  #cdrawer .chead { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #182235; border-bottom: 1px solid #2b3a55; } #cdrawer .chead #csum { flex: 1; cursor: pointer; color: #8fe0b8; } #cdrawer .chead button { background: none; border: 0; color: #9fb0cc; cursor: pointer; font-size: 13px; }
+  #cbody { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; overflow: auto; } #ctabs { display: flex; gap: 2px; flex-wrap: wrap; } .ctab { padding: 2px 9px; border: 1px solid #2b3a55; border-bottom: 0; border-radius: 5px 5px 0 0; cursor: pointer; background: #182235; color: #9fb0cc; } .ctab.on { background: #0f1520; color: #fff; } .ctab i { font-style: normal; margin-left: 6px; opacity: .6; } .ctab i:hover { opacity: 1; color: #ff8a8a; } .ctab.add { color: #6eaaff; }
+  #ced { flex: 1 1 45%; min-height: 160px; border: 1px solid #2b3a55; } #ced .CodeMirror { height: 100%; background: #0f1520; color: #d4deef; font: 12px/17px ui-monospace, Menlo, monospace; } #ced .CodeMirror-gutters { background: #0f1520; border-right: 1px solid #222e43; } #ced .CodeMirror-linenumber { color: #4a586f; } #ced .CodeMirror-cursor { border-left-color: #fff; } #ced .CodeMirror-selected { background: #254065 !important; } #ced .cm-keyword { color: #c792ea; } #ced .cm-def { color: #82aaff; } #ced .cm-string { color: #c3e88d; } #ced .cm-number { color: #f78c6c; } #ced .cm-comment { color: #637088; } #ced .cm-type, #ced .cm-variable-3 { color: #82aaff; } #ced .cm-atom, #ced .cm-builtin { color: #f78c6c; } .cfallback { width: 100%; height: 100%; background: #0f1520; color: #d4deef; border: 0; font: 12px/17px ui-monospace, Menlo, monospace; }
+  #cdrawer .crow { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } #cdrawer input[type=text], #cdrawer input:not([type]), #cdrawer select { background: #0f1520; color: #d4deef; border: 1px solid #2b3a55; border-radius: 4px; padding: 2px 6px; } #cgo.primary { background: #2a64c5; color: #fff; border: 0; border-radius: 5px; padding: 4px 14px; cursor: pointer; } #cgo:disabled { opacity: .5; cursor: default; } #cstat.q { color: #e8b04a; } #cstat.ok { color: #8fe0b8; } #cstat.err { color: #ff8a8a; }
+  #clog { margin: 0; padding: 6px 8px; max-height: 120px; overflow: auto; background: #0b101a; border: 1px solid #222e43; font: 11px/15px ui-monospace, Menlo, monospace; color: #8b97ad; white-space: pre-wrap; } #cdiags .cdiag { padding: 2px 4px; cursor: pointer; border-radius: 3px; } #cdiags .cdiag:hover { background: #1d2a40; } #cdiags .cdiag b { text-transform: uppercase; font-size: 10px; } #cdiags .warning b { color: #e8b04a; } #cdiags .error b { color: #ff8a8a; } #cdiags .info b { color: #8fb8ff; } #cerr { background: #4a2a30; color: #ffd0d6; padding: 8px 10px; border-radius: 6px; line-height: 1.5; } #cerr a { color: #fff; } #cerr code { background: rgba(0,0,0,.3); padding: 0 4px; border-radius: 3px; }
+  #cdiags .dkind { font-size: 10px; padding: 0 5px; border-radius: 8px; background: #26324a; color: #9fb0cc; } .rechint { margin: 4px 0 8px; font-size: 11.5px; } .rechint code { background: rgba(127,127,127,.2); padding: 0 4px; border-radius: 3px; }
+  #cresize { position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; } .rechd { margin: 10px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   #srange { position: absolute; right: 96px; top: 56px; z-index: 20003; width: 300px; max-height: 52%; overflow: auto; background: rgba(13,18,28,.92); border: 1px solid #2b4570; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; touch-action: auto; overscroll-behavior: contain; } #srange[hidden] { display: none; }
   #srange .ch { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; } #srange .ch button { margin-left: auto; background: none; border: 0; color: #7f8ba0; cursor: pointer; }
   #srange .ce { display: grid; grid-template-columns: 70px 1fr; column-gap: 6px; padding: 1px 2px; cursor: pointer; border-radius: 3px; white-space: nowrap; } #srange .ce:hover { background: #1a2436; } #srange .ce .cp { overflow: hidden; text-overflow: ellipsis; color: #7f8ba0; } #srange .ce code { overflow: hidden; text-overflow: ellipsis; font: 11px ui-monospace, Menlo, monospace; }
@@ -190,7 +198,7 @@
 <header>
   <span class="wordmark" title="Greffier: the clerk's record of a Scala 3 compile">Greffier</span>
   <button id="btn-recs" class="recname" title="open the recordings panel">▤ <span id="recname">no recording</span></button> <select id="variant" hidden aria-label="recording variant"></select><span id="optchips"></span>
-  <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button><button data-v="stack" title="the version stack of this unit, over the viewer (s)">Stack</button></span>
+  <button id="btn-compile" title="compile Scala sources on the compile server and load the recording (c)">Compile</button> <span id="viewtabs" role="group" aria-label="view"><button data-v="all" title="all views (0)">All</button><button data-v="scrub" title="tree only, full height (1)">Tree</button><button data-v="insp" title="events only, full height (2)">Events</button><button data-v="proj" title="dependencies, full height (3)">Deps</button><button data-v="stack" title="the version stack of this unit, over the viewer (s)">Stack</button></span>
   <span id="mergenote" class="mergenote" hidden></span>
   <button id="btn-exp" title="show or hide the project explorer (x)">☰ explorer</button>
   <button id="btn-phtab" title="phases ranked by how much they changed (p)">▦ phases</button>
@@ -201,6 +209,8 @@
   <div class="pgrp"><b>Recording</b>
     <label>unit <select id="unit"></select></label> <label id="clslabel" hidden>class <select id="clsel" hidden></select></label>
     <span><button id="btn-link" title="copy a deep link to the current state">copy link</button> <button id="btn-recs2" title="open the recordings panel">recordings…</button></span></div>
+  <div class="pgrp"><b>Compile server</b>
+    <label title="base URL of the compile server (empty: same origin, else http://localhost:8790); also api= in the link">server <input id="apiurl" placeholder="http://localhost:8790" size="26"></label></div>
   <div class="pgrp"><b>Pages</b>
     <label title="what ◀ ▶ / i I / ★ stop at: chapters (coalesced changes), ★ top 5 by the chosen metric, or every changed version">granularity <select id="gran"><option value="chapters">chapters</option><option value="top">★ top 5</option><option value="all">every change</option></select></label>
     <label title="how chapters are cut: the compiler's own phase groups pruned by the median (default), or thresholds on the accumulated change (the three options below)">chapters from <select id="chmode"><option value="groups">phase groups</option><option value="custom">custom thresholds</option></select></label>
@@ -280,12 +290,16 @@
 <div id="help" class="modal" hidden><div class="card"><h2>Keys <button class="x" data-close="help">×</button></h2><div id="cheat2"></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
 <script src="fixture.js"></script>
 <script src="js/loader.js"></script>
 <script src="js/app.js"></script>
 <script src="js/scrubber.js"></script>
 <script src="js/ir.js"></script>
 <script src="js/cfg.js"></script>
+<script src="js/compile.js"></script>
 <script src="js/diff.js"></script>
 <script src="js/scores.js"></script>
 <script src="js/stack/model.js"></script>

@@ -231,7 +231,7 @@
   // current state as hash parameters (used for the address bar, `copy link` and tours)
   R.buildHash = function () {
     const D = ST.D, p = new URLSearchParams();
-    if (R.srcUrls) p.set('src', R.srcUrls.join(',')); else if (R.isFixture) p.set('fixture', 1);
+    if (R.curCompile) { p.set('compile', R.curCompile); const ab = R.apiBaseForHash && R.apiBaseForHash(); if (ab) p.set('api', ab); } else if (R.srcUrls) p.set('src', R.srcUrls.join(',')); else if (R.isFixture) p.set('fixture', 1);
     const u = D.units.get(ST.unit); if (u && D.unitsWithVersions.length > 1) p.set('unit', (u.path || '').replace(/^.*\//, ''));
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); p.set('cls', R.curClass()); } } if (R.ev()) p.set('seq', R.seq());
     if (ST.selNode != null) p.set('node', ST.selNode); else if (ST.selSym != null) p.set('sym', ST.selSym);
@@ -261,6 +261,10 @@
 
   // ---- loading ----------------------------------------------------------------------------------------------------------------
   // sources: [{name, size?, open: () => Promise<ReadableStream>}]
+  // recordings that are not static files: a compile of the Compile drawer, or any absolute / API url
+  R.loadRecordingUrl = (url, label, compileId) => { R._nextCompile = compileId || null; try { history.replaceState(null, '', compileId ? '#compile=' + compileId + (R.apiBaseForHash && R.apiBaseForHash() ? '&api=' + R.apiBaseForHash() : '') : '#src=' + url); R._navKey = null; } catch (e) { /* ignore */ } return urlSources([url]).then((ss) => loadSources(ss, label || url)).catch((e) => { R._nextCompile = null; loadError(e, url); }); };
+  R.addLocalRecs = (list) => { for (let i = RECS.length - 1; i >= 0; i--) if (RECS[i].local || /\/api\/recordings\//.test(RECS[i].url || '') || (RECS[i].variants || []).some((v) => /\/api\/recordings\//.test(v.url || ''))) RECS.splice(i, 1); /* the server's /recordings.json lists its compiles too: the /api/recordings list replaces them */ list.forEach((x) => RECS.push(Object.assign({ local: true }, x))); };
+  R.renderRecs = () => { if (!$('recs').hidden) renderRecs(); };
   R.notice = (msg, warn) => { const el = $('notice'); el.textContent = msg; el.className = warn ? 'warn' : ''; el.hidden = false; clearTimeout(R._noticeT); R._noticeT = setTimeout(() => { el.hidden = true; }, warn ? 6000 : 2500); };
   // a failed load is loud: a banner with the URL and the status, never an empty page
   function loadError(e, url) {
@@ -271,7 +275,8 @@
   }
   async function loadSources(sources, label) {
     const t0 = performance.now(), L = R.createLoader({ lazy: sources.length === 1 });
-    const prev = { urls: R.srcUrls, fixture: R.isFixture, applied: R.hashApplied, hadD: !!ST.D };
+    const prev = { urls: R.srcUrls, fixture: R.isFixture, applied: R.hashApplied, hadD: !!ST.D, compile: R.curCompile };
+    R.curCompile = R._nextCompile || null; R._nextCompile = null;
     R.srcUrls = sources.every((x) => x.url) ? sources.map((x) => x.url) : null; R.isFixture = sources.length === 1 && /^fixture/.test(sources[0].name); R.hashApplied = false;
     let bytes = 0;
     try {
@@ -290,7 +295,7 @@
       R.hashApplied = true; R.scheduleHash();
     } catch (e) {
       loadError(e, sources.length === 1 ? sources[0].url : ''); console.error(e);
-      if (prev.hadD) { R.srcUrls = prev.urls; R.isFixture = prev.fixture; R.hashApplied = prev.applied; try { history.replaceState(null, '', '#' + R.buildHash()); } catch (er) { /* ignore */ } }   // the address bar names what is still shown
+      if (prev.hadD) { R.curCompile = prev.compile; R.srcUrls = prev.urls; R.isFixture = prev.fixture; R.hashApplied = prev.applied; try { history.replaceState(null, '', '#' + R.buildHash()); } catch (er) { /* ignore */ } }   // the address bar names what is still shown
     }
   }
   const textSource = (name, text) => ({ name, size: text.length, open: async () => text });
@@ -483,6 +488,7 @@
       ['scrub', 'explorer'].forEach((id) => { const el = $(id); if (el) el.addEventListener('wheel', swipe, { passive: false }); }); }
     document.addEventListener('keydown', (ev) => {
       if (R.stackOpen) { if (ev.key === 'Escape') { R.stackEsc(); ev.preventDefault(); } else if (ev.key === 's' && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) { R.closeStack(); ev.preventDefault(); } else if (ev.key === '?') { $('help').hidden = !$('help').hidden; } return; }
+      if (ev.key === 'c' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && !(ev.target.closest && ev.target.closest('.CodeMirror')) && $('recs').hidden && R.compileToggle) { R.compileToggle(); ev.preventDefault(); return; }
       if (ev.key === 's' && !ev.metaKey && !ev.ctrlKey && ST.D && !/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && $('recs').hidden) { R.openStack && R.openStack(); ev.preventDefault(); return; }
       if (ev.key === 'Escape' && !$('opts').hidden) { $('opts').hidden = true; ev.preventDefault(); return; }
       if (ev.key === 'Escape' && !$('phtab').hidden) { $('phtab').hidden = true; ev.preventDefault(); return; }
@@ -509,6 +515,7 @@
     });
     window.addEventListener('hashchange', () => {
       const h = new URLSearchParams(location.hash.slice(1)), src = h.get('src') || '', cur = R.srcUrls ? R.srcUrls.join(',') : ''; R._navKey = navKey(location.hash);
+      if (h.get('compile') && h.get('compile') !== R.curCompile && R.compileLink) { R.compileLink(h.get('compile')); return; }
       if (!ST.D || (src && src !== cur) || (!src && !R.isFixture && location.hash.length > 1)) start(); else if (ST.D) R.applyHash();
     });
     start();
@@ -548,7 +555,9 @@
   const fmtSize = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' kB');
   function renderRecs() {
     const box = $('reclist'); box.innerHTML = '';
+    if (R.compileHint) { const hd = document.createElement('div'); hd.className = 'dim rechint'; hd.innerHTML = R.compileHint; box.append(hd); }
     RECS.forEach((r, i) => {
+      if (r.local && !RECS.slice(0, i).some((x) => x.local)) { const hd = document.createElement('div'); hd.className = 'dim rechd'; hd.textContent = 'local compiles'; box.append(hd); }
       const d = document.createElement('div'); d.className = 'rec';
       const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!r.checked, ariaLabel: 'select recording ' + r.name }); cb.onchange = () => { r.checked = cb.checked; $('rec-load').disabled = !RECS.some((x) => x.checked); };
       const cur = resolveRec(r);
@@ -558,7 +567,7 @@
       const chips = document.createElement('span'); chips.className = 'vchips';
       (r.variants || []).forEach((v) => { const c = Object.assign(document.createElement('button'), { className: 'vchip' + ((r.sel || 'base') === v.label ? ' on' : ''), textContent: v.label, ariaLabel: 'load ' + r.name + ' variant ' + v.label, title: `${v.name}\n${v.schema} · ${v.phases} phases · ${v.events} events · ${v.nodes} nodes · ${v.versions} versions${v.jvm ? ` · ${v.classes} classes, ${v.jvm} class versions` : ''} · ${fmtSize(v.size)}${v.args && v.args.length ? '\n' + v.args.join(' ') : ''}` }); c.onclick = () => { r.sel = v.label; loadEntries([r]); }; chips.append(c); });
       const meta = document.createElement('div'); meta.className = 'meta';
-      const rs = cur; meta.textContent = r.fixture ? 'synthetic: hand-written v0 data modelled on Givens.scala, useful as a quick demo only' : rs.events != null ? `${rs.schema} · ${r.units.length} unit${r.units.length > 1 ? 's' : ''} (${r.units.slice(0, 3).join(', ')}${r.units.length > 3 ? ', …' : ''}) · ${rs.phases} phases · ${rs.events} events · ${rs.nodes} nodes${rs.jvm ? ` · + JVM bytecode: ${rs.classes} classes, ${rs.jvm} class versions` : ''}` : 'local file';
+      const rs = cur; meta.textContent = (r.local ? `local compile${r.scala ? ' · scala ' + r.scala : ''}${r.when ? ' · ' + String(r.when).replace(/^\d{4}-(\d\d-\d\d)T(\d\d:\d\d).*$/, '$1 $2') : ''}${r.options && r.options.length ? ' · ' + r.options.join(' ') : ''}${r.errors ? ' · ' + r.errors + ' error' + (r.errors > 1 ? 's' : '') : ''} · ` : '') + (r.fixture ? 'synthetic: hand-written v0 data modelled on Givens.scala, useful as a quick demo only' : rs.events != null ? `${rs.schema} · ${r.units.length} unit${r.units.length > 1 ? 's' : ''} (${r.units.slice(0, 3).join(', ')}${r.units.length > 3 ? ', …' : ''}) · ${rs.phases} phases · ${rs.events} events · ${rs.nodes} nodes${rs.jvm ? ` · + JVM bytecode: ${rs.classes} classes, ${rs.jvm} class versions` : ''}` : 'local file');
       d.append(cb, nm, chips, sz, ld, meta); box.append(d);
     });
     if (!RECS.length) box.innerHTML = '<span class="dim">No recordings listed (no <code>recordings.json</code>; run <code>gen_index.py</code>). Drop files below.</span>';
@@ -566,19 +575,21 @@
   }
   // ---- variant switcher (header): same unit / class / phase / selected node in another option variant of the same recording ----
   R.variantInfo = () => { const u = R.srcUrls; if (!u || u.length !== 1) return null; for (const r of RECS) { if (r.variants) { const v = r.variants.find((x) => x.url === u[0]); if (v) return { r, v }; } } return null; };
+  R.updateVariantUI = () => updateVariantUI();
   function updateVariantUI() {
     const sel = $('variant'), vi = R.variantInfo(), esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); if (!vi) { sel.hidden = true; return; }
     sel.hidden = false; sel.innerHTML = vi.r.variants.map((v) => `<option value="${esc(v.label)}"${v.label === vi.v.label ? ' selected' : ''}>${esc(v.label)}</option>`).join(''); sel.title = 'compiler option variant of this recording';
   }
   R.switchVariant = (label) => {
     const vi = R.variantInfo(), D = ST.D; if (!vi || !D) return; const t = vi.r.variants.find((x) => x.label === label); if (!t || t === vi.v) return;
-    const p = new URLSearchParams(); p.set('src', t.url); const u = D.units.get(ST.unit); if (u) p.set('unit', (u.path || '').replace(/^.*\//, ''));
+    const p = new URLSearchParams(), cm = /\/api\/recordings\/([0-9a-f]+)\.jsonl$/.exec(t.url); if (cm) { p.set('compile', cm[1]); const ab = R.apiBaseForHash && R.apiBaseForHash(); if (ab) p.set('api', ab); } else p.set('src', t.url); const u = D.units.get(ST.unit); if (u) p.set('unit', (u.path || '').replace(/^.*\//, ''));
     const v = R.ver(); if (v) { p.set('pname', D.phaseRaw(v.phase)); if (v.irPseudo) { p.set('ir', 1); const c = R.curClass(); if (c) p.set('cls', c); } }
     const nd = ST.selNode != null ? D.nodes.get(ST.selNode) : null; if (nd && nd.span) p.set('nspan', nd.span[0] + '-' + nd.span[1] + ':' + nd.kind);
     p.set('variant', t.label); if (ST.skip) p.set('skip', 1);
     location.hash = '#' + p.toString().replace(/%2F/g, '/').replace(/%3A/g, ':').replace(/%24/g, '$');
   };
   function openRecs() {
+    if (R.refreshLocalRecs) R.refreshLocalRecs();
     if (!RECS.some((x) => x.fixture)) RECS.unshift({ name: 'synthetic fixture (v0, hand-written, not a real compile)', fixture: true }); $('recs').hidden = false; renderRecs(); }
   function addLocal(files) { files.forEach((f) => RECS.push({ name: f.name.replace(/\.jsonl$/, ''), file: f, size: f.size, checked: true })); openRecs(); }
   function loadLocal(files) { loadEntries(files.map((f) => ({ name: f.name, file: f, size: f.size }))); }
@@ -598,6 +609,7 @@
   async function start() {
     const h = location.hash.slice(1), srcParam = new URLSearchParams(h).get('src');
     if (!RECS.some((x) => !x.fixture)) { try { const r = await fetch('recordings.json'); if (r.ok) { (await r.json()).forEach((x) => RECS.push(x)); R.recsLoaded = true; } } catch (e) { /* none */ } }
+    { const cp = new URLSearchParams(h).get('compile'); if (cp && R.compileLink) { await R.compileLink(cp); return; } }
     if (srcParam) { const urls = srcParam.split(','); urlSources(urls).then((ss) => loadSources(ss, urls.length > 1 ? urls.length + ' files merged' : urls[0])).catch((e) => { loadError(e); if (ST.D) { try { history.replaceState(null, '', '#' + R.buildHash()); } catch (er) { /* ignore */ } } else openRecs(); }); return; }
     if (h && new URLSearchParams(h).has('fixture')) return loadFixture();                     // the built-in fixture only on request (fixture=1); a link without src names no recording
     if (h) { R.notice('This link does not name a recording (no src=): pick one below.', true); }
