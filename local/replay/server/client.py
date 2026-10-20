@@ -4,7 +4,7 @@
        [--each] [--download DIR] [-- dotc options...] <files...>
 
 --each compiles every file on its own (one recording each), otherwise all files form one compile. --opt adds
-`-opt -opt-inline:<sources>`. Prints one line per compile: status, time, diagnostics, recording URL."""
+`-opt -opt-inline:<sources>` (Scala 2.13: `-opt:local -opt:inline:<sources>`). Prints one line per compile: status, time, diagnostics, recording URL."""
 import argparse, json, os, sys, time, urllib.request
 
 
@@ -49,7 +49,7 @@ def main():
         # options first, then files: the files are the trailing .scala/.java arguments
         while opts and opts[-1].endswith(('.scala', '.java')): paths.insert(0, opts.pop())
     else: opts, paths = [], a.rest
-    if a.opt: opts = opts + ['-opt', '-opt-inline:<sources>']
+    if a.opt: opts = opts + (['-opt:local', '-opt:inline:<sources>'] if a.scala.startswith('2.') else ['-opt', '-opt-inline:<sources>'])
     batches = [[p] for p in paths] if a.each else [paths]
     ok = True
     for b in batches:

@@ -497,7 +497,10 @@ final class Recorder(val global: Global, outPath: String, options: List[String])
     else if (r.isSuccess) "\"success\""
     else if (r.isAmbiguousFailure) "\"AmbiguousImplicits\""
     else if (r.isDivergent) "\"DivergentImplicit\""
-    else jstr(r.getClass.getSimpleName.stripSuffix("$"))
+    else {
+      val n = r.getClass.getSimpleName.stripSuffix("$")
+      jstr(if (n.isEmpty) "SearchFailure" else n) // nsc's SearchFailure is an anonymous subclass
+    }
 
   private val searchStack = mutable.ArrayBuffer[Boolean]()
   def implicitSearchEnter(search: analyzer.ImplicitSearch): Unit = searchStack += enter()
