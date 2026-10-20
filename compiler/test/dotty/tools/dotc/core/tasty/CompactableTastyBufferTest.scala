@@ -53,6 +53,18 @@ class CompactableTastyBufferTest:
     buf.compactify(new ScratchData)
     assertEquals(Seq(0x82, 1, 2), bytesOf(buf))
 
+  @Test def truncateDropsReferences(): Unit =
+    val buf = new CompactableTastyBuffer
+    buf.writeByte(1)
+    val mark = buf.currentAddr
+    val len = buf.reserveRef(relative = true)
+    buf.writeRef(Addr(0))
+    buf.fillRef(len, buf.currentAddr, relative = true)
+    buf.truncate(mark)
+    buf.writeByte(2)
+    buf.compactify(new ScratchData)
+    assertEquals(Seq(1, 2), bytesOf(buf))
+
   /** The model of a program, by hand */
   @Test def modelOfAProgram(): Unit =
     val model = ModelBuffer()
@@ -76,16 +88,30 @@ class CompactableTastyBufferTest:
     catch case _: AssertionError => ()
 
   @Test def randomProgramsCompactToTheirModel(): Unit =
-    forRandomPrograms: program =>
+    forRandomPrograms(truncating = false): program =>
       val (model, real, run) = runBoth(program)
       val scratch = new ScratchData
       real.buf.compactify(scratch)
       assertEquals(model.decoded, real.decoded)
       checkAdjusted(real, run.itemAddrs, scratch)
 
+  /** Writing something and truncating it leaves the buffer as if it was never written */
+  @Test def truncatedIsAsNeverWritten(): Unit =
+    forRandomPrograms(truncating = true): program =>
+      val (model, real, run) = runBoth(program)
+      val (modelWithout, realWithout, _) = runBoth(program.flatMap(_.withoutTruncated))
+      assertEquals(modelWithout.decoded, model.decoded)
+      assertEquals(bytesOf(realWithout.buf), bytesOf(real.buf))
+      val scratch = new ScratchData
+      real.buf.compactify(scratch)
+      realWithout.buf.compactify(new ScratchData)
+      assertEquals(model.decoded, real.decoded)
+      assertEquals(bytesOf(realWithout.buf), bytesOf(real.buf))
+      checkAdjusted(real, run.itemAddrs, scratch)
+
   /** `adjusted` never moves an address forward, and keeps the order of the items */
   @Test def adjustedIsMonotone(): Unit =
-    forRandomPrograms: program =>
+    forRandomPrograms(truncating = true): program =>
       val real = RealBuffer()
       val run = Interpreter(real)
       run(program)
@@ -152,11 +178,12 @@ object CompactableTastyBufferTest:
     def reserveRef(relative: Boolean): Addr
     def writeRef(target: Addr): Unit
     def fillRef(at: Addr, relative: Boolean): Unit
+    def truncate(addr: Addr): Unit
     def decoded: List[Item]
 
   class RealBuffer extends RefBuffer:
     val buf = new CompactableTastyBuffer
-    export buf.{currentAddr, writeByte, reserveRef, writeRef}
+    export buf.{currentAddr, writeByte, reserveRef, writeRef, truncate}
     def fillRef(at: Addr, relative: Boolean) = buf.fillRef(at, buf.currentAddr, relative)
     def decoded = decode(buf)
 
@@ -197,6 +224,11 @@ object CompactableTastyBufferTest:
       val i = itemAt(at - 1)
       assert(items(i) == Ref(relative, Unfilled), s"item $i is ${items(i)}")
       items(i) = Ref(relative, items.size)
+    def truncate(addr: Addr) =
+      val n = itemAt(addr)
+      items.dropRightInPlace(items.size - n)
+      addrs.dropRightInPlace(addrs.size - n)
+      length = addr.index
 
   // Programs, run on a buffer
 
@@ -213,15 +245,24 @@ object CompactableTastyBufferTest:
     case Fwd
     /** Fills one of the pending forward references with the current address */
     case Fill(k: Int)
+    /** Writes the operations and truncates them again, as `TreePickler` does with a type that
+     *  turns out to be shared. The forward references made inside are filled before the end.
+     */
+    case Truncated(body: List[Op])
+
+    def withoutTruncated: List[Op] = this match
+      case Len(body) => List(Len(body.flatMap(_.withoutTruncated)))
+      case Truncated(_) => Nil
+      case op => List(op)
   import Op.*
 
-  def genProgram(rnd: scala.util.Random, size: Int): List[Op] =
+  def genProgram(rnd: scala.util.Random, size: Int, truncating: Boolean): List[Op] =
     def gen(budget: Int, depth: Int): List[Op] =
       val ops = new ArrayBuffer[Op]
       var left = budget
       while left > 0 do
         left -= 1
-        rnd.nextInt(10) match
+        rnd.nextInt(12) match
           case 0 | 1 | 2 => ops += Lit(1 + rnd.nextInt(125))
           case 3 | 4 | 5 => ops += Back(rnd.nextInt(1000))
           case 6 | 7 if depth < 5 =>
@@ -229,7 +270,12 @@ object CompactableTastyBufferTest:
             left -= n
             ops += Len(gen(n, depth + 1))
           case 8 => ops += Fwd
-          case _ => ops += Fill(rnd.nextInt(1000))
+          case 9 => ops += Fill(rnd.nextInt(1000))
+          case 10 if truncating && depth < 5 =>
+            val n = rnd.nextInt(left + 1)
+            left -= n
+            ops += Truncated(gen(n, depth + 1))
+          case _ => ops += Lit(1 + rnd.nextInt(125))
       ops.toList
     gen(size, 0)
 
@@ -266,11 +312,23 @@ object CompactableTastyBufferTest:
         item(REF)
         pending += buf.reserveRef(relative = false)
       case Fill(k) => if pending.nonEmpty then fill(k % pending.size)
+      case Truncated(body) =>
+        val mark = buf.currentAddr
+        val numItems = itemAddrs.size
+        // the forward references pending outside cannot be filled inside, as they would then refer to dropped bytes
+        val outer = pending.toList
+        pending.clear()
+        runOps(body)
+        while pending.nonEmpty do fill(0)
+        pending ++= outer
+        buf.truncate(mark)
+        itemAddrs.dropRightInPlace(itemAddrs.size - numItems)
+
   val NumPrograms = 3000
 
-  def forRandomPrograms(check: List[Op] => Unit): Unit =
+  def forRandomPrograms(truncating: Boolean)(check: List[Op] => Unit): Unit =
     for seed <- 0 until NumPrograms do
-      val program = genProgram(new scala.util.Random(seed), size = 5 + seed % 60)
+      val program = genProgram(new scala.util.Random(seed), size = 5 + seed % 60, truncating)
       try check(program)
       catch case NonFatal(ex) =>
         throw new AssertionError(s"seed $seed: $ex\n${program.mkString("\n")}", ex)

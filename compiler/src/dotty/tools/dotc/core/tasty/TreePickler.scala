@@ -431,6 +431,19 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     stats.foreach(stat => if (!stat.isEmpty) pickleTree(stat))
   }
 
+  /** Drop what was pickled from `addr` on, which an error left unfinished: the bytes, and the addresses
+   *  of the trees and types in them. A symbol defined there keeps its address and the forward references
+   *  filled with it: nothing refers to it any more, as the definition itself is gone.
+   */
+  private def dropFrom(addr: Addr): Unit =
+    truncate(addr)
+    val dropped = pickledTypes.iterator.collect { case (tpe, at) if at.index >= addr.index => tpe }.toList
+    dropped.foreach(pickledTypes.remove)
+    var i = 0
+    while i < treeAddrs.size do
+      if treeAddrs.value(i) >= addr.index then treeAddrs.setValue(i, -1) // as if never registered
+      i += 1
+
   def pickleTree(tree: Tree)(using Context): Unit = {
     val addr = registerTreeAddr(tree)
     if (addr != currentAddr) {
@@ -829,6 +842,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       catch {
         case ex: TypeError =>
           report.error(ex.toMessage, tree.srcPos.focus)
+          dropFrom(addr)
           pickleErrorType()
         case NonFatal(t) =>
           println(i"error when pickling tree $tree of class ${tree.getClass}")
@@ -981,7 +995,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
     var i = 0
     while i < treeAddrs.size do
-      treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
+      if treeAddrs.value(i) >= 0 then treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
       i += 1
   }
 }
