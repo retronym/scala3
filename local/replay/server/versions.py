@@ -89,7 +89,8 @@ def read_entry(cp, entry):
 def detect(cp):
     """Feature tests on the compiler's class files: the ASM package and the plugin/compat/ overlays."""
     asm = 'scala.tools.asm' if read_entry(cp, 'scala/tools/asm/tree/MethodNode.class') else 'org.objectweb.asm'
-    opt = 'opt' if read_entry(cp, 'dotty/tools/backend/jvm/opt/LocalOptimizer.class') else 'noopt'
+    # LocalOptimizer on main, LocalOpt on 3.8 to 3.10 (same KnownCallsite/Callee and settings APIs)
+    opt = 'opt' if any(read_entry(cp, f'dotty/tools/backend/jvm/opt/{c}.class') for c in ('LocalOptimizer', 'LocalOpt')) else 'noopt'
     skip = 'skipIfJava' if b'skipIfJava' in (read_entry(cp, 'dotty/tools/dotc/core/Phases$Phase.class') or b'') else 'noSkipIfJava'
     return asm, [opt, skip]
 

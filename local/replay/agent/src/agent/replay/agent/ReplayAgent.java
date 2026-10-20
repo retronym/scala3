@@ -134,7 +134,9 @@ public final class ReplayAgent {
 
   /** The pinned site or the first alternative that matches in {@code td}. If none does and no candidate is in
    *  another class, the site is MISSING now; otherwise {@link #verify} decides once every class has loaded. */
-  private static JoinPoints.Alt find(TypeDescription td, JoinPoint jp) {
+  private static JoinPoints.Alt find(TypeDescription td, JoinPoint jp) { return find(td, jp, null); }
+
+  private static JoinPoints.Alt find(TypeDescription td, JoinPoint jp, ClassLoader cl) {
     String why = null;
     boolean elsewhere = false;
     for (JoinPoints.Alt a : jp.candidates()) {
@@ -142,7 +144,12 @@ public final class ReplayAgent {
       MethodList<MethodDescription.InDefinedShape> ms =
         td.getDeclaredMethods().filter(named(a.method()).and(hasDescriptor(a.descriptor())));
       if (ms.size() != 1) { if (why == null) why = "no method " + a.method() + a.descriptor() + " in " + td.getName(); continue; }
-      if (a.requiredField() != null && td.getDeclaredFields().filter(named(a.requiredField())).isEmpty()) {
+      if (a.requiredField() != null && jp.kind() == Kind.REPLACE_HASHCODE) {
+        if (!loadsString(td, cl, a.method(), a.descriptor(), a.requiredField())) {
+          if (why == null) why = td.getName() + "." + a.method() + " does not load \"" + a.requiredField() + "\"";
+          continue;
+        }
+      } else if (a.requiredField() != null && td.getDeclaredFields().filter(named(a.requiredField())).isEmpty()) {
         if (why == null) why = "no field " + a.requiredField() + " in " + td.getName();
         continue;
       }
@@ -156,6 +163,25 @@ public final class ReplayAgent {
     if (!elsewhere) missing(jp, why);
     else if (status.get(jp.key()) != Status.FOUND) detail.putIfAbsent(jp.key(), why);
     return null;
+  }
+
+  /** Whether {@code td}'s method loads the string constant {@code s}: tells apart enum cases, which are anonymous
+   *  classes numbered differently in different compiler versions. */
+  private static boolean loadsString(TypeDescription td, ClassLoader cl, String name, String desc, String s) {
+    byte[] bytes;
+    try { bytes = ClassFileLocator.ForClassLoader.of(cl).locate(td.getName()).resolve(); }
+    catch (Exception e) { return false; }
+    boolean[] found = {false};
+    new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+      @Override
+      public MethodVisitor visitMethod(int acc, String n, String d, String sig, String[] ex) {
+        if (!(n.equals(name) && d.equals(desc))) return null;
+        return new MethodVisitor(Opcodes.ASM9) {
+          @Override public void visitLdcInsn(Object v) { if (s.equals(v)) found[0] = true; }
+        };
+      }
+    }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+    return found[0];
   }
 
   private static MethodDescription.InDefinedShape method(TypeDescription td, JoinPoints.Alt a) {
@@ -174,7 +200,11 @@ public final class ReplayAgent {
       JoinPoints.Alt site = find(td, jp);
       if (site == null) continue;
       MethodDescription.InDefinedShape md = method(td, site);
-      if (jp.kind() == Kind.ADVICE) {
+      if (jp.kind() == Kind.ADVICE && site.advice() == Advices.InlinedTraceIfChanged.class) {
+        builder = builder.visit(new net.bytebuddy.asm.AsmVisitorWrapper.ForDeclaredMethods()
+          .invokable(named(site.method()).or(named("removalRound$1")), new InlinedTraceSites()));
+        inlinedTrace.put(td.getName(), jp);
+      } else if (jp.kind() == Kind.ADVICE) {
         builder = builder.visit(Advice.to(site.advice()).on(is(md)));
       } else if (jp.kind() == Kind.GATE) {
         builder = builder.visit(MemberSubstitution.relaxed()
@@ -201,6 +231,62 @@ public final class ReplayAgent {
     return builder;
   }
 
+  /** Classes with {@link InlinedTraceSites} applied, re-checked against the emitted bytes. */
+  private static final Map<String, JoinPoint> inlinedTrace = new ConcurrentHashMap<>();
+  private static final Set<String> PASSES = Set.of("beforeMethodOpt", "nullness", "dce", "boxUnbox", "copyProp", "staleStores",
+    "redundantCasts", "pushPop", "storeLoadPairs", "staleHandlers", "simplifyJumps", "localVariables", "lineNumbers");
+
+  /** The inlined copies of {@code traceIfChanged(pass)} in a released (-opt built) compiler's {@code LocalOpt}: each
+   *  starts by storing the pass name constant, so after {@code ldc pass} insert {@code Hooks.optimizerPass(method, pass)}
+   *  (the MethodNode is parameter 1 of both methods that held the calls), the point where the call's arguments were
+   *  evaluated. On a build without the inlining the constants are the call's argument: the same point. */
+  private static final class InlinedTraceSites implements net.bytebuddy.asm.AsmVisitorWrapper.ForDeclaredMethods.MethodVisitorWrapper {
+    @Override
+    public MethodVisitor wrap(TypeDescription type, MethodDescription method, MethodVisitor mv,
+        Implementation.Context ctx, TypePool pool, int writerFlags, int readerFlags) {
+      if (method.getParameters().isEmpty() || !method.getParameters().get(0).getType().asErasure().getName().endsWith(".tree.MethodNode"))
+        return mv;
+      return new MethodVisitor(Opcodes.ASM9, mv) {
+        @Override
+        public void visitLdcInsn(Object v) {
+          super.visitLdcInsn(v);
+          if (v instanceof String p && PASSES.contains(p)) {
+            super.visitInsn(Opcodes.DUP);
+            super.visitVarInsn(Opcodes.ALOAD, 1);
+            super.visitInsn(Opcodes.SWAP);
+            super.visitMethodInsn(Opcodes.INVOKESTATIC, "replay/agent/api/Hooks", "optimizerPass", "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+          }
+        }
+        @Override
+        public void visitMaxs(int maxStack, int maxLocals) { super.visitMaxs(maxStack + 2, maxLocals); }
+      };
+    }
+  }
+
+  /** Every pass name must have got its hook. */
+  private static void checkInlinedTrace(String cls, byte[] bytes) {
+    JoinPoint jp = inlinedTrace.get(cls);
+    if (jp == null) return;
+    Set<String> hooked = new HashSet<>();
+    new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+      @Override
+      public MethodVisitor visitMethod(int acc, String name, String desc, String sig, String[] ex) {
+        return new MethodVisitor(Opcodes.ASM9) {
+          Object last;
+          @Override public void visitLdcInsn(Object v) { last = v; }
+          @Override public void visitInsn(int op) { if (op != Opcodes.DUP && op != Opcodes.SWAP) last = null; }
+          @Override
+          public void visitMethodInsn(int op, String owner, String n, String d, boolean itf) {
+            if (owner.equals("replay/agent/api/Hooks") && n.equals("optimizerPass") && last instanceof String p) hooked.add(p);
+            last = null;
+          }
+        };
+      }
+    }, 0);
+    if (!hooked.equals(PASSES)) missing(jp, "inlined traceIfChanged sites hooked: " + hooked);
+    else detail.put(jp.key(), detail.getOrDefault(jp.key(), "") + ", " + hooked.size() + " inlined sites");
+  }
+
   private static MethodDescription gate(String name) {
     return TypeDescription.ForLoadedType.of(replay.agent.api.Gate.class).getDeclaredMethods().filter(named(name)).getOnly();
   }
@@ -209,7 +295,7 @@ public final class ReplayAgent {
       ClassLoader cl, JavaModule module, java.security.ProtectionDomain pd) {
     for (JoinPoint jp : sitesOf(td)) {
       if (jp.kind() == Kind.REPLACE_HASHCODE) {
-        if (find(td, jp) == null) continue;
+        if (find(td, jp, cl) == null) continue;
         builder = builder.method(named("hashCode").and(takesArguments(0)))
           .intercept(new Implementation.Simple(nameHash("tag()")));
         status.put(jp.key(), Status.FOUND);
@@ -276,6 +362,7 @@ public final class ReplayAgent {
     public void onTransformation(TypeDescription td, ClassLoader cl, JavaModule module, boolean loaded, DynamicType dt) {
       if (td.getName().equals(JoinPoints.RUN)) checkRunSubstitution(dt.getBytes());
       if (td.getName().equals(JoinPoints.PLUGINS)) checkGate(dt.getBytes());
+      checkInlinedTrace(td.getName(), dt.getBytes());
     }
 
     @Override

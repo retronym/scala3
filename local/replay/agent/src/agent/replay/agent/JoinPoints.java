@@ -59,6 +59,18 @@ final class JoinPoints {
 
   private static final String BJ = "dotty.tools.backend.jvm.";
   private static final String MNODE = "Lorg/objectweb/asm/tree/MethodNode;";
+  private static final String CNODE = "Lorg/objectweb/asm/tree/ClassNode;";
+  private static final String BUF = "Lscala/collection/mutable/ListBuffer;";
+  private static final String OPT = BJ + "opt.";
+  // Released 3.x before 3.8 use the shaded scala-asm, and the server rewrites org.objectweb.asm in these sources
+  // (including MNODE and CNODE) to the compiler's package, so one descriptor serves both ASM packages.
+
+  private static JoinPoint avoidCase(String name, int anon) {
+    String c = "dotty.tools.dotc.core.NameKinds$AvoidNameKind$$anon$";
+    return new JoinPoint("names", Kind.REPLACE_HASHCODE, c + anon, "hashCode", "()I", null, name,
+      "inherits NameKinds.scala:36 (enum case " + name + ")")
+      .or(new Alt(c + (anon - 1), "hashCode", "()I", null, name));
+  }
 
   static final String RUN = "dotty.tools.dotc.Run";
   static final String PLUGINS = "dotty.tools.dotc.plugins.Plugins";
@@ -108,31 +120,64 @@ final class JoinPoints {
 
     new JoinPoint("jvm", Kind.ADVICE, BJ + "CodeGen", "generateClassNodes",
       "(Ldotty/tools/dotc/ast/Trees$TypeDef;" + CTX + ")" + LIST, Advices.GenerateClassNodes.class, null,
-      "CodeGen.scala:162 classNodes (fires on return, after atPhase(sbtExtractDependencies))"),
+      "CodeGen.scala:162 classNodes (fires on return, after atPhase(sbtExtractDependencies))")
+      // 3.8 to 3.10: genUnit's local genClassDef(cd) appends GeneratedClass(classNode, ...) to a ListBuffer
+      .or(new Alt(BJ + "CodeGen", "genClassDef$1", "(" + CTX + BUF + BUF + "Ldotty/tools/dotc/ast/Trees$TypeDef;)V",
+        Advices.GenClassDef310.class, null))
+      // 3.3 to 3.7: the same, with the CompilationUnit as a parameter
+      .or(new Alt(BJ + "CodeGen", "genClassDef$1",
+        "(" + CTX + "Ldotty/tools/dotc/CompilationUnit;" + BUF + BUF + "Ldotty/tools/dotc/ast/Trees$TypeDef;)V",
+        Advices.GenClassDef.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeSkelBuilder$PlainSkelBuilder", "genDefDef",
-      "(Ldotty/tools/dotc/ast/Trees$DefDef;" + CTX + ")V", Advices.GenDefDef.class, null, "BCodeSkelBuilder.scala:929 genMethod (stashes dd)"),
+      "(Ldotty/tools/dotc/ast/Trees$DefDef;" + CTX + ")V", Advices.GenDefDef.class, null, "BCodeSkelBuilder.scala:929 genMethod (stashes dd)")
+      // 3.3 to 3.7: the backend has no Context parameters (DottyBackendInterface.ctx); see Advices.GenClassDef
+      .or("genDefDef", "(Ldotty/tools/dotc/ast/Trees$DefDef;)V"),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeSkelBuilder$PlainSkelBuilder", "initJMethod",
-      "(I" + LIST + CTX + ")V", Advices.InitJMethod.class, "mnode", "BCodeSkelBuilder.scala:929 genMethod (fires)"),
+      "(I" + LIST + CTX + ")V", Advices.InitJMethod.class, "mnode", "BCodeSkelBuilder.scala:929 genMethod (fires)")
+      .or(new Alt(BJ + "BCodeSkelBuilder$PlainSkelBuilder", "initJMethod", "(I" + LIST + ")V", Advices.InitJMethodNoCtx.class, "mnode")),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genStat",
-      "(" + TREE + CTX + ")V", Advices.GenStat.class, null, "BCodeBodyBuilder.scala:91 genLoadEnter/Exit"),
+      "(" + TREE + CTX + ")V", Advices.GenStat.class, null, "BCodeBodyBuilder.scala:91 genLoadEnter/Exit")
+      .or(new Alt(BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genStat", "(" + TREE + ")V", Advices.GenLoadNoCtx.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genLoadTo",
       "(" + TREE + "L" + "dotty/tools/backend/jvm/BType;Ldotty/tools/backend/jvm/BCodeSkelBuilder$LoadDestination;" + CTX + ")V",
-      Advices.GenLoadTo.class, null, "BCodeBodyBuilder.scala:320 genLoadEnter/Exit"),
+      Advices.GenLoadTo.class, null, "BCodeBodyBuilder.scala:320 genLoadEnter/Exit")
+      // 3.3 to 3.7: BType is BTypes#BType
+      .or(new Alt(BJ + "BCodeBodyBuilder$PlainBodyBuilder", "genLoadTo",
+        "(" + TREE + "Ldotty/tools/backend/jvm/BTypes$BType;Ldotty/tools/backend/jvm/BCodeSkelBuilder$LoadDestination;)V",
+        Advices.GenLoadNoCtx.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.LocalOptimizer", "methodOptimizations",
-      "(" + MNODE + "Ljava/lang/String;)Z", Advices.MethodOptimizations.class, null, "LocalOptimizer.scala:219 optimizerPass (stashes owner)"),
+      "(" + MNODE + "Ljava/lang/String;)Z", Advices.MethodOptimizations.class, null, "LocalOptimizer.scala:219 optimizerPass (stashes owner)")
+      // 3.8 to 3.10: the local optimiser is LocalOpt (3.3 to 3.7 have no optimiser)
+      .or(new Alt(OPT + "LocalOpt", "methodOptimizations", "(" + MNODE + "Ljava/lang/String;)Z", Advices.MethodOptimizations.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.LocalOptimizer", "traceIfChanged$1",
       "(Z" + MNODE + "Lscala/runtime/ObjectRef;Ljava/lang/String;)V", Advices.TraceIfChanged.class, null,
-      "LocalOptimizer.scala:219 optimizerPass (fires)"),
+      "LocalOptimizer.scala:219 optimizerPass (fires)")
+      // released 3.8 to 3.10 are built with -opt: traceIfChanged$1 is inlined at its 13 call sites (and dead); hook the
+      // copies in the methods that held the calls, anchored on methodOptimizations (ReplayAgent.InlinedTraceSites)
+      .or(new Alt(OPT + "LocalOpt", "methodOptimizations", "(" + MNODE + "Ljava/lang/String;)Z", Advices.InlinedTraceIfChanged.class, null))
+      .or(new Alt(OPT + "LocalOpt", "traceIfChanged$1", "(Z" + MNODE + "Lscala/runtime/ObjectRef;Ljava/lang/String;)V",
+        Advices.TraceIfChanged.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.GlobalOptimizer", "doInline$1",
       "(" + MNODE + "Ldotty/tools/backend/jvm/opt/MethodInlinerState;Lscala/runtime/BooleanRef;"
         + "Ldotty/tools/backend/jvm/opt/InlineRequest;Ldotty/tools/backend/jvm/analysis/AliasingFrame;Lscala/Option;)"
-        + "Lscala/collection/immutable/Map;", Advices.DoInline.class, null, "Inliner.scala:127 inlined (arms)"),
+        + "Lscala/collection/immutable/Map;", Advices.DoInline.class, null, "Inliner.scala:127 inlined (arms)")
+      // 3.8 to 3.10: the inliner is opt.Inliner; released builds inlined doInline into the per-request lambda
+      .or(new Alt(OPT + "Inliner", "runInliner$$anonfun$1", "(Lscala/runtime/BooleanRef;Ldotty/tools/backend/jvm/opt/MethodInlinerState;"
+        + MNODE + "Lscala/collection/mutable/Set;Lscala/collection/mutable/Map;Lscala/collection/mutable/Queue;Lscala/Function1;"
+        + "Lscala/runtime/BooleanRef;Lscala/Tuple2;)V", Advices.DoInlineLambda.class, null))
+      .or(new Alt(OPT + "Inliner", "doInline$1", "(" + MNODE + "Ldotty/tools/backend/jvm/opt/MethodInlinerState;Lscala/runtime/BooleanRef;"
+        + "Ldotty/tools/backend/jvm/opt/InlineRequest;Ldotty/tools/backend/jvm/analysis/AliasingFrame;Lscala/Option;)"
+        + "Lscala/collection/immutable/Map;", Advices.DoInline.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "opt.GlobalOptimizer", "inlineCallsite",
       "(Ldotty/tools/backend/jvm/opt/KnownCallsite;Lscala/Option;Z)Lscala/collection/immutable/Map;", Advices.InlineCallsite.class, null,
-      "Inliner.scala:127 inlined (fires)"),
+      "Inliner.scala:127 inlined (fires)")
+      .or(new Alt(OPT + "Inliner", "inlineCallsite", "(Ldotty/tools/backend/jvm/opt/KnownCallsite;Lscala/Option;Z)Lscala/collection/immutable/Map;",
+        Advices.InlineCallsite.class, null)),
     new JoinPoint("jvm", Kind.ADVICE, BJ + "CodeGen", "serializeClassNode",
-      "(Lorg/objectweb/asm/tree/ClassNode;)[B", Advices.SerializeClassNode.class, null,
-      "CodeGen.scala:250 classWritten (fires on return, after the ClassWriter)"),
+      "(" + CNODE + ")[B", Advices.SerializeClassNode.class, null,
+      "CodeGen.scala:250 classWritten (fires on return, after the ClassWriter)")
+      // 3.3 to 3.10: PostProcessor.sendToDisk -> serializeClass, after the local optimiser and setInnerClasses
+      .or(new Alt(BJ + "PostProcessor", "serializeClass", "(" + CNODE + ")[B", Advices.SerializeClassNode.class, null)),
 
     new JoinPoint("fix", Kind.ADVICE, "dotty.tools.dotc.ast.tpd$TimeTravellingTreeCopier", "TypeApply",
       "(" + TREE + TREE + LIST + CTX + ")Ldotty/tools/dotc/ast/Trees$TypeApply;", Advices.TypeApplyFix.class, null,
@@ -151,14 +196,13 @@ final class JoinPoints {
 
     // Subclasses compiled without the base hashCode got a synthesized one (case class: product hash;
     // enum case: hash of its name). In the fork they inherit NameKind.hashCode, so replace the body with `tag`.
+    // For an enum case the required "field" is the case name its synthesized hashCode loads (ReplayAgent.loadsString):
+    // the anonymous class numbering differs between versions (3.7: $$anon$8 to $$anon$10, else $$anon$9 to $$anon$11).
     new JoinPoint("names", Kind.REPLACE_HASHCODE, "dotty.tools.dotc.core.NameKinds$UniqueNameKind", "hashCode", "()I", null, null,
       "inherits NameKinds.scala:36 (case class)"),
-    new JoinPoint("names", Kind.REPLACE_HASHCODE, "dotty.tools.dotc.core.NameKinds$AvoidNameKind$$anon$9", "hashCode", "()I", null, null,
-      "inherits NameKinds.scala:36 (enum case UpperBound)"),
-    new JoinPoint("names", Kind.REPLACE_HASHCODE, "dotty.tools.dotc.core.NameKinds$AvoidNameKind$$anon$10", "hashCode", "()I", null, null,
-      "inherits NameKinds.scala:36 (enum case LowerBound)"),
-    new JoinPoint("names", Kind.REPLACE_HASHCODE, "dotty.tools.dotc.core.NameKinds$AvoidNameKind$$anon$11", "hashCode", "()I", null, null,
-      "inherits NameKinds.scala:36 (enum case BothBounds)"),
+    avoidCase("UpperBound", 9),
+    avoidCase("LowerBound", 10),
+    avoidCase("BothBounds", 11),
 
     new JoinPoint("extra", Kind.ADVICE, "dotty.tools.dotc.typer.Implicits$ImplicitRefs", "candidateKind$1",
       "(" + TYPE + "ZLdotty/tools/dotc/core/Types$TermRef;" + CTX + ")I", Advices.CandidateKind.class, null,
