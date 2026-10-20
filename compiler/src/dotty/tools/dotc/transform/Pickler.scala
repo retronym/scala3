@@ -387,6 +387,26 @@ class Pickler extends Phase {
 
   private val executor = Executor[Array[Byte]]()
 
+  /** Tree buffers reused from one top-level class to the next. A buffer is taken on the compiler thread when a class
+   *  is pickled and given back by `computePickled` once the class's bytes are assembled, which with parallel
+   *  pickling happens on the executor's thread. A fresh pool per run, so that no buffer outlives the run.
+   */
+  private final class TreeBufferPool:
+    private val free = new java.util.ArrayDeque[TreeBuffer]
+    def acquire(): TreeBuffer = synchronized:
+      val buf = free.pollFirst()
+      if buf == null then new TreeBuffer else buf
+    def release(buf: TreeBuffer): Unit =
+      buf.reset() // the buffer is no longer shared: done outside the lock
+      synchronized:
+        if free.size < TreeBufferPool.MaxFree then free.addFirst(buf)
+
+  private object TreeBufferPool:
+    // How many free buffers to keep: enough for the pickling executor's backlog
+    inline val MaxFree = 4
+
+  private var treeBuffers: TreeBufferPool = new TreeBufferPool
+
   private def useExecutor(using Context) =
     Pickler.ParallelPickling && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
 
@@ -406,9 +426,16 @@ class Pickler extends Phase {
     else cls.binaryClassName
 
   // This can be called inside a Future in a background thread, it must not capture a Context
-  def computePickled(pickler: TastyPickler, treePkl: TreePickler, 
+  private def computePickled(pickler: TastyPickler, treePkl: TreePickler, 
                      tree: Tree, unit: CompilationUnit, internalName: String, attributes: Attributes,
-                     dropComments: Boolean/*ctx.settings.XdropComments.value*/): Array[Byte] =
+                     dropComments: Boolean/*ctx.settings.XdropComments.value*/,
+                     buffers: TreeBufferPool): Array[Byte] =
+    try assemblePickled(pickler, treePkl, tree, unit, internalName, attributes, dropComments)
+    finally buffers.release(treePkl.buf) // `assembleParts` has copied the buffer's bytes
+
+  private def assemblePickled(pickler: TastyPickler, treePkl: TreePickler,
+                     tree: Tree, unit: CompilationUnit, internalName: String, attributes: Attributes,
+                     dropComments: Boolean): Array[Byte] =
     serialized.run { scratch =>
       treePkl.compactify(scratch)
       if tree.span.exists then
@@ -475,7 +502,8 @@ class Pickler extends Phase {
       )
 
       val pickler = new TastyPickler(cls, isBestEffortTasty = isBestEffort)
-      val treePkl = new TreePickler(pickler, attributes)
+      val buffers = treeBuffers
+      val treePkl = new TreePickler(pickler, attributes, buffers.acquire())
       val successful =
         try
           treePkl.pickle(tree :: Nil)
@@ -492,7 +520,7 @@ class Pickler extends Phase {
         val dropComments = ctx.settings.XdropComments.value
         // must not depend on a Context as it's passed to the executor, so we fetch settings before
         def doComputePickled() =
-          computePickled(pickler, treePkl, tree, unit, internalName, attributes, dropComments)
+          computePickled(pickler, treePkl, tree, unit, internalName, attributes, dropComments, buffers)
         /** A function that returns the pickled bytes. Depending on `Pickler.ParallelPickling`
          *  either computes the pickled data in a future or eagerly before constructing the
          *  function value.
@@ -514,11 +542,13 @@ class Pickler extends Phase {
             () => pickled
 
         unit.pickled += (cls -> demandPickled)
+      else buffers.release(treePkl.buf)
     end for
   }
 
   override def runOn(units: List[CompilationUnit])(using Context): List[CompilationUnit] = {
     val useExecutor = this.useExecutor
+    treeBuffers = new TreeBufferPool
 
     val asyncTasty = ctx.run.nn.asyncTasty
     if asyncTasty.isDefined then fastDoAsyncTasty = true

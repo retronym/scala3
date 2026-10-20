@@ -44,6 +44,16 @@ class PerfectHashing[Key](initialCapacity: Int = 8, capacityMultiple: Int = 2):
     used = 0
     allocate(roundToPower(initialCapacity max 4))
 
+  /** Remove keys from this map, keeping the tables for reuse unless they are much larger than the keys removed
+   *  needed, in which case this is `clear()`.
+   */
+  def clearForReuse(): Unit =
+    if used * 8 < capacity then clear()
+    else
+      java.util.Arrays.fill(keys, 0, used, null)
+      if !isDense then java.util.Arrays.fill(table, 0)
+      used = 0
+
   /** The number of keys */
   final def size: Int = used
 

@@ -25,6 +25,12 @@ class TreeBuffer extends TastyBuffer(4096) {
   /** A map from trees to the address at which a tree is pickled. */
   private val treeAddrs = util.IntMap[Tree](initialCapacity = 512)
 
+  /** Make this buffer empty, to pickle another class into it */
+  override def reset(): Unit =
+    super.reset()
+    numOffsets = 0
+    treeAddrs.clearForReuse()
+
   def registerTreeAddr(tree: Tree): Addr =
     val idx = treeAddrs(tree)
     if idx < 0 then
