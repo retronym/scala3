@@ -1,3 +1,7 @@
+-- Error: tests/neg-custom-args/captures/safemode-4.scala:9:16 ---------------------------------------------------------
+9 |  if Properties.propIsSet("foo") then // error
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |     Cannot refer to method propIsSet in trait PropertiesTrait from safe code since it is tagged @rejectSafe
 -- Error: tests/neg-custom-args/captures/safemode-4.scala:10:15 --------------------------------------------------------
 10 |    Properties.clearProp("foo") // error
    |    ^^^^^^^^^^^^^^^^^^^^

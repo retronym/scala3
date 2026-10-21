@@ -6,7 +6,7 @@ import scala.util.{Random, Properties}
 
 object Test:
 
-  if Properties.propIsSet("foo") then
+  if Properties.propIsSet("foo") then // error
     Properties.clearProp("foo") // error
     Properties.setProp("foo", "invalid") // error
 
