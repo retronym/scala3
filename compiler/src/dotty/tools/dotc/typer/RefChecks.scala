@@ -914,23 +914,20 @@ object RefChecks {
           }
         addDecls(clazz)
 
-        // Only a merge of several members (a `JointRefDenotation`) can fail the check below, and `member` merges
-        // only denotations of distinct symbols. Without a given self type, those symbols are declarations of the
-        // base classes of `clazz`, so a name declared once among them can't need the check, and we skip its lookup.
+        // Only a merge of several members (a `JointRefDenotation`) can fail the check below, and a name with
+        // a sole declaration among the base classes can't be one (see `soleTermDecls`), so we skip its lookup.
         val namesToCheck =
           if !clazz.is(Module) && clazz.givenSelfType.exists then membersToCheck
           else
-            val declaredOnce = new util.HashSet[Name](membersToCheck.size * 2)
-            val declaredTwice = new util.HashSet[Name](256)
-            for bc <- clazz.baseClasses; decl <- bc.info.decls do
-              if decl.isTerm && membersToCheck.contains(decl.name) && !declaredOnce.add(decl.name) then
-                declaredTwice += decl.name
-            if config.Config.checkSkippedMemberTypes then
-              for name <- membersToCheck do
-                if !declaredTwice.contains(name) then
-                  for mbrd <- self.member(name).alternatives do
-                    assert(!mbrd.isInstanceOf[JointRefDenotation], i"skipped joint member $mbrd of $clazz")
-            declaredTwice
+            val sole = clazz.soleTermDecls
+            val several = new util.HashSet[Name](256)
+            for name <- membersToCheck do
+              val decl = sole.lookup(name)
+              if decl == null || !decl.exists then several += name
+              else if config.Config.checkSoleTermDecls then
+                for mbrd <- self.member(name).alternatives do
+                  assert(!mbrd.isInstanceOf[JointRefDenotation], i"skipped joint member $mbrd of $clazz")
+            several
 
         // For each member, check that the type of its symbol, as seen from `self`
         // can override the info of this member
