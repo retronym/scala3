@@ -753,6 +753,12 @@ class CheckCaptures extends Recheck, SymTransformer:
           case Some(idx) if idx >= 0 && idx < cls.caseAccessors.length =>
             normTree = tree.qualifier.select(cls.caseAccessors(idx)).withSpan(tree.span)
           case _ =>
+      if tree.qualifier.symbol.is(Package) && !tree.symbol.isOneOf(Package | Method) then
+        // A qualified reference `p.q.X` to a static object or value `X`. The path
+        // starts at `X`, so mark it as if `X` was referenced by a simple identifier.
+        // Only idents mark paths otherwise, and the ident at the root of a qualified
+        // reference is a package.
+        markPathFree(tree.symbol.termRef, pt, tree)
       super.recheckSelect(normTree, pt)
 
     /** A specialized implementation of the selection rule.
