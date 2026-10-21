@@ -73,6 +73,32 @@ None of this is a capture-checking bug. It is the allowlist: whole-package `@ass
 4. Reword the docs and talks: safe mode is a static information-flow layer to be used *inside* an OS sandbox, with an explicit list of what is not covered.
 5. Report the escapes to the maintainers before publishing this review more widely.
 
+## Findings index
+
+Every individual finding, where the evidence is, and its status as of 2026-10-21. Fixes are in retronym/scala3#65.
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| 1 | `scala.util.Properties.envOrNone`/`propOrNone` and the host-path accessors read the environment from safe code | `probes/Probe.scala` on 3.10.0 | fixed, 68dd58a7e3 (rejected in `SafeRefs`) |
+| 2 | `scala.runtime.LazyVals.getOffset`/`CAS`/`setFlag` expose `sun.misc.Unsafe` to safe code | `probes/Probe.scala` (`getOffset` returned 12) | fixed, 68dd58a7e3 |
+| 3 | `scala.runtime.coverage.Invoker.invoked(id, dir)` appends to a file in any directory, from a function typed `->` | `probes/Probe.scala`, bytes of a `Classified` recovered from `/tmp/safeprobe-leak` | fixed, 68dd58a7e3 |
+| 4 | `Throwable.printStackTrace` writes to stderr from a function typed `->`; `setStackTrace` mutates | `probes/Probe.scala` | fixed, 68dd58a7e3 |
+| 5 | `Invoker` had been allowlisted in a997f9ddc3 although coverage instrumentation runs after the safe-reference check, so safe code never needs it | git history | fixed, 68dd58a7e3 |
+| 6 | TACIT's regex `CodeValidator` matches none of 1 to 4 | `lampepfl/tacit` `src/main/scala/executor/CodeValidator.scala` | reported here only |
+| 7 | `mutable.StringBuilder` (via the `scala` package object alias) is not capture-checked, so `append` is pure; leaks a `Classified` | `probes/t/D1_stringbuilder` | open; needs D1 in `plan.md` |
+| 8 | Java objects (`java.util.stream.Stream.builder`) are untracked mutable cells | `probes/t/D2_javamutable` | open; needs D1 |
+| 9 | `scala.util.Random.setSeed` inside a pure function leaks 32 bits per call through the global object | `probes/t/I_random` | partly fixed: `object Random` now declares `uses caps.any` (771b4515f9), so it is a tracked capability; the Java-allocation purity behind it is still open (D1) |
+| 10 | `throw` inside a pure function carries the payload out; VM exceptions carry agent-controlled payload too (`parseInt`, index errors); conditional throw is a 1-bit oracle | `probes/t/H_exception` | open; proposal 3 in the addendum |
+| 11 | `java.time.Instant.now()` gives safe code a clock for timing attacks | `probes/t/K_clock` | open; allowlist-level |
+| 12 | Capture checking rejects captured local vars, arrays, class and object vars, `boundary` labels, and type-test laundering | `probes/t/{A,B,C,E,F,J}_*` | no issue |
+| 13 | `class D extends C(new Cap)` and `object O extends C(new Cap)` yield pure instances; `d.r` and `O.r` are tracked references that are never charged, because paths are only marked when their root is tracked and no `new` site refines the parent's parameters | `probes/t/M/N2`, `N7`, `N13`; `probes/inherited-param-captures.scala` on `main` | fixed, 771b4515f9: parent-call captures must be in the class use set, inferred locally, declared with `uses` or `extends Capability` otherwise |
+| 14 | Counting inherited parameter accessors in `capturesImpliedByFields` is sound but breaks 112 library sites that forward a parameter to the parent | `probes/d4-coarse-rule.patch` | rejected approach, documented in `plan.md` |
+| 15 | A fully qualified reference to a static capability (`scala.util.Random.nextLong()`, `test.M.c`, `_root_.test.M.c`) is never charged; only `recheckIdent` marks paths and the root ident is a package | `probes/t/X2/B4.scala` | fixed, 6c57576733 |
+| 16 | `object O8 { val r: Cap }` from another compilation unit is pure in the empty package; in a named package the existing rule (1d4acc1572) demands `extends Capability` | `probes/t/X`, `probes/t/P/pkg.scala` | no change; the empty package is exempt from explicit-declaration checks by design, and safe mode removes the exemption |
+| 17 | The pickler runs before the capture checker, so inferred capture sets never cross units; anything cross-unit must come from declared types and annotations | `Compiler.scala` phase order | design constraint, recorded in `plan.md` |
+| 18 | The incremental nonbootstrapped library build fails with a bogus cyclic reference on any edit to `Random.scala`; a clean build is fine | reproduced with a comment-only change | build quirk, not pursued |
+| 19 | The docs say safe mode is nightly-only; it compiles on stable 3.10.0 with no `-experimental` flag | 3.10.0 | documentation is stale |
+
 ## Addendum: the type-system restrictions themselves
 
 Follow-up to the allowlist findings (fixed in 68dd58a7e3). Question: setting the allowlist aside, where does safe mode's *type-level* story leak, and how could it be strengthened? Probes are in `probes/t/*`, one directory each, run on 3.10.0 with a `Classified[T]` whose `map` takes `T -> U`.
