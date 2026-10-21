@@ -1,6 +1,6 @@
 # Safe mode: closing the foreign-state gap
 
-Status: design draft, 2026-10-21. Nothing implemented. Builds on the review in `review.md` and the probes in `probes/t/`. Written with LLM assistance (Claude Code); all probes were run against the released 3.10.0 compiler.
+Status: design draft, 2026-10-21. Nothing implemented. Builds on the review in [`review.md`](review.md) and the probes in [`probes/t/`](probes/t/). Written with LLM assistance (Claude Code); all probes were run against the released 3.10.0 compiler.
 
 ## Problem
 
@@ -12,7 +12,7 @@ Two mechanisms produce this, and they compound:
 
 2. **Module parents drop constructor-argument captures.** `capturesImpliedByFields` deliberately excludes class parameters because `new C(args)` sites get capture refinements instead. A top-level `object O extends C(new Cap)` has no `new` site, so `O.r` comes out pure even when `Cap` is a real `SharedCapability` (`t/M/N2`). The same object declared locally, or `val o = new C(new Cap)`, is tracked (`t/M/N6`, `t/M/N1`), and a direct field `object O { val r: Cap }` is tracked (`t/M/N3`). `object Random extends Random(new java.util.Random())` is this shape exactly.
 
-Fixing only the allowlist (68dd58a7e3 closed the specific members found) does not change the guarantee. Every allowlisted Java package and every non-cc Scala class remains an unbounded source of invisible cells. The guarantee has to come from a default that fails closed.
+Fixing only the allowlist ([68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) closed the specific members found) does not change the guarantee. Every allowlisted Java package and every non-cc Scala class remains an unbounded source of invisible cells. The guarantee has to come from a default that fails closed.
 
 ## Goals
 
@@ -61,14 +61,14 @@ Start with (a). Measure on the TACIT facades and the paper's benchmark harness b
 
 ### D4. Parent constructor arguments contribute to the instance capture set
 
-Findings from the implementation attempt (2026-10-21, probes `probes/t/M/N7`..`N13`, patch `probes/d4-coarse-rule.patch`):
+Findings from the implementation attempt (2026-10-21, probes `probes/t/M/N7`..`N13`, patch [`probes/d4-coarse-rule.patch`](probes/d4-coarse-rule.patch)):
 
 - The gap is not module-specific. `class D extends C(new Cap)` with `val d = new D` gives a pure `d`, and `() => d.r.use()` type-checks as `() -> Unit` (`N7`). `object O extends C(new Cap)` is the same gap (`N2`).
 - Mechanism: `markPathFree` charges a path `p.r` only when its root `p` is tracked. That is sound as long as every instance whose fields hold capabilities is itself tracked, which `capturesImpliedByFields` ensures by giving such instances a fresh capability. Refining parameter accessors are deliberately excluded from that computation because the `new C(args)` site refines the instance type with the argument captures. A subclass or module has no such site for the parent's parameters, so the instance is pure and every path through the inherited accessor is silently uncharged. `O.r` and `d.r` *are* tracked references (`N13`); they are just never marked.
 - Coarse fix (count inherited refining param accessors in `capturesImpliedByFields`, see the patch): closes `N2` and `N7`, passes the captures suite, and breaks 112 sites in `scala3-library-bootstrapped`, almost all `SeqView`/`IndexedSeqView`/`ArrayBuffer` classes that forward their own refined parameter to the parent constructor. In that pattern the parent's accessor holds a value the subclass's own refinement already accounts for, and the extra fresh capability is pure loss of precision. Not viable.
 - Precise fix: the extra captures are exactly the terminal (fresh) capabilities in the rechecked parent constructor applications that are not references to the subclass's own parameters. `recheckClassDef` has `parent.nuType` after `super.recheckClassDef`, so computing this for classes in the current unit is a few lines. The cost is persistence: `new D` in another unit must see the result, so it has to be pickled per class. Options: (a) reuse `@retains` on the class symbol with `caps.any`, making it the class's use set, which `refineConstructorInstance` already maps to a fresh capability at `new` sites, at the price of top-level classes no longer always having empty use sets; (b) a new internal marker annotation consulted by `creationCapset`; (c) fold it into the class's self type capture set, which is already pickled in `ClassInfo`, and derive `creationCapset` from it for classes loaded from TASTy. Order of rechecking within a unit also matters for (b) and (c): `new D` may be rechecked before `D`'s template.
 
-Decision: (a). Implemented as a rule in `recheckClassDef`: the terminal capabilities in the capture set of a rechecked parent constructor application, minus the one implied by the parent's own fields (already in `capturesImpliedByFields`), must be covered by the class's use set. Local classes infer it; a class visible elsewhere has to extend `Capability` or declare it with a `uses` clause, which is the existing `@retains` pickling and matches 1d4acc1572's rule for `any`-typed fields. No new pickled information. Library fallout: one site, `object Random extends Random`, now `uses caps.any`. Note that the pickler runs before the capture checker, so inferred capture sets never cross units; everything cross-unit has to be derivable from declared types and annotations.
+Decision: (a). Implemented as a rule in `recheckClassDef`: the terminal capabilities in the capture set of a rechecked parent constructor application, minus the one implied by the parent's own fields (already in `capturesImpliedByFields`), must be covered by the class's use set. Local classes infer it; a class visible elsewhere has to extend `Capability` or declare it with a `uses` clause, which is the existing `@retains` pickling and matches [1d4acc1572](https://github.com/retronym/scala3/commit/1d4acc1572)'s rule for `any`-typed fields. No new pickled information. Library fallout: one site, `object Random extends Random`, now `uses caps.any`. Note that the pickler runs before the capture checker, so inferred capture sets never cross units; everything cross-unit has to be derivable from declared types and annotations.
 
 Found while verifying: a fully qualified reference to a static capability (`scala.util.Random.nextLong()`, `test.M.c`) was never charged, only the imported or unqualified form was, because only `recheckIdent` marks capability paths and the ident at the root of a qualified reference is a package. Fixed in `recheckSelect`. Without it the `Random` declaration was hollow.
 
@@ -85,12 +85,12 @@ Found while verifying: a fully qualified reference to a static capability (`scal
 
 ## Plan
 
-- [x] Allowlist fixes for the members found so far (68dd58a7e3).
-- [x] Probes establishing the gaps (`probes/t/`), including the module-parent case with a Scala capability (`t/M/N2`).
+- [x] Allowlist fixes for the members found so far ([68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3)).
+- [x] Probes establishing the gaps ([`probes/t/`](probes/t/)), including the module-parent case with a Scala capability (`t/M/N2`).
 - [x] D4: parent constructor captures must be in the class use set (inferred locally, declared otherwise); `object Random` declares `uses caps.any`. Plus the qualified-static-reference fix. Tests: `inherited-param-captures{,-sep}`, `qualified-static-refs`.
 - [ ] D1 behind a flag (`-Ycc-foreign-mutable`, implied by `language.experimental.safe`): foreign classes as `Mutable` with all-`update` members in safe units. Reuse the `Array` strict-mutability path.
 - [ ] D2: `@assumeImmutable` annotation in `caps`, initial list in `SafeRefs.init`, deny by default. Split the existing `assumeSafe` entries into callable versus immutable.
-- [ ] Re-run every probe in `probes/t/` as neg tests under `tests/neg-custom-args/captures/safemode-*`; the `Classified` leaks must fail to compile with capture errors, not allowlist errors.
+- [ ] Re-run every probe in [`probes/t/`](probes/t/) as neg tests under `tests/neg-custom-args/captures/safemode-*`; the `Classified` leaks must fail to compile with capture errors, not allowlist errors.
 - [ ] Compile the TACIT library and its facades in this mode; record what breaks and whether D3(b) is needed.
 - [ ] Docs: rewrite the "Safe Mode" guarantee paragraph to state the actual claim: no observable effect except through a capability or through a class on the audited immutability list.
 

@@ -1,12 +1,12 @@
 # Safe Scala: summary and critical review
 
-Reviewed 2026-10-21 against scala3 `main` (a98b104aaa) and the released 3.10.0 compiler. Probe code is in `probes/Probe.scala`.
+Reviewed 2026-10-21 against scala3 `main` ([a98b104aaa](https://github.com/retronym/scala3/commit/a98b104aaa)) and the released 3.10.0 compiler. Probe code is in [`probes/Probe.scala`](probes/Probe.scala).
 
 ## What it is
 
 "Safe Scala" is the marketing name for `import language.experimental.safe`, a restricted dialect of Scala 3 layered on capture checking. It exists for one use case: running LLM-generated code against a typed capability API instead of letting the agent call tools directly. The claim is that if agent code type-checks in safe mode, it can only perform the effects that were handed to it as capability values, and classified data can only flow through functions whose types prove they are pure.
 
-Sources: the EPFL paper *Tracking Capabilities for Safer Agents* (arXiv 2603.00991, Odersky, Zhao, Xu, Bračevac, Pham; best paper at CAIS '26), the [TACIT](https://github.com/lampepfl/tacit) MCP server that implements it, the reference page `docs/_docs/reference/experimental/capture-checking/safe.md`, and VirtusLab's [introduction](https://virtuslab.com/blog/scala/safe-scala-an-introduction). Odersky keynoted Scala Days 2026 on it and there is a workshop on building an agent harness with it.
+Sources: the EPFL paper *Tracking Capabilities for Safer Agents* (arXiv 2603.00991, Odersky, Zhao, Xu, Bračevac, Pham; best paper at CAIS '26), the [TACIT](https://github.com/lampepfl/tacit) MCP server that implements it, the reference page [`docs/_docs/reference/experimental/capture-checking/safe.md`](https://github.com/retronym/scala3/blob/main/docs/_docs/reference/experimental/capture-checking/safe.md), and VirtusLab's [introduction](https://virtuslab.com/blog/scala/safe-scala-an-introduction). Odersky keynoted Scala Days 2026 on it and there is a workshop on building an agent harness with it.
 
 ## Mechanism
 
@@ -16,7 +16,7 @@ Safe mode is small. It is a language import that sets `CompilationUnit.safeMode`
 - rejects `asInstanceOf`, `@unchecked*` annotations, `caps.unsafe`, `@assumeSafe` itself, and `$` in identifiers;
 - runs `SafeRefs.checker` before PostTyper. Every reference to a *static* symbol must resolve to something compiled in safe mode or carrying `@assumeSafe`; anything carrying `@rejectSafe` is an error. Non-static selections (`x.foo` where `x` is a local or parameter) are not checked at all; the design relies on capture checking for those.
 
-The standard library allowlist is hand-maintained in `compiler/src/dotty/tools/dotc/cc/SafeRefs.scala`: whole packages (`scala`, `scala.runtime`, `scala.util`, `scala.collection.immutable`, `scala.math`, `java.time`, `java.util.stream`, ...) plus a list of `java.lang` classes, with a short member-level denylist (`Predef.println`, `Class.forName`, `UUID.randomUUID`, the `scala.runtime.*Ref` boxes, ...).
+The standard library allowlist is hand-maintained in [`compiler/src/dotty/tools/dotc/cc/SafeRefs.scala`](https://github.com/retronym/scala3/blob/main/compiler/src/dotty/tools/dotc/cc/SafeRefs.scala): whole packages (`scala`, `scala.runtime`, `scala.util`, `scala.collection.immutable`, `scala.math`, `java.time`, `java.util.stream`, ...) plus a list of `java.lang` classes, with a short member-level denylist (`Predef.println`, `Class.forName`, `UUID.randomUUID`, the `scala.runtime.*Ref` boxes, ...).
 
 Trusted library code is written in ordinary Scala, annotated `@assumeSafe`, and is expected to do its own runtime checks (path roots, host allowlists, command allowlists). Exceptions are explicitly not tracked; the harness wraps execution in `Try`.
 
@@ -75,33 +75,33 @@ None of this is a capture-checking bug. It is the allowlist: whole-package `@ass
 
 ## Findings index
 
-Every individual finding, where the evidence is, and its status as of 2026-10-21. Fixes are in retronym/scala3#65.
+Every individual finding, where the evidence is, and its status as of 2026-10-21. Fixes are in [retronym/scala3#65](https://github.com/retronym/scala3/pull/65).
 
 | # | Finding | Evidence | Status |
 |---|---|---|---|
-| 1 | `scala.util.Properties.envOrNone`/`propOrNone` and the host-path accessors read the environment from safe code | `probes/Probe.scala` on 3.10.0 | fixed, 68dd58a7e3 (rejected in `SafeRefs`) |
-| 2 | `scala.runtime.LazyVals.getOffset`/`CAS`/`setFlag` expose `sun.misc.Unsafe` to safe code | `probes/Probe.scala` (`getOffset` returned 12) | fixed, 68dd58a7e3 |
-| 3 | `scala.runtime.coverage.Invoker.invoked(id, dir)` appends to a file in any directory, from a function typed `->` | `probes/Probe.scala`, bytes of a `Classified` recovered from `/tmp/safeprobe-leak` | fixed, 68dd58a7e3 |
-| 4 | `Throwable.printStackTrace` writes to stderr from a function typed `->`; `setStackTrace` mutates | `probes/Probe.scala` | fixed, 68dd58a7e3 |
-| 5 | `Invoker` had been allowlisted in a997f9ddc3 although coverage instrumentation runs after the safe-reference check, so safe code never needs it | git history | fixed, 68dd58a7e3 |
+| 1 | `scala.util.Properties.envOrNone`/`propOrNone` and the host-path accessors read the environment from safe code | [`probes/Probe.scala`](probes/Probe.scala) on 3.10.0 | fixed, [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) (rejected in `SafeRefs`) |
+| 2 | `scala.runtime.LazyVals.getOffset`/`CAS`/`setFlag` expose `sun.misc.Unsafe` to safe code | [`probes/Probe.scala`](probes/Probe.scala) (`getOffset` returned 12) | fixed, [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) |
+| 3 | `scala.runtime.coverage.Invoker.invoked(id, dir)` appends to a file in any directory, from a function typed `->` | [`probes/Probe.scala`](probes/Probe.scala), bytes of a `Classified` recovered from `/tmp/safeprobe-leak` | fixed, [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) |
+| 4 | `Throwable.printStackTrace` writes to stderr from a function typed `->`; `setStackTrace` mutates | [`probes/Probe.scala`](probes/Probe.scala) | fixed, [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) |
+| 5 | `Invoker` had been allowlisted in [a997f9ddc3](https://github.com/retronym/scala3/commit/a997f9ddc3) although coverage instrumentation runs after the safe-reference check, so safe code never needs it | git history | fixed, [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3) |
 | 6 | TACIT's regex `CodeValidator` matches none of 1 to 4 | `lampepfl/tacit` `src/main/scala/executor/CodeValidator.scala` | reported here only |
-| 7 | `mutable.StringBuilder` (via the `scala` package object alias) is not capture-checked, so `append` is pure; leaks a `Classified` | `probes/t/D1_stringbuilder` | open; needs D1 in `plan.md` |
-| 8 | Java objects (`java.util.stream.Stream.builder`) are untracked mutable cells | `probes/t/D2_javamutable` | open; needs D1 |
-| 9 | `scala.util.Random.setSeed` inside a pure function leaks 32 bits per call through the global object | `probes/t/I_random` | partly fixed: `object Random` now declares `uses caps.any` (771b4515f9), so it is a tracked capability; the Java-allocation purity behind it is still open (D1) |
-| 10 | `throw` inside a pure function carries the payload out; VM exceptions carry agent-controlled payload too (`parseInt`, index errors); conditional throw is a 1-bit oracle | `probes/t/H_exception` | open; proposal 3 in the addendum |
-| 11 | `java.time.Instant.now()` gives safe code a clock for timing attacks | `probes/t/K_clock` | open; allowlist-level |
+| 7 | `mutable.StringBuilder` (via the `scala` package object alias) is not capture-checked, so `append` is pure; leaks a `Classified` | [`probes/t/D1_stringbuilder`](probes/t/D1_stringbuilder) | open; needs D1 in [`plan.md`](plan.md) |
+| 8 | Java objects (`java.util.stream.Stream.builder`) are untracked mutable cells | [`probes/t/D2_javamutable`](probes/t/D2_javamutable) | open; needs D1 |
+| 9 | `scala.util.Random.setSeed` inside a pure function leaks 32 bits per call through the global object | [`probes/t/I_random`](probes/t/I_random) | partly fixed: `object Random` now declares `uses caps.any` ([771b4515f9](https://github.com/retronym/scala3/commit/771b4515f9)), so it is a tracked capability; the Java-allocation purity behind it is still open (D1) |
+| 10 | `throw` inside a pure function carries the payload out; VM exceptions carry agent-controlled payload too (`parseInt`, index errors); conditional throw is a 1-bit oracle | [`probes/t/H_exception`](probes/t/H_exception) | open; proposal 3 in the addendum |
+| 11 | `java.time.Instant.now()` gives safe code a clock for timing attacks | [`probes/t/K_clock`](probes/t/K_clock) | open; allowlist-level |
 | 12 | Capture checking rejects captured local vars, arrays, class and object vars, `boundary` labels, and type-test laundering | `probes/t/{A,B,C,E,F,J}_*` | no issue |
-| 13 | `class D extends C(new Cap)` and `object O extends C(new Cap)` yield pure instances; `d.r` and `O.r` are tracked references that are never charged, because paths are only marked when their root is tracked and no `new` site refines the parent's parameters | `probes/t/M/N2`, `N7`, `N13`; `probes/inherited-param-captures.scala` on `main` | fixed, 771b4515f9: parent-call captures must be in the class use set, inferred locally, declared with `uses` or `extends Capability` otherwise |
-| 14 | Counting inherited parameter accessors in `capturesImpliedByFields` is sound but breaks 112 library sites that forward a parameter to the parent | `probes/d4-coarse-rule.patch` | rejected approach, documented in `plan.md` |
-| 15 | A fully qualified reference to a static capability (`scala.util.Random.nextLong()`, `test.M.c`, `_root_.test.M.c`) is never charged; only `recheckIdent` marks paths and the root ident is a package | `probes/t/X2/B4.scala` | fixed, 6c57576733 |
-| 16 | `object O8 { val r: Cap }` from another compilation unit is pure in the empty package; in a named package the existing rule (1d4acc1572) demands `extends Capability` | `probes/t/X`, `probes/t/P/pkg.scala` | no change; the empty package is exempt from explicit-declaration checks by design, and safe mode removes the exemption |
-| 17 | The pickler runs before the capture checker, so inferred capture sets never cross units; anything cross-unit must come from declared types and annotations | `Compiler.scala` phase order | design constraint, recorded in `plan.md` |
+| 13 | `class D extends C(new Cap)` and `object O extends C(new Cap)` yield pure instances; `d.r` and `O.r` are tracked references that are never charged, because paths are only marked when their root is tracked and no `new` site refines the parent's parameters | `probes/t/M/N2`, `N7`, `N13`; [`probes/inherited-param-captures.scala`](probes/inherited-param-captures.scala) on `main` | fixed, [771b4515f9](https://github.com/retronym/scala3/commit/771b4515f9): parent-call captures must be in the class use set, inferred locally, declared with `uses` or `extends Capability` otherwise |
+| 14 | Counting inherited parameter accessors in `capturesImpliedByFields` is sound but breaks 112 library sites that forward a parameter to the parent | [`probes/d4-coarse-rule.patch`](probes/d4-coarse-rule.patch) | rejected approach, documented in [`plan.md`](plan.md) |
+| 15 | A fully qualified reference to a static capability (`scala.util.Random.nextLong()`, `test.M.c`, `_root_.test.M.c`) is never charged; only `recheckIdent` marks paths and the root ident is a package | [`probes/t/X2/B4.scala`](probes/t/X2/B4.scala) | fixed, [6c57576733](https://github.com/retronym/scala3/commit/6c57576733) |
+| 16 | `object O8 { val r: Cap }` from another compilation unit is pure in the empty package; in a named package the existing rule ([1d4acc1572](https://github.com/retronym/scala3/commit/1d4acc1572)) demands `extends Capability` | [`probes/t/X`](probes/t/X), [`probes/t/P/pkg.scala`](probes/t/P/pkg.scala) | no change; the empty package is exempt from explicit-declaration checks by design, and safe mode removes the exemption |
+| 17 | The pickler runs before the capture checker, so inferred capture sets never cross units; anything cross-unit must come from declared types and annotations | `Compiler.scala` phase order | design constraint, recorded in [`plan.md`](plan.md) |
 | 18 | The incremental nonbootstrapped library build fails with a bogus cyclic reference on any edit to `Random.scala`; a clean build is fine | reproduced with a comment-only change | build quirk, not pursued |
 | 19 | The docs say safe mode is nightly-only; it compiles on stable 3.10.0 with no `-experimental` flag | 3.10.0 | documentation is stale |
 
 ## Addendum: the type-system restrictions themselves
 
-Follow-up to the allowlist findings (fixed in 68dd58a7e3). Question: setting the allowlist aside, where does safe mode's *type-level* story leak, and how could it be strengthened? Probes are in `probes/t/*`, one directory each, run on 3.10.0 with a `Classified[T]` whose `map` takes `T -> U`.
+Follow-up to the allowlist findings (fixed in [68dd58a7e3](https://github.com/retronym/scala3/commit/68dd58a7e3)). Question: setting the allowlist aside, where does safe mode's *type-level* story leak, and how could it be strengthened? Probes are in `probes/t/*`, one directory each, run on 3.10.0 with a `Classified[T]` whose `map` takes `T -> U`.
 
 ### What capture checking gets right
 
@@ -124,7 +124,7 @@ So the core calculus does its job for state and control that is *expressed in ca
 | `val sb = new StringBuilder; secret.map(s => { sb.append(s); s })` | leaks | `mutable.StringBuilder` is not capture-checked, so `append` is pure by fiat; alias reachable through the `scala` package object |
 | `val b = java.util.stream.Stream.builder[String](); secret.map(s => { b.add(s); s })` | leaks | Java objects are untracked; `java.util.stream` is allowlisted wholesale |
 | `secret.map(s => { scala.util.Random.setSeed(s.hashCode); s }); Random.nextLong()` | leaks 32 bits | two gaps compound: `new java.util.Random()` is a Java allocation and therefore pure, so the `^` bound on `class Random(val self: java.util.Random^)` is met by a pure value; and even with a real capability, a top-level `object O extends C(cap)` does not count parent constructor arguments in its capture set (probe `t/M/N2`), so the static is pure |
-| `secret.map(s => throw new RuntimeException(s))` | leaks via message | `throw` needs no capability in safe mode (18ea9d309f "Allow throw in safe mode") |
+| `secret.map(s => throw new RuntimeException(s))` | leaks via message | `throw` needs no capability in safe mode ([18ea9d309f](https://github.com/retronym/scala3/commit/18ea9d309f) "Allow throw in safe mode") |
 | `java.time.Instant.now()` around a `map` that spins on the secret | timing channel with an in-language clock | static Java method, pure by fiat |
 
 Exceptions deserve a sharper statement than the docs give. The docs justify untracked exceptions by pointing at VM-generated ones (division by zero, stack overflow) and say the harness wraps in `Try`. But VM exceptions carry agent-controlled payload too: `Integer.parseInt(secret)` puts the secret in the `NumberFormatException` message, `arr(secret.length)` puts a number in the `ArrayIndexOutOfBoundsException`. And conditional throw or non-termination inside a pure callback is a 1-bit oracle per call regardless. "Capabilities are barred from exception fields" protects capabilities, not data.
