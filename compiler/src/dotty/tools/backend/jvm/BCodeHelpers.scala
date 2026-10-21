@@ -361,7 +361,7 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
         linkedClass.info.allMembers.collect { case d if d.name.isTermName => d.name }.toSet
       report.debuglog(s"Potentially conflicting names for forwarders: $conflictingNames")
 
-      for (m0 <- sortedMembersBasedOnFlags(moduleClass.info, required = Method, excluded = ExcludedForwarder)) {
+      for (m0 <- sortedMembersBasedOnFlags(moduleClass.asClass, required = Method, excluded = ExcludedForwarder)) {
         val m = if (m0.isOneOf(Bridge | MixedIn)) m0.nextOverriddenSymbol else m0
         if (m == NoSymbol)
           report.log(s"$m0 is a bridge method that overrides nothing, something went wrong in a previous phase.")
@@ -387,13 +387,47 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
     /** The members of this type that have all of `required` flags but none of `excluded` flags set.
      *  The members are sorted by name and signature to guarantee a stable ordering.
      */
-    private def sortedMembersBasedOnFlags(tp: Type, required: Flag, excluded: FlagSet)(using Context): List[Symbol] = {
+    private def sortedMembersBasedOnFlags(cls: ClassSymbol, required: Flag, excluded: FlagSet)(using Context): List[Symbol] = {
+      val tp = cls.info
       // The output of `memberNames` is a Set, sort it to guarantee a stable ordering.
       val names = tp.memberNames(takeAllFilter).toSeq.sorted
+      // Most names skip the lookup, which is most of the cost for an object that mixes in many members:
+      //  - a name with a sole declaration among the base classes can only name that declaration (`soleTermDecls`);
+      //  - a name declared once here, by a declaration that matches every other one with that name in the
+      //    base classes, names that declaration if it is visible: `membersNamed` drops inherited denotations
+      //    matched by the class's own (`filterDisjoint`), and after erasure, seeing them from the class does not
+      //    change their signatures. This is the common case of a mixin forwarder and the method it forwards to.
+      //    An own declaration that `excluded` filters out doesn't hide the inherited ones, so those are looked up.
+      assert(ctx.erasedTypes)
+      val sole = cls.classDenot.soleTermDecls
+      val shadowing = dotty.tools.dotc.util.EqHashMap[Name, Symbol]()
+      if !cls.isJavaStaticsClass then
+        for decl <- cls.info.decls do
+          if decl.isTerm && !decl.isConstructor then
+            shadowing(decl.name) = if shadowing.lookup(decl.name) == null then decl else NoSymbol
+        for bc <- cls.baseClasses.tail; other <- bc.info.decls do
+          shadowing.lookup(other.name) match
+            case decl: Symbol if decl.exists && !decl.denot.matches(other.denot) => shadowing(other.name) = NoSymbol
+            case _ =>
+      def visible(decl: Symbol) =
+        decl.isAllOf(required) && !decl.isOneOf(excluded) && (decl.owner == cls || !decl.is(Private))
+      def lookup(name: Name) =
+        tp.memberBasedOnFlags(name, required, excluded)
+          .alternatives.sortBy(_.signature)(using Signature.lexicographicOrdering).map(_.symbol)
+      def known(decl: Symbol | Null) = decl != null && decl.exists
       val buffer = mutable.ListBuffer[Symbol]()
       names.foreach { name =>
-        buffer ++= tp.memberBasedOnFlags(name, required, excluded)
-          .alternatives.sortBy(_.signature)(using Signature.lexicographicOrdering).map(_.symbol)
+        val soleDecl = sole.lookup(name)
+        val ownDecl = shadowing.lookup(name)
+        val mbrs =
+          if known(soleDecl) then if visible(soleDecl.nn) then soleDecl.nn :: Nil else Nil
+          else if known(ownDecl) && visible(ownDecl.nn) then ownDecl.nn :: Nil
+          else null
+        if mbrs == null then buffer ++= lookup(name)
+        else
+          if dotty.tools.dotc.config.Config.checkSoleTermDecls then
+            assert(lookup(name) == mbrs, i"declaration of $name in $cls: $mbrs, but member ${lookup(name)}")
+          buffer ++= mbrs
       }
       buffer.toList
     }

@@ -2076,6 +2076,27 @@ object SymDenotations {
       case self: Symbol => self.info
     }
 
+    /** For each term name declared in a base class of this class: its declaration if it is the only one
+     *  with that name among the base classes, otherwise `NoSymbol`.
+     *
+     *  `membersNamed` collects the declarations of the base classes, at most once per symbol, and only
+     *  `toDenot` merges them. So the members of `appliedRef` named by a sole declaration are that
+     *  declaration, if it is visible: if it is not private or is declared here, and if it passes the
+     *  flags of a `memberBasedOnFlags`. That holds for `thisType` as well when there is no given self type.
+     *  This lets callers that look up every member name skip `membersNamed` for most of them. Constructors
+     *  are not inherited, so they are left out, and Java statics classes also inherit the statics of their
+     *  companion's parents, so for those the map is empty.
+     *
+     *  Not cached: the declarations of base classes change between phases.
+     */
+    final def soleTermDecls(using Context): util.EqHashMap[Name, Symbol] =
+      val result = util.EqHashMap[Name, Symbol]()
+      if !isJavaStaticsClass then
+        for bc <- baseClasses; decl <- bc.info.decls do
+          if decl.isTerm && !decl.name.isConstructorName then
+            result(decl.name) = if result.lookup(decl.name) == null then decl else NoSymbol
+      result
+
    // ------ class-specific operations -----------------------------------
 
     private var myThisType: Type | Null = null

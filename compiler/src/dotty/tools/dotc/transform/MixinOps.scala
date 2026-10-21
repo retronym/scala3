@@ -9,6 +9,7 @@ import util.chaining.*
 
 import StdNames.*, NameOps.*
 import typer.Nullables
+import config.Config
 
 class MixinOps(cls: ClassSymbol, thisPhase: DenotTransformer)(using Context) {
   import ast.tpd.*
@@ -52,8 +53,16 @@ class MixinOps(cls: ClassSymbol, thisPhase: DenotTransformer)(using Context) {
    */
   def isInImplementingClass(sym: Symbol): Boolean =
     atPhase(thisPhase) {
-      cls.info.nonPrivateMember(sym.name).hasAltWith(_.symbol == sym)
+      def lookup = cls.info.nonPrivateMember(sym.name).hasAltWith(_.symbol == sym)
+      // A sole declaration among the base classes is the only member with its name, which saves the lookup.
+      if soleTermDecls.lookup(sym.name) eq sym then
+        val isMember = !sym.is(Private)
+        if Config.checkSoleTermDecls then assert(lookup == isMember, i"sole declaration $sym of $cls")
+        isMember
+      else lookup
     }
+
+  private lazy val soleTermDecls = atPhase(thisPhase)(cls.classDenot.soleTermDecls)
 
   /**
    * `meth` needs a forwarder in class `cls` if
