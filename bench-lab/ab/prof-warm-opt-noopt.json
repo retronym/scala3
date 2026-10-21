@@ -2,6 +2,7 @@
   "name": "prof-warm-opt-noopt",
   "trees": {
     "opt": ".",
+    "localopt": "../compiler-perf-testing-plan-14aa8c-localopt",
     "noopt": "../compiler-perf-testing-plan-14aa8c-noopt"
   },
   "benchmark": "CompileBenchmark",
@@ -29,10 +30,12 @@
   ],
   "variantDescriptions": {
     "opt": "The default build: `scala3-compiler-bootstrapped` with `-opt -opt-inline:dotty.**`, the library with `-opt -opt-inline:**,!java.**`.",
-    "noopt": "`Global / Build.optimize := false` (`noopt.sbt`; same setting as `SCALA3_BUILD_OPTIMIZE=false`): no optimizer flags for the compiler or the library."
+    "noopt": "`Global / Build.optimize := false` (`noopt.sbt`; same setting as `SCALA3_BUILD_OPTIMIZE=false`): no optimizer flags for the compiler or the library.",
+    "localopt": "`localopt.sbt`: no optimizer flags (`Global / Build.optimize := false`), then `-opt` (local optimizations, no `-opt-inline`) for the compiler and the library, `-opt:local` for `scala2-library`."
   },
   "variants": {
     "opt": "",
+    "localopt": "",
     "noopt": ""
   }
 }
