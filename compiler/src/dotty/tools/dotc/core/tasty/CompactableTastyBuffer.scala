@@ -5,14 +5,13 @@ package tasty
 
 import dotty.tools.tasty.util.Util.dble
 import dotty.tools.tasty.TastyBuffer
-import TastyBuffer.{Addr, NoAddr, AddrWidth}
+import TastyBuffer.{Addr, AddrWidth}
 
 import util.Util.bestFit
 import config.Printers.pickling
-import ast.untpd.Tree
 import java.util.Arrays
 
-class TreeBuffer extends TastyBuffer(50000) {
+class CompactableTastyBuffer extends TastyBuffer(50000) {
 
   private inline val ItemsOverOffsets = 2
   private val initialOffsetSize = bytes.length / (AddrWidth * ItemsOverOffsets)
@@ -20,20 +19,14 @@ class TreeBuffer extends TastyBuffer(50000) {
   private var isRelative = new Array[Boolean](initialOffsetSize)
   private var numOffsets = 0
 
-  /** A map from trees to the address at which a tree is pickled. */
-  private val treeAddrs = util.IntMap[Tree](initialCapacity = 8192)
+  // For each reference, the index of the last offset before its target, recorded when the target is known, so
+  // that `compactify` finds the target's delta without a search. It cannot live in `ScratchData` with the other
+  // arrays of `compactify`: with parallel pickling, one buffer is compacted while the next one is being filled.
+  private var targetIdx = new Array[Int](initialOffsetSize)
 
-  def registerTreeAddr(tree: Tree): Addr =
-    val idx = treeAddrs(tree)
-    if idx < 0 then
-      treeAddrs(tree) = currentAddr.index
-      currentAddr
-    else
-      Addr(idx)
-
-  def addrOfTree(tree: Tree): Addr =
-    val idx = treeAddrs(tree)
-    if idx < 0 then NoAddr else Addr(idx)
+  // The indices of the length fields reserved but not yet filled. Lengths nest, so they are filled in LIFO order.
+  private var openLengths = new Array[Int](64)
+  private var numOpenLengths = 0
 
   private def offset(i: Int): Addr = Addr(offsets(i))
 
@@ -41,6 +34,7 @@ class TreeBuffer extends TastyBuffer(50000) {
     if (numOffsets == offsets.length) {
       offsets = dble(offsets)
       isRelative = dble(isRelative)
+      targetIdx = dble(targetIdx)
     }
     offsets(numOffsets) = length
     isRelative(numOffsets) = relative
@@ -51,30 +45,67 @@ class TreeBuffer extends TastyBuffer(50000) {
   def reserveRef(relative: Boolean): Addr = {
     val addr = currentAddr
     keepOffset(relative)
+    if relative then
+      if numOpenLengths == openLengths.length then openLengths = dble(openLengths)
+      openLengths(numOpenLengths) = numOffsets - 1
+      numOpenLengths += 1
     reserveAddr()
     addr
   }
 
-  /** Write reference right adjusted into freshly reserved field. */
+  /** Write a reference to `target`, which lies before the current address, right adjusted into a freshly
+   *  reserved field.
+   */
   def writeRef(target: Addr): Unit = {
+    assert(target.index <= length, s"forward reference to $target")
     keepOffset(relative = false)
+    // the target is usually something recent: search back from the latest offset
+    targetIdx(numOffsets - 1) = offsetIndexBefore(target, hint = numOffsets - 1)
     fillAddr(reserveAddr(), target)
   }
 
-  /** Fill previously reserved field with a reference */
-  def fillRef(at: Addr, target: Addr, relative: Boolean): Unit = {
-    val addr = if (relative) target.relativeTo(at) else target
-    fillAddr(at, addr)
+  /** Drop everything written from `addr` on. The addresses handed out since must not be used again: no
+   *  field reserved before may have been filled in the dropped range. A length field reserved there and
+   *  still open, by an exception while writing its contents, is dropped with it.
+   */
+  def truncate(addr: Addr): Unit =
+    length = addr.index
+    while numOffsets > 0 && offsets(numOffsets - 1) >= length do numOffsets -= 1
+    while numOpenLengths > 0 && openLengths(numOpenLengths - 1) >= numOffsets do numOpenLengths -= 1
+
+  /** Fill the field reserved at `at` with a reference to the current address. Length fields are filled
+   *  innermost first.
+   */
+  def fillRef(at: Addr, relative: Boolean): Unit = {
+    val i =
+      if relative then
+        numOpenLengths -= 1
+        openLengths(numOpenLengths)
+      else offsetIndexBefore(at + 1) // the field at `at`
+    assert(offsets(i) == at.index, s"reference at $at is not offset #$i")
+    // Every offset kept so far lies before `currentAddr`, so the last of them is the one before it
+    targetIdx(i) = numOffsets - 1
+    fillAddr(at, if relative then currentAddr.relativeTo(at) else currentAddr)
   }
 
-  /** The amount by which the bytes at the given address are shifted under compression */
-  def deltaAt(at: Addr, scratch: ScratchData): Int = {
-    val idx = bestFit(offsets, numOffsets, at.index - 1)
-    if (idx < 0) 0 else scratch.delta(idx)
-  }
+  /** The index of the last offset before the given address, or -1 if there is none.
+   *  @param hint  an index at or near the result, see `bestFit`
+   */
+  private def offsetIndexBefore(at: Addr, hint: Int = -1): Int =
+    bestFit(offsets, numOffsets, at.index - 1, hint)
+
+  private def deltaOf(idx: Int, scratch: ScratchData): Int =
+    if idx < 0 then 0 else scratch.delta(idx)
+
+  // The offset found by the last `adjusted`, to start the next search from. Addresses are mostly adjusted in
+  // ascending order (the pickler's tree addresses), where the next one is near it; otherwise (its symbol
+  // addresses, in hash order) the gallop costs about as much as a binary search.
+  private var lastAdjusted = -1
 
   /** The address to which `x` is translated under compression */
-  def adjusted(x: Addr, scratch: ScratchData): Addr = x - deltaAt(x, scratch)
+  def adjusted(x: Addr, scratch: ScratchData): Addr =
+    lastAdjusted = offsetIndexBefore(x, hint = lastAdjusted)
+    x - deltaOf(lastAdjusted, scratch)
 
   /** Final assembly, involving the following steps:
    *   - compute deltas
@@ -111,15 +142,11 @@ class TreeBuffer extends TastyBuffer(50000) {
     def adjustedOffset(i: Int): Addr = {
       val at = offset(i)
       val original = getAddr(at)
-      if (isRelative(i)) {
-        val start = skipNat(at)
-        val len1 = original + scratch.delta(i) - deltaAt(original + start.index, scratch)
-        val len2 = adjusted(original + start.index, scratch) - adjusted(start, scratch).index
-        assert(len1 == len2,
-            s"adjusting offset #$i: $at, original = $original, len1 = $len1, len2 = $len2")
-        len1
-      }
-      else adjusted(original, scratch)
+      val targetDelta = deltaOf(targetIdx(i), scratch)
+      // A relative reference is a length from the end of its field, which lies between offsets(i) and
+      // offsets(i + 1) and so moves by delta(i)
+      if isRelative(i) then original + scratch.delta(i) - targetDelta
+      else original - targetDelta
     }
 
     /** Adjust all offsets according to previously computed deltas */
@@ -175,12 +202,6 @@ class TreeBuffer extends TastyBuffer(50000) {
       wasted
     }
 
-    def adjustTreeAddrs(): Unit =
-      var i = 0
-      while i < treeAddrs.size do
-        treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
-        i += 1
-
     val origLength = length
     computeDeltas()
     //println(s"offsets: ${offsets.take(numOffsets).deep}")
@@ -192,8 +213,13 @@ class TreeBuffer extends TastyBuffer(50000) {
       saved > 0 && length / saved < 100
     do ()
     adjustOffsets()
-    adjustTreeAddrs()
     val wasted = compress()
     pickling.println(s"original length: $origLength, compressed to: $length, wasted: $wasted") // DEBUG, for now.
   end compactify
+
+  /** The references, as `address[L] -> target slot`, `L` for a length field; the open length fields by slot */
+  override def toString: String =
+    val refs = (0 until numOffsets).map(i => s"${offsets(i)}${if isRelative(i) then "L" else ""} -> ${targetIdx(i)}")
+    val open = (0 until numOpenLengths).map(openLengths)
+    s"CompactableTastyBuffer(length = $length, refs = ${refs.mkString("[", ", ", "]")}, open lengths = ${open.mkString("[", ", ", "]")})"
 }
