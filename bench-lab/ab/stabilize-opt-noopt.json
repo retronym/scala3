@@ -1,0 +1,34 @@
+{
+  "name": "stabilize-opt-noopt",
+  "trees": {
+    "opt": ".",
+    "noopt": "../compiler-perf-testing-plan-14aa8c-noopt"
+  },
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "async": "cycles@10000000+instructions@10000000",
+    "kperf": "/tmp/asprof-kperf.sock",
+    "lib": "/Users/jzaugg-virtus/code/.worktrees/async-profiler/integration-kperf-flamegraph/build/lib/libasyncProfiler.dylib"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M -XX:+AlwaysPreTouch",
+  "rounds": 3,
+  "corpora": {
+    "re2s": "-wi 0 -i 180 -r 1 -f 1"
+  },
+  "loadgate": {
+    "maxCores": 2.0,
+    "quietSecs": 30
+  },
+  "description": [
+    "Does the `-opt` build take longer to reach a JIT steady state? re2s with no warmup, every 1 s iteration measured, so jfrsync records every compilation from the start: ms/op over time and cumulative C2 compiles and compile time over time, 3 forks per build."
+  ],
+  "variantDescriptions": {
+    "opt": "The default build: `scala3-compiler-bootstrapped` with `-opt -opt-inline:dotty.**`, the library with `-opt -opt-inline:**,!java.**`.",
+    "noopt": "`Global / Build.optimize := false` (`noopt.sbt`; same setting as `SCALA3_BUILD_OPTIMIZE=false`): no optimizer flags for the compiler or the library."
+  },
+  "variants": {
+    "opt": "",
+    "noopt": ""
+  }
+}

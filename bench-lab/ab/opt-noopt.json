@@ -1,0 +1,32 @@
+{
+  "name": "opt-noopt",
+  "trees": {
+    "opt": ".",
+    "noopt": "../compiler-perf-testing-plan-14aa8c-noopt"
+  },
+  "benchmark": "CompileBenchmark",
+  "jvm": "/Users/jzaugg-virtus/code/.worktrees/jdk/jdk26-integration-branch-e9e67e/build/release/images/jdk/bin/java",
+  "profile": {
+    "xctrace": "ipc"
+  },
+  "jvmArgs": "-Xms4G -Xmx4G -Xss2M -XX:+AlwaysPreTouch",
+  "rounds": 2,
+  "corpora": {
+    "re2s": "-wi 10 -i 5 -w 5 -r 5",
+    "scalaz": "-wi 10 -i 5 -w 5 -r 5"
+  },
+  "loadgate": {
+    "maxCores": 2.0,
+    "quietSecs": 30
+  },
+  "gcLog": true,
+  "description": [
+    "Is dotc faster when the compiler and library are built with Scala 2's optimizer (`-opt -opt-inline`), on today's C2? Same commit (`0c8314024c`) built twice; the build toggle is [retronym/scala3#12](https://github.com/retronym/scala3/pull/12). Plan: `bench-lab/doc/opt-noopt.md`.",
+    "",
+    "- Smoke run (loaded machine): noopt +18% instructions/op but fewer ms/op, IPC 2.39 vs 2.28."
+  ],
+  "variantDescriptions": {
+    "opt": "The default build: `scala3-compiler-bootstrapped` with `-opt -opt-inline:dotty.**`, the library with `-opt -opt-inline:**,!java.**`.",
+    "noopt": "`Global / Build.optimize := false` (`noopt.sbt`; same setting as `SCALA3_BUILD_OPTIMIZE=false`): no optimizer flags for the compiler or the library."
+  }
+}
