@@ -14,7 +14,7 @@
   "jvmArgs": "-Xms4G -Xmx4G -Xss2M -XX:+AlwaysPreTouch",
   "rounds": 1,
   "corpora": {
-    "scalaz": "-wi 12 -w 5 -i 12 -r 5"
+    "re2s": "-wi 12 -w 5 -i 12 -r 5"
   },
   "loadgate": {
     "maxCores": 2.0,
@@ -28,5 +28,9 @@
   "variantDescriptions": {
     "opt": "The default build: `scala3-compiler-bootstrapped` with `-opt -opt-inline:dotty.**`, the library with `-opt -opt-inline:**,!java.**`.",
     "noopt": "`Global / Build.optimize := false` (`noopt.sbt`; same setting as `SCALA3_BUILD_OPTIMIZE=false`): no optimizer flags for the compiler or the library."
+  },
+  "variants": {
+    "opt": "",
+    "noopt": ""
   }
 }
