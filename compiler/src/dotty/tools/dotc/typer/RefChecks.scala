@@ -918,10 +918,28 @@ object RefChecks {
           }
         addDecls(clazz)
 
+        // Only a merge of several members (a `JointRefDenotation`) can fail the check below, and `member` merges
+        // only denotations of distinct symbols. Without a given self type, those symbols are declarations of the
+        // base classes of `clazz`, so a name declared once among them can't need the check, and we skip its lookup.
+        val namesToCheck =
+          if !clazz.is(Module) && clazz.givenSelfType.exists then membersToCheck
+          else
+            val declaredOnce = new mutable.HashSet[Name](membersToCheck.size * 2, mutable.HashSet.defaultLoadFactor)
+            val declaredTwice = new mutable.HashSet[Name](256, mutable.HashSet.defaultLoadFactor)
+            for bc <- clazz.baseClasses; decl <- bc.info.decls do
+              if decl.isTerm && membersToCheck.contains(decl.name) && !declaredOnce.add(decl.name) then
+                declaredTwice += decl.name
+            if config.Config.checkSkippedMemberTypes then
+              for name <- membersToCheck do
+                if !declaredTwice.contains(name) then
+                  for mbrd <- self.member(name).alternatives do
+                    assert(!mbrd.isInstanceOf[JointRefDenotation], i"skipped joint member $mbrd of $clazz")
+            declaredTwice
+
         // For each member, check that the type of its symbol, as seen from `self`
         // can override the info of this member
         withMode(Mode.IgnoreCaptures) {
-          for (name <- membersToCheck)
+          for (name <- namesToCheck)
             for (mbrd <- self.member(name).alternatives) {
               val mbr = mbrd.symbol
               mbrd match
