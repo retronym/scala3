@@ -3798,6 +3798,14 @@ object Types extends TypeUtils {
     }
   }
 
+  private[core] final class InstantiateMemo(args: List[Type], val result: Type) {
+    def sameArgs(others: List[Type]): Boolean =
+      var xs = args
+      var ys = others
+      while xs.nonEmpty && ys.nonEmpty && (xs.head eq ys.head) do { xs = xs.tail; ys = ys.tail }
+      xs.isEmpty && ys.isEmpty
+  }
+
   /** The lambda type square:
    *
    *    LambdaType   |   TermLambda      |   TypeLambda
@@ -3844,8 +3852,23 @@ object Types extends TypeUtils {
 
     /** Like `resultType` but substitute parameter references with the given arguments */
     final def instantiate(argTypes: => List[Type])(using Context): Type =
-      if (isResultDependent) resultType.substParams(this, argTypes)
+      if isResultDependent then
+        if ctx.isAfterTyper then
+          val args = argTypes
+          val memo = myInstantiated
+          if memo != null && memo.sameArgs(args) then memo.result
+          else
+            val result = resultType.substParams(this, args)
+            myInstantiated = InstantiateMemo(args, result)
+            result
+        else resultType.substParams(this, argTypes)
       else resultType
+
+    // The last instantiation after typer, reused when the next one has the same (`eq`) argument types. The tree
+    // copiers re-type every `TypeApply` in every MegaPhase group with the same polytype and argument types; without
+    // this, each one builds a fresh method type. Not in typer, where an instantiation also depends on the typer
+    // state of the type variables in it. One object, so that a racing reader never pairs arguments with another result.
+    private var myInstantiated: InstantiateMemo | Null = null
 
     def companion: LambdaTypeCompanion[ThisName, PInfo, This]
 
