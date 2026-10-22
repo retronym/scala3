@@ -193,8 +193,12 @@ class InteractiveDriver(
     if !logRequests then body
     else
       val t0 = System.nanoTime()
+      // the presentation-compiler provider that made the request, for the log
+      val by = Thread.currentThread.getStackTrace.iterator.map(_.getClassName.nn)
+        .find(c => c.startsWith("dotty.tools.pc.") && !c.contains("CachingDriver") && !c.contains("CompilerAccess") && !c.contains("CompilerWrapper"))
+        .map(c => " by " + c.stripPrefix("dotty.tools.pc.").takeWhile(_ != '$')).getOrElse("")
       try body
-      finally System.err.println(f"[dotc-session] $what ${outcome} ${(System.nanoTime() - t0) / 1e6}%.1f ms")
+      finally System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms")
 
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     val before = mySession
