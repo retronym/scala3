@@ -5,7 +5,7 @@
 
 package dotty.tools.io
 
-import java.io.{FilterInputStream, IOException, InputStream, OutputStream}
+import java.io.{ByteArrayInputStream, Closeable, IOException, InputStream, OutputStream}
 import java.nio.file.Files
 import java.util.zip.{ZipEntry, ZipFile}
 import java.util.jar.JarFile
@@ -41,7 +41,7 @@ private[io] object ZipArchive {
 }
 import ZipArchive.*
 /** ''Note:  This library is considered experimental and should not be used unless you know what you are doing.'' */
-private[io] abstract class ZipArchive(override val jpath: JPath) extends AbstractFile with Equals {
+private[io] abstract class ZipArchive(override val jpath: JPath) extends AbstractFile with Equals with Closeable {
   self =>
 
   override def isDirectory: Boolean = true
@@ -104,71 +104,57 @@ private[io] final class FileZipArchive(jpath: JPath, release: String) extends Zi
     case ioe: IOException => throw new IOException("Error accessing " + file.nn.getPath, ioe)
   }
 
-  private class LazyEntry(
-    name: String,
+  // The `ZipFile` that entries are read from. It is opened on demand and kept open between reads (unless
+  // `scala.classpath.closeZip` is set). `close()` may be called at any time, even while another compiler
+  // shares this archive through the classpath cache: a later read reopens it.
+  private var zipFile: ZipFile | Null = null
+
+  private def withZipFile[T](op: ZipFile => T): T = synchronized {
+    val zf = zipFile match
+      case null =>
+        val zf = openZipFile()
+        zipFile = zf
+        zf
+      case zf: ZipFile => zf
+    try op(zf)
+    finally if ZipArchive.closeZipFile then close()
+  }
+
+  private class FileEntry(
+    entryName: String,
     time: Long,
-    size: Int,
     parent: DirEntry
-  ) extends Entry(name, parent) {
+  ) extends Entry(entryName, parent) {
     override def lastModified: Long = time // could be stale
-    override def input: InputStream = {
-      val zipFile  = openZipFile()
-      val entry = zipFile.getEntry(name) // with `-release`, returns the correct version under META-INF/versions
-      val `delegate` = zipFile.getInputStream(entry)
-      new FilterInputStream(`delegate`) {
-        override def close(): Unit = { zipFile.close() }
-      }
+    // Reads the whole entry while holding the `ZipFile`, so that `close()` can't close it under the returned stream.
+    override def input: InputStream = withZipFile { zipFile =>
+      val entry = zipFile.getEntry(entryName) // with `-release`, returns the correct version under META-INF/versions
+      if entry == null then throw new IOException(s"$entryName not found in ${FileZipArchive.this.path}")
+      val in = zipFile.getInputStream(entry)
+      try new ByteArrayInputStream(in.readAllBytes())
+      finally in.close()
     }
   }
 
-  // keeps a file handle open to ZipFile, which forbids file mutation
-  // on Windows, and leaks memory on all OS (typically by stopping
-  // classloaders from being garbage collected). But is slightly
-  // faster than LazyEntry.
-  private class LeakyEntry(
-    zipFile: ZipFile,
-    zipEntry: ZipEntry,
-    parent: DirEntry
-  ) extends Entry(zipEntry.getName, parent) {
-    override def lastModified: Long = zipEntry.getTime
-    override def input: InputStream = zipFile.getInputStream(zipEntry)
-  }
-
-  private lazy val (root: DirEntry, allDirs: collection.Map[String, DirEntry]) = {
+  private lazy val (root: DirEntry, allDirs: collection.Map[String, DirEntry]) = withZipFile { zipFile =>
     val root = new DirEntry("/", null)
     val dirs = mutable.HashMap[String, DirEntry]("/" -> root)
-    val zipFile = openZipFile()
     val entries = zipFile.entries()
 
-    try {
-      while (entries.hasMoreElements) {
-        val zipEntry = entries.nextElement
-        if (!zipEntry.getName.startsWith("META-INF/versions/")) {
-          val zipEntryVersioned = if (release != "") {
-            // JARFile will return the entry for the corresponding release-dependent version here under META-INF/versions
-            zipFile.getEntry(zipEntry.getName)
-          } else zipEntry
+    while (entries.hasMoreElements) {
+      val zipEntry = entries.nextElement
+      if (!zipEntry.getName.startsWith("META-INF/versions/")) {
+        val zipEntryVersioned = if (release != "") {
+          // JARFile will return the entry for the corresponding release-dependent version here under META-INF/versions
+          zipFile.getEntry(zipEntry.getName)
+        } else zipEntry
 
-          if (!zipEntry.isDirectory) {
-            val dir = getDir(dirs, zipEntry)
-            val f =
-              if (ZipArchive.closeZipFile)
-                new LazyEntry(
-                  zipEntry.getName(),
-                  zipEntry.getTime(),
-                  zipEntry.getSize().toInt,
-                  dir
-                )
-              else
-                new LeakyEntry(zipFile, zipEntryVersioned, dir)
-
-            dir.entries(f.name) = f
-          }
+        if (!zipEntry.isDirectory) {
+          val dir = getDir(dirs, zipEntry)
+          val f = new FileEntry(zipEntry.getName, zipEntryVersioned.getTime, dir)
+          dir.entries(f.name) = f
         }
       }
-    } finally {
-      if (ZipArchive.closeZipFile) zipFile.close()
-      else closeables ::= zipFile
     }
     (root, dirs)
   }
@@ -195,9 +181,11 @@ private[io] final class FileZipArchive(jpath: JPath, release: String) extends Zi
       false
   }
 
-  private var closeables: List[java.io.Closeable] = Nil
-  override def close(): Unit = {
-    closeables.foreach(_.close)
-    closeables = Nil
+  override def close(): Unit = synchronized {
+    zipFile match
+      case null =>
+      case zf: ZipFile =>
+        zipFile = null
+        zf.close()
   }
 }

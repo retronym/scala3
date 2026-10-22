@@ -971,6 +971,27 @@ object Contexts {
       p
     }
 
+    /** Classpath entries created for this context base alone (under `-YdisableFlatCpCaching`), to be closed
+     *  by `closeClassPath`. They can outlive the platform that created them: `initialize` creates a new
+     *  platform, but symbols loaded through the old one still read from them.
+     */
+    private var uncachedClassPaths: List[java.io.Closeable] = Nil
+
+    private[dotc] def registerUncachedClassPath(cp: java.io.Closeable): Unit = synchronized {
+      uncachedClassPaths ::= cp
+    }
+
+    /** Release the file handles held by the classpath. They are reopened if the classpath is read again. */
+    def closeClassPath(): Unit =
+      val p = _platform
+      if p != null then p.close()
+      val cps = synchronized {
+        val cps = uncachedClassPaths
+        uncachedClassPaths = Nil
+        cps
+      }
+      cps.foreach(_.close())
+
     protected def newPlatform(using Context): Platform =
       if (settings.scalajs.value) new SJSPlatform
       else new JavaPlatform

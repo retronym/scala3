@@ -25,8 +25,14 @@ sealed trait ZipAndJarFileLookupFactory {
   def create(zipFile: AbstractFile)(using Context): ClassPath =
     val release = ctx.settings.javaOutputVersion.value
     val jFile = zipFile.file
-    if ctx.settings.YdisableFlatCpCaching.value || jFile == null then
+    if jFile == null then
       createForZipFile(zipFile, jFile, release)
+    else if ctx.settings.YdisableFlatCpCaching.value then
+      val cp = createForZipFile(zipFile, jFile, release)
+      cp match
+        case closeable: java.io.Closeable => ctx.base.registerUncachedClassPath(closeable)
+        case _ =>
+      cp
     else
       cache.getOrCreate(release, jFile.toPath, () => createForZipFile(zipFile, jFile, release))
 
@@ -88,7 +94,12 @@ final class FileBasedCache[K, T] {
     val key = (k, path)
     cache.get(key) match {
       case Some((cachedStamp, cached)) if cachedStamp == stamp => cached
-      case _ =>
+      case previous =>
+        // Close the entry we're replacing: an open `ZipFile` would also hand its stale index to a new one of the
+        // same file key and last modified time. A compiler still using it will reopen it.
+        previous match
+          case Some((_, closeable: AutoCloseable)) => closeable.close()
+          case _ =>
         val value = create()
         cache.put(key, (stamp, value))
         value
@@ -96,8 +107,10 @@ final class FileBasedCache[K, T] {
   }
 
   def clear(): Unit = cache.synchronized {
-    // TODO support closing
-    // cache.valuesIterator.foreach(_.close())
+    cache.valuesIterator.foreach {
+      case (_, closeable: AutoCloseable) => closeable.close()
+      case _ =>
+    }
     cache.clear()
   }
 }

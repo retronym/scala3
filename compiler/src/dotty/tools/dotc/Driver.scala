@@ -59,6 +59,10 @@ class Driver {
         case ex: Exception if !runOrNull.enrichedErrorMessage =>
           println(runOrNull.enrichErrorMessage(s"Exception while compiling ${files.map(_.path).mkString(", ")}"))
           throw ex
+      finally
+        // Don't hold the jars on the classpath open between compilations (or until GC): on Windows, that
+        // prevents them from being overwritten.
+        ctx.base.closeClassPath()
     ctx.reporter
 
   protected def finish(compiler: Compiler, run: Run)(using Context): Unit =

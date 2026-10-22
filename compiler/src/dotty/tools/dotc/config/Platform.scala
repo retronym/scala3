@@ -30,6 +30,9 @@ abstract class Platform {
   /** Add new entry to classpath */
   def addToClassPath(cPath: ClassPath)(using Context): Unit
 
+  /** Release the file handles held by the classpath. They are reopened if the classpath is read again. */
+  def close(): Unit = ()
+
   /** Any platform-specific phases. */
   //def platformPhases: List[SubComponent]
 
