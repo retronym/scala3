@@ -66,6 +66,10 @@ object WrappedSourceFile:
 class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec: Codec) extends interfaces.SourceFile {
   private var myContent: String | Null = null
 
+  // Span taken by the next `Positioned` allocated in this source instead of the envelope of its
+  // children. Set by `TreeCopier` just before it allocates a copy; reset by the `Positioned` constructor.
+  private[dotc] var primedSpan: Span = NoSpan
+
   private var _maybeIncomplete: Boolean = false
 
   def maybeIncomplete: Boolean = _maybeIncomplete
