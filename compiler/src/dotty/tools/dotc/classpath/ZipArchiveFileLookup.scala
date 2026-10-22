@@ -4,7 +4,7 @@
 package dotty.tools.dotc.classpath
 
 
-import java.io.File
+import java.io.{Closeable, File}
 
 import dotty.tools.io.AbstractFile
 import FileUtils.*
@@ -14,7 +14,7 @@ import FileUtils.*
  * It provides common logic for classes handling class and source files.
  * It's aware of things like e.g. META-INF directory which is correctly skipped.
  */
-trait ZipArchiveFileLookup[FileEntryType] extends ClassPath {
+trait ZipArchiveFileLookup[FileEntryType] extends ClassPath, Closeable {
   protected val zipFile: File
   protected val release: String
 
@@ -51,4 +51,9 @@ trait ZipArchiveFileLookup[FileEntryType] extends ClassPath {
 
   override def searchLocations: Iterable[AbstractFile] =
     Iterable(archive)
+
+  /** Closes the underlying jar. It is reopened if it is read from again. */
+  override def close(): Unit = archive match
+    case closeable: Closeable => closeable.close()
+    case _ =>
 }

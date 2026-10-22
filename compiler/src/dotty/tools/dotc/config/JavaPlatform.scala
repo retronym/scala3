@@ -72,6 +72,13 @@ class JavaPlatform(precomputedSourcePackages: Option[LogicalPackage] = None) ext
       currentClassPath = Some(AggregateClassPath(cp :: cPath :: Nil))
   }
 
+  override def close(): Unit =
+    def closeEntries(cp: ClassPath): Unit = cp match
+      case AggregateClassPath(entries) => entries.foreach(closeEntries)
+      case closeable: java.io.Closeable => closeable.close()
+      case _ =>
+    currentClassPath.foreach(closeEntries)
+
   /** Update classpath with a substituted subentry */
   def updateClassPath(subst: Map[ClassPath, ClassPath]): Unit = currentClassPath.get match {
     case AggregateClassPath(entries) =>

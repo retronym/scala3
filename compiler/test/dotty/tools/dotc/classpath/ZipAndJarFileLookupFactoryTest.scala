@@ -4,8 +4,14 @@ import org.junit.Test
 import java.nio.file.*
 import java.nio.file.attribute.FileTime
 
+import dotty.tools.dotc.Main
 import dotty.tools.dotc.core.Contexts.{Context, ContextBase, ctx}
+import dotty.tools.dotc.reporting.Reporter
 import dotty.tools.io.AbstractFile
+import dotty.tools.vulpix.TestConfiguration
+
+import java.io.File
+import scala.jdk.CollectionConverters.*
 
 
 
@@ -74,12 +80,50 @@ class ZipAndJarFileLookupFactoryTest {
       Files.setLastModifiedTime(f, lastMod1)
 
       // The size differs, so we expect a cache miss.
-      // (We don't check the contents seen through `cp2`: `cp1` still holds the jar open, and
-      // `java.util.zip.ZipFile` shares the open file's index with a new `ZipFile` of the same file key and
-      // last modified time.)
       val cp2 = createCp
       assert(cp1 ne cp2)
+      // And the new entry should see the new contents. This needs the replaced entry to have been closed:
+      // `java.util.zip.ZipFile` shares the index of an open `ZipFile` with a new one for the same file key
+      // and last modified time.
+      assert(cp2.findClassFile("p1.C").isEmpty)
+      assert(cp2.findClassFile("p1.LongerName").isDefined)
     } finally Files.delete(f)
+  }
+
+  @Test def uncachedJarClosedAfterCompile(): Unit = {
+    if (scala.util.Properties.isWin) return // can't overwrite an open file on windows.
+
+    val dir = Files.createTempDirectory("test-")
+    val jar = dir.resolve("lib.jar")
+
+    def compile(code: String, opts: String*): Reporter = {
+      val src = Files.writeString(dir.resolve("A.scala"), code)
+      Main.process((opts ++ Seq("-classpath", TestConfiguration.basicClasspath + File.pathSeparator + jar, src.toString)).toArray)
+    }
+    // Writes a jar of the class files compiled from `code` to `jar`, in place.
+    def writeJar(code: String): Unit = {
+      val out = Files.createDirectory(dir.resolve("out" + System.nanoTime))
+      assert(!compile(code, "-d", out.toString).hasErrors)
+      val tmpJar = dir.resolve("tmp.jar")
+      Files.walk(out).iterator.asScala.filter(Files.isRegularFile(_)).foreach { f =>
+        createZip(tmpJar, Files.readAllBytes(f), out.relativize(f).toString)
+      }
+      Files.write(jar, Files.readAllBytes(tmpJar))
+      Files.delete(tmpJar)
+    }
+
+    try {
+      writeJar("package p1; class C")
+      assert(!compile("object Test { def c = new p1.C }", "-YdisableFlatCpCaching", "-d", dir.toString).hasErrors)
+
+      // Overwrite the jar in place with the same last modified time. A `ZipFile` still open on the old
+      // contents would hand its index to the next compiler's `ZipFile`.
+      val lastMod1 = Files.getLastModifiedTime(jar)
+      writeJar("package p1; class D")
+      Files.setLastModifiedTime(jar, lastMod1)
+
+      assert(!compile("object Test { def d = new p1.D }", "-YdisableFlatCpCaching", "-d", dir.toString).hasErrors)
+    } finally dotty.tools.deleteDirectory(dir.toFile)
   }
 
   def createZip(zipLocation: Path, content: Array[Byte], internalPath: String): Unit = {
