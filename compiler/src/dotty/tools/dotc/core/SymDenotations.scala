@@ -153,28 +153,108 @@ object SymDenotations {
           println(i"${"  " * indent}completing ${if (isType) "type" else "val"} $name")
           indent += 1
 
-          if myFlags.is(Touched) then
+          if myFlags.is(Touched) && !healLeakedTouched() then
+            recordCyclePrevented()
             throw CyclicReference(this)(using ctx.withOwner(symbol))
           myFlags |= Touched
+          enterCompleting()
 
           // completions.println(s"completing ${this.debugString}")
           try atPhase(validFor.firstPhaseId)(completer.complete(this))
           catch {
             case ex: CyclicReference =>
               println(s"error while completing ${this.debugString}")
+              unwindsInteractive(ex)
+              throw ex
+            case ex if unwindsInteractive(ex) =>
               throw ex
           }
           finally {
+            leaveCompleting()
             indent -= 1
             println(i"${"  " * indent}completed ${if (isType) "type" else "val"} $name in $owner")
           }
         }
         else
           CyclicReference.trace("compute the signature of ", symbol):
-            if myFlags.is(Touched) then
+            if myFlags.is(Touched) && !healLeakedTouched() then
+              recordCyclePrevented()
               throw CyclicReference(this)(using ctx.withOwner(symbol))
             myFlags |= Touched
-            atPhase(validFor.firstPhaseId)(completer.complete(this))
+            enterCompleting()
+            try atPhase(validFor.firstPhaseId)(completer.complete(this))
+            catch case ex if unwindsInteractive(ex) =>
+              throw ex
+            finally leaveCompleting()
+
+    /** Interactive mode keeps the set of symbols whose completion is in
+     *  progress on the run (`Run.completing`), so that a `Touched` flag can be
+     *  told from a cycle: see `healLeakedTouched`.
+     */
+    private def enterCompleting()(using Context): Unit =
+      if ctx.mode.is(Mode.Interactive) then
+        val run = ctx.run
+        if run != null then run.completing += symbol
+    private def leaveCompleting()(using Context): Unit =
+      if ctx.mode.is(Mode.Interactive) then
+        val run = ctx.run
+        if run != null then run.completing -= symbol
+
+    /** `Touched` is set but, in interactive mode, no completion of this
+     *  symbol is in progress: the flag is what an exception unwinding through
+     *  an earlier completion left (a stale lock, not a cycle). Clear it and
+     *  complete; record the healing on the run. In batch mode, or when the
+     *  completion is in progress, it is a cycle.
+     */
+    private def healLeakedTouched()(using Context): Boolean =
+      ctx.mode.is(Mode.Interactive) && {
+        val run = ctx.run
+        run != null && !run.completing.contains(symbol) && {
+          myFlags &~= Touched
+          run.recordLeakHealed(symbol)
+          true
+        }
+      }
+
+    /** In interactive mode, a cyclic reference prevented here is recorded on
+     *  the run (see `Run.cyclesPrevented`): the request degrades, and what
+     *  it computed must not be resumed from.
+     */
+    private def recordCyclePrevented()(using Context): Unit =
+      if ctx.mode.is(Mode.Interactive) then
+        val run = ctx.run
+        if run != null then run.recordCyclePrevented(symbol)
+
+    /** An exception unwound through this completion before it finished. For
+     *  a cancellation, in any mode, clear `Touched` so that the next run can
+     *  complete the symbol instead of reporting a cyclic reference. In
+     *  interactive mode do the same for a cyclic reference (the result of a
+     *  computation that met a cycle below it must not be kept: IntelliJ's
+     *  `mayCacheNow` rule; the request's answer degrades where the exception
+     *  is handled, and the symbol is completable again afterwards) and for
+     *  any other exception (a stack overflow, an assertion in a partial tree),
+     *  which is also recorded on the run as a completion of unknown state
+     *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
+     *  stays set, as before, and the exception propagates. Returns true when
+     *  the caller is to rethrow (a guard: the exception always propagates).
+     */
+    private def unwindsInteractive(ex: Throwable)(using Context): Boolean =
+      ex match
+        case _: CompilationUnit.CancelledCompilation =>
+          untouchIfIncomplete()
+          true
+        case _: CyclicReference =>
+          if ctx.mode.is(Mode.Interactive) then untouchIfIncomplete()
+          ctx.mode.is(Mode.Interactive)
+        case _ if ctx.mode.is(Mode.Interactive) =>
+          untouchIfIncomplete()
+          val run = ctx.run
+          if run != null then run.recordCompletionUnwound(symbol, ex)
+          true
+        case _ => false
+
+    private def untouchIfIncomplete(): Unit =
+      if !isCompleted then myFlags &~= Touched
 
     protected[dotc] def info_=(tp: Type): Unit = {
       /* // DEBUG
@@ -1845,6 +1925,43 @@ object SymDenotations {
             c.ensureCompleted()
       end completeChildrenIn
 
+      /** In interactive mode a targeted run (`Run.typingTarget`) types only the
+       *  statements on the path to the target, so a child class elsewhere in
+       *  the file whose completer would register it (`registerIfChildInCreationContext`)
+       *  may never complete: complete every class of the current unit that the
+       *  Namer has indexed, the nested ones after their owner (whose completion
+       *  indexes its template). Batch compilation types them all anyway.
+       */
+      def completeClassesOfUnit()(using Context): Unit =
+        val unit = ctx.compilationUnit
+        if ctx.mode.is(Mode.Interactive) && (unit ne NoCompilationUnit) && !unit.untpdTree.isEmpty then
+          // an `ExpandedTree` can lead to a thicket that contains the tree itself: visit each tree once
+          val seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[untpd.Tree, java.lang.Boolean])
+          def walk(tree: untpd.Tree): Unit = if seen.add(tree) then tree match
+            case tree: untpd.DefTree if tree.hasAttachment(ctx.typer.ExpandedTree) =>
+              tree.getAttachment(ctx.typer.ExpandedTree).foreach(walk)
+              walkOwn(tree)
+            case tree: untpd.DefTree => walkOwn(tree)
+            case untpd.Thicket(trees) => trees.foreach(walk)
+            case untpd.PackageDef(_, stats) => stats.foreach(walk)
+            case _ =>
+          def walkOwn(tree: untpd.DefTree): Unit = tree match
+            case tree: untpd.TypeDef =>
+              tree.getAttachment(ctx.typer.SymOfTree) match
+                case Some(sym) if sym.isClass =>
+                  sym.ensureCompleted()
+                  tree.rhs match
+                    case impl: untpd.Template => impl.body.foreach(walk)
+                    case _ =>
+                case _ =>
+            case tree: untpd.ValDef =>
+              // an enum value (`case Cleaning`): its completer registers it as a child
+              tree.getAttachment(ctx.typer.SymOfTree) match
+                case Some(sym) if sym.originDenotation.is(EnumVal) => sym.ensureCompleted()
+                case _ =>
+            case _ =>
+          walk(unit.untpdTree)
+
       if is(Sealed) || isAllOf(JavaEnum) && isClass then
         if !is(ChildrenQueried) then
           // Make sure all visible children are completed, so that
@@ -1852,6 +1969,7 @@ object SymDenotations {
           // is defined in the same scope as `cls` or in the companion object of `cls`.
           completeChildrenIn(owner)
           completeChildrenIn(companionClass)
+          completeClassesOfUnit()
           setFlag(ChildrenQueried)
 
       annotations.collect { case Annotation.Child(child) => child }.reverse

@@ -5,11 +5,11 @@ import java.net.URI
 import java.nio.file.Path
 import java.util as ju
 
-import scala.compiletime.uninitialized
 import scala.jdk.CollectionConverters.*
 import scala.meta.pc.SemanticdbFileManager
 import scala.meta.pc.SourcePathMode
 
+import dotty.tools.dotc.CompilationUnit
 import dotty.tools.dotc.core.Contexts.Context
 import dotty.tools.dotc.interactive.{
   CachedLogicalPackage,
@@ -19,6 +19,7 @@ import dotty.tools.dotc.interactive.{
 }
 import dotty.tools.dotc.reporting.Diagnostic
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 
 /** CachingDriver is a wrapper class that provides a compilation cache for
  *  InteractiveDriver. CachingDriver skips running compilation if
@@ -43,16 +44,35 @@ class CachingDriver private (
     sourcePackage: CachedLogicalPackage
 ) extends InteractiveDriver(settings, sourcePackage):
 
-  private var lastCompiledURI: URI = uninitialized
+  private var lastCompiledURI: URI | Null = null
   private var previousDiags = List.empty[Diagnostic]
 
   private def alreadyCompiled(uri: URI, content: String): Boolean =
     lastCompiledURI == uri && compilationUnits.get(uri).forall(_.source.textContent() == content)
 
   override def run(uri: URI, source: SourceFile): List[Diagnostic] =
-    if !alreadyCompiled(uri, source.textContent()) then previousDiags = super.run(uri, source)
+    if !alreadyCompiled(uri, source.textContent()) then
+      try previousDiags = super.run(uri, source)
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        // The aborted run's `newRun` already reset the caches of the context
+        // base (`ContextBase.reset`), so the previous run's trees can no longer
+        // be served from the cache: the next request compiles the file again.
+        lastCompiledURI = null
+        throw ex
     lastCompiledURI = uri
     previousDiags
+
+  /** A targeted run leaves a prefix of the typed tree in the compilation unit
+   *  of `uri`: it is served as the result of `run` only once it covers the
+   *  whole file.
+   */
+  override def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    lastCompiledURI = null
+    val diags = super.runUpTo(uri, source, target)
+    if isFullyTyped(uri) then
+      lastCompiledURI = uri
+      previousDiags = diags
+    diags
 
   def freshDriver(): InteractiveDriver =
     new InteractiveDriver(settings, sourcePackage)

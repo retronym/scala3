@@ -32,6 +32,7 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable, mutable.ListBuffer
+import scala.annotation.internal.sharable
 import scala.io.Codec
 
 import Run.Progress
@@ -230,6 +231,89 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   def canProgress()(using Context): Boolean =
     foldProgress(true /* not cancelled by default */)(p => !p.checkCancellation())
+
+  /** Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`).
+   *  When `typingTarget` exists, `Typer.typedStats` types, of the statements
+   *  of a package or a template, only those whose span contains the target
+   *  (imports and exports are always typed); the others are recorded in
+   *  `skippedStats` with the context they would have been typed in and the
+   *  statement owner, for the driver to type later in this same run when a
+   *  request lands in one of them. Their symbols exist (the Namer indexed
+   *  them) and complete lazily as usual.
+   */
+  var typingTarget: Span = Spans.NoSpan
+  val skippedStats: ListBuffer[Run.SkippedStat] = ListBuffer.empty
+
+  /** The owner of the statement list about to be typed by `Typer.typedStats`
+   *  that is subject to targeting: the package class or the template's local
+   *  dummy, set by `typedPackageDef` and `typedClassDef` (and the driver's
+   *  resume) right before the call, consumed by it. The statements of blocks
+   *  are not subject to targeting: a block is typed as a whole.
+   */
+  var targetedStatsOwner: Symbol = NoSymbol
+  /** Set with `targetedStatsOwner` by `typedBlockStats`: the statements of a
+   *  block are skipped like a template's, but recorded as block statements,
+   *  which the driver does not resume into (it starts a fresh run instead:
+   *  a typed `Block` is not spliced).
+   */
+  var targetedStatsInBlock: Boolean = false
+
+  /** Interactive mode only: the symbols whose completion was prevented as a
+   *  cyclic reference during this run (`SymDenotation.completeFrom` found
+   *  `Touched` set), and the completions an exception other than a cyclic
+   *  reference unwound through. A request that met either has a degraded
+   *  result somewhere (an error type, a dropped item), and what was computed
+   *  on top of it must not outlive the request: `InteractiveDriver.runUpTo`
+   *  starts a fresh run instead of resuming a run that recorded one (the
+   *  session is tainted). IntelliJ's `RecursionManager` has the same rule
+   *  (`markStack` / `mayCacheNow`).
+   */
+  val cyclesPrevented: ListBuffer[Symbol] = ListBuffer.empty
+  val completionsUnwound: ListBuffer[(Symbol, Throwable)] = ListBuffer.empty
+  val leaksHealed: ListBuffer[Symbol] = ListBuffer.empty
+
+  /** The symbols whose completion is in progress (interactive mode only): a
+   *  `Touched` flag on a symbol not in this set is a leak from an earlier
+   *  unwind, not a cycle, and `completeFrom` clears it instead of reporting
+   *  a cyclic reference.
+   */
+  val completing: mutable.HashSet[Symbol] = mutable.HashSet.empty
+
+  /** A run with a degraded completion whose state is unknown (an exception
+   *  other than a cyclic reference or a cancellation unwound through it) is
+   *  not resumed: the next request on the same content starts fresh. A
+   *  prevented cyclic reference does not taint: the symbols it unwound
+   *  through are left recomputable (`Touched` cleared), the request's own
+   *  answer degrades at its handlers, and the run's state is as before.
+   */
+  def isTainted: Boolean = completionsUnwound.nonEmpty
+
+  def recordCyclePrevented(sym: Symbol)(using Context): Unit =
+    cyclesPrevented += sym
+    Run.CycleStats.prevented(sym)
+
+  def recordLeakHealed(sym: Symbol)(using Context): Unit =
+    leaksHealed += sym
+    Run.CycleStats.healed(sym)
+
+  def recordCompletionUnwound(sym: Symbol, ex: Throwable)(using Context): Unit =
+    completionsUnwound += ((sym, ex))
+    Run.CycleStats.unwound(sym, ex)
+
+  private var typedTreeCount = 0
+
+  /** Called by `Typer.typed` for every tree. Every 1024 trees, in interactive
+   *  mode, polls the progress callback and aborts the run with a
+   *  `CancelledCompilation` if it reports cancellation. Batch compilation is
+   *  unaffected: there cancellation keeps skipping the remaining units instead
+   *  (see `didEnterUnit`), so that sbt sees a run that ends normally.
+   */
+  def checkCancelledTyping()(using Context): Unit =
+    typedTreeCount += 1
+    if (typedTreeCount & Run.typerCheckpointMask) == 0
+       && ctx.mode.is(Mode.Interactive)
+       && !canProgress()
+    then throw CompilationUnit.CancelledCompilation()
 
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>
@@ -636,6 +720,44 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 }
 
 object Run {
+  /** The typer polls for cancellation every `typerCheckpointMask + 1` typed
+   *  trees (a power of two, 1024 by default). Tests lower it to make a
+   *  cancellation land inside small statements.
+   */
+  @sharable @volatile var typerCheckpointMask: Int = 1023
+
+  /** Process-wide counts of the cyclic references prevented and the
+   *  completions unwound in interactive mode, printed at exit when
+   *  `-Ddotty.interactive.cycleStats=true`: the measurement behind the
+   *  graceful-degradation design.
+   */
+  object CycleStats:
+    private val enabled = java.lang.Boolean.getBoolean("dotty.interactive.cycleStats")
+    @sharable private val preventedBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
+    @sharable private val unwoundBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
+    @sharable private val preventedCount = new java.util.concurrent.atomic.AtomicInteger
+    @sharable private val unwoundCount = new java.util.concurrent.atomic.AtomicInteger
+    @sharable private val healedCount = new java.util.concurrent.atomic.AtomicInteger
+    if enabled then
+      Runtime.getRuntime.addShutdownHook(new Thread(() => {
+        val top = (m: java.util.concurrent.ConcurrentHashMap[String, Integer]) =>
+          m.entrySet.toArray(Array.empty[java.util.Map.Entry[String, Integer]]).sortBy(-_.getValue.intValue).take(12).map(e => s"${e.getKey}=${e.getValue}").mkString(", ")
+        System.err.println(s"[interactive cycleStats] cyclic references prevented: ${preventedCount.get} (${top(preventedBy)}); leaked Touched flags healed: ${healedCount.get}; completions unwound by other exceptions: ${unwoundCount.get} (${top(unwoundBy)})")
+      }))
+    def prevented(sym: Symbol)(using Context): Unit =
+      if enabled then
+        preventedCount.incrementAndGet()
+        preventedBy.merge(sym.name.toString, 1, (a, b) => a + b)
+    def healed(sym: Symbol)(using Context): Unit =
+      if enabled then healedCount.incrementAndGet()
+    def unwound(sym: Symbol, ex: Throwable)(using Context): Unit =
+      if enabled then
+        unwoundCount.incrementAndGet()
+        unwoundBy.merge(s"${sym.name}:${ex.getClass.getSimpleName}", 1, (a, b) => a + b)
+
+  /** A statement left untyped by a targeted run (see `typingTarget`). */
+  case class SkippedStat(stat: ast.untpd.Tree, ctx: Context, owner: Symbol, inBlock: Boolean = false)
+
 
   case class SubPhase(name: String):
     override def toString: String = name
