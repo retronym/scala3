@@ -169,9 +169,12 @@ class SessionOracleSuite extends BasePCSuite:
    *  hovered on. Finding I29: at step 169, after a cancellation at step 168
    *  landed in a resume (k=3) and the statement was replaced, a recheck of
    *  `commit(result)(using nestedCtx)` answers `<error unspecified error>`
-   *  where the whole-file run has `Boolean`. Kept as the reproduction.
+   *  where the whole-file run has `Boolean`. The sequence of landings is not
+   *  reproducible across JVMs (the checkpoint counts typed trees, and the
+   *  classpath loading order shifts the count); the family of the failure
+   *  (a sibling's Namer completer unwound by the cancellation and retried)
+   *  is `CompletionSessionSuite.cancel-inside-a-sibling-completer`.
    */
-  @org.junit.Ignore("finding I29: an unspecified error type after a cancellation and a replacement in Contexts.scala")
   @Test def `Contexts-seed-1` = oracle("core/Contexts.scala", 1, 300)
   @Test def `Contexts-seed-2` = oracle("core/Contexts.scala", 2, 160)
   @Test def `SimpleIdentityMap-seed-1` = oracle("util/SimpleIdentityMap.scala", 1, 300)

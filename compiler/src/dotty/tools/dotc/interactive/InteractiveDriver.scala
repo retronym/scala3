@@ -125,6 +125,7 @@ class InteractiveDriver(
   private def completeSession(s: Session): List[Diagnostic] =
     logged(s"run ${fileNameOf(s.uri)} (completes the session)")({
       myCancelled = false
+      s.run.cancelledCompletions.clear()
       while s.skipped.nonEmpty do
         val batch = s.skipped.sortBy(_.stat.span.start)
         s.skipped = Nil
@@ -142,7 +143,7 @@ class InteractiveDriver(
               // or poisons the session, as in a resume
               s.reporter.removeBufferedMessages(using sk.ctx)
               s.skipped = s.skipped ++ batch.dropWhile(_ ne sk).drop(1)
-              if !replacePoisoned(s, sk) then s.poisoned = true
+              if !replacePoisoned(s, sk) || !replaceUnwound(s, sk.stat.span)(using sk.ctx) then s.poisoned = true
               throw ex
         finally
           val entries = typed.result()
@@ -309,6 +310,7 @@ class InteractiveDriver(
    */
   private def resume(s: Session, sk: Run.SkippedStat, target: Span): List[Diagnostic] =
     myCancelled = false
+    s.run.cancelledCompletions.clear()
     s.skipped = s.skipped.filterNot(_ eq sk)
     s.run.skippedStats.clear()
     s.run.typingTarget = target
@@ -327,7 +329,7 @@ class InteractiveDriver(
       // Whatever was typed before the abort stays typed; the statements
       // skipped inside the aborted one are its own and go with it.
       s.reporter.removeBufferedMessages(using sk.ctx)
-      if !replacePoisoned(s, sk) then s.poisoned = true
+      if !replacePoisoned(s, sk) || !replaceUnwound(s, sk.stat.span)(using sk.ctx) then s.poisoned = true
       throw ex
     finally
       s.run.typingTarget = NoSpan
@@ -377,14 +379,56 @@ class InteractiveDriver(
       case Some(stat) =>
         val cls = (if sk.owner.isClass then sk.owner else sk.owner.owner).asClass.classDenot
         val file = s.unit.source.file
-        for sym <- cls.info.decls.toList do
-          if sym.span.exists && stat.span.contains(sym.span) && sym.associatedFile == file then
-            cls.delete(sym)
+        val old = cls.info.decls.toList.filter(sym => sym.span.exists && stat.span.contains(sym.span) && sym.associatedFile == file)
+        // A given or implicit is held by the `ContextualImplicits` cached on
+        // the session's contexts (and by the run's implicit scopes), by
+        // symbol: a fresh symbol would not be found, and the old one is
+        // what is being replaced. The session is poisoned instead.
+        if old.exists(definesImplicit) then return false
+        old.foreach(cls.delete)
         ctx.typer.index(stat :: Nil)
         s.skipped = Run.SkippedStat(stat, sk.ctx, sk.owner) :: s.skipped
         true
       case None =>
         false
+
+  /** Is `sym` a given or implicit, or a class or object whose indexed
+   *  members (nested ones included) hold one.
+   */
+  private def definesImplicit(sym: Symbol)(using Context): Boolean =
+    sym.isOneOf(Flags.GivenOrImplicit)
+    || sym.is(Flags.ModuleClass) && sym.sourceModule.isOneOf(Flags.GivenOrImplicit)
+    || sym.isClass && sym.asClass.unforcedDecls.exists(definesImplicit)
+
+  /** The symbols whose completion the cancellation unwound through
+   *  (`Run.cancelledCompletions`): a Namer completer that was unwound can
+   *  not be run again (a method's had entered its parameters in the nested
+   *  typer's scope; a class's had set the temporary info, and the class is
+   *  `isCompleted` without parents), and the statement that defines each
+   *  one is replaced like the aborted statement itself (`replacePoisoned`),
+   *  or the session is poisoned: a symbol of this file in no skipped
+   *  statement (a local of a block, a member of a companion). The symbols
+   *  of other files (the classpath's loaders leave their roots loadable
+   *  again; a sourcepath file's completers are finding I7) are left alone.
+   *  `replaced` is the span of the aborted statement, replaced already.
+   *  Returns false when the session is to be poisoned.
+   */
+  private def replaceUnwound(s: Session, replaced: Span)(using Context): Boolean =
+    val syms = s.run.cancelledCompletions.toList
+    s.run.cancelledCompletions.clear()
+    val file = s.unit.source.file
+    var done = List(replaced)
+    var ok = true
+    for sym <- syms if ok && sym.exists && sym.associatedFile == file do
+      if !sym.span.exists then ok = false
+      else if !done.exists(_.contains(sym.span)) then
+        s.skipped.find(_.stat.span.contains(sym.span)) match
+          case Some(sk) =>
+            s.skipped = s.skipped.filterNot(_ eq sk)
+            if replacePoisoned(s, sk) then done = sk.stat.span :: done
+            else ok = false
+          case None => ok = false
+    ok
 
   /** Complete every symbol of the skipped statements of `s`, in the run
    *  that created their completers: the statement's own symbols, then the
@@ -419,8 +463,14 @@ class InteractiveDriver(
         }
       case _ =>
         tree.getAttachment(namer.SymOfTree).foreach(_.ensureCompleted())
-    s.skipped.foreach(sk => walk(sk.stat))
-    s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
+    s.run.cancelledCompletions.clear()
+    try s.skipped.foreach(sk => walk(sk.stat))
+    catch case ex: CompilationUnit.CancelledCompilation =>
+      // the session is kept (the walk runs again when a file is next left),
+      // with the statements of the unwound completers replaced
+      if !replaceUnwound(s, NoSpan) then s.poisoned = true
+      throw ex
+    finally s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
 
   /** Insert the typed `stats` into the statements of their owner in the
    *  unit's typed tree (the package for a package class, the template for

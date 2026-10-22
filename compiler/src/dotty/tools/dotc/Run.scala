@@ -272,6 +272,18 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   val completionsUnwound: ListBuffer[(Symbol, Throwable)] = ListBuffer.empty
   val leaksHealed: ListBuffer[Symbol] = ListBuffer.empty
 
+  /** The symbols whose completion a `CancelledCompilation` unwound through
+   *  (recorded by `SymDenotation.completeFrom`), innermost first. A Namer
+   *  completer that was unwound can not be run again: a method's completer
+   *  had entered its parameters in the nested typer's scope and typed some
+   *  ahead (a retry enters `T$1` next to `T` and the signature mixes the
+   *  two); a class completer had set the class's temporary info, so the
+   *  class is `isCompleted` without parents and is never retried. The
+   *  driver replaces the statement that defines each one in the session, or
+   *  poisons the session (`InteractiveDriver.replaceUnwound`).
+   */
+  val cancelledCompletions: ListBuffer[Symbol] = ListBuffer.empty
+
   /** The symbols whose completion is in progress (interactive mode only): a
    *  `Touched` flag on a symbol not in this set is a leak from an earlier
    *  unwind, not a cycle, and `completeFrom` clears it instead of reporting

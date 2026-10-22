@@ -242,6 +242,11 @@ object SymDenotations {
       ex match
         case _: CompilationUnit.CancelledCompilation =>
           untouchIfIncomplete()
+          // whether complete or not: a class completer sets the temporary
+          // info before it types the parents, and the class is then
+          // `isCompleted` with that info (see `Run.cancelledCompletions`)
+          val run = ctx.run
+          if run != null then run.cancelledCompletions += symbol
           true
         case _: CyclicReference =>
           if ctx.mode.is(Mode.Interactive) then untouchIfIncomplete()

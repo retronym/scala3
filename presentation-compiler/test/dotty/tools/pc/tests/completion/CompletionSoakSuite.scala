@@ -246,8 +246,11 @@ class CompletionSoakSuite extends BasePCSuite:
    *  that match type shapes.Show[Int]") in the session's run, while the same
    *  request in a fresh run of the same driver finds `show`. Per-run state left
    *  by the earlier cancellations (steps 262 and 265); the givens' symbols are
-   *  complete and whole. Kept as the reproduction; ignored until it is understood.
+   *  complete and whole. Not reproduced since (the landings shift between JVMs);
+   *  the completers the cancellations unwind in this file (`class Plain`'s, the
+   *  `apply`s', `val d`'s) are replaced or poison the session now
+   *  (`InteractiveDriver.replaceUnwound`), see
+   *  `CompletionSessionSuite.cancel-inside-a-given-class-completer`.
    */
-  @org.junit.Ignore("finding I18: a given not found after cancellations and a replacement in the same run")
   @Test def `shapes-seed-2` = soak("shapes", shapesFile, 2, 300)
   @Test def `shapes-seed-3` = soak("shapes", shapesFile, 3, 300)

@@ -389,6 +389,106 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     assert(skippedInInline == 0, "no statement of an inline method's body is skipped")
     assert(usedOk, "the request in the caller of the inline method is answered")
 
+  /** Completions at `at` from the session, and from a fresh whole-file run of a new driver. */
+  private def completionsVsOracle(d: CachingDriver, uri: URI, src: SourceFile, at: Int): (List[String], List[String]) =
+    def labelsOf(driver: dotty.tools.dotc.interactive.InteractiveDriver): List[String] =
+      val unit = driver.compilationUnits(uri)
+      given dotty.tools.dotc.core.Contexts.Context = driver.currentCtx.fresh.setCompilationUnit(unit).withPhase(dotty.tools.dotc.core.Phases.typerPhase(using driver.currentCtx))
+      dotty.tools.dotc.interactive.Completion.completions(dotty.tools.dotc.util.SourcePosition(src, Span(at)))._2.map(_.label).sorted.distinct
+    d.runUpTo(uri, src, Span(at))
+    val session = labelsOf(d)
+    val fresh = new dotty.tools.dotc.interactive.InteractiveDriver(dotty.tools.pc.utils.TestingWorkspaceSearch(dotty.tools.pc.base.TestResources.classpath.map(_.toString)).settings, dotty.tools.dotc.interactive.CachedLogicalPackage.none)
+    fresh.run(uri, src)
+    (session, labelsOf(fresh))
+
+  @Test def `cancel-inside-a-sibling-completer` =
+    // The oracle's sequence on Contexts.scala (seed 1, step 14): a resume into
+    // `def set` forces the completer of its skipped sibling `update[T]`, and
+    // the cancellation lands inside that completer (its long signature). The
+    // resumed statement is replaced; the sibling must be too: its completer,
+    // retried, had entered `T$1` next to the `T` it entered before the abort
+    // ("T is already defined as type T"), and `update(...)` then failed to
+    // type against the mixed signature.
+    val params = (1 to 40).map(i => s"p$i: List[Map[T, T]]").mkString(", ")
+    val args = (1 to 40).map(_ => "Nil").mkString(", ")
+    val code =
+      s"""|object Store:
+          |  class Loc[T]
+          |  def set(x: Int): Int = update(new Loc[Int], x, $args).to
+          |  def update[T](loc: Loc[T], value: T, $params): Int = 1
+          |""".stripMargin
+    val uri = URI.create("file:///Sibling.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atSet = code.indexOf("update(new") + 3
+    val atTo = code.indexOf(".to\n") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (thrown, polls, run1, run2, skippedBefore, skippedAfter, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("class Loc") + 8)) // set and update skipped
+        val run1 = d.runIdOf(uri)
+        val skippedBefore = d.untypedSpans(uri).size
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 2 }) { d.runUpTo(uri, src, Span(atSet)) }; false }
+          catch case _: CancelledCompilation => true
+        val skippedAfter = d.untypedSpans(uri).size
+        val (session, oracle) = completionsVsOracle(d, uri, src, atTo)
+        (thrown, polls, run1, d.runIdOf(uri), skippedBefore, skippedAfter, session, oracle)
+      }
+      println(s"[cancel-inside-a-sibling-completer] thrown=$thrown polls=$polls run=$run1->$run2 skipped=$skippedBefore->$skippedAfter; session: ${session.take(6)}; whole-file: ${oracle.take(6)}")
+      assert(thrown, "the cancellation must land")
+      assertEquals(run1, run2, "the session is kept: both statements are replaced")
+      assertEquals(skippedBefore, skippedAfter, "the aborted statement and the sibling are skipped again")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  @Test def `cancel-inside-a-given-class-completer` =
+    // The shape of finding I18 (a given not found after a cancellation, in
+    // the same run): a cancellation lands inside the class completer of a
+    // given (its parents being typed) that an implicit search forced. The
+    // completer had set the class's temporary info, so the class is
+    // `isCompleted` without parents and is never retried, and
+    // `summon[Show[Int]]` finds no given for the rest of the run. A given is
+    // not replaced (the contexts' implicit caches hold it by symbol): the
+    // session is poisoned and the next request starts fresh. (A top-level
+    // given is a member of the synthetic package object, which is typed
+    // whole by the first request; one in an object is completed lazily.)
+    val markers = (1 to 40).map(i => s"trait M$i").mkString("\n")
+    val withs = (1 to 40).map(i => s"M$i").mkString(" with ")
+    val code =
+      s"""|trait Show[T]:
+          |  def show(t: T): String
+          |$markers
+          |object Givens:
+          |  given Show[Int] with $withs with
+          |    def show(t: Int) = t.toString
+          |object Infer:
+          |  import Givens.given
+          |  val d = summon[Show[Int]].sh
+          |  val e = 1
+          |""".stripMargin
+    val uri = URI.create("file:///GivenCompleter.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atD = code.indexOf(".sh\n") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (thrown, polls, run1, run2, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("val e = 1") + 4)) // val d and Givens skipped
+        val run1 = d.runIdOf(uri)
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 2 }) { d.runUpTo(uri, src, Span(atD)) }; false }
+          catch case _: CancelledCompilation => true
+        val (session, oracle) = completionsVsOracle(d, uri, src, atD)
+        (thrown, polls, run1, d.runIdOf(uri), session, oracle)
+      }
+      println(s"[cancel-inside-a-given-class-completer] thrown=$thrown polls=$polls run=$run1->$run2; session: $session; whole-file: $oracle")
+      assert(thrown, "the cancellation must land")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
     val heavy = Set(300)
