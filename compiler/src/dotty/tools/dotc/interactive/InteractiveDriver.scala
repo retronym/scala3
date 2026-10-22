@@ -255,6 +255,8 @@ class InteractiveDriver(
       run.typingTarget = target
       try
         run.targetNextStats(sk.owner, sk.inBlock)(using ctx0)
+        // a resumed block statement continues the targeting of its block
+        run.targetingTyperState = ctx0.typerState
         val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
         collectSkipped()
         assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")

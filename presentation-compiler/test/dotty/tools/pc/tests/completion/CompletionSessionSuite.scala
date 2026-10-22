@@ -502,11 +502,11 @@ class CompletionSessionSuite extends BaseCompletionSuite:
        |}
        |""".stripMargin
 
-  @Test def `a-resume-into-a-closure-body-types-under-a-live-typer-state` =
-    // A statement skipped in a closure body is recorded under the typer state
-    // that tryEither made for the enclosing application, which is committed
-    // when the application succeeds. A resume into it must not type under that
-    // state: committing into a committed state is an assertion (I24).
+  @Test def `a-closure-argument-is-typed-whole` =
+    // A closure argument is typed in the typer state that tryEither makes for
+    // the application, which may be retried or abandoned: its body is not
+    // targeted, so nothing in it is recorded in a state that does not last
+    // (I24 resumed under such a state once it had been committed).
     val code = closureBody
     val uri = URI.create("file:///Com.scala")
     val src = SourceFile.virtual(uri, code)
@@ -523,14 +523,13 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       val path = Interactive.pathTo(unit.tpdTree, Span(atInner))
       (d.runIdOf(uri) == run0, before, after, path.headOption.map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"))
     }
-    println(s"[a-resume-into-a-closure-body] same run: $sameRun; before: $before; after: $after; at List(x, x): $at")
-    assert(before.exists(_.startsWith("if (x > 0)")), s"the if is skipped by the first request: $before")
-    assert(sameRun, "the second request resumes the first request's run")
-    assert(!after.exists(_.startsWith("if (x > 0)")), s"the if is typed by the second: $after")
-    assert(at.exists(_.contains("List")), s"the resumed statement is typed: $at")
+    println(s"[a-closure-argument-is-typed-whole] same run: $sameRun; before: $before; after: $after; at List(x, x): $at")
+    assert(!before.exists(_.startsWith("if (x > 0)")), s"the closure body is typed whole by the first request: $before")
+    assert(sameRun, "the second request is served from the first request's run")
+    assert(at.exists(_.contains("List")), s"the statement in the closure body is typed: $at")
 
   @Test def `the-completing-run-types-a-closure-body-under-a-live-typer-state` =
-    // The same statement, typed by the whole-file run that completes the session (I24).
+    // The completing run over a file whose closure body is typed whole (I24).
     val code = closureBody
     val uri = URI.create("file:///Com2.scala")
     val src = SourceFile.virtual(uri, code)
@@ -609,6 +608,30 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     println(s"[a-pattern-definition-in-a-block-is-spliced] fully typed: $fully; at a: $atA")
     assert(fully, "the whole-file run completes the session")
     assert(atA.exists(_.endsWith(" a")), s"the pattern's val is in the tree: $atA")
+
+  @Test def `a-block-in-a-method-body-is-still-targeted` =
+    // The rule types closure arguments whole; the blocks of a method body are
+    // typed in the class body's typer state and keep being targeted.
+    val code =
+      """|object Tgt {
+         |  def big(xs: List[Int]): Int = {
+         |    val a = xs.map(_ + 1).sum
+         |    if (a > 0) {
+         |      val b = xs.map(_ + 2).sum
+         |      val c = xs.map(_ + 3).filter(_ > 0).sum
+         |      b + c
+         |    } else 0
+         |  }
+         |}
+         |""".stripMargin
+    val uri = URI.create("file:///Tgt.scala")
+    val src = SourceFile.virtual(uri, code)
+    val skipped = withDriver { d =>
+      d.runUpTo(uri, src, Span(code.indexOf(".filter(_ > 0)") + 4))
+      d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 9)).trim)
+    }
+    println(s"[a-block-in-a-method-body-is-still-targeted] skipped: $skipped")
+    assert(skipped.exists(_.startsWith("val b")), s"a statement of the if's block is skipped: $skipped")
 
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed

@@ -274,12 +274,24 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     assert(!targetedStatsOwner.exists, i"targeting of $targetedStatsOwner not consumed before $owner")
     targetedStatsOwner = owner
     targetedStatsInBlock = inBlock
+    if !inBlock then targetingTyperState = ctx.typerState
+
+  /** The typer state of the statement list targeting started from: a package
+   *  or class body, or the recorded context of a resumed statement. A block
+   *  is targeted only when it is typed in this state: a block typed under a
+   *  nested state (a closure argument, typed in the state `tryEither` makes
+   *  for the application) or an explore state (an overload or implicit
+   *  candidate) may be typed again or thrown away, and what it skipped would
+   *  be recorded in a context that does not last. Such blocks are typed whole.
+   */
+  var targetingTyperState: TyperState | Null = null
 
   /** Back to the defaults: no target, no pending mark, nothing skipped. */
   def clearTargeting(): Unit =
     typingTarget = Spans.NoSpan
     targetedStatsOwner = NoSymbol
     targetedStatsInBlock = false
+    targetingTyperState = null
     skippedStats.clear()
 
   /** Interactive mode only: the symbols whose completion was prevented as a
