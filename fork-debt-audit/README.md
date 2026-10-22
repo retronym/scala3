@@ -8,7 +8,7 @@ Rendered dashboard: https://claude.ai/artifact/UHFiTQqeEsX6ByHSiRHxWy (same cont
 
 ## Contents
 
-- `dashboard.html` – the findings table (52 findings: 3 high, 17 medium), avenue summaries, assessment, with GitHub links for every commit and the PR it landed in. Standalone; open in a browser.
+- `dashboard.html` – the findings table (66 findings: 4 high, 25 medium), filterable by direction and severity, avenue summaries, assessment, with GitHub links for every commit and the PR it landed in. Standalone; open in a browser.
 - `reports/` – one markdown report per audited area, in a fixed format: file pairs with port date and later upstream commit count, findings with severity, confidence, locations and the upstream fix commit, what was already ported, and method notes. `00-agent-brief.md` is the instruction every agent was given.
 - `sim.tsv` – for each scala3 source file, the scala/scala 2.13.x file sharing the most exact (whitespace-normalized) lines, with counts.
 - `sim_tok.tsv` – the same using identifier 6-gram shingles, which still matches files rewritten into Scala 3 syntax.
@@ -18,7 +18,7 @@ Rendered dashboard: https://claude.ai/artifact/UHFiTQqeEsX6ByHSiRHxWy (same cont
 
 ## Areas
 
-A classpath and IO; B settings and CLI; C backend codegen; D backend optimizer; E parsing (Java, XML, scanner, line table); F classfile reader and Scala 2 unpickler; G utilities (profiler, string interpolator rewrites, constant folding, doc comments); I standard library fork. TASTy (`tasty/src`) was skipped: Scala 2 copied it from Scala 3, so the debt flows the other way. Not covered: `transform/` phases (conceptual ports), sbt-bridge, Scala.js backend.
+Forward (2.13 → 3): A classpath and IO; B settings and CLI; C backend codegen; D backend optimizer; E parsing (Java, XML, scanner, line table); F classfile reader and Scala 2 unpickler; G utilities (profiler, string interpolator rewrites, constant folding, doc comments); I standard library fork. Reverse (3 → 2.13): H the TASTy reader in scala/scala, which was copied from Scala 3 and must track its format; R a sweep of areas A-G for Scala 3 fixes never forward-ported. Not covered: `transform/` phases (conceptual ports), sbt-bridge, Scala.js backend.
 
 ## Findings in brief
 
@@ -28,7 +28,7 @@ Missed upstream fixes, concentrated where no re-sync ever happened: classpath re
 
 Drift from refactoring the copies without an upstream reference: the 2026 IO encapsulation refactor broke `VirtualDirectoryClassPath` for every non-root package; the "warn when catching Errors" sweep narrowed `Throwable` to `NonFatal` in `Promise`, `BatchingExecutor` and `LazyList` (reproduced on 3.10.1-RC1, see scala/scala3#26794); the optimizer port's interface lookup stops inlining Java default methods behind redundant or transitive interfaces.
 
-Reverse debt: fixes made in the Scala 3 copies that 2.13.x never received, and an inner fork where `library-js/src` full-file overrides missed fixes to `library/src`.
+Reverse debt: fixes made in the Scala 3 copies that 2.13.x never received (the inliner's JDK module-export check, NUL dropped from Java string constants, box-unbox cost guards, and others), and an inner fork where `library-js/src` full-file overrides missed fixes to `library/src`. The TASTy reader is not drifting: Scala 2's format layer is re-synced per Scala 3 minor and is identical to 3.7.x, with a deliberate freeze at 28.7.
 
 ## Reproducing the scans
 

@@ -83,6 +83,13 @@
   "prurl": "https://github.com/scala/scala/pull/11081",
   "subject": "bugfix: Try and avoid potential race condition"
  },
+ "251900e615": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/251900e6151c9a70e618b3327ef936b6dce20a70",
+  "pr": "27290",
+  "prurl": "https://github.com/scala/scala3/pull/27290",
+  "subject": "Optimizer: bound producer/consumer analysis cost in local optimizations (#27290)"
+ },
  "270f3f274b": {
   "repo": "scala/scala3",
   "url": "https://github.com/scala/scala3/commit/270f3f274b9afdb2ff362bcc05f6997380b15872",
@@ -152,6 +159,13 @@
   "pr": "9946",
   "prurl": "https://github.com/scala/scala/pull/9946",
   "subject": "Reduce default capacity of classpath's pool of ZipFile for each JAR"
+ },
+ "34c9fb97e9": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/34c9fb97e9d6ef8dbc3fcf4ec164a27f26afae23",
+  "pr": "11274",
+  "prurl": "https://github.com/scala/scala/pull/11274",
+  "subject": "TASTy reader: 3.7 is the final supported version"
  },
  "3e500b21a5": {
   "repo": "scala/scala",
@@ -223,6 +237,13 @@
   "prurl": "https://github.com/scala/scala/pull/10218",
   "subject": "Find more doc vars and distinguish C from CC"
  },
+ "5f29c2178f": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/5f29c2178fc253a0fcfd8af0100e18ff434ea546",
+  "pr": "1",
+  "prurl": "https://github.com/scala/scala3/pull/1",
+  "subject": "Tweak java getlitch not to skip zero"
+ },
  "639fd849c8": {
   "repo": "scala/scala3",
   "url": "https://github.com/scala/scala3/commit/639fd849c841e33284977e10e1e49c0df4c80506",
@@ -250,6 +271,27 @@
   "pr": "10674",
   "prurl": "https://github.com/scala/scala/pull/10674",
   "subject": "Warn more constant inexactitude"
+ },
+ "6f1c8580d0": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/6f1c8580d05ec683b2f2145719c7176ec06a341e",
+  "pr": null,
+  "prurl": null,
+  "subject": "Lower max instrs and locals for local opts"
+ },
+ "6f48c3962e": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/6f48c3962e36892161ac2603ca8daea50cf88144",
+  "pr": "21872",
+  "prurl": "https://github.com/scala/scala3/pull/21872",
+  "subject": "Ensure to escape characters before constructing JSON profile trace (#21872)"
+ },
+ "730eefa650": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/730eefa6504d8e3ad7e26fcc54917233c910f2dc",
+  "pr": null,
+  "prurl": null,
+  "subject": "Take JDK 9+ modules into account when determining what can be inlined"
  },
  "73d5879c21": {
   "repo": "scala/scala",
@@ -342,6 +384,13 @@
   "prurl": "https://github.com/scala/scala/pull/5783",
   "subject": "SI-10231 Skip outer parameter when classfile parsing java param names"
  },
+ "9717ee771e": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/9717ee771ead70c6c90be6922d5053cd7dab3344",
+  "pr": "25300",
+  "prurl": "https://github.com/scala/scala3/pull/25300",
+  "subject": "Enforce JVM UTF-8 string limits in the backend (#25300)"
+ },
  "98726c0e1f": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/98726c0e1fab033f18362246343efec4ca8b9697",
@@ -362,6 +411,13 @@
   "pr": "7977",
   "prurl": "https://github.com/scala/scala/pull/7977",
   "subject": "[backport] Fix interop between Java and generic inner Scala classes"
+ },
+ "9cf6109dad": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/9cf6109dad0ef0fad0c95551d6b5d0835a968a2f",
+  "pr": "27214",
+  "prurl": "https://github.com/scala/scala3/pull/27214",
+  "subject": "Optimizer: make analyzers intrinsically lazy (#27214)"
  },
  "a03973a353": {
   "repo": "scala/scala",
@@ -447,6 +503,13 @@
   "prurl": "https://github.com/scala/scala/pull/7712",
   "subject": "[backport] Resource management for macro/plugin classloaders, classpath JARs"
  },
+ "d3e7895798": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/d3e7895798ce80a4f7042563cd83b6d8926fb61b",
+  "pr": "10670",
+  "prurl": "https://github.com/scala/scala/pull/10670",
+  "subject": "Upgrade tasty format, copy new tasty config"
+ },
  "d856d1510c": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/d856d1510ce8488914d0a4ae2bc9623bfb7de1c9",
@@ -481,6 +544,13 @@
   "pr": null,
   "prurl": null,
   "subject": "Port analysis and opt directories"
+ },
+ "ecfa019360": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/ecfa019360117189bdaec868b61e1157adcf6b52",
+  "pr": "25676",
+  "prurl": "https://github.com/scala/scala3/pull/25676",
+  "subject": "Fix infinite loop with bad section ends in TastyHeaderUnpickler (#25676)"
  },
  "f36ea50842": {
   "repo": "scala/scala3",
@@ -537,5 +607,12 @@
   "pr": "10017",
   "prurl": "https://github.com/scala/scala/pull/10017",
   "subject": "Error on source files with unicode directional formatting characters"
+ },
+ "ff88d25f2b": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/ff88d25f2b63bb50ed35cdb5db3920b91908d21e",
+  "pr": "27205",
+  "prurl": "https://github.com/scala/scala3/pull/27205",
+  "subject": "Stop checking tasty UUIDs in class files (#27205)"
  }
 }
