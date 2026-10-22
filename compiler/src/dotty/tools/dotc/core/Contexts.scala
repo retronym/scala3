@@ -956,6 +956,9 @@ object Contexts {
 
     val settings: ScalaSettings = ScalaSettings
 
+    /** Scratch lookup key for `Names.termName`, only used from this base's thread. */
+    val namesProbe: Names.Probe = new Names.Probe
+
     /** The initial context */
     val initialCtx: Context = FreshContext.initial(this: @unchecked, settings)
 
