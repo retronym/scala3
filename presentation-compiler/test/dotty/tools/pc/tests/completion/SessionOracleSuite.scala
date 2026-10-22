@@ -161,4 +161,13 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `SourceTree-seed-1` = oracle("interactive/SourceTree.scala", 1, 300)
   @Test def `SourceTree-seed-2` = oracle("interactive/SourceTree.scala", 2, 300)
   @Test def `Chars-seed-1` = oracle("util/Chars.scala", 1, 300)
+  /** inline methods with local definitions, givens, a large class: what VS Code
+   *  hovered on. Finding I29: at step 169, after a cancellation at step 168
+   *  landed in a resume (k=3) and the statement was replaced, a recheck of
+   *  `commit(result)(using nestedCtx)` answers `<error unspecified error>`
+   *  where the whole-file run has `Boolean`. Kept as the reproduction.
+   */
+  @org.junit.Ignore("finding I29: an unspecified error type after a cancellation and a replacement in Contexts.scala")
+  @Test def `Contexts-seed-1` = oracle("core/Contexts.scala", 1, 300)
+  @Test def `Contexts-seed-2` = oracle("core/Contexts.scala", 2, 160)
   @Test def `SimpleIdentityMap-seed-1` = oracle("util/SimpleIdentityMap.scala", 1, 300)

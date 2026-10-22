@@ -1611,8 +1611,14 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // completer when an overload resolution elsewhere needs the type) is typed
     // whole, since the typed-ahead body is cached and reused when the method
     // is later typed with a target inside it; stubs made then stayed.
+    // Never inside an inline method: its typed body is registered whole
+    // (`PrepareInlineable.makeInlineable` maps it, and callers inline it), so
+    // a stub in it is a wrong body, and the map failed on the stub's untyped
+    // type tree.
     val run = ctx.run
-    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget) then
+    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
+       && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
+    then
       run.targetedStatsOwner = ctx.owner
       run.targetedStatsInBlock = true
     typedStats(stats, ctx.owner)

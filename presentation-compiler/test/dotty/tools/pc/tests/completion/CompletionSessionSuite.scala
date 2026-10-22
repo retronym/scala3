@@ -360,6 +360,35 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     assert(run1 == run0 && fully, "the whole-file run completed the session in the same run")
     assert(run2 == run0 && skipped2 == 0, "the request after it is served from the same run")
 
+  @Test def `an-inline-method-body-is-never-stubbed` =
+    // The body of an inline method is registered whole for its callers and
+    // mapped by PrepareInlineable: a stub for a skipped local inside it
+    // broke that map (UnAssignedTypeException on the stub's type tree).
+    val code =
+      """|object Inl {
+         |  inline def twice(x: Int): Int = {
+         |    val a = x + 1
+         |    val b = a * 2
+         |    val c = b - 1
+         |    c + a
+         |  }
+         |  def use(y: Int): Int = twice(y) + 1
+         |}
+         |""".stripMargin
+    val uri = URI.create("file:///Inl.scala")
+    val src = SourceFile.virtual(uri, code)
+    val (skippedInInline, usedOk) = withDriver { d =>
+      d.runUpTo(uri, src, Span(code.indexOf("b - 1") + 2))
+      val inInline = d.untypedSpans(uri).filter(sp => sp.start > code.indexOf("inline def") && sp.end < code.indexOf("def use"))
+      d.runUpTo(uri, src, Span(code.indexOf("twice(y)") + 3))
+      val unit = d.compilationUnits(uri)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      (inInline.size, Interactive.pathTo(unit.tpdTree, Span(code.indexOf("twice(y)") + 3)).headOption.exists(_.symbol.name.toString == "twice"))
+    }
+    println(s"[an-inline-method-body-is-never-stubbed] skipped inside the inline body: $skippedInInline; the call site typed: $usedOk")
+    assert(skippedInInline == 0, "no statement of an inline method's body is skipped")
+    assert(usedOk, "the request in the caller of the inline method is answered")
+
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
     val heavy = Set(300)
