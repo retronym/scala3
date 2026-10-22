@@ -60,6 +60,7 @@ td.ref { font-family: var(--mono); font-size: .8em; min-width: 14em; } td.ref a.
 .chips .lbl { font-size: .74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 td.fu { min-width: 18em; font-size: .84rem; }
 .fuv { display: inline-block; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: 0 6px; border-radius: 3px; border: 1px solid var(--line); margin-right: 4px; color: var(--muted); }
+.plabel { display: inline-block; font-family: var(--mono); font-size: .68rem; padding: 0 5px; border-radius: 3px; background: var(--accent); color: var(--bg); white-space: nowrap; vertical-align: 1px; }
 .fu-regressed { color: var(--bad); border-color: var(--bad); } .fu-amended { color: var(--warn); border-color: var(--warn); } .fu-caveat { color: var(--info); border-color: var(--info); } .fu-clean { color: var(--ok); border-color: var(--ok); }
 .tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; } .tag { font-size: .68rem; padding: 0 5px; border-radius: 3px; background: var(--soft); color: var(--muted); white-space: nowrap; }
 .d-format { color: var(--bad); border-color: var(--bad); }
@@ -87,6 +88,7 @@ td.fu { min-width: 18em; font-size: .84rem; }
         <li><b>Missed 2.13.x fixes (classic fork debt).</b> Concentrated where no re-sync ever happened: classpath resource management (A1-A4, 2019-2025 upstream work), the string-interpolator rewrites (G1, G2), array-store codegen (C1, a 2016 fix), scanner/line-table details (E1-E3), argfile tokenizer (B1). Areas that were re-synced wholesale (FileWriters 2023, AbstractFileClassLoader 2025, backend layering 2022, optimizer 2026, stdlib 2025) are clean up to their sync point.</li>
         <li><b>Drift introduced by local refactors of forked code.</b> Rewriting a copy without an upstream reference produced regressions of its own: the 2026 IO encapsulation refactor (A5 reproduced, A6), the "warn when catching Errors" sweep that narrowed <code>Throwable</code> to <code>NonFatal</code> in Promise/LazyList/BatchingExecutor (I1-I3), the optimizer's interface lookup (D1, D2). These are not visible to any "list upstream commits since X" tool; they need a periodic semantic diff against upstream.</li>
         <li><b>Reverse debt.</b> Fixes made in Scala 3 copies that 2.13.x never received: in the compiler, the inliner's JDK module-export check (R1), NUL dropped from Java string constants (R2), box-unbox cost guards (R3) and three low ones; in the library, Enumeration.iteratorFrom (I8) and seven collection perf/null fixes (I10). An inner fork: <code>library-js/src</code> full-file overrides that missed fixes to <code>library/src</code> (I9). The TASTy reader, where Scala 2 must track Scala 3, is not drifting: it is re-synced per Scala 3 minor and byte-identical to 3.7.x, with a deliberate freeze at 28.7 (H1).</li>
+        <li><b>The one upstream signal: the <code>port-to-scala3</code> label.</b> scala/scala has a label "Forward port to Scala 3 pending", created 2026-05 and applied by lrytz to four PRs so far, all in the library: scala/scala#11243 (ArrayOps.transpose, I5), scala/scala#11286 (Await latches, I6), scala/scala#11248 (LazyList tail updater, I7), and the open scala/scala#11312 (trait this cast, compiler). All three merged ones are still unported, so the label is a backlog nobody drains: nothing in scala3 references it, there is no matching label or issue on the scala3 side, and no bot turns it into a scala3 issue. It is also applied only to library PRs, while this audit's compiler findings had nothing marking them.</li>
         <li><b>Process today.</b> Compiler: none. 6 of 67 overlapping files name their origin; the optimizer port names no base commit. Library: <code>project/scripts/syncStdLib.scala</code> writes <code>Upstream: scala/scala@sha</code> footers but was used once (4 commits); the 31 upstream commits since v2.13.18 were hand-ported or missed.</li>
         <li><b>Machine assistance that would have caught most of this.</b> (1) A checked-in file-pair map (this scan's <code>sim_tok.tsv</code> is a first draft: 67 compiler pairs, 495 library pairs) with the last-synced upstream sha per pair. (2) A CI/cron job that lists 2.13.x commits touching mapped origin paths since that sha and opens an issue per unported fix. (3) For the drift class, a normalized diff (whitespace, braces, Scala 3 syntax) per pair, reviewed when either side changes.</li>
       </ul>
@@ -153,6 +155,8 @@ td.fu { min-width: 18em; font-size: .84rem; }
       <button class="chip" data-fu="caveat" title="Author or reviewer noted a limitation that matters for porting, or the fix should not be ported.">caveat <span class="n"></span></button>
       <button class="chip" data-fu="clean" title="Nothing happened after the fix.">clean <span class="n"></span></button>
       <button class="chip" data-fu="unknown" title="No upstream reference to check, or could not determine.">unknown <span class="n"></span></button>
+      <span class="sep"></span>
+      <button class="chip labelchip" data-label="1" title="Findings whose scala/scala PR carries the port-to-scala3 label (forward port pending).">upstream labelled port-to-scala3 <span class="n"></span></button>
     </div>
     <p class="sub">Commit links go to GitHub; "PR #n" is the pull request the commit landed in. The last column records what happened to each cited fix after it landed (its PR thread, linked issues, later commits in both repos): whether it regressed, was amended, carries a caveat, or should not be ported at all. Sorted by severity. "Reproduced" in the text means the agent ran it; C1, I1 and the F1 byte-read were re-checked by the coordinating session. Full per-avenue reports (pairs table, already-ported list, method notes) are in <code>local/fork-debt/</code> in the worktree.</p>
     <div class="tbl"><table id="findings">
@@ -254,12 +258,13 @@ const DIR_OF = {
 function linkify(s){
   s = s.replace(/\b([0-9a-f]{10})\b/g, (m, sha) => {
     const e = SHAS[sha]; if (!e) return m;
-    const pr = e.p ? ` <a class="pr" href="https://github.com/${e.r}/pull/${e.p}" title="pull request this commit landed in">${e.r === 'scala/scala' ? 'PR' : 'PR'} #${e.p}</a>` : '';
+    const lab = (e.r === 'scala/scala' && PORT_LABEL[e.p]) ? ` <span class="plabel" title="scala/scala label port-to-scala3: forward port to Scala 3 pending">port-to-scala3</span>` : '';
+    const pr = e.p ? ` <a class="pr" href="https://github.com/${e.r}/pull/${e.p}" title="pull request this commit landed in">PR #${e.p}</a>${lab}` : '';
     return `<a href="${e.u}" title="${e.r} commit ${sha}">${sha}</a>${pr}`;
   });
   s = s.replace(/scala\/bug#(\d+)/g, '<a href="https://github.com/scala/bug/issues/$1">scala/bug#$1</a>');
   s = s.replace(/\bSI-(\d+)/g, '<a href="https://github.com/scala/bug/issues/$1">SI-$1</a>');
-  s = s.replace(/scala\/scala#(\d+)/g, '<a href="https://github.com/scala/scala/pull/$1">scala/scala#$1</a>');
+  s = s.replace(/scala\/scala#(\d+)/g, (m, n) => `<a href="https://github.com/scala/scala/pull/${n}">scala/scala#${n}</a>` + (PORT_LABEL[n] ? ' <span class="plabel" title="scala/scala label port-to-scala3: forward port to Scala 3 pending">port-to-scala3</span>' : ''));
   s = s.replace(/(^|[\s(])#(2\d{4})\b/g, '$1<a href="https://github.com/scala/scala3/pull/$2">#$2</a>');
   return s;
 }
@@ -351,8 +356,11 @@ const FU = {
   H2:{v:"caveat", n:"The scala3 fix (#25676) also changed the writer, pickler and position unpickler after sjrd's review; only the reader half (readNat/readInt overflow checks throwing UnpickleException, plus the test) applies to scala/scala, where it patches cleanly against the frozen reader."},
 };
 const FUV = {clean:"clean", amended:"amended", reverted:"reverted", regressed:"regressed", caveat:"caveat", unknown:"unknown"};
-const FILTER = { dir: 'all', sev: 'all', cats: [], fu: 'all' };
-try { const s = JSON.parse(localStorage.getItem('fork-debt-filter') || 'null'); if (s && s.dir && s.sev) Object.assign(FILTER, s); if (!Array.isArray(FILTER.cats)) FILTER.cats = []; if (!FILTER.fu) FILTER.fu = 'all'; } catch (e) {}
+// scala/scala label "port-to-scala3" ("Forward port to Scala 3 pending"), created 2026-05 and applied by lrytz. Every PR that carries it, as of 2026-10-22.
+const PORT_LABEL = {11243:{state:"merged",date:"2026-05-18",title:"Fix NPE in ArrayOps.transpose",finding:"I5"},11286:{state:"merged",date:"2026-10-12",title:"Unregister Future Await latches on timeout or interrupt",finding:"I6"},11248:{state:"merged",date:"2026-10-19",title:"Create LazyList's tail updater on first use",finding:"I7"},11312:{state:"open",date:"2026-10-17",title:"Cast a trait's this to its self type's class, not the member's owner",finding:null}};
+const LABELLED = new Set(Object.values(PORT_LABEL).filter(e => e.finding).map(e => e.finding));
+const FILTER = { dir: 'all', sev: 'all', cats: [], fu: 'all', label: false };
+try { const s = JSON.parse(localStorage.getItem('fork-debt-filter') || 'null'); if (s && s.dir && s.sev) Object.assign(FILTER, s); if (!Array.isArray(FILTER.cats)) FILTER.cats = []; if (!FILTER.fu) FILTER.fu = 'all'; FILTER.label = !!FILTER.label; } catch (e) {}
 function dirOf(f){ return f.dir || DIR_OF[f.id] || "missed"; }
 function catsOf(f){ return f.cats || CATS[f.id] || []; }
 function passes(f){
@@ -361,6 +369,7 @@ function passes(f){
   if (FILTER.sev === 'medium' && f.sev === 'low') return false;
   if (FILTER.cats.length && !catsOf(f).some(c => FILTER.cats.includes(c))) return false;
   if (FILTER.fu !== 'all' && (FU[f.id] || {v:'unknown'}).v !== FILTER.fu) return false;
+  if (FILTER.label && !LABELLED.has(f.id)) return false;
   return true;
 }
 function render(){
@@ -372,6 +381,8 @@ function render(){
     b.querySelector('.n').textContent = d === 'all' ? FINDINGS.length : FINDINGS.filter(f => dirOf(f) === d).length;
   }
   for (const b of document.querySelectorAll('.chip[data-sev]')) b.classList.toggle('on', FILTER.sev === b.dataset.sev);
+  { const b = document.querySelector('.chip[data-label]'); b.classList.toggle('on', FILTER.label);
+    b.querySelector('.n').textContent = FINDINGS.filter(f => LABELLED.has(f.id)).length; }
   for (const b of document.querySelectorAll('.chip[data-fu]')) {
     b.classList.toggle('on', FILTER.fu === b.dataset.fu);
     const n = b.querySelector('.n'); if (n) n.textContent = FINDINGS.filter(f => { const s = FILTER.fu; FILTER.fu = 'all'; const ok = passes(f); FILTER.fu = s; return ok && (FU[f.id]||{v:'unknown'}).v === b.dataset.fu; }).length;
@@ -401,7 +412,7 @@ function render(){
 for (const el of document.querySelectorAll('.card .stat, details ul')) el.innerHTML = linkify(el.innerHTML);
 document.getElementById('fuchips').addEventListener('click', e => {
   const b = e.target.closest('.chip'); if (!b) return;
-  FILTER.fu = b.dataset.fu;
+  if (b.dataset.label) FILTER.label = !FILTER.label; else FILTER.fu = b.dataset.fu;
   try { localStorage.setItem('fork-debt-filter', JSON.stringify(FILTER)); } catch (e) {}
   render();
 });

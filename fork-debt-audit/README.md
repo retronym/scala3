@@ -10,6 +10,7 @@ Rendered dashboard: https://claude.ai/artifact/UHFiTQqeEsX6ByHSiRHxWy (same cont
 
 - `dashboard.html` – the findings table (66 findings: 4 high, 24 medium), filterable by direction, severity, category and follow-up verdict, avenue summaries, assessment, with GitHub links for every commit and the PR it landed in. Standalone; open in a browser.
 - `findings.json` – the findings with their extracted commit, PR and issue references.
+- `port-to-scala3-prs.tsv` – every scala/scala PR carrying the `port-to-scala3` label ("Forward port to Scala 3 pending") as of 2026-10-22: four, all library, three merged and all three still unported (findings I5, I6, I7). The dashboard badges these PRs and has a chip for them.
 - `reports/followups/` – for every cited fix, what happened after it landed: its PR thread, linked issues and later commits in both repositories, with a verdict (clean, amended, regressed, caveat, unknown) and a porting note. `00-followup-brief.md` is the instruction given.
 - `reports/` – one markdown report per audited area, in a fixed format: file pairs with port date and later upstream commit count, findings with severity, confidence, locations and the upstream fix commit, what was already ported, and method notes. `00-agent-brief.md` is the instruction every agent was given.
 - `sim.tsv` – for each scala3 source file, the scala/scala 2.13.x file sharing the most exact (whitespace-normalized) lines, with counts.
@@ -35,6 +36,10 @@ Reverse debt: fixes made in the Scala 3 copies that 2.13.x never received (the i
 ## Follow-up pass
 
 Every cited PR and issue was read for regressions and amendments before anyone ports a fix. Three fixes regressed after landing (the StringContext chunking in scala/scala#7996 broke non-String splices and was corrected in #8315; the classpath close/refcount scheme needed six follow-up PRs; the Scala 3 IO refactor behind the VirtualDirectory regression), nine were amended later, and several should not be ported at all: per-line argfile tokenizing (scala/scala#10319 moved toward whole-file), classfile buffer reuse (scala3#26481 removed it after measuring), the TASTy 28.7 freeze (documented policy). ArrayOps in Scala 3 is bytecode overlaid from the 2.13 jar, so its source fixes have no effect until the next stdlib bump.
+
+## The port-to-scala3 label
+
+scala/scala has one upstream signal for this problem: the `port-to-scala3` label, created in May 2026 and applied by lrytz to four PRs. Nothing on the scala3 side consumes it: no matching label, no issue, no bot. All three merged labelled PRs are still unported, so today it is a backlog nobody drains, and it is only applied to library PRs; none of this audit's compiler findings had any upstream marker.
 
 ## Reproducing the scans
 
