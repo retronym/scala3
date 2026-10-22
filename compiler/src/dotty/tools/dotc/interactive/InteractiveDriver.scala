@@ -184,7 +184,7 @@ class InteractiveDriver(
      */
     def complete(): List[Diagnostic] =
       beginTyping()
-      while skipped.nonEmpty do
+      while skipped.nonEmpty && !poisoned do
         val batch = skipped.sortBy(_.stat.span.start)
         skipped = Nil
         run.clearTargeting() // no target: each statement typed whole
@@ -192,14 +192,20 @@ class InteractiveDriver(
         try
           for sk <- batch do
             assertOwnSource(sk)
-            val ctx0 = sk.ctx
-            try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
-            catch case ex: CompilationUnit.CancelledCompilation =>
-              // the ones typed so far are kept; the aborted one is replaced
-              // or poisons the session, as in a resume
-              skipped = skipped ++ batch.dropWhile(_ ne sk).drop(1)
-              abandon(sk)
-              throw ex
+            liveContext(sk.ctx) match
+              case None =>
+                // no typer state left to type it in: it stays skipped, and the
+                // next request starts fresh
+                skipped = sk :: skipped
+                poisoned = true
+              case Some(ctx0) =>
+                try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
+                catch case ex: CompilationUnit.CancelledCompilation =>
+                  // the ones typed so far are kept; the aborted one is replaced
+                  // or poisons the session, as in a resume
+                  skipped = skipped ++ batch.dropWhile(_ ne sk).drop(1)
+                  abandon(sk)
+                  throw ex
         finally
           val entries = typed.result()
           if entries.nonEmpty then spliceAll(entries)(using entries.head._1.ctx)
@@ -217,13 +223,37 @@ class InteractiveDriver(
      *  splice the result into the unit's typed tree.
      */
     def resume(sk: Run.SkippedStat, target: Span): List[Diagnostic] =
+      liveContext(sk.ctx) match
+        case None => InteractiveDriver.this.run(uri, source, target) // no typer state left to resume in
+        case Some(ctx0) => resumeIn(sk, ctx0, target)
+
+    /** The recorded context of a skipped statement, in the nearest typer
+     *  state that can still take constraints. A statement skipped inside an
+     *  argument is recorded under the nested state that `tryEither` made for
+     *  the application, which is committed into its parent when the
+     *  application succeeds; typing under it would commit into a committed
+     *  state. Its parent holds everything it held, and what the application
+     *  instantiated afterwards. An explore state (not committable) is
+     *  climbed over the same way. `None` if no ancestor is live.
+     */
+    private def liveContext(ctx0: Context): Option[Context] =
+      def live(ts: TyperState | Null): TyperState | Null =
+        if ts == null then null
+        else if ts.isCommittable && !ts.hasBeenCommitted then ts
+        else live(ts.previousState)
+      val ts = ctx0.typerState
+      if ts.isCommittable && !ts.hasBeenCommitted then Some(ctx0)
+      else live(ts.previousState) match
+        case null => None
+        case ts1 => Some(ctx0.fresh.setTyperState(ts1))
+
+    private def resumeIn(sk: Run.SkippedStat, ctx0: Context, target: Span): List[Diagnostic] =
       beginTyping()
       assertOwnSource(sk)
       skipped = skipped.filterNot(_ eq sk)
       run.clearTargeting()
       run.typingTarget = target
       try
-        val ctx0 = sk.ctx
         run.targetNextStats(sk.owner, sk.inBlock)(using ctx0)
         val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
         collectSkipped()
@@ -361,34 +391,45 @@ class InteractiveDriver(
         }
       val ofOwner = entries.filter(!_._1.inBlock).groupBy(_._1.owner)
       val inBlocks = entries.filter(_._1.inBlock)
+      val placed = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Run.SkippedStat, java.lang.Boolean])
       val mapper = new tpd.TreeMap:
         override def transform(tree: Tree)(using Context): Tree = tree match
           // a skipped block definition's stub has an untyped type tree: not entered
           case t if !t.hasType => t
           case t: PackageDef if t.symbol.moduleClass.is(Flags.PackageClass) && ofOwner.contains(t.symbol.moduleClass) =>
             // and on into the classes and blocks it holds: their entries are theirs
+            ofOwner(t.symbol.moduleClass).foreach(e => placed.add(e._1))
             super.transform(tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2))))
           case t: Template if ofOwner.contains(t.symbol) =>
+            ofOwner(t.symbol).foreach(e => placed.add(e._1))
             super.transform(tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2))))
           // the innermost typed block containing a statement's span: its stubs
           // (a definition's) go, the typed statement is inserted in order (an
           // expression statement left no stub); a block nested in one of the
           // block's statements is reached by the traversal
           case b: Block if inBlocks.nonEmpty && (b.source eq src) =>
+            // a definition's place is the block that holds its stub, whatever
+            // else overlaps it there (the synthetic temporary of a pattern
+            // definition spans the vals it binds); an expression statement
+            // left no stub, and its place is the block that contains it
+            // directly, not through one of the block's statements
             val here = inBlocks.filter { (sk, _) =>
-              b.span.contains(sk.stat.span)
-              && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(sk)(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) }
+              b.stats.exists(isStubOf(sk))
+              || b.span.contains(sk.stat.span)
+                 && !(b.stats :+ b.expr).exists(t => t.span.exists && t.span != sk.stat.span && t.span.contains(sk.stat.span)) }
             if here.isEmpty then super.transform(b)
             else
               val stubs = here.map(_._1)
+              stubs.foreach(placed.add)
               super.transform(tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr))
           case _ => super.transform(tree)
       val t = mapper.transform(unit.tpdTree)
-      // Not asserted: every entry should find its owner group or block in the
-      // tree (an entry that does not is silently dropped), but counting them
-      // showed 236 of 238 spliced in `SessionOracleSuite` "Contexts-seed-1"
-      // (a random request and cancellation sequence over Contexts.scala):
-      // two typed statements found no place. A latent bug to triage.
+      // every typed statement finds its place: its owner's package or template,
+      // or the innermost typed block that contains it
+      val dropped = entries.filterNot(e => placed.contains(e._1))
+      assert(dropped.isEmpty, dropped.map { (sk, stats) =>
+        s"${sk.stat.getClass.getSimpleName}${sk.stat.span} owner=${sk.owner.showLocated} inBlock=${sk.inBlock} typed=${stats.map(_.getClass.getSimpleName).mkString(",")} \"${unit.source.textContent.slice(sk.stat.span.start, sk.stat.span.start + 50).replace('\n', ' ')}\""
+      }.mkString(s"spliced ${entries.size - dropped.size} of ${entries.size} typed statements; dropped: ", "; ", ""))
       unit.tpdTree = t
       // What `SetRootTree` would have done had the statements been typed in the phase
       inContext(ctx.fresh.setCompilationUnit(unit)):

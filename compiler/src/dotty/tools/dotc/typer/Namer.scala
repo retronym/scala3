@@ -440,6 +440,8 @@ class Namer { typer: Typer =>
         walkOwn(tree)
       case Thicket(trees) => trees.foreach(walk)
       case PackageDef(_, stats) => stats.foreach(walk)
+      // an `extension` block is not a DefTree; its expansion holds the methods
+      case tree: ExtMethods => tree.getAttachment(ExpandedTree).foreach(walk)
       case _ =>
     def walkOwn(tree: DefTree): Unit =
       tree.getAttachment(SymOfTree).foreach { sym =>
@@ -960,6 +962,10 @@ class Namer { typer: Typer =>
       val creationRunId = creationContext.runId
       if ctx.runId > creationRunId then
         assert(ctx.mode.is(Mode.Interactive), s"completing $denot in wrong run ${ctx.runId}, was created in $creationRunId")
+        // an earlier interactive run indexed it and left before completing it:
+        // its untyped tree belongs to that run. The degraded info is reported,
+        // so that what is computed from it knows an error is behind it.
+        report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
         try

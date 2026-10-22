@@ -489,6 +489,127 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  private val closureBody =
+    """|object Com {
+       |  def run(xs: List[Int]): Int = {
+       |    var acc = 0
+       |    xs.foreach { x =>
+       |      if (x > 0) { List(x, x).foreach(y => acc += y); Option(x).map(_ + 1).foreach(acc += _) }
+       |      acc += x
+       |    }
+       |    acc
+       |  }
+       |}
+       |""".stripMargin
+
+  @Test def `a-resume-into-a-closure-body-types-under-a-live-typer-state` =
+    // A statement skipped in a closure body is recorded under the typer state
+    // that tryEither made for the enclosing application, which is committed
+    // when the application succeeds. A resume into it must not type under that
+    // state: committing into a committed state is an assertion (I24).
+    val code = closureBody
+    val uri = URI.create("file:///Com.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atLast = code.indexOf("acc += x") + 4
+    val atInner = code.indexOf("List(x, x)") + 2
+    val (sameRun, before, after, at) = withDriver { d =>
+      d.runUpTo(uri, src, Span(atLast))
+      val run0 = d.runIdOf(uri)
+      val before = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 10)).trim)
+      d.runUpTo(uri, src, Span(atInner))
+      val after = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 10)).trim)
+      val unit = d.compilationUnits(uri)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      val path = Interactive.pathTo(unit.tpdTree, Span(atInner))
+      (d.runIdOf(uri) == run0, before, after, path.headOption.map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"))
+    }
+    println(s"[a-resume-into-a-closure-body] same run: $sameRun; before: $before; after: $after; at List(x, x): $at")
+    assert(before.exists(_.startsWith("if (x > 0)")), s"the if is skipped by the first request: $before")
+    assert(sameRun, "the second request resumes the first request's run")
+    assert(!after.exists(_.startsWith("if (x > 0)")), s"the if is typed by the second: $after")
+    assert(at.exists(_.contains("List")), s"the resumed statement is typed: $at")
+
+  @Test def `the-completing-run-types-a-closure-body-under-a-live-typer-state` =
+    // The same statement, typed by the whole-file run that completes the session (I24).
+    val code = closureBody
+    val uri = URI.create("file:///Com2.scala")
+    val src = SourceFile.virtual(uri, code)
+    val (fully, at) = withDriver { d =>
+      d.runUpTo(uri, src, Span(code.indexOf("acc += x") + 4))
+      d.run(uri, src)
+      val unit = d.compilationUnits(uri)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      val path = Interactive.pathTo(unit.tpdTree, Span(code.indexOf("List(x, x)") + 2))
+      (d.isFullyTyped(uri), path.headOption.map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"))
+    }
+    println(s"[the-completing-run-types-a-closure-body] fully typed: $fully; at List(x, x): $at")
+    assert(fully, "the whole-file run completes the session")
+    assert(at.exists(_.contains("List")), s"the statement in the closure body is typed: $at")
+
+  @Test def `leaving-a-file-completes-its-extension-methods` =
+    // Before a request leaves a file, the symbols of its skipped statements are
+    // completed in their own run (I17). An `extension` block is not a DefTree:
+    // its methods kept the left run's completers, the next run gave them an
+    // error type silently, and an inferred union over it tripped
+    // TypeOps.orDominator's assertion (I27).
+    val uriA = URI.create("file:///ExtA.scala")
+    val uriB = URI.create("file:///ExtB.scala")
+    val codeA =
+      """|object ExtA {
+         |  extension (s: String) def twice = s.length * 2
+         |  def n = 1
+         |}
+         |""".stripMargin
+    val codeB =
+      """|object ExtB {
+         |  import ExtA.*
+         |  def run(b: Boolean): Int = {
+         |    def pick = if b then "x".twice else 0
+         |    pick
+         |  }
+         |}
+         |""".stripMargin
+    val (diags, tpe) = withDriver { d =>
+      d.runUpTo(uriA, SourceFile.virtual(uriA, codeA), Span(codeA.indexOf("def n") + 5))
+      val diags = d.run(uriB, SourceFile.virtual(uriB, codeB))
+      val unit = d.compilationUnits(uriB)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      val path = Interactive.pathTo(unit.tpdTree, Span(codeB.indexOf("\"x\".twice") + 5))
+      (diags.map(_.msg.message), path.headOption.map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"))
+    }
+    println(s"[leaving-a-file-completes-its-extension-methods] diagnostics: $diags; twice: $tpe")
+    org.junit.Assert.assertEquals(Nil, diags)
+    org.junit.Assert.assertEquals(Some("(s: String): Int"), tpe)
+
+  @Test def `a-pattern-definition-in-a-block-is-spliced` =
+    // `val (loc, store1) = ...` in a block desugars to a synthetic temporary,
+    // never skipped, and one val per name, skipped with stubs; the temporary's
+    // span covers the vals. The completing run's splice took the temporary for
+    // a statement nesting them and found no block to put them in (I31).
+    val code =
+      """|object Pat {
+         |  def pair(n: Int): (Int, String) = (n, n.toString)
+         |  def use(n: Int): Int = {
+         |    val (a, b) = pair(n)
+         |    val c = n + 1
+         |    a + b.length + c
+         |  }
+         |}
+         |""".stripMargin
+    val uri = URI.create("file:///Pat.scala")
+    val src = SourceFile.virtual(uri, code)
+    val (fully, atA) = withDriver { d =>
+      d.runUpTo(uri, src, Span(code.indexOf("n + 1") + 2))
+      d.run(uri, src)
+      val unit = d.compilationUnits(uri)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      val path = Interactive.pathTo(unit.tpdTree, Span(code.indexOf("val (a, b)") + 6))
+      (d.isFullyTyped(uri), path.headOption.map(t => s"${t.getClass.getSimpleName} ${t.symbol.name}"))
+    }
+    println(s"[a-pattern-definition-in-a-block-is-spliced] fully typed: $fully; at a: $atA")
+    assert(fully, "the whole-file run completes the session")
+    assert(atA.exists(_.endsWith(" a")), s"the pattern's val is in the tree: $atA")
+
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
     val heavy = Set(300)
