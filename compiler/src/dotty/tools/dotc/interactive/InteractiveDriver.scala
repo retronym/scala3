@@ -203,6 +203,25 @@ class InteractiveDriver(
       case _ =>
         run(uri, source, target)
 
+  /** Type the statement that defines `sym` if it is in the file of `uri` and
+   *  the session skipped it: a resume into it (or a fresh run for a local
+   *  definition), after which providers that read the typed tree of a
+   *  definition (`defTree`, a name position) find it. Returns whether
+   *  anything was typed, in which case the unit's tree is new.
+   */
+  def typeDefinitionOf(uri: URI, sym: Symbol): Boolean =
+    given Context = myCtx
+    mySession match
+      case s: Session if s.uri == uri && sym.exists && sym.span.exists
+          && { val f = sym.source.file; f != null && f.path == s.source.file.nn.path }
+          && s.skippedAt(Span(sym.span.point)).exists(!_.inBlock) =>
+        // a template-level statement: a resume keeps the request's own typed
+        // path (a local definition would take a fresh run and lose it; the
+        // ones the target refers to are typed by the dependency rule anyway)
+        runUpTo(uri, s.source, Span(sym.span.point))
+        true
+      case _ => false
+
   /** Type the skipped statement `sk` in the run and context it was skipped
    *  in, with `target` as the target for the statements nested in it, and
    *  splice the result into the unit's typed tree.

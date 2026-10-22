@@ -3570,7 +3570,13 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
-      ctx.run.nn.targetedStatsOwner = dummy
+      // Only a class that contains the target is typed along the path to it.
+      // A class typed for another reason (the synthetic class of a refinement
+      // type, an anonymous class, both typed inside an expression that a
+      // completer types ahead) is typed whole: its members were skipped and
+      // lost, so `Sel { def foo2: Int }` lost `foo2`.
+      if cdef.span.contains(ctx.run.nn.typingTarget) then
+        ctx.run.nn.targetedStatsOwner = dummy
       val body1 =
         implementDeferredGivens(
           addParentRefinements(
@@ -3754,6 +3760,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
                   if !pobj.symbol.isCompleting then
                     pobj.symbol.ensureCompleted()
               case _ =>
+          // a package clause is never skipped as a statement, so one that does not
+          // contain the target is targeted too: all of its statements are skipped
           ctx.run.nn.targetedStatsOwner = pkg.moduleClass
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)

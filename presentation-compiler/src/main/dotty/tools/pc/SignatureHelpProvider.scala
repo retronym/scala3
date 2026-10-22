@@ -44,7 +44,18 @@ object SignatureHelpProvider:
         given Context =
           newctx.setPrinterFn(_ => ShortenedTypePrinter(search, IncludeDefaultParam.Never)(using indexedContext))
 
-        val (paramN, callableN, alternatives) = Signatures.signatureHelp(path, pos.span)
+        val (paramN, callableN, alternatives) = locally {
+          val first @ (_, _, alternatives0) = Signatures.signatureHelp(path, pos.span)
+          // a callee defined in this file whose statement the targeted run
+          // skipped is typed now (its typed tree gives the return type of an
+          // erroneous signature); then the help is computed over the new tree
+          val typedNow = alternatives0.flatMap(_.denot).map(_.symbol).filter(sym => driver.typeDefinitionOf(uri, sym))
+          if typedNow.isEmpty then first
+          else
+            val unit1 = driver.compilationUnits(uri)
+            val ctx1 = summon[Context].fresh.setCompilationUnit(unit1)
+            Signatures.signatureHelp(Interactive.pathTo(unit1.tpdTree, pos.span)(using ctx1), pos.span)(using ctx1)
+        }
 
         val infos = alternatives.flatMap: signature =>
           signature.denot.map(signature -> _)

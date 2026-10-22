@@ -139,6 +139,10 @@ class PcDefinitionProvider(
   )(using ctx: Context): List[Location] =
     val isLocal = symbol.source == pos.source
     if isLocal then
+      // a definition the targeted run skipped is typed now (a resume); for an
+      // export forwarder, the forwarded definition too
+      driver.typeDefinitionOf(uri, symbol)
+      if symbol.sourceSymbol != symbol then driver.typeDefinitionOf(uri, symbol.sourceSymbol)
       val trees = driver.openedTrees(uri)
       val include = Include.definitions | Include.local
       val (exportedDefs, otherDefs) =
