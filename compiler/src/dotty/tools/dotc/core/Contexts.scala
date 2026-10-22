@@ -551,7 +551,16 @@ object Contexts {
         base.recursiveDepth = depth + 1
         ops(depth).title = title
         ops(depth).details = details
+        ops(depth).details2 = null
         ops(depth).pos = pos
+      try block
+      finally base.recursiveDepth = depth
+
+    /** `handleRecursive` with details made of two operands and a separator, recorded without allocating a closure */
+    final inline def handleRecursive2[T](title: String, d1: Showable, sep: String, d2: Showable)(inline block: T): T =
+      // Only the depth bookkeeping is inlined; recording the operation, or throwing on overflow, is `enterRecursive2`
+      val depth = base.recursiveDepth
+      if depth >= 0 then base.enterRecursive2(depth, title, d1, sep, d2)(using this)
       try block
       finally base.recursiveDepth = depth
 
@@ -1075,6 +1084,16 @@ object Contexts {
     // before the compiler has really started
     private[dotc] var recursiveDepth: Int = 0
     private[dotc] var recursiveOperations: Array[RecursiveOperation] = Array.fill(10)(RecursiveOperation.blank())
+
+    /** The out-of-line part of `handleRecursive2`, for `depth >= 0`: record the operation at `depth`, or throw
+     *  `RecursionOverflow` if there is no fuel left.
+     */
+    private[dotc] def enterRecursive2(depth: Int, title: String, d1: Showable, sep: String, d2: Showable)(using Context): Unit =
+      val ops = recursiveOperations
+      if depth >= ops.length then
+        throw RecursionOverflow(ops, title, d1, sep, d2)
+      recursiveDepth = depth + 1
+      ops(depth).set(title, d1, sep, d2)
 
     // Types state
     /** A table for hash consing unique types */
