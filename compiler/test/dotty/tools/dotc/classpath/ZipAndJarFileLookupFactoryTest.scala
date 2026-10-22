@@ -49,6 +49,39 @@ class ZipAndJarFileLookupFactoryTest {
     } finally Files.delete(f)
   }
 
+  @Test def cacheInvalidationOnSizeChange(): Unit = {
+    if (scala.util.Properties.isWin) return // can't overwrite an open file on windows.
+
+    val f = Files.createTempFile("test-", ".jar")
+    Files.delete(f)
+
+    given Context = new ContextBase().initialCtx
+
+    def createCp = ZipAndJarClassPathFactory.create(AbstractFile.getFile(f).nn)
+    try {
+      createZip(f, Array(), "p1/C.class")
+      val cp1 = createCp
+      assert(cp1.findClassFile("p1.C").isDefined)
+
+      // Overwrite the jar in place (same file key), with a different size but the same last modified time,
+      // as can happen on file systems with a coarse timestamp resolution.
+      val lastMod1 = Files.getLastModifiedTime(f)
+      val other = Files.createTempFile("test-", ".jar")
+      Files.delete(other)
+      createZip(other, Array(), "p1/LongerName.class")
+      try Files.write(f, Files.readAllBytes(other))
+      finally Files.delete(other)
+      Files.setLastModifiedTime(f, lastMod1)
+
+      // The size differs, so we expect a cache miss.
+      // (We don't check the contents seen through `cp2`: `cp1` still holds the jar open, and
+      // `java.util.zip.ZipFile` shares the open file's index with a new `ZipFile` of the same file key and
+      // last modified time.)
+      val cp2 = createCp
+      assert(cp1 ne cp2)
+    } finally Files.delete(f)
+  }
+
   def createZip(zipLocation: Path, content: Array[Byte], internalPath: String): Unit = {
     val env = new java.util.HashMap[String, String]()
     env.put("create", String.valueOf(Files.notExists(zipLocation)))

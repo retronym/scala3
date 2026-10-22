@@ -18,11 +18,7 @@ class MultiReleaseJarTest extends DottyBytecodeTest {
   @Test
   def mrJar(): Unit = {
 
-    // The test fails if the same jar file gets reused. This might be a caching problem in our classpath implementation
-
-    val jar1 = Files.createTempFile("mr-jar-test-", ".jar")
-    val jar3 = Files.createTempFile("mr-jar-test-", ".jar")
-    val jar2 = Files.createTempFile("mr-jar-test-", ".jar")
+    val jar = Files.createTempFile("mr-jar-test-", ".jar")
 
     def classBytes(code: String): Array[Byte] =
       val outDir = compileCode(code :: Nil)
@@ -47,23 +43,23 @@ class MultiReleaseJarTest extends DottyBytecodeTest {
     }
 
     try {
-      List(jar1, jar2, jar3).foreach(temp => createZip(temp, List(
+      createZip(jar, List(
         "/p1/Foo.class" -> classBytes(defaultFooDef),
         "/p2/Bar.class" -> classBytes(defaultBarDef),
         "/META-INF/versions/9/p1/Foo.class" -> classBytes(java9FooDef),
         "/META-INF/versions/10/p2/Bar.class" -> classBytes(java10BarDef),
         "/META-INF/MANIFEST.MF" -> createManifest)
-      ))
-
-      assertEquals(Set("foo1", "bar1"), apiMethods(jar1, "8"))
-      assertEquals(Set("foo1", "foo2", "bar1"), apiMethods(jar2, "9"))
-
-      assertEquals(Set("foo1", "foo2", "bar1", "bar2"), apiMethods(jar3, "10"))
-    } finally
-      List(jar1, jar2, jar3).forall(path =>
-        try Files.deleteIfExists(path)
-        catch case _: IOException => false
       )
+
+      // The same jar is seen by compilers with different `-release` in one JVM: the classpath cache must not
+      // hand one compiler the multi-release view of another.
+      assertEquals(Set("foo1", "bar1"), apiMethods(jar, "8"))
+      assertEquals(Set("foo1", "foo2", "bar1"), apiMethods(jar, "9"))
+      assertEquals(Set("foo1", "foo2", "bar1", "bar2"), apiMethods(jar, "10"))
+      assertEquals(Set("foo1", "bar1"), apiMethods(jar, "8"))
+    } finally
+      try Files.deleteIfExists(jar)
+      catch case _: IOException => ()
   }
 
   @Test
