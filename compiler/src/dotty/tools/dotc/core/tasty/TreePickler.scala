@@ -6,6 +6,7 @@ package tasty
 import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 import dotty.tools.tasty.TastyBuffer.*
+import dotty.tools.tasty.util.Util.dble
 
 import ast.Trees.*
 import ast.{untpd, tpd}
@@ -63,6 +64,10 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   private inline def withLength(inline op: Unit) = {
     val lengthAddr = reserveRef(relative = true)
+    if typeDepth > 0 then
+      if numTypeLengths == typeLengths.length then typeLengths = dble(typeLengths)
+      typeLengths(numTypeLengths) = lengthAddr.index
+      numTypeLengths += 1
     op
     fillRef(lengthAddr, currentAddr, relative = true)
   }
@@ -114,6 +119,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       writeRef(label)
 
   private def pickleForwardSymRef(sym: Symbol)(using Context) = {
+    incomparable += 1
     val ref = reserveRef(relative = false)
     assert(!sym.is(Flags.Package), sym)
     forwardSymRefs(sym) = ref :: forwardSymRefs.getOrElse(sym, Nil)
@@ -167,18 +173,138 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
           else STABLE)
     case _ =>
 
+  /** The parts of the types being pickled, as triples of start, end and the address where they
+   *  are pickled in full, and the addresses of their length fields, innermost type last.
+   *  See `pickleType`.
+   */
+  private var typeParts = new Array[Int](64)
+  private var numTypeParts = 0
+  private var typeLengths = new Array[Int](16)
+  private var numTypeLengths = 0
+  private var typeDepth = 0
+
+  /** The pickled form of a type: its bytes, except for the length fields, with each part replaced
+   *  by the address where it is pickled in full, encoded as a negative number. Unlike the bytes,
+   *  this does not depend on whether a part is pickled in place or as a `SHAREDtype`.
+   */
+  private class PickledForm(val elems: Array[Int], val size: Int):
+    override def hashCode: Int =
+      var h = size
+      var i = 0
+      while i < size do
+        h = 31 * h + elems(i)
+        i += 1
+      h
+    override def equals(that: Any): Boolean = that match
+      case that: PickledForm => java.util.Arrays.equals(elems, 0, size, that.elems, 0, that.size)
+      case _ => false
+
+  private var formScratch = new Array[Int](64)
+
+  /** The pickled form of the type pickled from `start` to `end`, whose parts and length fields
+   *  start at `partsMark` and `lengthsMark`, in `formScratch`.
+   */
+  private def pickledForm(start: Int, end: Int, partsMark: Int, lengthsMark: Int): PickledForm =
+    var size = 0
+    def add(elem: Int) =
+      if size == formScratch.length then formScratch = dble(formScratch)
+      formScratch(size) = elem
+      size += 1
+    var i = start
+    var part = partsMark
+    var length = lengthsMark
+    while i < end do
+      if part < numTypeParts && typeParts(part) == i then
+        add(-1 - typeParts(part + 2))
+        i = typeParts(part + 1)
+        part += 3
+      else if length < numTypeLengths && typeLengths(length) == i then
+        i += AddrWidth
+        length += 1
+      else
+        add(bytes(i) & 0xff)
+        i += 1
+    PickledForm(formScratch, size)
+
+  /** The address of each type pickled in full so far, by its pickled form */
+  private val typesByForm = util.HashMap[PickledForm, Addr]()
+
+  /** Counts what is pickled that makes pickled forms unfit for comparison, or that `dropFrom`
+   *  cannot undo: forward references to symbols, which are filled in later, and trees in annotations.
+   */
+  private var incomparable = 0
+
+  /** The types entered in `pickledTypes` while pickling the outermost type, in order, so that
+   *  the entries pointing into bytes that are dropped can be removed.
+   */
+  private val pickledTypesOrder = mutable.ArrayBuffer[Type]()
+
+  private def enterPickledType(tpe: Type, addr: Addr): Unit =
+    pickledTypes(tpe) = addr
+    pickledTypesOrder += tpe
+
+  /** Drop the bytes from `start` on, and the types pickled there, which were entered after `mark` */
+  private def dropFrom(start: Addr, mark: Int): Unit =
+    truncate(start)
+    while pickledTypesOrder.length > mark do
+      val tpe = pickledTypesOrder.remove(pickledTypesOrder.length - 1)
+      val addr = pickledTypes.lookup(tpe)
+      if addr != null && addr.index >= start.index then pickledTypes.remove(tpe)
+
+  /** Pickles `tpe`, or a reference to an earlier type with the same pickled form.
+   *
+   *  Types are shared by pickled form, not by identity: equal types are not always the same object,
+   *  e.g. a reference to a package can be a `TermRef` or a `ThisType`, depending on whether the
+   *  type comes from source or from a classfile. Sharing them only if identical would make the
+   *  TASTy depend on that. A type is pickled before its pickled form is known, so its parts have
+   *  been shared already, and, if an earlier type has the same form, it consists of references only.
+   */
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
     printOnAssertionError(i"error when pickling type $tpe") {
+      val start = currentAddr
+      var inFull = start // where `tpe` is pickled in full
       val prev: Addr | Null = pickledTypes.lookup(tpe)
       if (prev == null) {
-        pickledTypes(tpe) = currentAddr
-        pickleNewType(tpe, richTypes)
+        val mark = pickledTypesOrder.length
+        val incomparableBefore = incomparable
+        enterPickledType(tpe, start) // for references to `tpe` as a binder while pickling it
+        val partsMark = numTypeParts
+        val lengthsMark = numTypeLengths
+        typeDepth += 1
+        try pickleNewType(tpe, richTypes)
+        finally typeDepth -= 1
+        val end = currentAddr.index
+        if numTypeParts - partsMark == 3 && typeParts(partsMark) == start.index && typeParts(partsMark + 1) == end then
+          // `tpe` is pickled as one of its parts, e.g. the underlying type of a `LazyRef`
+          inFull = Addr(typeParts(partsMark + 2))
+          pickledTypes(tpe) = inFull
+        else if incomparable == incomparableBefore && end > start.index then
+          val key = pickledForm(start.index, end, partsMark, lengthsMark)
+          typesByForm.lookup(key) match
+            case null =>
+              typesByForm(PickledForm(java.util.Arrays.copyOf(key.elems, key.size), key.size)) = start
+            case same: Addr =>
+              dropFrom(start, mark)
+              enterPickledType(tpe, same)
+              writeByte(SHAREDtype)
+              writeRef(same)
+              inFull = same
+        numTypeParts = partsMark
+        numTypeLengths = lengthsMark
       }
       else {
         writeByte(SHAREDtype)
         writeRef(prev)
+        inFull = prev
       }
+      if typeDepth > 0 then
+        if numTypeParts + 3 > typeParts.length then typeParts = dble(typeParts)
+        typeParts(numTypeParts) = start.index
+        typeParts(numTypeParts + 1) = currentAddr.index
+        typeParts(numTypeParts + 2) = inFull.index
+        numTypeParts += 3
+      else pickledTypesOrder.clear() // nothing from here on is dropped
     }
   }
 
@@ -273,6 +399,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         pickleVariances(tpe.hi)
       }
     case tpe: AnnotatedType =>
+      incomparable += 1
       writeByte(ANNOTATEDtype)
       withLength:
         pickleType(tpe.parent, richTypes)
