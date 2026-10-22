@@ -6,6 +6,13 @@
   "prurl": "https://github.com/scala/scala3/pull/27077",
   "subject": "Micro-optimizations, mostly focused on allocations (#27077)"
  },
+ "0529819b53": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/0529819b536cc1dccb2a619599411cf095434ea5",
+  "pr": null,
+  "prurl": null,
+  "subject": "Expand tests for unregistering Await latches"
+ },
  "06347fc82d": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/06347fc82d3d438d57988d93c665ac21aaef89bf",
@@ -19,6 +26,13 @@
   "pr": "9557",
   "prurl": "https://github.com/scala/scala/pull/9557",
   "subject": "Cache JRT and --release (ct.sym) classpath elements."
+ },
+ "0902c3ba3e": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/0902c3ba3ed6f83a380c2582df64e676d9b88991",
+  "pr": "11515",
+  "prurl": "https://github.com/scala/scala3/pull/11515",
+  "subject": "Parse parameter names from classfiles"
  },
  "0c8c581143": {
   "repo": "scala/scala3",
@@ -61,6 +75,13 @@
   "pr": "3867",
   "prurl": "https://github.com/scala/scala/pull/3867",
   "subject": "SI-8708 Fix pickling of LOCAL_CHILD child of sealed classes"
+ },
+ "1ac2451178": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/1ac2451178e1d2c94a8eb192e76adf8c0ca947ae",
+  "pr": "10776",
+  "prurl": "https://github.com/scala/scala/pull/10776",
+  "subject": "Warn if interpolator uses ref.toString"
  },
  "1b1bc81484": {
   "repo": "scala/scala",
@@ -110,6 +131,13 @@
   "pr": "8556",
   "prurl": "https://github.com/scala/scala/pull/8556",
   "subject": "Avoid temporary byte arrays when reading .class/.sig or source files from VirtualFile"
+ },
+ "294fca1e18": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/294fca1e18ea4fa89760343d49022590d3cceec3",
+  "pr": "11214",
+  "prurl": "https://github.com/scala/scala/pull/11214",
+  "subject": "remove stale '@nowarn's"
  },
  "29f116f1f2": {
   "repo": "scala/scala",
@@ -173,6 +201,13 @@
   "pr": "7712",
   "prurl": "https://github.com/scala/scala/pull/7712",
   "subject": "Use file size as part of the cache invalidation"
+ },
+ "416536e7fd": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/416536e7fdb211c0e840199e8de39fe124846399",
+  "pr": "10114",
+  "prurl": "https://github.com/scala/scala/pull/10114",
+  "subject": "process.Parser strips escaping backslash"
  },
  "493f985520": {
   "repo": "scala/scala",
@@ -321,6 +356,13 @@
   "prurl": "https://github.com/scala/scala/pull/10364",
   "subject": "Format constant args constantly consistently"
  },
+ "803dd5773e": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/803dd5773ee4caf3771740e131c67e42e2999c66",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "Only assume the string value of strings"
+ },
  "856c111449": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/856c111449d870ca3754978801c941bd9f65cdb6",
@@ -369,6 +411,13 @@
   "pr": "11286",
   "prurl": "https://github.com/scala/scala/pull/11286",
   "subject": "Unregister Future Await latches on timeout or interrupt"
+ },
+ "9429c4e205": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/9429c4e205d65a927255ca0103e7763445aa8af1",
+  "pr": "8871",
+  "prurl": "https://github.com/scala/scala/pull/8871",
+  "subject": "Reusable Instance: replace single-var with a mutable Stack."
  },
  "945f7b12c9": {
   "repo": "scala/scala",
@@ -432,6 +481,13 @@
   "pr": null,
   "prurl": null,
   "subject": "Merge pull request #11302 from lrytz/t12974"
+ },
+ "a8225a093d": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/a8225a093da82381cc4bd7634492c237a3defcc9",
+  "pr": "9548",
+  "prurl": "https://github.com/scala/scala/pull/9548",
+  "subject": "SI-12290: support JDK15 text blocks in Java parser"
  },
  "a98b104aaa": {
   "repo": "scala/scala3",
@@ -503,6 +559,13 @@
   "prurl": "https://github.com/scala/scala/pull/7712",
   "subject": "[backport] Resource management for macro/plugin classloaders, classpath JARs"
  },
+ "d155007b89": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/d155007b89559e6c81c5b56404c984fadc130813",
+  "pr": "11155",
+  "prurl": "https://github.com/scala/scala/pull/11155",
+  "subject": "Include object in search list"
+ },
  "d3e7895798": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/d3e7895798ce80a4f7042563cd83b6d8926fb61b",
@@ -510,12 +573,26 @@
   "prurl": "https://github.com/scala/scala/pull/10670",
   "subject": "Upgrade tasty format, copy new tasty config"
  },
+ "d6083a4dcf": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/d6083a4dcf2e1a79aa1410b5bc9e0902ee875fc8",
+  "pr": "8315",
+  "prurl": "https://github.com/scala/scala/pull/8315",
+  "subject": "Fix regression in large string interpolations with non-String typed splices"
+ },
  "d856d1510c": {
   "repo": "scala/scala",
   "url": "https://github.com/scala/scala/commit/d856d1510ce8488914d0a4ae2bc9623bfb7de1c9",
   "pr": "10740",
   "prurl": "https://github.com/scala/scala/pull/10740",
   "subject": "Use correct position for error in escape"
+ },
+ "d874f79719": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/d874f797193e2a581d7a490ce9ac55b707d6bb51",
+  "pr": "10197",
+  "prurl": "https://github.com/scala/scala/pull/10197",
+  "subject": "Document: don't allow characters with unicode property Bidi_Class in source files"
  },
  "da99eb87b0": {
   "repo": "scala/scala3",
@@ -608,11 +685,25 @@
   "prurl": "https://github.com/scala/scala/pull/10017",
   "subject": "Error on source files with unicode directional formatting characters"
  },
+ "fdf73696ac": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/fdf73696ac3aa62940b7a0a5b7b9bf20114011c4",
+  "pr": null,
+  "prurl": null,
+  "subject": "fix: Java leading annotation parsing"
+ },
  "ff88d25f2b": {
   "repo": "scala/scala3",
   "url": "https://github.com/scala/scala3/commit/ff88d25f2b63bb50ed35cdb5db3920b91908d21e",
   "pr": "27205",
   "prurl": "https://github.com/scala/scala3/pull/27205",
   "subject": "Stop checking tasty UUIDs in class files (#27205)"
+ },
+ "ffdc25bf46": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/ffdc25bf46ca45834b65659cefd623ae34114352",
+  "pr": "27292",
+  "prurl": "https://github.com/scala/scala3/pull/27292",
+  "subject": "Avoid boxing when computing SourceFile line indices (#27292)"
  }
 }
