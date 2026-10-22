@@ -12,6 +12,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.Signatures
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.pc.printer.ShortenedTypePrinter
 import dotty.tools.pc.printer.ShortenedTypePrinter.IncludeDefaultParam
 import dotty.tools.pc.utils.InteractiveEnrichments.*
@@ -28,7 +29,8 @@ object SignatureHelpProvider:
     val uri = params.uri().nn
     val text = params.text().nn
     val sourceFile = SourceFile.virtual(uri, text)
-    driver.run(uri.nn, sourceFile)
+    // only the path to the position is typed (unless -Yno-targeted-requests)
+    driver.runUpTo(uri.nn, sourceFile, Span(params.offset()))
 
     driver.compilationUnits.get(uri) match
       case Some(unit) =>

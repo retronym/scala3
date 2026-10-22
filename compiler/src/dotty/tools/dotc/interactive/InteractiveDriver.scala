@@ -84,6 +84,12 @@ class InteractiveDriver(
   }
 
   private var myCtx: Context = myInitCtx
+
+  /** Does `runUpTo` type only the path to its target? Off with
+   *  `-Yno-targeted-requests`, in which case every request types the whole
+   *  file as `run` does: the gate on the behaviour of this branch.
+   */
+  val targetedRequests: Boolean = !myInitCtx.settings.YnoTargetedRequests.value(using myInitCtx)
   def currentCtx: Context = myCtx
 
   private val compiler: Compiler = new InteractiveCompiler
@@ -172,7 +178,8 @@ class InteractiveDriver(
    *  tree use `run` instead.
    */
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    mySession match
+    if !targetedRequests then run(uri, source)
+    else mySession match
       case s: Session if s.uri == uri && s.source.textContent() == source.textContent() =>
         // A run that had a completion unwound by an exception of unknown
         // effect (not a cycle, not a cancellation) holds state nothing should

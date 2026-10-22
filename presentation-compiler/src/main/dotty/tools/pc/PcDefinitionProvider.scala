@@ -19,6 +19,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.Interactive.Include
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.dotc.util.SourcePosition
 import dotty.tools.io.FileExtension
 import dotty.tools.pc.utils.InteractiveEnrichments.*
@@ -43,10 +44,8 @@ class PcDefinitionProvider(
     val uri = params.uri().nn
     val text = params.text().nn
     val filePath = Paths.get(uri)
-    driver.run(
-      uri,
-      SourceFile.virtual(filePath.toString, text)
-    )
+    // only the path to the position is typed (unless -Yno-targeted-requests)
+    driver.runUpTo(uri, SourceFile.virtual(filePath.toString, text), Span(params.offset()))
 
     val pos = driver.sourcePosition(params)
     val path =

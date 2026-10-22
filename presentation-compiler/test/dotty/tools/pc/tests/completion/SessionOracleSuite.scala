@@ -135,6 +135,22 @@ class SessionOracleSuite extends BasePCSuite:
       println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms")
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  /** The gate: with `-Yno-targeted-requests` a `runUpTo` types the whole
+   *  file, as `run` does, and leaves no skipped statement.
+   */
+  @Test def `the-knob-turns-targeting-off` =
+    val rel = "core/classfile/ByteCodecs.scala"
+    val root = sourcesRoot.getOrElse(throw new AssertionError("compiler sources not found"))
+    val path = root.resolve(rel); val content = Files.readString(path); val uri = path.toUri
+    val source = SourceFile.virtual(uri, content)
+    val target = Span(content.indexOf("val dstlen") + 4)
+    val on = newDriver(); on.runUpTo(uri, source, target)
+    val off = new InteractiveDriver(settings :+ "-Yno-targeted-requests", CachedLogicalPackage.none); off.runUpTo(uri, source, target)
+    println(s"[knob] targeted: ${on.targetedRequests}, skipped ${on.untypedSpans(uri).size}; -Yno-targeted-requests: ${off.targetedRequests}, skipped ${off.untypedSpans(uri).size}, fully typed ${off.isFullyTyped(uri)}")
+    org.junit.Assert.assertTrue("targeting is on by default and skips something", on.targetedRequests && on.untypedSpans(uri).nonEmpty)
+    org.junit.Assert.assertTrue("-Yno-targeted-requests types the whole file", !off.targetedRequests && off.untypedSpans(uri).isEmpty && off.compilationUnits.contains(uri))
+    org.junit.Assert.assertEquals(describe(on, uri, target.start), describe(off, uri, target.start))
+
   @Test def `ByteCodecs-seed-1` = oracle("core/classfile/ByteCodecs.scala", 1, 300)
   @Test def `ByteCodecs-seed-2` = oracle("core/classfile/ByteCodecs.scala", 2, 300)
   @Test def `SourceTree-seed-1` = oracle("interactive/SourceTree.scala", 1, 300)
