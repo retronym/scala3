@@ -225,7 +225,7 @@ class InteractiveDriver(
   /** `-Yinteractive-log`: one line per request on stderr (the Metals log), with
    *  what the run did, so that the session can be observed from an editor.
    */
-  private val logRequests: Boolean = myInitCtx.settings.YinteractiveLog.value(using myInitCtx)
+  val logRequests: Boolean = myInitCtx.settings.YinteractiveLog.value(using myInitCtx)
 
   /** The last segment of `uri`, for the log; a `jar:` URI (a source in a
    *  sources jar, opened by a jump into the library) has no path.
@@ -442,11 +442,10 @@ class InteractiveDriver(
         // a skipped block definition's stub has an untyped type tree: not entered
         case t if !t.hasType => t
         case t: PackageDef if t.symbol.moduleClass.is(Flags.PackageClass) && ofOwner.contains(t.symbol.moduleClass) =>
-          val t1 = tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2)))
-          if inBlocks.isEmpty then t1 else super.transform(t1)
+          // and on into the classes and blocks it holds: their entries are theirs
+          super.transform(tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2))))
         case t: Template if ofOwner.contains(t.symbol) =>
-          val t1 = tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2)))
-          if inBlocks.isEmpty then t1 else super.transform(t1)
+          super.transform(tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2))))
         // the innermost typed block containing a statement's span: its stubs
         // (a definition's) go, the typed statement is inserted in order (an
         // expression statement left no stub); a block nested in one of the
@@ -458,8 +457,7 @@ class InteractiveDriver(
           if here.isEmpty then super.transform(b)
           else
             val stubs = here.map(_._1)
-            val b1 = tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr)
-            if inBlocks.size == here.size then b1 else super.transform(b1)
+            super.transform(tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr))
         case _ => super.transform(tree)
     val t = mapper.transform(s.unit.tpdTree)
     s.unit.tpdTree = t

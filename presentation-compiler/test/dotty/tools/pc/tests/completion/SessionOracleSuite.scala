@@ -122,6 +122,10 @@ class SessionOracleSuite extends BasePCSuite:
           // which completes the session; the answers after it must still match
           driver.runUpTo(uri, source, Span(o)); driver.run(uri, source)
           log += s"$step run (whole file) run=${driver.runIdOf(uri)} fully=${driver.isFullyTyped(uri)}"
+          // the completed tree must hold every statement: identifiers never asked before
+          for _ <- 1 to 5 do
+            val (p, pn) = idents(rng.nextInt(idents.size))
+            check(step, "after-run", p, pn)
         if step % cancelEvery == 0 then
           val k = 1 + rng.nextInt(3)
           var p = 0
