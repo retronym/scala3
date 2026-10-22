@@ -302,6 +302,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   private var typedTreeCount = 0
 
+  /** The number of trees typed in this run so far (every `Typer.typed`). */
+  def typedTrees: Int = typedTreeCount
+
   /** Called by `Typer.typed` for every tree. Every 1024 trees, in interactive
    *  mode, polls the progress callback and aborts the run with a
    *  `CancelledCompilation` if it reports cancellation. Batch compilation is

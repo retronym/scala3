@@ -298,10 +298,10 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     assert(fresh.exists(_.startsWith("val b")) && fresh.exists(_.startsWith("val d")), s"b and d are skipped in a fresh run: $fresh")
     assert(resumed.exists(_.startsWith("val b")) && resumed.exists(_.startsWith("val d")), s"b and d are skipped in a resume: $resumed")
 
-  @Test def `a-target-in-a-skipped-block-statement-is-a-fresh-run` =
+  @Test def `a-target-in-a-skipped-block-statement-is-resumed` =
     // A request in a block statement that an earlier request skipped (a stub
-    // in the typed `Block`) starts a fresh run: resuming would type the
-    // statement without splicing it, and the stub would be served.
+    // in the typed `Block`) resumes the run: the statement is typed in the
+    // block's recorded context and replaces its stub in the typed tree.
     val code =
       """|object Blk2 {
          |  def enc(src: Array[Byte]): Array[Byte] = {
@@ -320,17 +320,20 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val src = SourceFile.virtual(uri, code)
     val atN = code.indexOf("val n =") + 5
     val atToByte = code.indexOf(".toByte") + 7
-    val (before, after, resumed) = withDriver { d =>
+    val (before, after, resumed, sameRun) = withDriver { d =>
       d.runUpTo(uri, src, Span(atN))
+      val run0 = d.runIdOf(uri)
       val before = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 9)).trim)
       d.runUpTo(uri, src, Span(atToByte))
+      val sameRun = d.runIdOf(uri) == run0
       val after = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 9)).trim)
       val unit = d.compilationUnits(uri)
       given Context = d.currentCtx.fresh.setCompilationUnit(unit)
       val path = Interactive.pathTo(unit.tpdTree, Span(atToByte))
-      (before, after, path.headOption.map(t => s"${t.getClass.getSimpleName} ${t.symbol.name}"))
+      (before, after, path.headOption.map(t => s"${t.getClass.getSimpleName} ${t.symbol.name}"), sameRun)
     }
-    println(s"[a-target-in-a-skipped-block-statement-is-a-fresh-run] before: $before; after: $after; at toByte: $resumed")
+    println(s"[a-target-in-a-skipped-block-statement-is-resumed] before: $before; after: $after; at toByte: $resumed; same run: $sameRun")
+    assert(sameRun, "the second request resumes the first request's run")
     assert(before.exists(_.startsWith("while")), s"the while is skipped by the first request: $before")
     assert(!after.exists(_.startsWith("while")), s"the while is typed by the second: $after")
     assert(resumed.contains("Select toByte"), s"the tree at the target is the typed select: $resumed")

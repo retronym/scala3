@@ -177,7 +177,32 @@ class InteractiveDriver(
    *  tree, without the skipped statements; providers that need the whole
    *  tree use `run` instead.
    */
+  /** `-Yinteractive-log`: one line per request on stderr (the Metals log), with
+   *  what the run did, so that the session can be observed from an editor.
+   */
+  private val logRequests: Boolean = myInitCtx.settings.YinteractiveLog.value(using myInitCtx)
+
+  private def logged[T](what: String)(body: => T)(outcome: => String): T =
+    if !logRequests then body
+    else
+      val t0 = System.nanoTime()
+      try body
+      finally System.err.println(f"[dotc-session] $what ${outcome} ${(System.nanoTime() - t0) / 1e6}%.1f ms")
+
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    val before = mySession
+    val skippedBefore = if before == null then -1 else before.skipped.size
+    logged(s"runUpTo ${uri.getPath.nn.split('/').last}@${target.start}")(runUpTo0(uri, source, target)) {
+      val s = mySession
+      val how =
+        if s eq null then "whole-file"
+        else if !(s eq before) then "fresh"
+        else if s.skipped.size != skippedBefore then "resumed"
+        else "served"
+      s"$how run=${runIdOf(uri)} typedTop=${typedPrefixLength(uri)} skipped=${untypedSpans(uri).size}${if s != null then s" trees=${s.run.typedTrees}" else ""}"
+    }
+
+  private def runUpTo0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     if !targetedRequests then run(uri, source)
     else mySession match
       case s: Session if s.uri == uri && s.source.textContent() == source.textContent() =>
@@ -195,11 +220,10 @@ class InteractiveDriver(
           case None => s.diagnostics
           case Some(sk) =>
             // A statement skipped inside a block left a stub in the typed
-            // `Block`, and a typed `Block` is not spliced: resuming into it
-            // would type the statement and leave the stub in place (a hover
-            // on it found the block, a completion in it found nothing).
-            if sk.inBlock then run(uri, source, target)
-            else resume(s, sk, target)
+            // `Block`; the resume replaces the stub by the typed statement.
+            // (The first version took a fresh run instead, which made every
+            // hover on a sibling statement inside a method a new run.)
+            resume(s, sk, target)
       case _ =>
         run(uri, source, target)
 
@@ -214,10 +238,7 @@ class InteractiveDriver(
     mySession match
       case s: Session if s.uri == uri && sym.exists && sym.span.exists
           && { val f = sym.source.file; f != null && f.path == s.source.file.nn.path }
-          && s.skippedAt(Span(sym.span.point)).exists(!_.inBlock) =>
-        // a template-level statement: a resume keeps the request's own typed
-        // path (a local definition would take a fresh run and lose it; the
-        // ones the target refers to are typed by the dependency rule anyway)
+          && s.skippedAt(Span(sym.span.point)).isDefined =>
         runUpTo(uri, s.source, Span(sym.span.point))
         true
       case _ => false
@@ -234,9 +255,10 @@ class InteractiveDriver(
     try
       val ctx0 = sk.ctx
       s.run.targetedStatsOwner = sk.owner
+      s.run.targetedStatsInBlock = sk.inBlock
       val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
       s.skipped = s.skipped ++ s.run.skippedStats.toList
-      splice(s, sk.owner, stats)(using ctx0)
+      splice(s, sk, stats)(using ctx0)
       s.diagnostics
     catch case ex: CompilationUnit.CancelledCompilation =>
       // The statement being typed can not be typed a second time: typing
@@ -250,6 +272,7 @@ class InteractiveDriver(
     finally
       s.run.typingTarget = NoSpan
       s.run.targetedStatsOwner = NoSymbol
+      s.run.targetedStatsInBlock = false
       s.run.skippedStats.clear()
 
   /** Does `owner` define `name` in this file: the companion of a statement
@@ -277,11 +300,11 @@ class InteractiveDriver(
   private def replacePoisoned(s: Session, sk: Run.SkippedStat): Boolean =
     given Context = sk.ctx
     val head = sk.stat
-    val replaceable = head match
+    val replaceable = !sk.inBlock && (head match
       case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic) && !hasCompanionHere(sk.owner, mdef.name.toTypeName)
       case tdef: untpd.TypeDef => !hasCompanionHere(sk.owner, tdef.name.toTermName)
       case _: untpd.DefDef | _: untpd.ValDef => true
-      case _ => false
+      case _ => false)
     if !replaceable then return false
     val parsed = new parsing.Parsers.Parser(s.source).parse()
     val fresh = new untpd.UntypedTreeAccumulator[Option[untpd.Tree]]:
@@ -343,7 +366,11 @@ class InteractiveDriver(
    *  unit's typed tree (the package for a package class, the template for
    *  a local dummy), in source order, and update what depends on the tree.
    */
-  private def splice(s: Session, owner: Symbol, stats: List[Tree])(using Context): Unit =
+  private def splice(s: Session, sk: Run.SkippedStat, stats: List[Tree])(using Context): Unit =
+    val owner = sk.owner
+    // a skipped block statement left stubs with its span in the typed `Block`
+    // (one per symbol it defines): the typed statement takes their place
+    def isStubOf(t: Tree) = t.span == sk.stat.span && (t.source eq s.unit.source)
     def insert(into: List[Tree]): List[Tree] =
       val start = stats.headOption.map(_.span.start).getOrElse(-1)
       val (before, after) = into.span(t => !t.span.exists || t.span.start <= start)
@@ -352,10 +379,17 @@ class InteractiveDriver(
       override def transform(tree: Tree)(using Context): Tree = tree match
         // a skipped block definition's stub has an untyped type tree: not entered
         case t if !t.hasType => t
-        case t: PackageDef if owner.is(Flags.PackageClass) && t.symbol.moduleClass == owner =>
+        case t: PackageDef if !sk.inBlock && owner.is(Flags.PackageClass) && t.symbol.moduleClass == owner =>
           tpd.cpy.PackageDef(t)(t.pid, insert(t.stats))
-        case t: Template if t.symbol == owner =>
+        case t: Template if !sk.inBlock && t.symbol == owner =>
           tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body))
+        // the innermost typed block containing the statement's span: its
+        // stubs (a definition's) go, the typed statement is inserted in order
+        // (an expression statement left no stub); a block nested in one of
+        // its statements is reached by the traversal
+        case b: Block if sk.inBlock && (b.source eq s.unit.source) && b.span.contains(sk.stat.span)
+            && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) =>
+          tpd.cpy.Block(b)(insert(b.stats.filterNot(isStubOf)), b.expr)
         case _ => super.transform(tree)
     val t = mapper.transform(s.unit.tpdTree)
     s.unit.tpdTree = t
@@ -366,7 +400,12 @@ class InteractiveDriver(
     myOpenedTrees(s.uri) = topLevelTrees(t, s.source)
     s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
 
-  private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
+  private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    logged(s"run ${uri.getPath.nn.split('/').last}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
+      s"run=${runIdOf(uri)} typedTop=${typedPrefixLength(uri)} skipped=${untypedSpans(uri).size}"
+    }
+
+  private def run0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
     import typer.ImportInfo.*
 
     val previousCtx = myCtx
