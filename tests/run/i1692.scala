@@ -138,7 +138,7 @@ object Test {
 
     val inner = new lz.Inner
     assert(inner.l8 == "H")
-    assertNotNull("LazyNotNullable$$h") // fragile: test will break if compiler generated names change
+    assertNotNull("h") // fragile: test will break if compiler generated names change
 
     val fromTrait = new LazyTrait {}
     assert(fromTrait.l0 == "A")
