@@ -46,7 +46,7 @@ Sources: gh (scala/scala, scala/bug, scala/scala3, scalameta/metals), git log of
 
 ### F2
 - verdict: caveat
-- refs read: https://github.com/scala/scala/pull/5783 (SI-10231): description only; "Nested java classes have a synthetic outer parameter, which the classfile parser skips for the constructor symbol. When assigning parameter names from MethodParameters we also need to skip the first name". No comments. scala/bug#10231 is a crash (scalac) for `new o.Inner` with javac -parameters, repro Outer/Inner.
+- refs read: https://github.com/scala/scala/pull/5783 ([SI-10231](https://github.com/scala/bug/issues/10231)): description only; "Nested java classes have a synthetic outer parameter, which the classfile parser skips for the constructor symbol. When assigning parameter names from MethodParameters we also need to skip the first name". No comments. scala/bug#10231 is a crash (scalac) for `new o.Inner` with javac -parameters, repro Outer/Inner.
 - follow-ups: the 2017 fix was subsumed by a rewrite: ae6da154c1 (2018-05, PR 6653 area, "Eagerly read from the constant pool") and 6587b19f6f / PR 6283 (2018-01, "Ensure that parameter names read from bytecode aren't obliterated by generic signatures"). Current 2.13 code (ClassfileParser ~l.1396-1418) shifts by `hasOuterParam`, skips ACC_SYNTHETIC names, and has `devWarningIf` for a length mismatch ("there's not anything we can do, but it's slightly worrisome"). Scala 3: no issue found; related recent PR scala/scala3#27277 (2026-10-10, java enum valueOf param name) touches only JavaParsers.
 - porting note: port the shift-by-outer logic as a unit with 6283's ordering (names applied after signature parsing; scala3 already does this at l.973-975 via namedParams) and keep the length-mismatch tolerance; do not assume MethodParameters length == descriptor length.
 
@@ -64,7 +64,7 @@ Sources: gh (scala/scala, scala/bug, scala/scala3, scalameta/metals), git log of
 
 ### F5
 - verdict: clean
-- refs read: https://github.com/scala/scala/pull/3867 (SI-8708, LOCAL_CHILD dummy had a trait as first parent and was entered into the enclosing class scope; lrytz, adriaanm "thorough testing", no caveats), https://github.com/scala/scala/pull/4013 (SI-8868 local dummy symbols unpickled as owners of annotation-argument symbols; LGTM). Both are Scala 2 unpickler/compiler crash fixes.
+- refs read: https://github.com/scala/scala/pull/3867 ([SI-8708](https://github.com/scala/bug/issues/8708), LOCAL_CHILD dummy had a trait as first parent and was entered into the enclosing class scope; lrytz, adriaanm "thorough testing", no caveats), https://github.com/scala/scala/pull/4013 ([SI-8868](https://github.com/scala/bug/issues/8868) local dummy symbols unpickled as owners of annotation-argument symbols; LGTM). Both are Scala 2 unpickler/compiler crash fixes.
 - follow-ups: none reverting them; UnPickler.scala later churn is stub/cycle related (8efcb4236b "unpickler cycle avoidance" 2019, 699eba8b63 2022, 37c134b0b4 2025) not touching these two hunks.
 - porting note: the Scala 2 bugs were crashes in scalac's own symbol table; the finding itself says no user-visible Scala 3 failure, so only port with a reproducer (sealed + local child pickled by 2.13, then unpickled by dotty).
 

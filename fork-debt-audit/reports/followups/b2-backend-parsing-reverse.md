@@ -47,12 +47,12 @@ Checked 2026-10-22 against origin/2.13.x (local clone) and scala3 origin/main a9
 ### E3
 - verdict: clean
 - refs read: PR 3285 (som-snytt; "Count lines by EOLs": FF no longer a line break for `pos.line`; "Unicode processing now precedes line ending processing"; second commit 8be560a1cf prints whole line content with control chars as unicode escapes; densh/paulp/adriaanm LGTM). bug#8015 root cause: `isLineBreak` in StripMarginInterpolator treated '\f' as a break.
-- follow-ups: SourceFile later tweaks (SI-8205 2014 CR handling, 5fc33170c5 ArrayBuilder, 0dceecab19 unboxed) none revert it. scala3 #27292 (ffdc25bf46, 2026-10-15) knowingly keeps `\f` as a line break: its description says dotc uses `isLineBreakChar` "so `\f` also ends a line; scala2's line indices only count CR/LF". So the divergence is documented there, not accidental.
+- follow-ups: SourceFile later tweaks ([SI-8205](https://github.com/scala/bug/issues/8205) 2014 CR handling, 5fc33170c5 ArrayBuilder, 0dceecab19 unboxed) none revert it. scala3 #27292 (ffdc25bf46, 2026-10-15) knowingly keeps `\f` as a line break: its description says dotc uses `isLineBreakChar` "so `\f` also ends a line; scala2's line indices only count CR/LF". So the divergence is documented there, not accidental.
 - porting note: Fix has two parts: line-index table uses CR/LF only (SourceFile) and CharArrayReader/Scanners distinguish "line end" from "line break". Check `isLineBreakChar` users in the scanner (newline tokens) before narrowing it; the #27292 test pins current behaviour and will need changing.
 
 ### E5
 - verdict: caveat
-- refs read: PR 4306 (SI-3368: PCData nodes; `-Yxml:coalescing`; also fixes rejecting consecutive CDATA sections; fixup rounds for pattern-matcher/t5699 failures); PR 4451 (498a07fcd8: "default to coalescing for 2.11": preserve the old behaviour for 2.11; coalescing on by default unless source level is 2.12). 
+- refs read: PR 4306 ([SI-3368](https://github.com/scala/bug/issues/3368): PCData nodes; `-Yxml:coalescing`; also fixes rejecting consecutive CDATA sections; fixup rounds for pattern-matcher/t5699 failures); PR 4451 (498a07fcd8: "default to coalescing for 2.11": preserve the old behaviour for 2.11; coalescing on by default unless source level is 2.12). 
 - follow-ups: 2.13 today: `XxmlSettings.isCoalescing` is only true if `-Xxml:coalescing` is passed (ScalaSettings.scala:259); man page still says "default in 2.11". So in 2.13 the default is PCData (round-trips), while Scala 3 always coalesces (what 2.11 did). 5bcc7222b0 documents the flag. No scala3 issue found.
 - porting note: The target behaviour is the 2.13 default (PCData unless `-Xxml:coalescing`), not the 2.11 one. A port needs the setting plus the coalesce pass in the parser, and scala-xml's `PCData` must be available on the classpath.
 

@@ -50,7 +50,7 @@ Repro scratch: `<scratchpad>/work/G-misc-util/` (Fl.scala, Big.scala, Cf.scala, 
 - severity: low
 - confidence: medium
 - s3: FormatChecker.scala:~99-101 (`else if cv.isIndexed then if cv.index.getOrElse(-1) == n then accept(cv) else insertStringConversion()`)
-- s2: FormatInterpolator.scala ; present since f8e0f9810b (2014, SI-8092); stayed in Scala 2 `interpolated`
+- s2: FormatInterpolator.scala ; present since f8e0f9810b (2014, [SI-8092](https://github.com/scala/bug/issues/8092)); stayed in Scala 2 `interpolated`
 - what: Scala 2 emits `c.warning(cv.groupPosAt(Index, 0), "Index is not this arg")` when an indexed conversion that follows a splice refers to a different arg, then inserts the default `%s`. Scala 3 silently does the insertion. The expected-output file `tests/untried/neg/stringinterpolation_macro-neg.check` still contains the warning at lines 145,151, i.e. the test was never enabled.
 - verified: grep "Index is not this arg" in compiler/src: absent; only in tests/untried.
 
@@ -87,7 +87,7 @@ Repro scratch: `<scratchpad>/work/G-misc-util/` (Fl.scala, Big.scala, Cf.scala, 
 - verified: diff -w of the two files.
 
 ## Already ported / not applicable
-- ConstFold: shift Int/Long (SI-8462, SI-9516), div-by-zero no-fold, folded `toX`/unary selections (f4ddef727b/5a79d92de8), singleton/literal val folding (2e0c0972f9), NaN/-0.0 compare semantics, Null ops.
+- ConstFold: shift Int/Long ([SI-8462](https://github.com/scala/bug/issues/8462), [SI-9516](https://github.com/scala/bug/issues/9516)), div-by-zero no-fold, folded `toX`/unary selections (f4ddef727b/5a79d92de8), singleton/literal val folding (2e0c0972f9), NaN/-0.0 compare semantics, Null ops.
 - Constants: raw-bits NaN equality, tag in hashCode (a2ffb7e113), `convertTo` and lossy-widening diagnostics (Scala 3 has own `LossyWideningConstantConversion`, Typer.scala:1232-1245, 5112). 7ed7368ad2 "Build constant string" is printer-only.
 - FormatChecker: Boolean null-test warning, toString/Unit lint (+OrType), `%` literal width warning, `<` flag handling, BigInt/BigDecimal/Calendar/Date/Formattable acceptable variants, `%n`/`%%` rules, all flag/width/precision validation tables (same as Scala 2).
 - DocStrings -> CommentParsing: identical logic; Scala 2 commits are lint/refactor. `{@inheritDoc}` replace, `expandInheritdoc`, `merge` match. c5ec0a3931/824c6b2e5e (getter/field inheritdoc) are N/A: Scala 3 has no field/getter split at this level.
