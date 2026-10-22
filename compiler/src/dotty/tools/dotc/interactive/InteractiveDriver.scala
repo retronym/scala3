@@ -198,6 +198,10 @@ class InteractiveDriver(
         .find(c => c.startsWith("dotty.tools.pc.") && !c.contains("CachingDriver") && !c.contains("CompilerAccess") && !c.contains("CompilerWrapper"))
         .map(c => " by " + c.stripPrefix("dotty.tools.pc.").takeWhile(_ != '$')).getOrElse("")
       try body
+      catch case scala.util.control.NonFatal(ex) =>
+        // the editor's report keeps the message only: the stack goes to the log
+        System.err.println(s"[dotc-session] $what failed$by: $ex\n" + ex.getStackTrace.nn.take(24).map("    at " + _).mkString("\n"))
+        throw ex
       finally System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms")
 
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
