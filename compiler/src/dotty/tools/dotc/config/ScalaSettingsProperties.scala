@@ -30,14 +30,17 @@ object ScalaSettingsProperties:
 
   def defaultClasspath: String = sys.env.getOrElse("CLASSPATH", ".")
 
-  def defaultPageWidth: Int = {
+  def defaultPageWidth: Int =
+    pageWidth(System.getenv("COLUMNS"), if Properties.isWin then System.getenv("ANSICON") else null)
+
+  /** Width from `COLUMNS`, else from `ANSICON` (Windows), else 80. Malformed values are ignored. */
+  private[config] def pageWidth(columnsVar: String | Null, ansiconVar: String | Null): Int = {
     val defaultWidth = 80
-    val columnsVar = System.getenv("COLUMNS")
-    if columnsVar != null then columnsVar.toInt
-    else if Properties.isWin then
-      val ansiconVar = System.getenv("ANSICON") // eg. "142x32766 (142x26)"
+    def columnsWidth =
+      if columnsVar != null then columnsVar.toIntOption else None
+    def ansiconWidth = // eg. "142x32766 (142x26)"
       if ansiconVar != null && ansiconVar.matches("[0-9]+x.*") then
-        ansiconVar.substring(0, ansiconVar.indexOf("x")).toInt
-      else defaultWidth
-    else defaultWidth
+        ansiconVar.substring(0, ansiconVar.indexOf("x")).toIntOption
+      else None
+    columnsWidth.orElse(ansiconWidth).getOrElse(defaultWidth)
   }
