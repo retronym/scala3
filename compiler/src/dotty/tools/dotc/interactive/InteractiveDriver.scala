@@ -199,7 +199,12 @@ class InteractiveDriver(
                 skipped = sk :: skipped
                 poisoned = true
               case Some(ctx0) =>
-                try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
+                // in its own typer state, committed once typed (see `resumeIn`)
+                val ctx1 = ctx0.fresh.setNewTyperState()
+                try
+                  val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
+                  ctx1.typerState.commit()(using ctx0)
+                  typed += ((sk, stats))
                 catch case ex: CompilationUnit.CancelledCompilation =>
                   // the ones typed so far are kept; the aborted one is replaced
                   // or poisons the session, as in a resume
@@ -254,10 +259,14 @@ class InteractiveDriver(
       run.clearTargeting()
       run.typingTarget = target
       try
-        run.targetNextStats(sk.owner, sk.inBlock)(using ctx0)
+        // typed in its own typer state, committed into the session's only once
+        // the statement is typed: a cancellation drops its constraints with it
+        val ctx1 = ctx0.fresh.setNewTyperState()
+        run.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
         // a resumed block statement continues the targeting of its block
-        run.targetingTyperState = ctx0.typerState
-        val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
+        run.targetingTyperState = ctx1.typerState
+        val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
+        ctx1.typerState.commit()(using ctx0)
         collectSkipped()
         assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")
         spliceAll(List((sk, stats)))(using ctx0)
