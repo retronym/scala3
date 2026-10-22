@@ -1,0 +1,541 @@
+{
+ "035a05af5b": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/035a05af5ba0089ff0d5132b371fc4912d2d255e",
+  "pr": "27077",
+  "prurl": "https://github.com/scala/scala3/pull/27077",
+  "subject": "Micro-optimizations, mostly focused on allocations (#27077)"
+ },
+ "06347fc82d": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/06347fc82d3d438d57988d93c665ac21aaef89bf",
+  "pr": "6219",
+  "prurl": "https://github.com/scala/scala/pull/6219",
+  "subject": "emit parameter names for static forwarders"
+ },
+ "0714941e30": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/0714941e302e7cc8182f770226497af25108a3fa",
+  "pr": "9557",
+  "prurl": "https://github.com/scala/scala/pull/9557",
+  "subject": "Cache JRT and --release (ct.sym) classpath elements."
+ },
+ "0c8c581143": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/0c8c5811436ad1168fb29a0f754402eff3300202",
+  "pr": "25958",
+  "prurl": "https://github.com/scala/scala3/pull/25958",
+  "subject": "Fix potential NPE in BoxesRunTime.equalsCharObject (#25958)"
+ },
+ "0e9026785e": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/0e9026785e02481de3d1afcceffd3aea16538a6f",
+  "pr": "11043",
+  "prurl": "https://github.com/scala/scala/pull/11043",
+  "subject": "Merge pull request #11041 from som-snytt/doc/pf"
+ },
+ "0f566b3acd": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/0f566b3acd44c0d16804a859c90fa7f930e6c585",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "s interpolator constantenates"
+ },
+ "10b09dd228": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/10b09dd228de6e5ee403e4bd816a40cc8948c606",
+  "pr": "6284",
+  "prurl": "https://github.com/scala/scala/pull/6284",
+  "subject": "Deprecate static forwarders along with their forwardees."
+ },
+ "13fd5af95d": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/13fd5af95d426797e2ecc09729a1faadd5908b00",
+  "pr": "23522",
+  "prurl": "https://github.com/scala/scala3/pull/23522",
+  "subject": "[stdlib] embed the history of the scala 2 stdlib into dotty's history (#23522)"
+ },
+ "14fa7bef12": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/14fa7bef120cbb996d042daba6095530167c49ed",
+  "pr": "3867",
+  "prurl": "https://github.com/scala/scala/pull/3867",
+  "subject": "SI-8708 Fix pickling of LOCAL_CHILD child of sealed classes"
+ },
+ "1b1bc81484": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/1b1bc8148492af85f9d5507676ef7b677cf86bcb",
+  "pr": "5123",
+  "prurl": "https://github.com/scala/scala/pull/5123",
+  "subject": "Emit a warning when a constant expression evaluates to an ArithmeticException (#5123)"
+ },
+ "1ceafd2275": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/1ceafd2275f6fab4016173a4fb93dbce941805e4",
+  "pr": "6673",
+  "prurl": "https://github.com/scala/scala/pull/6673",
+  "subject": "Avoid double open when overwriting a classfile on non-Windows"
+ },
+ "211cc41a15": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/211cc41a157f052a57822c741d1e9356e0dcabff",
+  "pr": "11081",
+  "prurl": "https://github.com/scala/scala/pull/11081",
+  "subject": "bugfix: Try and avoid potential race condition"
+ },
+ "270f3f274b": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/270f3f274b9afdb2ff362bcc05f6997380b15872",
+  "pr": "26275",
+  "prurl": "https://github.com/scala/scala3/pull/26275",
+  "subject": "perf: fix redundant rootNode.diff computation in HashSet.diff (#26275)"
+ },
+ "27fa48c6f6": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/27fa48c6f64082b2fd8899a3bc64185252c79762",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "Check duplicate flags"
+ },
+ "2826c6cb96": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/2826c6cb96f948cbe1c90ca73e43c8aa399fa1a9",
+  "pr": "8556",
+  "prurl": "https://github.com/scala/scala/pull/8556",
+  "subject": "Avoid temporary byte arrays when reading .class/.sig or source files from VirtualFile"
+ },
+ "29f116f1f2": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/29f116f1f246169ea0b446f786199081ed3d50f4",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "Concatenate if not formatting"
+ },
+ "2c1ca22ad7": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/2c1ca22ad72abae1c10c99a47e8cced6f3341d28",
+  "pr": "9561",
+  "prurl": "https://github.com/scala/scala/pull/9561",
+  "subject": "Emit LocalVariableTable for mirror methods"
+ },
+ "2ccc7489a2": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/2ccc7489a2574b04c8102986a0a2966808f3ee8b",
+  "pr": "8915",
+  "prurl": "https://github.com/scala/scala/pull/8915",
+  "subject": "Actually use the reuseable buffer/UTF-8 decoder"
+ },
+ "30a688cc90": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/30a688cc90d06fe4dc3733657f4a01310bed23fa",
+  "pr": "6653",
+  "prurl": "https://github.com/scala/scala/pull/6653",
+  "subject": "Reuse the buffer for classfile reading"
+ },
+ "31255c38f0": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/31255c38f0bc3e3e1a46716518f5dd401773236d",
+  "pr": "9557",
+  "prurl": "https://github.com/scala/scala/pull/9557",
+  "subject": "Avoid contention in classpath access"
+ },
+ "31d8d058fa": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/31d8d058fa346e599c13f9d075e32e94e9d56073",
+  "pr": "9671",
+  "prurl": "https://github.com/scala/scala/pull/9671",
+  "subject": "Include -release arg in cache key for ct.sym classpath element"
+ },
+ "33a331c52b": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/33a331c52bce9787806e5105077cfd6e7cb04459",
+  "pr": "9946",
+  "prurl": "https://github.com/scala/scala/pull/9946",
+  "subject": "Reduce default capacity of classpath's pool of ZipFile for each JAR"
+ },
+ "3e500b21a5": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/3e500b21a59f648081fb0cc8566b187779b31075",
+  "pr": "7712",
+  "prurl": "https://github.com/scala/scala/pull/7712",
+  "subject": "Use file size as part of the cache invalidation"
+ },
+ "493f985520": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/493f98552047b0473b3a30dcb0dda9e4db8ba2e4",
+  "pr": "9557",
+  "prurl": "https://github.com/scala/scala/pull/9557",
+  "subject": "Include --release version in cache key for classpath cache"
+ },
+ "4960a7a6ea": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/4960a7a6ea30da4f01e972c005227e9777ea561f",
+  "pr": "10319",
+  "prurl": "https://github.com/scala/scala/pull/10319",
+  "subject": "Re-revert untokenized argfile, write quoted args"
+ },
+ "498a07fcd8": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/498a07fcd8d922545e942b817d3fbd16ef56809b",
+  "pr": "4451",
+  "prurl": "https://github.com/scala/scala/pull/4451",
+  "subject": "SI-3368 Default to coalescing for 2.11"
+ },
+ "4a3ecde9cb": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/4a3ecde9cb3b013821c569e5ee8ec141ecd03c0f",
+  "pr": "26672",
+  "prurl": "https://github.com/scala/scala3/pull/26672",
+  "subject": "Fix Enumeration.ValueSet.iteratorFrom for negative IDs (#26672)"
+ },
+ "4a918afd51": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/4a918afd515ad3c2d42e880920a42742e39f64f8",
+  "pr": "10024",
+  "prurl": "https://github.com/scala/scala/pull/10024",
+  "subject": "Improve lookahead during java textblock"
+ },
+ "4d96a8ad0b": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/4d96a8ad0b7050303e0b841708ba452e708f6a35",
+  "pr": "4214",
+  "prurl": "https://github.com/scala/scala/pull/4214",
+  "subject": "SI-5154 Parse leading literal brace in XML pattern"
+ },
+ "4df81aab31": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/4df81aab315e587d9c7e319c7a2ece0f0f6fbaf3",
+  "pr": "4306",
+  "prurl": "https://github.com/scala/scala/pull/4306",
+  "subject": "SI-3368 CDATA gets a Node"
+ },
+ "55ef130e96": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/55ef130e9691ef1405ff835f9171fdc2b22db6ad",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "Improve message for unsupported escapes"
+ },
+ "568b43d1c3": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/568b43d1c3c5e403e88c175f5dbaa55619651017",
+  "pr": "10218",
+  "prurl": "https://github.com/scala/scala/pull/10218",
+  "subject": "Find more doc vars and distinguish C from CC"
+ },
+ "639fd849c8": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/639fd849c841e33284977e10e1e49c0df4c80506",
+  "pr": "25205",
+  "prurl": "https://github.com/scala/scala3/pull/25205",
+  "subject": "Remove incorrect equals implementations from ArrayBuilder (#25205)"
+ },
+ "659dba63c3": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/659dba63c37263e4d28bc9d4c9672d5af54d23ea",
+  "pr": "7975",
+  "prurl": "https://github.com/scala/scala/pull/7975",
+  "subject": "Fix interop between Java and generic inner Scala classes"
+ },
+ "683f698459": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/683f698459db6d371f7b3f256d9e8f32738e7df7",
+  "pr": "11009",
+  "prurl": "https://github.com/scala/scala/pull/11009",
+  "subject": "Fix file handle leak under the non-default classpath mode"
+ },
+ "69af723ba4": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/69af723ba4d1d46d8cbad8de42efbae6fc477f9e",
+  "pr": "10674",
+  "prurl": "https://github.com/scala/scala/pull/10674",
+  "subject": "Warn more constant inexactitude"
+ },
+ "73d5879c21": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/73d5879c2144c7e7363d9b2c0888e3bcf33ba081",
+  "pr": "11248",
+  "prurl": "https://github.com/scala/scala/pull/11248",
+  "subject": "Create LazyList's tail updater on first use"
+ },
+ "7bec039ff4": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/7bec039ff4e0d8501301d2bbe25ead1e2e3d27ec",
+  "pr": "26294",
+  "prurl": "https://github.com/scala/scala3/pull/26294",
+  "subject": "perf: use bound variable in ArrayOps.WithFilter.flatMap (#26294)"
+ },
+ "7f16e81220": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/7f16e81220726b83445a5eebb4f1d3c5cc4d3e23",
+  "pr": "26794",
+  "prurl": "https://github.com/scala/scala3/pull/26794",
+  "subject": "Warn when catching `Error`s (#26794)"
+ },
+ "7fb9052101": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/7fb90521017c7ed5048d8b22a5e979c5204217fb",
+  "pr": "10364",
+  "prurl": "https://github.com/scala/scala/pull/10364",
+  "subject": "Format constant args constantly consistently"
+ },
+ "856c111449": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/856c111449d870ca3754978801c941bd9f65cdb6",
+  "pr": "7364",
+  "prurl": "https://github.com/scala/scala/pull/7364",
+  "subject": "Emit detailed compiler trace under -Yprofile-trace"
+ },
+ "880aec04e8": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/880aec04e82ad3a9a2feb3b83b779f192d84e01e",
+  "pr": "5543",
+  "prurl": "https://github.com/scala/scala/pull/5543",
+  "subject": "SI-10069 Fix code gen errors with array updates, Nothing"
+ },
+ "8b7e2cec53": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/8b7e2cec5304564622352da978be7af2f86d24c5",
+  "pr": "26278",
+  "prurl": "https://github.com/scala/scala3/pull/26278",
+  "subject": "perf: eliminate redundant getHash calls in HashMap/HashSet concat (#26278)"
+ },
+ "8be560a1cf": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/8be560a1cf6306ea4ed2596f3b6631c2e44d8213",
+  "pr": "3285",
+  "prurl": "https://github.com/scala/scala/pull/3285",
+  "subject": "SI-8015 Unprintables in messages"
+ },
+ "8f55db50f9": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/8f55db50f9210957ba230f4d01aa8c72ef8b13e4",
+  "pr": "10543",
+  "prurl": "https://github.com/scala/scala/pull/10543",
+  "subject": "-Yrelease:sun.misc opens packages in jrt hidden by --release"
+ },
+ "911d375755": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/911d3757556750716b6e236bc4671349ea35ba52",
+  "pr": "10735",
+  "prurl": "https://github.com/scala/scala/pull/10735",
+  "subject": "Emit missing `POP` in backend when accessing static fields"
+ },
+ "93e8493854": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/93e84938545117175e33a6f70a76e28d4652673f",
+  "pr": "11286",
+  "prurl": "https://github.com/scala/scala/pull/11286",
+  "subject": "Unregister Future Await latches on timeout or interrupt"
+ },
+ "945f7b12c9": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/945f7b12c9c6eab148f5f3ff688d5157bafc7e4b",
+  "pr": "11211",
+  "prurl": "https://github.com/scala/scala/pull/11211",
+  "subject": "Remove incorrect equals implementations from ArrayBuilder"
+ },
+ "954ea7e2e9": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/954ea7e2e94b211a0769747a2e03f48609eddb4d",
+  "pr": "5783",
+  "prurl": "https://github.com/scala/scala/pull/5783",
+  "subject": "SI-10231 Skip outer parameter when classfile parsing java param names"
+ },
+ "98726c0e1f": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/98726c0e1fab033f18362246343efec4ca8b9697",
+  "pr": "10801",
+  "prurl": "https://github.com/scala/scala/pull/10801",
+  "subject": "Add support for alternative system images to the compiler"
+ },
+ "996d066bb3": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/996d066bb3ef0fc91acab18a5502bb649929881a",
+  "pr": "4306",
+  "prurl": "https://github.com/scala/scala/pull/4306",
+  "subject": "SI-3368 Promote xml option to -Xxml"
+ },
+ "9c57e78be5": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/9c57e78be5609275d752e47b796dc5790e4391f7",
+  "pr": "7977",
+  "prurl": "https://github.com/scala/scala/pull/7977",
+  "subject": "[backport] Fix interop between Java and generic inner Scala classes"
+ },
+ "a03973a353": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/a03973a35330cf8543def5191ba862b54361e64b",
+  "pr": "11090",
+  "prurl": "https://github.com/scala/scala/pull/11090",
+  "subject": "Reset disallowed FINAL in ClassfileParser"
+ },
+ "a0ebc676ba": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/a0ebc676ba9570a5c0bd25d4e72e001d3b47f454",
+  "pr": null,
+  "prurl": null,
+  "subject": "Merge pull request #11302 from lrytz/t12974"
+ },
+ "a98b104aaa": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/a98b104aaa7e97332437c4f663a0bd35729f4f9d",
+  "pr": "26554",
+  "prurl": "https://github.com/scala/scala3/pull/26554",
+  "subject": "Macro/inlining performance boost via typer state reuse (#26554)"
+ },
+ "aaedc0f14f": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/aaedc0f14f2e49b557224c20d469f5206f9022a1",
+  "pr": "7996",
+  "prurl": "https://github.com/scala/scala/pull/7996",
+  "subject": "Avoid deep ASTs in StringContext rewrite."
+ },
+ "b264c1965c": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/b264c1965c3f0831dd4f2d974bb2293fe488373c",
+  "pr": "25962",
+  "prurl": "https://github.com/scala/scala3/pull/25962",
+  "subject": "Safer equalsNumChar (#25962)"
+ },
+ "bb2e99a692": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/bb2e99a69201060b88dd25602def42f31ba9ab65",
+  "pr": "3285",
+  "prurl": "https://github.com/scala/scala/pull/3285",
+  "subject": "SI-8015 Count lines by EOLs"
+ },
+ "bcd1e4f3a3": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/bcd1e4f3a3c7a683bb7cf435ef8163ecaf90f126",
+  "pr": "4013",
+  "prurl": "https://github.com/scala/scala/pull/4013",
+  "subject": "SI-8868 Fix unpickling of local dummy symbols"
+ },
+ "bdde5ad0ff": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/bdde5ad0ff39d62ba830dbba4d6b17c99a6a7fa0",
+  "pr": "10468",
+  "prurl": "https://github.com/scala/scala/pull/10468",
+  "subject": "Trailing escape is error in command parser"
+ },
+ "c8aab64ef8": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/c8aab64ef8b137dac1ebdc3f6e3a29ae8f07774b",
+  "pr": "11289",
+  "prurl": "https://github.com/scala/scala/pull/11289",
+  "subject": "Retain `throws` clauses of Java methods parsed from source"
+ },
+ "c8bc25a6d0": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/c8bc25a6d037e86a4cc474fb391187331bfac033",
+  "pr": "11327",
+  "prurl": "https://github.com/scala/scala/pull/11327",
+  "subject": "Upgrade ASM to 9.11.1"
+ },
+ "cb0d205522": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/cb0d205522811faf1824e976ae4922fc34ee0f56",
+  "pr": "11219",
+  "prurl": "https://github.com/scala/scala/pull/11219",
+  "subject": "Further improve error pos in raw"
+ },
+ "cfbb2a2d16": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/cfbb2a2d16846f1f366a8596fbaba1c5f62e5ced",
+  "pr": "7712",
+  "prurl": "https://github.com/scala/scala/pull/7712",
+  "subject": "[backport] Resource management for macro/plugin classloaders, classpath JARs"
+ },
+ "d856d1510c": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/d856d1510ce8488914d0a4ae2bc9623bfb7de1c9",
+  "pr": "10740",
+  "prurl": "https://github.com/scala/scala/pull/10740",
+  "subject": "Use correct position for error in escape"
+ },
+ "da99eb87b0": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/da99eb87b004d3a9cd47d2fcc3d9884f15d8ef96",
+  "pr": "26398",
+  "prurl": "https://github.com/scala/scala3/pull/26398",
+  "subject": "Improve IO package encapsulation (#26398)"
+ },
+ "e3406b0fb1": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/e3406b0fb176200dac7c8ba36931483eb7700814",
+  "pr": "26280",
+  "prurl": "https://github.com/scala/scala3/pull/26280",
+  "subject": "perf: skip builder allocation for empty source in HashMap.from (#26280)"
+ },
+ "e5883add4f": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/e5883add4f9ec867d8d5f21d215a3edac63b71e7",
+  "pr": "10030",
+  "prurl": "https://github.com/scala/scala/pull/10030",
+  "subject": "loosen unicode directional character check"
+ },
+ "e86be00cfb": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/e86be00cfb80f6ee7feee0ed0a9bd2fb3968df6a",
+  "pr": null,
+  "prurl": null,
+  "subject": "Port analysis and opt directories"
+ },
+ "f36ea50842": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/f36ea508427d2fcc78f57b14707e30ef2d3040e7",
+  "pr": "26288",
+  "prurl": "https://github.com/scala/scala3/pull/26288",
+  "subject": "perf: ArrayDeque.clear() from O(n) to O(1) with GC-safe nulling (#26288)"
+ },
+ "f69089cb7d": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/f69089cb7d1c5f3e3dfb89e00b15d8d2d554c895",
+  "pr": "10336",
+  "prurl": "https://github.com/scala/scala/pull/10336",
+  "subject": "javabootclasspath supersedes jrt"
+ },
+ "f831f7df48": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/f831f7df480a40e5b870e29fe4cce3bb7cfc2f32",
+  "pr": "27311",
+  "prurl": "https://github.com/scala/scala3/pull/27311",
+  "subject": "Do not follow symlinks when writing files (#27311)"
+ },
+ "f87a7db7f0": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/f87a7db7f0abc065b79302642223219c0a05b1d3",
+  "pr": "11203",
+  "prurl": "https://github.com/scala/scala/pull/11203",
+  "subject": "Don't catch the deprecated-for-removal AccessControlException."
+ },
+ "f9e0b1a03a": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/f9e0b1a03ab731d9cb9d5527dc6c60e110c6ed4a",
+  "pr": "10734",
+  "prurl": "https://github.com/scala/scala/pull/10734",
+  "subject": "Java parses leading annotation"
+ },
+ "fa9648259d": {
+  "repo": "scala/scala3",
+  "url": "https://github.com/scala/scala3/commit/fa9648259d29a3c8bfcf8f1123bfa19b31931a84",
+  "pr": "2",
+  "prurl": "https://github.com/scala/scala3/pull/2",
+  "subject": "Port GenBCode refactor Scala#6012"
+ },
+ "fd63e80f4a": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/fd63e80f4a87c9e64f2f93fa3881e0a3b2fc839c",
+  "pr": "11243",
+  "prurl": "https://github.com/scala/scala/pull/11243",
+  "subject": "fix(array-ops): partially fix transpose"
+ },
+ "fd97b40579": {
+  "repo": "scala/scala",
+  "url": "https://github.com/scala/scala/commit/fd97b40579b8ec6ad297a7723d36557e4f45925f",
+  "pr": "10017",
+  "prurl": "https://github.com/scala/scala/pull/10017",
+  "subject": "Error on source files with unicode directional formatting characters"
+ }
+}
