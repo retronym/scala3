@@ -3920,6 +3920,12 @@ object Types extends TypeUtils {
           x => substParams(paramInfos, x),
           x => resType.subst(this, x))
 
+    /** A lambda like this one, with the same parameter names (and variances), whose parameter infos and result type
+     *  are computed from the new lambda: they refer to its parameters, not to this lambda's.
+     */
+    def newLikeThis(paramInfosExp: This => List[PInfo], resultTypeExp: This => Type)(using Context): This =
+      companion(paramNames)(paramInfosExp, resultTypeExp)
+
     protected def prefixString: String
     override def toString: String = s"$prefixString($paramNames, $paramInfos, $resType)"
   }
@@ -4430,6 +4436,9 @@ object Types extends TypeUtils {
       HKTypeLambda(paramNames, variances)(
           x => paramInfos.mapConserve(_.subst(this, x).asInstanceOf[PInfo]),
           x => resType.subst(this, x))
+
+    override def newLikeThis(paramInfosExp: This => List[PInfo], resultTypeExp: This => Type)(using Context): This =
+      HKTypeLambda(paramNames, declaredVariances)(paramInfosExp, resultTypeExp)
 
     def withVariances(variances: List[Variance])(using Context): This =
       newLikeThis(paramNames, variances, paramInfos, resType)

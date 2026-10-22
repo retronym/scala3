@@ -582,6 +582,7 @@ private sealed trait YSettings:
 
   /** Area-specific debug output */
   val YexplainLowlevel: Setting[Boolean] = BooleanSetting(ForkSetting, "Yexplain-lowlevel", "When explaining type errors, show types at a lower level.")
+  val YfuseLambdaRebind: Setting[String] = ChoiceSetting(ForkSetting, "Yfuse-lambda-rebind", "mode", "Rebind lambda parameters while mapping a lambda type with asSeenFrom, instead of in a second pass: always (eager) or once something changed (lazy). Temporary, for benchmarking.", List("off", "eager", "lazy"), "off")
   val YnoDoubleBindings: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-double-bindings", "Assert no namedtype is bound twice (should be enabled only if program is error-free).")
   val YshowVarBounds: Setting[Boolean] = BooleanSetting(ForkSetting, "Yshow-var-bounds", "Print type variables with their bounds.")
 
