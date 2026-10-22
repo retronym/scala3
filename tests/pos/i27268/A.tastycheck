@@ -51,13 +51,13 @@ Trees (151 bytes, starting from <elided base index>):
     32:       VALDEF(10) 12 [b]
     35:         IDENTtpt 13 [Byte]
     37:           TYPEREF 13 [Byte]
-    39:             TERMREFpkg 11 [scala]
+    39:             SHAREDtype 30
     41:         BYTEconst -1
     43:         FINAL
     44:       VALDEF(10) 14 [s]
     47:         IDENTtpt 15 [Short]
     49:           TYPEREF 15 [Short]
-    51:             SHAREDtype 39
+    51:             SHAREDtype 30
     53:         SHORTconst -1
     55:         FINAL
     56:       VALDEF(6) 16 [c]
@@ -76,7 +76,7 @@ Trees (151 bytes, starting from <elided base index>):
     91:         LONGconst -9223372036854775808
    102:         SELECT 20 [MinValue]
    104:           TERMREF 21 [Long]
-   106:             SHAREDtype 39
+   106:             SHAREDtype 30
    108:         FINAL
    109:       VALDEF(14) 22 [f]
    112:         FLOATconst -1082130432
