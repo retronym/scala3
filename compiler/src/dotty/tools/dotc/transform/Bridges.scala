@@ -111,7 +111,7 @@ class Bridges(root: ClassSymbol, thisPhase: DenotTransformer)(using Context) {
     val bridge = other.copy(
       owner = root,
       flags = (member.flags | Method | Bridge | Artifact) &~
-        (Accessor | ParamAccessor | CaseAccessor | Deferred | Lazy | Module),
+        (Accessor | ParamAccessor | CaseAccessor | Deferred | Lazy | Module).toTermFlags,
       coord = bridgePosFor(member).span).enteredAfter(thisPhase).asTerm
 
     report.debuglog(

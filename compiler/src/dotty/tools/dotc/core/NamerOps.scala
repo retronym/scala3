@@ -140,7 +140,7 @@ object NamerOps:
     else NoSymbol.assertingErrorsReported(em"no companion $name in $scope")
 
   /** If a class has one of these flags, it does not get a constructor companion */
-  private val NoConstructorProxyNeededFlags = Abstract | Trait | Case | Synthetic | Module | Invisible
+  private val NoConstructorProxyNeededFlags = (Abstract | Trait | Case | Synthetic | Module | Invisible).toTypeFlags
 
   /** The flags of a constructor companion */
   private val ConstructorCompanionFlags = Synthetic | PhantomSymbol
