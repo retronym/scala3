@@ -79,6 +79,27 @@ class MultiReleaseJarTest extends DottyBytecodeTest {
     assertTrue(classExists("java.lang.invoke.LambdaMetafactory", "9"))
   }
 
+  @Test
+  def ctSymIsShared(): Unit = {
+    def ctSymClassPath(release: String): ClassPath = {
+      given ctx: Context = initCtx.fresh
+      ctx.settings.Yusejavacp.update(true)
+      ctx.settings.javaOutputVersion.update(release)
+      ctx.initialize()
+      val AggregateClassPath(entries) = ctx.platform.classPath: @unchecked
+      entries.collectFirst { case cp: CtSymClassPath => cp }.get
+    }
+
+    // Compilers in one JVM with the same `-release` share the ct.sym classpath (and its zip file system),
+    // and those with a different `-release` see their own release.
+    val cp11 = ctSymClassPath("11")
+    assertSame(cp11, ctSymClassPath("11"))
+    val cp9 = ctSymClassPath("9")
+    assertNotSame(cp11, cp9)
+    assertTrue(cp11.findClassFile("java.net.http.HttpClient").isDefined)
+    assertTrue(cp9.findClassFile("java.net.http.HttpClient").isEmpty)
+  }
+
   private def createManifest = {
     val manifest = new java.util.jar.Manifest()
     manifest.getMainAttributes.put(Name.MANIFEST_VERSION, "1.0")

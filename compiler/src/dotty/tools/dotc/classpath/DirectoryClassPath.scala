@@ -113,7 +113,7 @@ object JrtClassPath {
         try
           val ctSym = Paths.get(Properties.javaHome).resolve("lib").resolve("ct.sym")
           if (Files.notExists(ctSym)) None
-          else Some(new CtSymClassPath(ctSym, v.toInt))
+          else Some(CtSymClassPath(ctSym, v.toInt))
         catch case _: Exception => None
       case _ =>
         try Some(new JrtClassPath(FileSystems.getFileSystem(URI.create("jrt:/"))))
@@ -200,15 +200,33 @@ final class JrtClassPath(fs: java.nio.file.FileSystem) extends ClassPath {
     Iterable.empty // not necessary to include JRT in there
 }
 
+object CtSymClassPath {
+  import java.nio.file.{FileSystem, FileSystems, Files, Path}
+
+  // Shared by compilers in this JVM: the zip file system on ct.sym is opened once (per stamp of the file), and the
+  // classpath for each `-release` is built once from it.
+  private val cache = new FileBasedCache[Unit, CtSym]
+
+  def apply(ctSym: Path, release: Int): CtSymClassPath =
+    cache.getOrCreate((), ctSym, () => new CtSym(ctSym)).forRelease(release)
+
+  private final class CtSym(ctSym: Path) {
+    private val fileSystem: FileSystem = FileSystems.newFileSystem(ctSym, null: ClassLoader | Null)
+    private val root: Path = fileSystem.getRootDirectories.iterator.next
+    private val roots = Files.newDirectoryStream(root).iterator.asScala.toList
+    private val classPaths = mutable.HashMap.empty[Int, CtSymClassPath]
+
+    def forRelease(release: Int): CtSymClassPath = synchronized {
+      classPaths.getOrElseUpdate(release, new CtSymClassPath(roots, release))
+    }
+  }
+}
+
 /**
   * Implementation `ClassPath` based on the \$JAVA_HOME/lib/ct.sym backing http://openjdk.java.net/jeps/247
   */
-final class CtSymClassPath(ctSym: java.nio.file.Path, release: Int) extends ClassPath {
+final class CtSymClassPath private (roots: List[java.nio.file.Path], release: Int) extends ClassPath {
   import java.nio.file.Path, java.nio.file.*
-
-  private val fileSystem: FileSystem = FileSystems.newFileSystem(ctSym, null: ClassLoader | Null)
-  private val root: Path = fileSystem.getRootDirectories.iterator.next
-  private val roots = Files.newDirectoryStream(root).iterator.asScala.toList
 
   // http://mail.openjdk.java.net/pipermail/compiler-dev/2018-March/011737.html
   private def codeFor(major: Int): String = if (major < 10) major.toString else ('A' + (major - 10)).toChar.toString
