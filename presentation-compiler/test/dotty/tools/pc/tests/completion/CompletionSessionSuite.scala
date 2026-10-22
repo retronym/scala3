@@ -81,7 +81,7 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     }.get(timeout.length, timeout.unit)
 
   /** (run id, typed top-level statements, skipped statements at any level) */
-  private def state(): (Int, Int, Int) = withDriver(d => (d.runIdOf(uri), d.typedPrefixLength(uri), d.untypedSpans(uri).size))
+  private def state(): (Int, Int, Int) = withDriver(d => (d.runIdOf(uri), d.typedTopLevelCount(uri), d.untypedSpans(uri).size))
 
   private def complete(query: String, token: CancelToken = EmptyCancelToken): String =
     val (code, offset) = params(query)
@@ -118,7 +118,7 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val (obtained, targetedMs) = timed(complete(bigSource("timing", 10)))
     assertNoDiff(expectedAt(10), obtained)
     val (runId, typed, skipped) = state()
-    println(s"[targeted-prefix-and-timing] runId=$runId typedPrefixLength=$typed skipped=$skipped (an object counts as its module val and class; skipped: the other 399 objects and method10)")
+    println(s"[targeted-prefix-and-timing] runId=$runId typedTopLevelCount=$typed skipped=$skipped (an object counts as its module val and class; skipped: the other 399 objects and method10)")
     assertEquals(2, typed, "only the object containing the offset is typed")
     assertEquals(400, skipped, "the other objects and the sibling method are skipped")
     // The same content typed in full
@@ -136,29 +136,29 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val (_, typed3, _) = state()
     val (code4, _) = params(bigSource("timing-4", 10))
     val (_, fullMs4) = timed(withDriver(_.run(uri, SourceFile.virtual(uri, code4))))
-    println(s"[targeted-prefix-and-timing] driver only: runUpTo(object 10)=${targetedMs3}ms, runUpTo within the typed statement=${withinMs3}ms, resume at object 200=${resumeMs3}ms (typedPrefixLength=$typed3); full run=${fullMs4}ms")
+    println(s"[targeted-prefix-and-timing] driver only: runUpTo(object 10)=${targetedMs3}ms, runUpTo within the typed statement=${withinMs3}ms, resume at object 200=${resumeMs3}ms (typedTopLevelCount=$typed3); full run=${fullMs4}ms")
     val (tiny, tinyMs) = timed(complete("object T { val x = this.toStr@@ }"))
     println(s"[targeted-prefix-and-timing] completion request on a one-object file: ${tinyMs}ms ($tiny)")
 
   @Test def `resume-in-the-same-run` =
     assertNoDiff(expectedAt(10), complete(bigSource("resume", 10)))
     val (runId1, typed1, skipped1) = state()
-    println(s"[resume-in-the-same-run] after object 10:  runId=$runId1 typedPrefixLength=$typed1 skipped=$skipped1")
+    println(s"[resume-in-the-same-run] after object 10:  runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1")
     // Same content (the `@@` marker is not part of it), offset in a skipped object
     val (obtained2, ms2) = timed(complete(bigSource("resume", 200)))
     assertNoDiff(expectedAt(200), obtained2)
     val (runId2, typed2, skipped2) = state()
-    println(s"[resume-in-the-same-run] after object 200: runId=$runId2 typedPrefixLength=$typed2 skipped=$skipped2 (${ms2}ms)")
+    println(s"[resume-in-the-same-run] after object 200: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2 (${ms2}ms)")
     // Within a typed statement: nothing is typed
     val (obtained3, ms3) = timed(complete(bigSource("resume", 10)))
     assertNoDiff(expectedAt(10), obtained3)
     val (runId3, typed3, skipped3) = state()
-    println(s"[resume-in-the-same-run] after object 10 again: runId=$runId3 typedPrefixLength=$typed3 skipped=$skipped3 (${ms3}ms)")
+    println(s"[resume-in-the-same-run] after object 10 again: runId=$runId3 typedTopLevelCount=$typed3 skipped=$skipped3 (${ms3}ms)")
     // An earlier skipped object: typed in the same run, the typed set is not a prefix
     val (obtained4, ms4) = timed(complete(bigSource("resume", 5)))
     assertNoDiff(expectedAt(5), obtained4)
     val (runId4, typed4, skipped4) = state()
-    println(s"[resume-in-the-same-run] after object 5:   runId=$runId4 typedPrefixLength=$typed4 skipped=$skipped4 (${ms4}ms)")
+    println(s"[resume-in-the-same-run] after object 5:   runId=$runId4 typedTopLevelCount=$typed4 skipped=$skipped4 (${ms4}ms)")
     assertEquals(runId1, runId2, "the second request must resume the first run")
     assertEquals(runId2, runId3, "the third request must be served by the same run")
     assertEquals(runId3, runId4, "the fourth request must resume the same run")
@@ -173,12 +173,12 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val untyped1 = withDriver(_.untypedSpans(uri))
     val (code, _) = params(bigSource("members", 7))
     val method7 = code.indexOf("def method7(")
-    println(s"[members-are-skipped-too] after `val r` of object 7: runId=$runId1 typedPrefixLength=$typed1 skipped=$skipped1; method7 skipped=${untyped1.exists(_.contains(Span(method7)))}")
+    println(s"[members-are-skipped-too] after `val r` of object 7: runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1; method7 skipped=${untyped1.exists(_.contains(Span(method7)))}")
     assert(untyped1.exists(_.contains(Span(method7))), "the sibling method of the completion is skipped")
     // Inside the skipped method: typed in the same run, in its template's context
     val obtained2 = complete(bigSource("members", 7, inMethod = true))
     val (runId2, typed2, skipped2) = state()
-    println(s"[members-are-skipped-too] inside method7: runId=$runId2 typedPrefixLength=$typed2 skipped=$skipped2 (${obtained2.linesIterator.size} items)")
+    println(s"[members-are-skipped-too] inside method7: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2 (${obtained2.linesIterator.size} items)")
     assert(obtained2.linesIterator.exists(_.startsWith("filter")), s"expected filter among the completions, got: $obtained2")
     assertEquals(runId1, runId2, "the request inside the skipped member must resume the run")
     assertEquals(typed1, typed2, "no further top-level statement is typed")
@@ -539,23 +539,23 @@ class CompletionSessionSuite extends BaseCompletionSuite:
   @Test def `edit-starts-a-new-run` =
     assertNoDiff(expectedAt(10), complete(bigSource("edit", 10)))
     val (runId1, typed1, _) = state()
-    println(s"[edit-starts-a-new-run] runId=$runId1 typedPrefixLength=$typed1")
+    println(s"[edit-starts-a-new-run] runId=$runId1 typedTopLevelCount=$typed1")
     assertNoDiff(expectedAt(10), complete(bigSource("edit-changed", 10)))
     val (runId2, typed2, _) = state()
-    println(s"[edit-starts-a-new-run] after edit: runId=$runId2 typedPrefixLength=$typed2")
+    println(s"[edit-starts-a-new-run] after edit: runId=$runId2 typedTopLevelCount=$typed2")
     assert(runId2 > runId1, "changed content must start a new run")
 
   @Test def `cancel-inside-a-statement` =
     val heavy = Set(300)
     assertNoDiff(expectedAt(10), complete(bigSource("cancel", 10, heavy = heavy)))
     val (runId1, typed1, skipped1) = state()
-    println(s"[cancel-inside-a-statement] after object 10: runId=$runId1 typedPrefixLength=$typed1 skipped=$skipped1")
+    println(s"[cancel-inside-a-statement] after object 10: runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1")
     val (code, offset) = params(bigSource("cancel", 300, inGiant = true, heavy = heavy))
     // Cancel at the second typer checkpoint reached while typing object 300
     // (its member `giant` contains the target, so it is typed with the object)
     val (thrown, polls) = cancelAtCheckpoint(2)(_.runUpTo(uri, SourceFile.virtual(uri, code), Span(offset)))
     val (runId2, typed2, skipped2) = state()
-    println(s"[cancel-inside-a-statement] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedPrefixLength=$typed2 skipped=$skipped2")
+    println(s"[cancel-inside-a-statement] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2")
     assert(thrown, "the resume must be aborted with CancelledCompilation")
     assertEquals(runId1, runId2, "the aborted resume must keep the run")
     assertEquals(typed1, typed2, "the aborted statement is not typed")
@@ -563,12 +563,12 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     // Within a typed statement, still served by the same run
     assertNoDiff(expectedAt(10), complete(bigSource("cancel", 10, heavy = heavy)))
     val (runId3, typed3, _) = state()
-    println(s"[cancel-inside-a-statement] after object 10 (typed): runId=$runId3 typedPrefixLength=$typed3")
+    println(s"[cancel-inside-a-statement] after object 10 (typed): runId=$runId3 typedTopLevelCount=$typed3")
     assertEquals(runId1, runId3, "a request within a typed statement is served by the same run")
     // The replaced statement, typed this time
     val obtained4 = complete(bigSource("cancel", 300, inGiant = true, heavy = heavy))
     val (runId4, typed4, skipped4) = state()
-    println(s"[cancel-inside-a-statement] inside giant of object 300 (replaced, resumed): runId=$runId4 typedPrefixLength=$typed4 skipped=$skipped4 (${obtained4.linesIterator.size} items)")
+    println(s"[cancel-inside-a-statement] inside giant of object 300 (replaced, resumed): runId=$runId4 typedTopLevelCount=$typed4 skipped=$skipped4 (${obtained4.linesIterator.size} items)")
     assert(obtained4.linesIterator.exists(_.startsWith("filter")), s"expected filter among the completions, got: $obtained4")
     assertEquals(runId1, runId4, "the resume after the abort must continue the same run")
     assertEquals(typed1 + 2, typed4, "object 300 is typed")
@@ -579,18 +579,18 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     // `val r` of the heavy object: its methods, `giant` included, are skipped
     assertNoDiff(expectedAt(300), complete(bigSource("cancel-member", 300, heavy = heavy)))
     val (runId1, typed1, skipped1) = state()
-    println(s"[cancel-inside-a-member] after `val r` of object 300: runId=$runId1 typedPrefixLength=$typed1 skipped=$skipped1")
+    println(s"[cancel-inside-a-member] after `val r` of object 300: runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1")
     val (code, offset) = params(bigSource("cancel-member", 300, inGiant = true, heavy = heavy))
     // Cancel at the first typer checkpoint reached while typing `giant` alone
     val (thrown, polls) = cancelAtCheckpoint(1)(_.runUpTo(uri, SourceFile.virtual(uri, code), Span(offset)))
     val (runId2, typed2, skipped2) = state()
-    println(s"[cancel-inside-a-member] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedPrefixLength=$typed2 skipped=$skipped2")
+    println(s"[cancel-inside-a-member] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2")
     assert(thrown, "the resume must be aborted with CancelledCompilation")
     assertEquals(runId1, runId2, "the aborted resume must keep the run")
     assertEquals(skipped1, skipped2, "the aborted member is replaced and skipped again")
     val obtained3 = complete(bigSource("cancel-member", 300, inGiant = true, heavy = heavy))
     val (runId3, typed3, skipped3) = state()
-    println(s"[cancel-inside-a-member] inside giant again: runId=$runId3 typedPrefixLength=$typed3 skipped=$skipped3 (${obtained3.linesIterator.size} items)")
+    println(s"[cancel-inside-a-member] inside giant again: runId=$runId3 typedTopLevelCount=$typed3 skipped=$skipped3 (${obtained3.linesIterator.size} items)")
     assert(obtained3.linesIterator.exists(_.startsWith("filter")), s"expected filter among the completions, got: $obtained3")
     assertEquals(runId1, runId3, "after an abort inside a member, the same run serves the next request")
     assertEquals(skipped2 - 1, skipped3, "the member is typed")

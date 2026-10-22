@@ -356,7 +356,7 @@ object XrayServer:
     val typedBefore = typedSpans(uri, source)
     val runIdBefore = driver.currentCtx.runId
     val sessionRunBefore = driver.runIdOf(uri)
-    val prefixBefore = driver.typedPrefixLength(uri)
+    val prefixBefore = driver.typedTopLevelCount(uri)
     val untypedBefore = driver.untypedSpans(uri)
     val (touchedBefore, _, _) = scopeCounts(uri)
 
@@ -422,7 +422,7 @@ object XrayServer:
 
     val runIdAfter = driver.currentCtx.runId
     val sessionRunAfter = driver.runIdOf(uri)
-    val prefixAfter = driver.typedPrefixLength(uri)
+    val prefixAfter = driver.typedTopLevelCount(uri)
     val typedAfter = typedSpans(uri, source)
     val untypedAfter = driver.untypedSpans(uri)
     val (touched, completed, total) = scopeCounts(uri)

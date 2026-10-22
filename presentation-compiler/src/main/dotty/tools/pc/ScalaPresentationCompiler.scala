@@ -45,18 +45,6 @@ import org.eclipse.lsp4j.DocumentHighlight
 import org.eclipse.lsp4j.TextEdit
 import org.eclipse.lsp4j as l
 
-/** Under `-Yinteractive-log`, the time a whole request took inside the
- *  presentation compiler, the driver included: what the editor waits for
- *  once Metals has handed the request over.
- */
-private object PcTiming:
-  def timed[T](driver: dotty.tools.dotc.interactive.InteractiveDriver, what: String)(body: => T): T =
-    if !driver.logRequests then body
-    else
-      val t0 = System.nanoTime()
-      try body
-      finally System.err.println(f"[dotc-session] $what: whole request ${(System.nanoTime() - t0) / 1e6}%.1f ms in the presentation compiler")
-
 case class ScalaPresentationCompiler(
     buildTargetIdentifier: String = "",
     buildTargetName: Option[String] = None,
@@ -235,7 +223,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcTiming.timed(driver, "definition")(PcDefinitionProvider(driver, params, search).definitions())
+      driver.timedRequest("definition")(PcDefinitionProvider(driver, params, search).definitions())
     }(using params.toQueryContext)
 
   override def typeDefinition(
@@ -246,7 +234,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcTiming.timed(driver, "typeDefinition")(PcDefinitionProvider(driver, params, search).typeDefinitions())
+      driver.timedRequest("typeDefinition")(PcDefinitionProvider(driver, params, search).typeDefinitions())
     }(using params.toQueryContext)
 
   def documentHighlight(
@@ -536,7 +524,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcTiming.timed(driver, "hover")(HoverProvider.hover(params, driver, search, config.hoverContentType()))
+      driver.timedRequest("hover")(HoverProvider.hover(params, driver, search, config.hoverContentType()))
     }(using params.toQueryContext)
   end hover
 
@@ -596,7 +584,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcTiming.timed(driver, "signatureHelp")(SignatureHelpProvider.signatureHelp(driver, params, search))
+      driver.timedRequest("signatureHelp")(SignatureHelpProvider.signatureHelp(driver, params, search))
     }(using params.toQueryContext)
 
   override def didChange(

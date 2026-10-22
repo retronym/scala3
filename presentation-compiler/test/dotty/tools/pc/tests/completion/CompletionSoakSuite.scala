@@ -184,7 +184,7 @@ class CompletionSoakSuite extends BasePCSuite:
       val id = driver.runIdOf(uri)
       if id != runId then { fresh += 1; runId = id }
       val skippedText = driver.untypedSpans(uri).map(sp => content.substring(sp.start, math.min(sp.end, sp.start + 18)).replace('\n', ' ')).mkString("[", " | ", "]")
-      log += s"$step $what@$offset run=$id typed=${driver.typedPrefixLength(uri)} skipped=${driver.untypedSpans(uri).size} $skippedText tainted=${driver.isTainted(uri)}"
+      log += s"$step $what@$offset run=$id typed=${driver.typedTopLevelCount(uri)} skipped=${driver.untypedSpans(uri).size} $skippedText tainted=${driver.isTainted(uri)}"
       if expected != obtained then
         println(s"[soak $name seed=$seed step $step] MISMATCH at $offset: tree path: $treeAt; diagnostics of the request: ${diags.map(d => s"${d.pos.line + 1}: ${d.msg.message.take(100)}")}")
         // the givens of the file's packages, as the driver's context sees them
@@ -228,7 +228,7 @@ class CompletionSoakSuite extends BasePCSuite:
             catch case _: CancelledCompilation => true
           polls += p
           if thrown then cancelled += 1
-          log += s"$step cancel(k=$k)@$offset thrown=$thrown polls=$p run=${driver.runIdOf(uri)} typed=${driver.typedPrefixLength(uri)}"
+          log += s"$step cancel(k=$k)@$offset thrown=$thrown polls=$p run=${driver.runIdOf(uri)} typed=${driver.typedTopLevelCount(uri)}"
           val t = touched(driver)
           org.junit.Assert.assertTrue(s"[$name seed=$seed step $step] symbols still Touched after a cancellation: ${t.mkString(", ")}", t.isEmpty)
           check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))

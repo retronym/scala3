@@ -67,7 +67,7 @@ class CachingDriver private (
    *  whole file.
    */
   override def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    if !targetedRequests then run(uri, source)
+    if !targetedRequests then run(uri, source) // the driver's own check would call its `run`, not this caching one
     else
       lastCompiledURI = null
       val diags = super.runUpTo(uri, source, target)

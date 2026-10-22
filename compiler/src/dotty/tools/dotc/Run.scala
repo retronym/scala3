@@ -232,31 +232,55 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   def canProgress()(using Context): Boolean =
     foldProgress(true /* not cancelled by default */)(p => !p.checkCancellation())
 
-  /** Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`).
-   *  When `typingTarget` exists, `Typer.typedStats` types, of the statements
-   *  of a package or a template, only those whose span contains the target
-   *  (imports and exports are always typed); the others are recorded in
-   *  `skippedStats` with the context they would have been typed in and the
-   *  statement owner, for the driver to type later in this same run when a
-   *  request lands in one of them. Their symbols exist (the Namer indexed
-   *  them) and complete lazily as usual.
-   */
+  // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
+  //
+  // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
+  // a package, a template or a block on the path to the target, only those
+  // whose span contains the target (see `Targeting`); the others are recorded
+  // in `skippedStats` with the context they would have been typed in and the
+  // statement owner, for the driver to type later in this same run when a
+  // request lands in one of them. Their symbols exist (the Namer indexed them)
+  // and complete lazily as usual. Batch compilation never sets any of this.
+
+  /** The offset the run types towards; `NoSpan` for a run that types everything. */
   var typingTarget: Span = Spans.NoSpan
+
+  /** The statements `typedStats` skipped, innermost lists last. */
   val skippedStats: ListBuffer[Run.SkippedStat] = ListBuffer.empty
 
+  /** Set once by the driver when the run starts with a target: the run is a
+   *  targeted session's, and stays so for its later resumes and completion
+   *  (`typingTarget` itself is reset between them).
+   */
+  var isTargeted: Boolean = false
+
   /** The owner of the statement list about to be typed by `Typer.typedStats`
-   *  that is subject to targeting: the package class or the template's local
-   *  dummy, set by `typedPackageDef` and `typedClassDef` (and the driver's
-   *  resume) right before the call, consumed by it. The statements of blocks
-   *  are not subject to targeting: a block is typed as a whole.
+   *  that is subject to targeting (the package class, the template's local
+   *  dummy, or the owner of a block), set by `targetNextStats` right before
+   *  the call and consumed by it.
    */
   var targetedStatsOwner: Symbol = NoSymbol
-  /** Set with `targetedStatsOwner` by `typedBlockStats`: the statements of a
-   *  block are skipped like a template's, but recorded as block statements,
-   *  which the driver does not resume into (it starts a fresh run instead:
-   *  a typed `Block` is not spliced).
+
+  /** Set with `targetedStatsOwner` for the statements of a block: skipped
+   *  ones leave a stub in the typed `Block`, and are recorded as block
+   *  statements, which the driver splices back in place (`spliceAll`).
    */
   var targetedStatsInBlock: Boolean = false
+
+  /** Mark the next `typedStats` list, owned by `owner`, as subject to
+   *  targeting. Call only when `typingTarget.exists`.
+   */
+  def targetNextStats(owner: Symbol, inBlock: Boolean = false)(using Context): Unit =
+    assert(!targetedStatsOwner.exists, i"targeting of $targetedStatsOwner not consumed before $owner")
+    targetedStatsOwner = owner
+    targetedStatsInBlock = inBlock
+
+  /** Back to the defaults: no target, no pending mark, nothing skipped. */
+  def clearTargeting(): Unit =
+    typingTarget = Spans.NoSpan
+    targetedStatsOwner = NoSymbol
+    targetedStatsInBlock = false
+    skippedStats.clear()
 
   /** Interactive mode only: the symbols whose completion was prevented as a
    *  cyclic reference during this run (`SymDenotation.completeFrom` found
@@ -266,7 +290,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  on top of it must not outlive the request: `InteractiveDriver.runUpTo`
    *  starts a fresh run instead of resuming a run that recorded one (the
    *  session is tainted). IntelliJ's `RecursionManager` has the same rule
-   *  (`markStack` / `mayCacheNow`).
+   *  (`markStack` / `mayCacheNow`). Of the three lists only `completionsUnwound`
+   *  drives behaviour (`isTainted`); `cyclesPrevented` and `leaksHealed` are
+   *  for tests and the x-ray, and not used by the compiler.
    */
   val cyclesPrevented: ListBuffer[Symbol] = ListBuffer.empty
   val completionsUnwound: ListBuffer[(Symbol, Throwable)] = ListBuffer.empty
@@ -314,21 +340,32 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   private var typedTreeCount = 0
 
-  /** The number of trees typed in this run so far (every `Typer.typed`). */
+  /** The typer polls for cancellation every `checkpointMask + 1` typed trees;
+   *  the mask is read from `Run.typerCheckpointMask` once, when the run is
+   *  created, so the per-tree test reads no volatile.
+   */
+  private val checkpointMask: Int = Run.typerCheckpointMask
+
+  /** The number of trees typed in this run so far (every `Typer.typed`).
+   *  For tests and the x-ray; not used by the compiler.
+   */
   def typedTrees: Int = typedTreeCount
 
-  /** Called by `Typer.typed` for every tree. Every 1024 trees, in interactive
-   *  mode, polls the progress callback and aborts the run with a
+  /** Called by `Typer.typed` for every tree: an increment and a mask test;
+   *  the poll itself is out of line. Every 1024 trees, in interactive mode,
+   *  polls the progress callback and aborts the run with a
    *  `CancelledCompilation` if it reports cancellation. Batch compilation is
    *  unaffected: there cancellation keeps skipping the remaining units instead
    *  (see `didEnterUnit`), so that sbt sees a run that ends normally.
+   *  (Not `inline`: the tests recognise the typer's poll by this frame.)
    */
   def checkCancelledTyping()(using Context): Unit =
     typedTreeCount += 1
-    if (typedTreeCount & Run.typerCheckpointMask) == 0
-       && ctx.mode.is(Mode.Interactive)
-       && !canProgress()
-    then throw CompilationUnit.CancelledCompilation()
+    if (typedTreeCount & checkpointMask) == 0 then pollCancellation()
+
+  private def pollCancellation()(using Context): Unit =
+    if ctx.mode.is(Mode.Interactive) && !canProgress() then
+      throw CompilationUnit.CancelledCompilation()
 
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>
@@ -736,15 +773,16 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
 object Run {
   /** The typer polls for cancellation every `typerCheckpointMask + 1` typed
-   *  trees (a power of two, 1024 by default). Tests lower it to make a
-   *  cancellation land inside small statements.
+   *  trees (a power of two, 1024 by default). A test knob. Tests lower it to make a
+   *  cancellation land inside small statements; a run reads it when created.
    */
   @sharable @volatile var typerCheckpointMask: Int = 1023
 
   /** Process-wide counts of the cyclic references prevented and the
    *  completions unwound in interactive mode, printed at exit when
    *  `-Ddotty.interactive.cycleStats=true`: the measurement behind the
-   *  graceful-degradation design.
+   *  graceful-degradation design. Measurement scaffolding, read by no one
+   *  else: a candidate to drop before upstreaming.
    */
   object CycleStats:
     private val enabled = java.lang.Boolean.getBoolean("dotty.interactive.cycleStats")

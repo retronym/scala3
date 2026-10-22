@@ -1601,26 +1601,14 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
   def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
-    // Targeted typing applies to the statements of a block too: a statement
-    // that does not contain the target is skipped, and its symbol, indexed
-    // just above, completes lazily (types ahead its right-hand side) if a
-    // later statement refers to it. So a macro in an earlier statement is
-    // expanded only when something depends on it.
-    // Only a block that contains the target: a block typed for another reason
-    // (the body of a method without a result type, typed ahead by its
-    // completer when an overload resolution elsewhere needs the type) is typed
-    // whole, since the typed-ahead body is cached and reused when the method
-    // is later typed with a target inside it; stubs made then stayed.
-    // Never inside an inline method: its typed body is registered whole
-    // (`PrepareInlineable.makeInlineable` maps it, and callers inline it), so
-    // a stub in it is a wrong body, and the map failed on the stub's untyped
-    // type tree.
+    // Targeted typing applies to the statements of a block that contains the
+    // target (see `Targeting`): a skipped one's symbol, indexed just above,
+    // completes lazily if a later statement refers to it. A block typed for
+    // another reason is typed whole, and never inside an inline method.
     val run = ctx.run
     if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
-    then
-      run.targetedStatsOwner = ctx.owner
-      run.targetedStatsInBlock = true
+    then run.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
@@ -3576,13 +3564,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
-      // Only a class that contains the target is typed along the path to it.
-      // A class typed for another reason (the synthetic class of a refinement
-      // type, an anonymous class, both typed inside an expression that a
-      // completer types ahead) is typed whole: its members were skipped and
-      // lost, so `Sel { def foo2: Int }` lost `foo2`.
-      if cdef.span.contains(ctx.run.nn.typingTarget) then
-        ctx.run.nn.targetedStatsOwner = dummy
+      // only a class that contains the target is typed along the path to it
+      val run = ctx.run.nn
+      if run.typingTarget.exists && cdef.span.contains(run.typingTarget) then
+        run.targetNextStats(dummy)
       val body1 =
         implementDeferredGivens(
           addParentRefinements(
@@ -3768,7 +3753,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               case _ =>
           // a package clause is never skipped as a statement, so one that does not
           // contain the target is targeted too: all of its statements are skipped
-          ctx.run.nn.targetedStatsOwner = pkg.moduleClass
+          if ctx.run.nn.typingTarget.exists then ctx.run.nn.targetNextStats(pkg.moduleClass)
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)
             stats1 = stats1 ++ typedBlockStats(MainProxies.proxies(stats1))._1
@@ -4180,10 +4165,11 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       record("typed total")
       if ctx.phase.isTyper then
         assertPositioned(tree)
-      ctx.run.nn.checkCancelledTyping()
+      val run = ctx.run.nn
+      run.checkCancelledTyping()
       if tree.source != ctx.source && tree.source.exists then
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
-      else if ctx.run.nn.isCancelled then
+      else if run.isCancelled then
         tree.withType(WildcardType)
       else adapt(typedUnadapted(tree, pt, locked), pt, locked)
     }
@@ -4200,132 +4186,22 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     var enumContexts: SimpleIdentityMap[Symbol, Context] = SimpleIdentityMap.empty
     val initialNotNullInfos = ctx.notNullInfos
       // A map from `enum` symbols to the contexts enclosing their definitions
-    val run = ctx.run.nn
-    /** Targeted typing: of the statements of a package or a template (the
-     *  list `Run.targetedStatsOwner` marks), only the statement whose span
-     *  contains the target is typed (a class and its synthetic companion
-     *  share the span, so both are); the others are recorded on the run,
-     *  with the context they would have been typed in, for
-     *  `InteractiveDriver.runUpTo` to type later in this run. When no
-     *  statement contains the target (a class header, a comment between
-     *  definitions), the first statement after it is typed: a scaladoc
-     *  completion needs the definition the comment documents. scalac's
-     *  `typedStats` types the whole list in that case. Imports and exports
-     *  are typed regardless, as they shape the context of what follows, and
-     *  so are nested package clauses (they are containers: their own
-     *  statements are subject to this), trees without a source range of
-     *  their own (the module val of an object, a synthetic companion: cheap,
-     *  and nothing could target them), and synthetic definitions (the
-     *  `$anonfun` of a closure's block, a pattern's temporaries), which the
-     *  statement after them is built on.
-     */
-    // Only the statements of the request's own source: a span is an offset in
-    // its source, and the trees of an inlined macro body carry the macro's
-    // source (the target offset fell inside a `$anonfun` of the splice body or
-    // not depending on the file's length, and the splice broke when it did not).
-    val targeted =
-      run.typingTarget.exists && (exprOwner eq run.targetedStatsOwner)
-      && (ctx.compilationUnit ne NoCompilationUnit) && (ctx.source eq ctx.compilationUnit.source)
-    val inBlock = run.targetedStatsInBlock
-    run.targetedStatsOwner = NoSymbol
-    run.targetedStatsInBlock = false
-    val nextAfterTarget: untpd.Tree | Null =
-      if targeted && !stats.exists(_.span.contains(run.typingTarget)) then
-        stats.find(s => s.span.exists && s.span.start >= run.typingTarget.end).orNull
-      else null
-    // The expansion of a statement that contains the target is typed whole:
-    // an `extension` block expands into methods whose own spans need not
-    // contain a target in the block's comment.
-    var forcedSpan: Span = NoSpan
-    def isSyntheticDef(stat: untpd.Tree): Boolean = stat match
-      case mdef: untpd.MemberDef => mdef.mods.is(Synthetic) || mdef.mods.is(Artifact)
-      case _ => false
-    /** In a block, the statements before the target's that it depends on, by
-     *  name, transitively: typed in order rather than skipped, so that a
-     *  chain of dependent local definitions is not typed ahead by their
-     *  completers recursively (200 dependent vals overflowed the stack that
-     *  way). Names are a conservative footprint: a referenced name that some
-     *  earlier statement defines makes that statement needed.
-     */
-    val neededInBlock: Set[untpd.Tree] =
-      if !(targeted && inBlock) then Set.empty
-      else
-        val target = run.typingTarget
-        val targetIdx = stats.indexWhere(_.span.contains(target))
-        if targetIdx < 0 then Set.empty
-        else
-          val before = stats.take(targetIdx).toArray
-          def definedNames(t: untpd.Tree): Set[Name] = t match
-            case d: untpd.ValDef => Set(d.name)
-            case d: untpd.DefDef => Set(d.name)
-            case d: untpd.TypeDef => Set(d.name)
-            case m: untpd.ModuleDef => Set(m.name, m.name.moduleClassName)
-            case untpd.PatDef(_, pats, _, _) =>
-              val acc = new untpd.UntypedTreeAccumulator[Set[Name]]:
-                def apply(x: Set[Name], t: untpd.Tree)(using Context): Set[Name] = t match
-                  case untpd.Bind(n, body) => foldOver(x + n, body)
-                  case untpd.Ident(n) => x + n
-                  case _ => foldOver(x, t)
-              pats.foldLeft(Set.empty[Name])((x, p) => acc(x, p))
-            case _ => Set.empty
-          def usedNames(t: untpd.Tree): Set[Name] =
-            val acc = new untpd.UntypedTreeAccumulator[Set[Name]]:
-              def apply(x: Set[Name], t: untpd.Tree)(using Context): Set[Name] = t match
-                case untpd.Ident(n) => foldOver(x + n, t)
-                case untpd.Select(q, n) => foldOver(x + n, t)
-                case _ => foldOver(x, t)
-            acc(Set.empty, t)
-          val defined = before.map(definedNames)
-          val needed = new Array[Boolean](before.length)
-          var wanted = usedNames(stats(targetIdx))
-          var i = before.length - 1
-          while i >= 0 do
-            if !needed(i) && defined(i).exists(wanted) then
-              needed(i) = true
-              wanted = wanted ++ usedNames(before(i))
-            i -= 1
-          before.indices.filter(needed).map(before(_)).toSet
-    /** A skipped definition of a block leaves a typed stub in the block: its
-     *  name and symbol, no right-hand side, an untyped type tree, so that a
-     *  scope rebuilt from the typed tree (`Interactive.contextOfPath` enters
-     *  the symbol of every `MemberDef` of a `Block`) sees the local, while
-     *  its info stays lazy until something asks for it.
-     */
-    def stubsOf(stat: untpd.Tree)(using Context): List[Tree] = expanded(stat) match
-      case Thicket(trees) => trees.flatMap(stubsOf)
-      case t: untpd.DefTree =>
-        t.getAttachment(SymOfTree) match
-          case Some(sym) if sym.exists =>
-            val stub: untpd.Tree = t match
-              case v: untpd.ValDef => untpd.ValDef(v.name, untpd.TypeTree(), untpd.EmptyTree)
-              case d: untpd.DefDef => untpd.DefDef(d.name, Nil, untpd.TypeTree(), untpd.EmptyTree)
-              case td: untpd.TypeDef => untpd.TypeDef(td.name, untpd.EmptyTree)
-              case _ => untpd.EmptyTree
-            if stub.isEmpty then Nil
-            else List(stub.withSpan(t.span).withType(if sym.isType then sym.typeRef else sym.termRef))
-          case _ => Nil
-      case _ => Nil
-    def skip(stat: untpd.Tree)(using Context): Boolean =
-      targeted
-      && stat.span.exists && !stat.span.isZeroExtent
-      && !stat.isInstanceOf[untpd.PackageDef]
-      && !isSyntheticDef(stat) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
-      && !neededInBlock.contains(stat)
-      && !stat.span.contains(run.typingTarget)
-      && !(stat eq nextAfterTarget)
-      && !forcedSpan.contains(stat.span)
-      && { if inBlock then buf ++= stubsOf(stat); run.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock); true }
-    def forceExpansion(stat: untpd.Tree): Unit =
-      if targeted && (stat.span.contains(run.typingTarget) || (stat eq nextAfterTarget)) then forcedSpan = stat.span
+    val targeting = Targeting.of(this, stats, exprOwner, buf)
     @tailrec def traverse(stats: List[untpd.Tree])(using Context): (List[Tree], Context) = stats match {
       case (imp: untpd.Import) :: rest =>
         val imp1 = typed(imp)
         buf += imp1
         traverse(rest)(using ctx.importContext(imp, imp1.symbol))
-      case (mdef: untpd.DefTree) :: rest if skip(mdef) =>
+      case Thicket(stats) :: rest =>
+        traverse(stats ::: rest)
+      case (stat: untpd.Export) :: rest =>
+        buf +=  typed(stat)
+        buf ++= stat.attachmentOrElse(ExportForwarders, Nil)
+          // no attachment can happen in case of cyclic references
+        traverse(rest)
+      case stat :: rest if targeting != null && targeting.skip(stat) =>
         traverse(rest)
       case (mdef: untpd.DefTree) :: rest =>
-        forceExpansion(mdef)
         mdef.removeAttachment(ExpandedTree) match {
           case Some(xtree) =>
             traverse(xtree :: rest)
@@ -4348,21 +4224,9 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
             }
             traverse(rest)
         }
-      case Thicket(stats) :: rest =>
-        traverse(stats ::: rest)
-      case (stat: untpd.Export) :: rest =>
-        buf +=  typed(stat)
-        buf ++= stat.attachmentOrElse(ExportForwarders, Nil)
-          // no attachment can happen in case of cyclic references
-        traverse(rest)
-      case (stat: untpd.ExtMethods) :: rest if skip(stat) =>
-        traverse(rest)
       case (stat: untpd.ExtMethods) :: rest =>
-        forceExpansion(stat)
         val xtree = stat.removeAttachment(ExpandedTree).get
         traverse(xtree :: rest)
-      case stat :: rest if skip(stat) =>
-        traverse(rest)
       case stat :: rest =>
         val stat1 = typed(stat)(using ctx.exprContext(stat, exprOwner))
         if !Linter.warnOnInterestingResultInStatement(stat1) then

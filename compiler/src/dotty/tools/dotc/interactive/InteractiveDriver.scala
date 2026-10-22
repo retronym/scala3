@@ -13,6 +13,7 @@ import core.*, core.Decorators.*
 import Contexts.*, Names.*, NameOps.*, Symbols.*, SymDenotations.*, Trees.*, Types.*
 import reporting.*
 import util.*
+import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
 
 private class InteractiveContextBase(sourcePackage: CachedLogicalPackage) extends ContextBase {
@@ -109,55 +110,17 @@ class InteractiveDriver(
 
   def run(uri: URI, source: SourceFile): List[Diagnostic] =
     mySession match
-      case s: Session if targetedRequests && s.uri == uri && s.source.textContent() == source.textContent()
-          && !s.run.isTainted && !s.poisoned && s.skipped.nonEmpty =>
-        completeSession(s)
+      case s: Session if targetedRequests && s.isOn(uri, source) && s.isResumable && s.skipped.nonEmpty =>
+        // A whole-file run on the content of the session completes the session
+        // instead of replacing it, so the requests after it are served from the
+        // run that holds the whole file typed.
+        logged(s"run ${fileNameOf(s.uri)} (completes the session)")(s.complete())(sessionSummary(uri))
       case _ => run(uri, source, NoSpan)
-
-  /** A whole-file run on the content of the session completes the session
-   *  instead of replacing it: every statement still skipped is typed whole,
-   *  in source order, in its recorded context, and all are spliced in one
-   *  pass; the run then holds the whole file typed, and the requests after
-   *  it are served from it. (A whole-file request from the editor, document
-   *  highlight on every cursor move, used to start a new run and so made the
-   *  hover after it a fresh run again.)
-   */
-  private def completeSession(s: Session): List[Diagnostic] =
-    logged(s"run ${fileNameOf(s.uri)} (completes the session)")({
-      myCancelled = false
-      s.run.cancelledCompletions.clear()
-      while s.skipped.nonEmpty do
-        val batch = s.skipped.sortBy(_.stat.span.start)
-        s.skipped = Nil
-        s.run.skippedStats.clear()
-        s.run.typingTarget = NoSpan // no target: each statement typed whole
-        val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
-        try
-          for sk <- batch do
-            val ctx0 = sk.ctx
-            s.run.targetedStatsOwner = NoSymbol
-            s.run.targetedStatsInBlock = false
-            try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
-            catch case ex: CompilationUnit.CancelledCompilation =>
-              // the ones typed so far are kept; the aborted one is replaced
-              // or poisons the session, as in a resume
-              s.reporter.removeBufferedMessages(using sk.ctx)
-              s.skipped = s.skipped ++ batch.dropWhile(_ ne sk).drop(1)
-              if !replacePoisoned(s, sk) || !replaceUnwound(s, sk.stat.span)(using sk.ctx) then s.poisoned = true
-              throw ex
-        finally
-          val entries = typed.result()
-          if entries.nonEmpty then spliceAll(s, entries)(using entries.head._1.ctx)
-          s.skipped = s.skipped ++ s.run.skippedStats.toList
-          s.run.skippedStats.clear()
-      s.diagnostics
-    }) {
-      s"run=${runIdOf(s.uri)} typedTop=${typedPrefixLength(s.uri)} skipped=${untypedSpans(s.uri).size} trees=${s.run.typedTrees}"
-    }
 
   /** The state of a targeted run (see `runUpTo`): the run, the unit with
    *  the partially typed tree, the statements the run skipped (with the
-   *  context to type them in), and the diagnostics so far.
+   *  context to type them in), and the diagnostics so far. Its operations
+   *  mutate only the session, its unit and its run.
    */
   private class Session(val uri: URI, val source: SourceFile, val run: Run, val reporter: StoreReporter,
       val unit: CompilationUnit):
@@ -169,60 +132,319 @@ class InteractiveDriver(
      *  second time, and the next request starts a fresh run.
      */
     var poisoned: Boolean = false
+
     def skippedAt(target: Span): Option[Run.SkippedStat] = skipped.find(_.stat.span.contains(target))
+
+    /** Is this the session of `uri` on the content of `source`? */
+    def isOn(uri: URI, source: SourceFile): Boolean =
+      this.uri == uri && this.source.textContent() == source.textContent()
+
+    /** A run that had a completion unwound by an exception of unknown effect
+     *  (not a cycle, not a cancellation) holds state nothing should be served
+     *  or resumed from, and a poisoned session holds a statement that is
+     *  neither typed nor skipped: the request starts a fresh run.
+     */
+    def isResumable: Boolean = !run.isTainted && !poisoned
+
+    /** Move the statements the run skipped since into the session's. */
+    private def collectSkipped(): Unit =
+      skipped = skipped ++ run.skippedStats.toList
+      run.skippedStats.clear()
+
+    /** A new stretch of typing in this run starts: forget a cancellation of
+     *  the previous request and the completions it unwound.
+     */
+    private def beginTyping(): Unit =
+      myCancelled = false
+      run.cancelledCompletions.clear()
+
+    /** The typing of `sk` was aborted by a cancellation: the statement can
+     *  not be typed a second time (typing consumes the attachments of the
+     *  untyped trees and the nested typers of the methods). Whatever was
+     *  typed before the abort stays typed; the statements skipped inside the
+     *  aborted one are its own and go with it. Replace it, or poison the
+     *  session.
+     */
+    private def abandon(sk: Run.SkippedStat): Unit =
+      reporter.removeBufferedMessages(using sk.ctx)
+      if !replacePoisoned(sk) || !replaceUnwound(sk.stat.span)(using sk.ctx) then poisoned = true
+
+    /** Is `sym` defined in this session's file, by the identity of its
+     *  `associatedFile` (a virtual file has no equality of its own)?
+     */
+    private def definesHere(sym: Symbol)(using Context): Boolean = sym.associatedFile == unit.source.file
+
+    /** Is `file` the file of this session, by path? */
+    def isFileOf(file: AbstractFile | Null): Boolean = file != null && file.path == unit.source.file.nn.path
+
+    /** Complete the session: every statement still skipped is typed whole, in
+     *  source order, in its recorded context, and all are spliced in one pass;
+     *  the run then holds the whole file typed, and the requests after it are
+     *  served from it.
+     */
+    def complete(): List[Diagnostic] =
+      beginTyping()
+      while skipped.nonEmpty do
+        val batch = skipped.sortBy(_.stat.span.start)
+        skipped = Nil
+        run.clearTargeting() // no target: each statement typed whole
+        val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
+        try
+          for sk <- batch do
+            assertOwnSource(sk)
+            val ctx0 = sk.ctx
+            try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
+            catch case ex: CompilationUnit.CancelledCompilation =>
+              // the ones typed so far are kept; the aborted one is replaced
+              // or poisons the session, as in a resume
+              skipped = skipped ++ batch.dropWhile(_ ne sk).drop(1)
+              abandon(sk)
+              throw ex
+        finally
+          val entries = typed.result()
+          if entries.nonEmpty then spliceAll(entries)(using entries.head._1.ctx)
+          collectSkipped()
+      diagnostics
+
+    /** A skipped statement is a statement of the session's own source: one
+     *  from an inlined macro's source would splice at the wrong offsets.
+     */
+    private def assertOwnSource(sk: Run.SkippedStat): Unit =
+      assert(sk.ctx.source eq unit.source, s"skipped statement at ${sk.stat.span} is from ${sk.ctx.source}, not the session's ${unit.source}")
+
+    /** Type the skipped statement `sk` in the run and context it was skipped
+     *  in, with `target` as the target for the statements nested in it, and
+     *  splice the result into the unit's typed tree.
+     */
+    def resume(sk: Run.SkippedStat, target: Span): List[Diagnostic] =
+      beginTyping()
+      assertOwnSource(sk)
+      skipped = skipped.filterNot(_ eq sk)
+      run.clearTargeting()
+      run.typingTarget = target
+      try
+        val ctx0 = sk.ctx
+        run.targetNextStats(sk.owner, sk.inBlock)(using ctx0)
+        val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
+        collectSkipped()
+        assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")
+        spliceAll(List((sk, stats)))(using ctx0)
+        diagnostics
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        abandon(sk)
+        throw ex
+      finally run.clearTargeting()
+
+    /** Does `owner` define `name` in this file: the companion of a statement
+     *  to replace. A companion is not replaced alone: the synthetic members a
+     *  case class gives its object (`apply`, `unapply`) were merged into the
+     *  object's tree by the class's expansion, and a fresh parse of the object
+     *  alone lacks them.
+     */
+    private def hasCompanionHere(owner: Symbol, name: Name)(using Context): Boolean =
+      val cls = if owner.isClass then owner else owner.owner
+      cls.isClass && {
+        val sym = cls.asClass.classDenot.info.decls.lookup(name)
+        sym.exists && isFileOf(sym.associatedFile)
+      }
+
+    /** Replace the skipped statement `sk`, whose typing was aborted, by a
+     *  fresh parse of its source range, indexed afresh in the same run and
+     *  context: its symbols are unlinked from the owner's scope and re-created,
+     *  and it is skipped again. References to the old symbols typed earlier
+     *  keep them. Only definitions are replaced (not the synthetic
+     *  `<file>$package` object of top-level definitions, nor a nested package
+     *  clause, nor a statement that is an expression).
+     */
+    private def replacePoisoned(sk: Run.SkippedStat): Boolean =
+      given Context = sk.ctx
+      val head = sk.stat
+      val replaceable = !sk.inBlock && (head match
+        case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic) && !hasCompanionHere(sk.owner, mdef.name.toTypeName)
+        case tdef: untpd.TypeDef => !hasCompanionHere(sk.owner, tdef.name.toTermName)
+        case _: untpd.DefDef | _: untpd.ValDef => true
+        case _ => false)
+      if !replaceable then return false
+      val parsed = new parsing.Parsers.Parser(source).parse()
+      val fresh = new untpd.UntypedTreeAccumulator[Option[untpd.Tree]]:
+        def apply(x: Option[untpd.Tree], tree: untpd.Tree)(using Context): Option[untpd.Tree] =
+          if x.isDefined then x
+          else if tree.span == head.span && tree.getClass == head.getClass then Some(tree)
+          else if tree.span.contains(head.span) then foldOver(x, tree)
+          else x
+      fresh(None, parsed) match
+        case Some(stat) =>
+          val cls = (if sk.owner.isClass then sk.owner else sk.owner.owner).asClass.classDenot
+          val old = cls.info.decls.toList.filter(sym => sym.span.exists && stat.span.contains(sym.span) && definesHere(sym))
+          // A given or implicit is held by the `ContextualImplicits` cached on
+          // the session's contexts (and by the run's implicit scopes), by
+          // symbol: a fresh symbol would not be found, and the old one is
+          // what is being replaced. The session is poisoned instead.
+          if old.exists(definesImplicit) then return false
+          old.foreach(cls.delete)
+          ctx.typer.index(stat :: Nil)
+          skipped = Run.SkippedStat(stat, sk.ctx, sk.owner) :: skipped
+          true
+        case None =>
+          false
+
+    /** Is `sym` a given or implicit, or a class or object whose indexed
+     *  members (nested ones included) hold one.
+     */
+    private def definesImplicit(sym: Symbol)(using Context): Boolean =
+      sym.isOneOf(Flags.GivenOrImplicit)
+      || sym.is(Flags.ModuleClass) && sym.sourceModule.isOneOf(Flags.GivenOrImplicit)
+      || sym.isClass && sym.asClass.unforcedDecls.exists(definesImplicit)
+
+    /** The symbols whose completion the cancellation unwound through
+     *  (`Run.cancelledCompletions`): a Namer completer that was unwound can
+     *  not be run again (a method's had entered its parameters in the nested
+     *  typer's scope; a class's had set the temporary info, and the class is
+     *  `isCompleted` without parents), and the statement that defines each
+     *  one is replaced like the aborted statement itself (`replacePoisoned`),
+     *  or the session is poisoned: a symbol of this file in no skipped
+     *  statement (a local of a block, a member of a companion). The symbols
+     *  of other files (the classpath's loaders leave their roots loadable
+     *  again; a sourcepath file's completers are left alone) are not touched.
+     *  `replaced` is the span of the aborted statement, replaced already.
+     *  Returns false when the session is to be poisoned.
+     */
+    private def replaceUnwound(replaced: Span)(using Context): Boolean =
+      val syms = run.cancelledCompletions.toList
+      run.cancelledCompletions.clear()
+      var done = List(replaced)
+      var ok = true
+      for sym <- syms if ok && sym.exists && definesHere(sym) do
+        if !sym.span.exists then ok = false
+        else if !done.exists(_.contains(sym.span)) then
+          skipped.find(_.stat.span.contains(sym.span)) match
+            case Some(sk) =>
+              skipped = skipped.filterNot(_ eq sk)
+              if replacePoisoned(sk) then done = sk.stat.span :: done
+              else ok = false
+            case None => ok = false
+      ok
+
+    /** Complete every symbol of the skipped statements, in the run that
+     *  created their completers: the statement's own symbols, then the
+     *  members of a class after the class (whose completion indexes its
+     *  template), nested ones likewise. The typed statements completed their
+     *  symbols as they were typed, and typing consumed their `ExpandedTree`
+     *  attachments, so the untyped tree no longer leads to them; the skipped
+     *  statements keep theirs. Local definitions inside bodies are not indexed
+     *  and have no completer to run.
+     */
+    def completeSymbols(): Unit =
+      given Context = myCtx.fresh.setCompilationUnit(unit) // the session's run context, with root imports
+      assert(ctx.runId == run.runContext.runId, s"the completers of $uri were created in run ${run.runContext.runId}, not in run ${ctx.runId}")
+      run.cancelledCompletions.clear()
+      try skipped.foreach(sk => ctx.typer.foreachIndexedDef(sk.stat)((_, sym) => sym.ensureCompleted()))
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        // the session is kept (the walk runs again when a file is next left),
+        // with the statements of the unwound completers replaced
+        if !replaceUnwound(NoSpan) then poisoned = true
+        throw ex
+      finally diagnostics = diagnostics ++ reporter.removeBufferedMessages
+
+    /** Insert the typed `stats` into the statements of their owner in the
+     *  unit's typed tree (the package for a package class, the template for
+     *  a local dummy), in source order, and update what depends on the tree.
+     */
+    private def spliceAll(entries: List[(Run.SkippedStat, List[Tree])])(using Context): Unit =
+      val src = unit.source
+      def isStubOf(sk: Run.SkippedStat)(t: Tree) = t.span == sk.stat.span && (t.source eq src)
+      /** `stats` inserted into `into` in source order */
+      def insert(into: List[Tree], stats: List[Tree]): List[Tree] =
+        stats.foldLeft(into) { (acc, st) =>
+          val (before, after) = acc.span(t => !t.span.exists || t.span.start <= st.span.start)
+          before ++ (st :: after)
+        }
+      val ofOwner = entries.filter(!_._1.inBlock).groupBy(_._1.owner)
+      val inBlocks = entries.filter(_._1.inBlock)
+      val mapper = new tpd.TreeMap:
+        override def transform(tree: Tree)(using Context): Tree = tree match
+          // a skipped block definition's stub has an untyped type tree: not entered
+          case t if !t.hasType => t
+          case t: PackageDef if t.symbol.moduleClass.is(Flags.PackageClass) && ofOwner.contains(t.symbol.moduleClass) =>
+            // and on into the classes and blocks it holds: their entries are theirs
+            super.transform(tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2))))
+          case t: Template if ofOwner.contains(t.symbol) =>
+            super.transform(tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2))))
+          // the innermost typed block containing a statement's span: its stubs
+          // (a definition's) go, the typed statement is inserted in order (an
+          // expression statement left no stub); a block nested in one of the
+          // block's statements is reached by the traversal
+          case b: Block if inBlocks.nonEmpty && (b.source eq src) =>
+            val here = inBlocks.filter { (sk, _) =>
+              b.span.contains(sk.stat.span)
+              && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(sk)(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) }
+            if here.isEmpty then super.transform(b)
+            else
+              val stubs = here.map(_._1)
+              super.transform(tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr))
+          case _ => super.transform(tree)
+      val t = mapper.transform(unit.tpdTree)
+      // Not asserted: every entry should find its owner group or block in the
+      // tree (an entry that does not is silently dropped), but counting them
+      // showed 236 of 238 spliced in `SessionOracleSuite` "Contexts-seed-1"
+      // (a random request and cancellation sequence over Contexts.scala):
+      // two typed statements found no place. A latent bug to triage.
+      unit.tpdTree = t
+      // What `SetRootTree` would have done had the statements been typed in the phase
+      inContext(ctx.fresh.setCompilationUnit(unit)):
+        new transform.SetRootTree().run
+      entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
+      myOpenedTrees(uri) = topLevelTrees(t, source)
+      diagnostics = diagnostics ++ reporter.removeBufferedMessages
+  end Session
 
   private var mySession: Session | Null = null
 
-  /** The number of statements of the outermost package typed by the targeted
-   *  run of `uri` (an object counts as its module val and class), or -1 if
-   *  `uri` is not the subject of a targeted run. The typed statements are
+  private def sessionOf(uri: URI): Session | Null = mySession match
+    case s: Session if s.uri == uri => s
+    case _ => null
+
+  // ---- Introspection of the targeted session, for tests, the x-ray, the log
+  // and `CachingDriver`; not used by the providers.
+
+  /** The number of top-level trees (the statements of the outermost package;
+   *  an object counts as its module val and class) the targeted run of `uri`
+   *  has typed, or -1 if `uri` is not the subject of a targeted run. They are
    *  those that contained the targets of the requests so far, not a prefix.
    */
-  def typedPrefixLength(uri: URI): Int = mySession match
-    case s: Session if s.uri == uri =>
+  def typedTopLevelCount(uri: URI): Int = sessionOf(uri) match
+    case s: Session =>
       // through a package clause that wraps the whole file
       def count(t: Tree): Int = t match
         case PackageDef(_, (inner: PackageDef) :: Nil) => count(inner)
         case PackageDef(_, stats) => stats.length
         case _ => 0
       count(s.unit.tpdTree)
-    case _ => -1
+    case null => -1
 
   /** Is the targeted run of `uri` tainted: did an exception of unknown effect
    *  unwind through a completion (see `Run.isTainted`)? The next request on
    *  it starts a fresh run.
    */
-  def isTainted(uri: URI): Boolean = mySession match
-    case s: Session if s.uri == uri => s.run.isTainted
-    case _ => false
+  def isTainted(uri: URI): Boolean = sessionOf(uri) match
+    case s: Session => s.run.isTainted
+    case null => false
 
   /** The spans of the statements the targeted run of `uri` has not typed. */
-  def untypedSpans(uri: URI): List[Span] = mySession match
-    case s: Session if s.uri == uri => s.skipped.map(_.stat.span)
-    case _ => Nil
+  def untypedSpans(uri: URI): List[Span] = sessionOf(uri) match
+    case s: Session => s.skipped.map(_.stat.span)
+    case null => Nil
 
   /** Has the targeted run of `uri` typed all of its statements? */
-  def isFullyTyped(uri: URI): Boolean = mySession match
-    case s: Session if s.uri == uri => s.skipped.isEmpty
-    case _ => false
+  def isFullyTyped(uri: URI): Boolean = sessionOf(uri) match
+    case s: Session => s.skipped.isEmpty
+    case null => false
 
   /** The id of the run that typed `uri`, or -1. */
-  def runIdOf(uri: URI): Int = mySession match
-    case s: Session if s.uri == uri => s.run.runContext.runId
-    case _ => -1
+  def runIdOf(uri: URI): Int = sessionOf(uri) match
+    case s: Session => s.run.runContext.runId
+    case null => -1
 
-  /** Type `source` only along the path to `target`: of the statements of
-   *  the outermost package and of each template on the path, only the one
-   *  containing the target, as scalac's `typedStats` does for its target
-   *  position. Or resume the previous targeted run of `uri` if it was on the
-   *  same content: a target within what is typed is served without typing
-   *  anything, a target within a skipped statement types that statement in
-   *  the same run and context, so that the denotations and completers of
-   *  everything else stay valid. Any other content starts a fresh targeted
-   *  run. The compilation unit of `uri` then holds the typed part of the
-   *  tree, without the skipped statements; providers that need the whole
-   *  tree use `run` instead.
-   */
   /** `-Yinteractive-log`: one line per request on stderr (the Metals log), with
    *  what the run did, so that the session can be observed from an editor.
    */
@@ -234,6 +456,13 @@ class InteractiveDriver(
   private def fileNameOf(uri: URI): String =
     val p = uri.getPath
     (if p == null then uri.toString else p).split('/').last
+
+  /** What the session of `uri` did, for the log. */
+  private def sessionSummary(uri: URI): String =
+    val trees = sessionOf(uri) match
+      case s: Session => s" trees=${s.run.typedTrees}"
+      case null => ""
+    s"run=${runIdOf(uri)} typedTop=${typedTopLevelCount(uri)} skipped=${untypedSpans(uri).size}$trees"
 
   private def logged[T](what: String)(body: => T)(outcome: => String): T =
     if !logRequests then body
@@ -250,6 +479,29 @@ class InteractiveDriver(
         throw ex
       finally System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms")
 
+  /** Under `-Yinteractive-log`, the time a whole request took in the caller
+   *  (a presentation-compiler provider), the driver's own work included: what
+   *  the editor waits for once the request is handed over.
+   */
+  def timedRequest[T](what: String)(body: => T): T =
+    if !logRequests then body
+    else
+      val t0 = System.nanoTime()
+      try body
+      finally System.err.println(f"[dotc-session] $what: whole request ${(System.nanoTime() - t0) / 1e6}%.1f ms in the presentation compiler")
+
+  /** Type `source` only along the path to `target`: of the statements of
+   *  the outermost package and of each template on the path, only the one
+   *  containing the target, as scalac's `typedStats` does for its target
+   *  position. Or resume the previous targeted run of `uri` if it was on the
+   *  same content: a target within what is typed is served without typing
+   *  anything, a target within a skipped statement types that statement in
+   *  the same run and context, so that the denotations and completers of
+   *  everything else stay valid. Any other content starts a fresh targeted
+   *  run. The compilation unit of `uri` then holds the typed part of the
+   *  tree, without the skipped statements; providers that need the whole
+   *  tree use `run` instead.
+   */
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     val before = mySession
     val skippedBefore = if before == null then -1 else before.skipped.size
@@ -260,31 +512,23 @@ class InteractiveDriver(
         else if !(s eq before) then "fresh"
         else if s.skipped.size != skippedBefore then "resumed"
         else "served"
-      s"$how run=${runIdOf(uri)} typedTop=${typedPrefixLength(uri)} skipped=${untypedSpans(uri).size}${if s != null then s" trees=${s.run.typedTrees}" else ""}"
+      s"$how ${sessionSummary(uri)}"
     }
 
   private def runUpTo0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     if !targetedRequests then run(uri, source)
     else mySession match
-      case s: Session if s.uri == uri && s.source.textContent() == source.textContent() =>
-        // A run that had a completion unwound by an exception of unknown
-        // effect (not a cycle, not a cancellation) holds state nothing should
-        // be served or resumed from: the session is tainted, and the request
-        // starts a fresh run, which is cheap for a targeted run.
-        // A poisoned session holds a statement that is neither typed nor
-        // skipped (its typing was aborted and it could not be replaced): a
-        // request anywhere starts a fresh run, since a request in that
-        // statement's range would otherwise be served from the tree without
-        // it (the hover found the package).
-        if s.run.isTainted || s.poisoned then run(uri, source, target)
+      case s: Session if s.isOn(uri, source) =>
+        // Nothing is served or resumed from a tainted or poisoned session
+        // (a request in a poisoned statement's range would be served from the
+        // tree without it): the request starts a fresh run, which is cheap
+        // for a targeted run.
+        if !s.isResumable then run(uri, source, target)
         else s.skippedAt(target) match
           case None => s.diagnostics
-          case Some(sk) =>
-            // A statement skipped inside a block left a stub in the typed
-            // `Block`; the resume replaces the stub by the typed statement.
-            // (The first version took a fresh run instead, which made every
-            // hover on a sibling statement inside a method a new run.)
-            resume(s, sk, target)
+          // A statement skipped inside a block left a stub in the typed
+          // `Block`; the resume replaces the stub by the typed statement.
+          case Some(sk) => s.resume(sk, target)
       case _ =>
         run(uri, source, target)
 
@@ -296,231 +540,16 @@ class InteractiveDriver(
    */
   def typeDefinitionOf(uri: URI, sym: Symbol): Boolean =
     given Context = myCtx
-    mySession match
-      case s: Session if s.uri == uri && sym.exists && sym.span.exists
-          && { val f = sym.source.file; f != null && f.path == s.source.file.nn.path }
+    sessionOf(uri) match
+      case s: Session if sym.exists && sym.span.exists && s.isFileOf(sym.source.file)
           && s.skippedAt(Span(sym.span.point)).isDefined =>
         runUpTo(uri, s.source, Span(sym.span.point))
         true
       case _ => false
 
-  /** Type the skipped statement `sk` in the run and context it was skipped
-   *  in, with `target` as the target for the statements nested in it, and
-   *  splice the result into the unit's typed tree.
-   */
-  private def resume(s: Session, sk: Run.SkippedStat, target: Span): List[Diagnostic] =
-    myCancelled = false
-    s.run.cancelledCompletions.clear()
-    s.skipped = s.skipped.filterNot(_ eq sk)
-    s.run.skippedStats.clear()
-    s.run.typingTarget = target
-    try
-      val ctx0 = sk.ctx
-      s.run.targetedStatsOwner = sk.owner
-      s.run.targetedStatsInBlock = sk.inBlock
-      val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
-      s.skipped = s.skipped ++ s.run.skippedStats.toList
-      spliceAll(s, List((sk, stats)))(using ctx0)
-      s.diagnostics
-    catch case ex: CompilationUnit.CancelledCompilation =>
-      // The statement being typed can not be typed a second time: typing
-      // consumes the attachments of the untyped trees (`SymOfTree`,
-      // `TypedAhead`, `ExpandedTree`) and the nested typers of the methods.
-      // Whatever was typed before the abort stays typed; the statements
-      // skipped inside the aborted one are its own and go with it.
-      s.reporter.removeBufferedMessages(using sk.ctx)
-      if !replacePoisoned(s, sk) || !replaceUnwound(s, sk.stat.span)(using sk.ctx) then s.poisoned = true
-      throw ex
-    finally
-      s.run.typingTarget = NoSpan
-      s.run.targetedStatsOwner = NoSymbol
-      s.run.targetedStatsInBlock = false
-      s.run.skippedStats.clear()
-
-  /** Does `owner` define `name` in this file: the companion of a statement
-   *  to replace. A companion is not replaced alone: the synthetic members a
-   *  case class gives its object (`apply`, `unapply`) were merged into the
-   *  object's tree by the class's expansion, and a fresh parse of the object
-   *  alone lacks them (`SourceTree(imp, source)` failed with "object
-   *  SourceTree does not take parameters" after such a replacement).
-   */
-  private def hasCompanionHere(owner: Symbol, name: Name)(using Context): Boolean =
-    val cls = if owner.isClass then owner else owner.owner
-    cls.isClass && {
-      val sym = cls.asClass.classDenot.info.decls.lookup(name)
-      sym.exists && mySession != null && { val f = sym.associatedFile; f != null && f.path == mySession.nn.unit.source.file.nn.path }
-    }
-
-  /** Replace the skipped statement `sk`, whose typing was aborted, by a
-   *  fresh parse of its source range, indexed afresh in the same run and
-   *  context: its symbols are unlinked from the owner's scope and re-created,
-   *  and it is skipped again. References to the old symbols typed earlier
-   *  keep them. Only definitions are replaced (not the synthetic
-   *  `<file>$package` object of top-level definitions, nor a nested package
-   *  clause, nor a statement that is an expression).
-   */
-  private def replacePoisoned(s: Session, sk: Run.SkippedStat): Boolean =
-    given Context = sk.ctx
-    val head = sk.stat
-    val replaceable = !sk.inBlock && (head match
-      case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic) && !hasCompanionHere(sk.owner, mdef.name.toTypeName)
-      case tdef: untpd.TypeDef => !hasCompanionHere(sk.owner, tdef.name.toTermName)
-      case _: untpd.DefDef | _: untpd.ValDef => true
-      case _ => false)
-    if !replaceable then return false
-    val parsed = new parsing.Parsers.Parser(s.source).parse()
-    val fresh = new untpd.UntypedTreeAccumulator[Option[untpd.Tree]]:
-      def apply(x: Option[untpd.Tree], tree: untpd.Tree)(using Context): Option[untpd.Tree] =
-        if x.isDefined then x
-        else if tree.span == head.span && tree.getClass == head.getClass then Some(tree)
-        else if tree.span.contains(head.span) then foldOver(x, tree)
-        else x
-    fresh(None, parsed) match
-      case Some(stat) =>
-        val cls = (if sk.owner.isClass then sk.owner else sk.owner.owner).asClass.classDenot
-        val file = s.unit.source.file
-        val old = cls.info.decls.toList.filter(sym => sym.span.exists && stat.span.contains(sym.span) && sym.associatedFile == file)
-        // A given or implicit is held by the `ContextualImplicits` cached on
-        // the session's contexts (and by the run's implicit scopes), by
-        // symbol: a fresh symbol would not be found, and the old one is
-        // what is being replaced. The session is poisoned instead.
-        if old.exists(definesImplicit) then return false
-        old.foreach(cls.delete)
-        ctx.typer.index(stat :: Nil)
-        s.skipped = Run.SkippedStat(stat, sk.ctx, sk.owner) :: s.skipped
-        true
-      case None =>
-        false
-
-  /** Is `sym` a given or implicit, or a class or object whose indexed
-   *  members (nested ones included) hold one.
-   */
-  private def definesImplicit(sym: Symbol)(using Context): Boolean =
-    sym.isOneOf(Flags.GivenOrImplicit)
-    || sym.is(Flags.ModuleClass) && sym.sourceModule.isOneOf(Flags.GivenOrImplicit)
-    || sym.isClass && sym.asClass.unforcedDecls.exists(definesImplicit)
-
-  /** The symbols whose completion the cancellation unwound through
-   *  (`Run.cancelledCompletions`): a Namer completer that was unwound can
-   *  not be run again (a method's had entered its parameters in the nested
-   *  typer's scope; a class's had set the temporary info, and the class is
-   *  `isCompleted` without parents), and the statement that defines each
-   *  one is replaced like the aborted statement itself (`replacePoisoned`),
-   *  or the session is poisoned: a symbol of this file in no skipped
-   *  statement (a local of a block, a member of a companion). The symbols
-   *  of other files (the classpath's loaders leave their roots loadable
-   *  again; a sourcepath file's completers are finding I7) are left alone.
-   *  `replaced` is the span of the aborted statement, replaced already.
-   *  Returns false when the session is to be poisoned.
-   */
-  private def replaceUnwound(s: Session, replaced: Span)(using Context): Boolean =
-    val syms = s.run.cancelledCompletions.toList
-    s.run.cancelledCompletions.clear()
-    val file = s.unit.source.file
-    var done = List(replaced)
-    var ok = true
-    for sym <- syms if ok && sym.exists && sym.associatedFile == file do
-      if !sym.span.exists then ok = false
-      else if !done.exists(_.contains(sym.span)) then
-        s.skipped.find(_.stat.span.contains(sym.span)) match
-          case Some(sk) =>
-            s.skipped = s.skipped.filterNot(_ eq sk)
-            if replacePoisoned(s, sk) then done = sk.stat.span :: done
-            else ok = false
-          case None => ok = false
-    ok
-
-  /** Complete every symbol of the skipped statements of `s`, in the run
-   *  that created their completers: the statement's own symbols, then the
-   *  members of a class after the class (whose completion indexes its
-   *  template), nested ones likewise. The typed statements completed their
-   *  symbols as they were typed, and typing consumed their `ExpandedTree`
-   *  attachments, so the untyped tree no longer leads to them; the skipped
-   *  statements keep theirs. Local definitions inside bodies are not indexed
-   *  and have no completer to run.
-   */
-  private def completeSymbolsOf(s: Session): Unit =
-    given Context = myCtx.fresh.setCompilationUnit(s.unit) // the session's run context, with root imports
-    val namer = ctx.typer
-    // An `ExpandedTree` can lead to a thicket that contains the tree itself
-    // (`cpy` returns the same tree when nothing changed): visit each tree once.
-    val seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[untpd.Tree, java.lang.Boolean])
-    def walk(tree: untpd.Tree): Unit = if seen.add(tree) then tree match
-      case tree: untpd.DefTree if tree.hasAttachment(namer.ExpandedTree) =>
-        tree.getAttachment(namer.ExpandedTree).foreach(walk)
-        walkOwn(tree)
-      case tree: untpd.DefTree => walkOwn(tree)
-      case untpd.Thicket(trees) => trees.foreach(walk)
-      case untpd.PackageDef(_, stats) => stats.foreach(walk)
-      case _ =>
-    def walkOwn(tree: untpd.DefTree): Unit = tree match
-      case tree: untpd.TypeDef =>
-        tree.getAttachment(namer.SymOfTree).foreach { sym =>
-          sym.ensureCompleted()
-          tree.rhs match
-            case impl: untpd.Template => impl.body.foreach(walk)
-            case _ =>
-        }
-      case _ =>
-        tree.getAttachment(namer.SymOfTree).foreach(_.ensureCompleted())
-    s.run.cancelledCompletions.clear()
-    try s.skipped.foreach(sk => walk(sk.stat))
-    catch case ex: CompilationUnit.CancelledCompilation =>
-      // the session is kept (the walk runs again when a file is next left),
-      // with the statements of the unwound completers replaced
-      if !replaceUnwound(s, NoSpan) then s.poisoned = true
-      throw ex
-    finally s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
-
-  /** Insert the typed `stats` into the statements of their owner in the
-   *  unit's typed tree (the package for a package class, the template for
-   *  a local dummy), in source order, and update what depends on the tree.
-   */
-  private def spliceAll(s: Session, entries: List[(Run.SkippedStat, List[Tree])])(using Context): Unit =
-    val src = s.unit.source
-    def isStubOf(sk: Run.SkippedStat)(t: Tree) = t.span == sk.stat.span && (t.source eq src)
-    /** `stats` inserted into `into` in source order */
-    def insert(into: List[Tree], stats: List[Tree]): List[Tree] =
-      stats.foldLeft(into) { (acc, st) =>
-        val (before, after) = acc.span(t => !t.span.exists || t.span.start <= st.span.start)
-        before ++ (st :: after)
-      }
-    val ofOwner = entries.filter(!_._1.inBlock).groupBy(_._1.owner)
-    val inBlocks = entries.filter(_._1.inBlock)
-    val mapper = new tpd.TreeMap:
-      override def transform(tree: Tree)(using Context): Tree = tree match
-        // a skipped block definition's stub has an untyped type tree: not entered
-        case t if !t.hasType => t
-        case t: PackageDef if t.symbol.moduleClass.is(Flags.PackageClass) && ofOwner.contains(t.symbol.moduleClass) =>
-          // and on into the classes and blocks it holds: their entries are theirs
-          super.transform(tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2))))
-        case t: Template if ofOwner.contains(t.symbol) =>
-          super.transform(tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2))))
-        // the innermost typed block containing a statement's span: its stubs
-        // (a definition's) go, the typed statement is inserted in order (an
-        // expression statement left no stub); a block nested in one of the
-        // block's statements is reached by the traversal
-        case b: Block if inBlocks.nonEmpty && (b.source eq src) =>
-          val here = inBlocks.filter { (sk, _) =>
-            b.span.contains(sk.stat.span)
-            && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(sk)(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) }
-          if here.isEmpty then super.transform(b)
-          else
-            val stubs = here.map(_._1)
-            super.transform(tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr))
-        case _ => super.transform(tree)
-    val t = mapper.transform(s.unit.tpdTree)
-    s.unit.tpdTree = t
-    // What `SetRootTree` would have done had the statements been typed in the phase
-    inContext(ctx.fresh.setCompilationUnit(s.unit)):
-      new transform.SetRootTree().run
-    entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
-    myOpenedTrees(s.uri) = topLevelTrees(t, s.source)
-    s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
-
   private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
-      s"run=${runIdOf(uri)} typedTop=${typedPrefixLength(uri)} skipped=${untypedSpans(uri).size}"
+      sessionSummary(uri)
     }
 
   private def run0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
@@ -536,7 +565,7 @@ class InteractiveDriver(
     // own run: the signatures, not the bodies. A whole-file run completed
     // them all as it typed; a run on the same file re-enters them.
     mySession match
-      case s: Session if s.uri != uri => completeSymbolsOf(s)
+      case s: Session if s.uri != uri => s.completeSymbols()
       case _ =>
     // Any new run resets the caches of the context base: a previous targeted
     // run can no longer be resumed.
@@ -556,9 +585,12 @@ class InteractiveDriver(
       myOpenedFiles(uri) = source
 
       run.typingTarget = target
-      run.skippedStats.clear()
-      try run.compileSources(List(source))
-      finally run.typingTarget = NoSpan
+      run.isTargeted = target.exists
+      val skipped =
+        try
+          run.compileSources(List(source))
+          run.skippedStats.toList
+        finally run.clearTargeting()
       // A cancellation noticed before the typer skips the units instead of
       // unwinding (see `Run.didEnterUnit`); discard that run too.
       if myProgressCallback.isCancelled() then throw CompilationUnit.CancelledCompilation()
@@ -566,8 +598,6 @@ class InteractiveDriver(
       val ctxRun = ctx.run.nn
       val unit = if ctxRun.units.nonEmpty then ctxRun.units.head else ctxRun.suspendedUnits.head
       val t = unit.tpdTree
-      val skipped = run.skippedStats.toList
-      run.skippedStats.clear()
       val partial = target.exists && skipped.nonEmpty
       cleanup(t, errorOutCompleters = !partial)
       myOpenedTrees(uri) = topLevelTrees(t, source)
@@ -591,7 +621,7 @@ class InteractiveDriver(
         // stay current, and the caller decides what to answer. Its context
         // stays current, though: the run brought the denotations it touched
         // forward to its own run id, and a query under the previous run's
-        // context would find them "invalid in run" (the soak suite did).
+        // context would find them "invalid in run".
         startedRun match
           case r: Run => myCtx = r.runContext.withRootImports.fresh.setPhase(myInitCtx.base.typerPhase)
           case null => myCtx = previousCtx
