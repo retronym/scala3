@@ -131,6 +131,15 @@ td.fu { min-width: 18em; font-size: .84rem; }
     </div>
   </section>
 
+  <section id="fixes">
+    <h2>Fix PRs</h2>
+    <p class="sub">One session per row, each in its own worktree cut from scala3 <code>main</code> 58b6bf3aa7 or scala/scala <code>2.13.x</code> f67d42767a. All eleven are draft PRs on retronym/scala3 and retronym/scala, opened 2026-10-22/23; each new test failed before its fix. On the fork, the CI <code>specification</code> job fails on every PR for an unrelated runner reason (ruby 2.7.8 unavailable on ubuntu-26.04); the other jobs are skipped or pending.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>Findings</th><th>Repo</th><th>Status</th><th>Draft PR</th><th>Notes</th></tr></thead>
+      <tbody id="fixb"></tbody>
+    </table></div>
+  </section>
+
   <section>
     <h2>Findings</h2>
     <div class="chips" id="chips" role="group" aria-label="Filter findings by direction">
@@ -269,6 +278,31 @@ function linkify(s){
   return s;
 }
 const AREA_STATUS = {}; // filled below as agents finish
+
+// Fix sessions. status: running | pr | oos (out of scope). Updated as sessions report.
+const FIXES = [
+  {ids:["C1"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/77", note:"Array store and Int.box now load a Nothing-typed argument at the primitive type, so adapt emits ATHROW (both hunks of scala/bug#10069). Run tests t10069/t10069b fail before, pass after; 200 backend bytecode tests pass."},
+  {ids:["H4"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/71", note:"Drops the if-false guard left by #27205. New TastyLoaderErrorTest writes a too-new .tasty header and asserts the error names the file."},
+  {ids:["A5"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/72", note:"Strips the trailing separator in getSubDir and leaves lookupPath alone. Unit test with package p.q, including lookup through AggregateClassPath."},
+  {ids:["G2"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/75", note:"Chunks of 32 operands seeded with \"\" (the post-scala/scala#8315 form); 32 or fewer operands build exactly as before; liftStringConcat flattens nested concats. Targeted tests only; bootstrapped build not run."},
+  {ids:["A1","A2"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/78", note:"Stack 1/3. Cache key includes -release, so MultiReleaseJarTest no longer needs three copies of one jar to dodge the bug. File size in the stamp. Scala 2's NoSuchFileException dummy stamp deliberately not ported (it belonged to the classloader cache)."},
+  {ids:["A4"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/79", note:"Stack 2/3. One ct.sym file system per JVM and a cached index per release. Four -release 11 classpaths: 100/14/10/9 ms with 4 open handles before, 115/0/0/0 ms with 1 after. Caching JrtClassPath itself left out (mutable, unsynchronized caches)."},
+  {ids:["A3"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/80", note:"Stack 3/3. Archives reopen on demand, so close is always safe; the cache closes replaced entries; Driver.doCompile closes the run's classpath (covers Main, sbt bridge, Resident, scripting). No refcounts, timers or API change; no measurable cost in a 100-compile loop. Presentation compiler and REPL still keep jars open."},
+  {ids:["E1"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/76", note:"Pre-scan loop guard reads the lookahead scanner. New neg test; existing text-block test t12290 passes."},
+  {ids:["B1","B4"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/73", note:"Two commits: a trailing backslash is reported through errorFn (no stripping); a malformed COLUMNS falls back to the default width (related scala/scala3#15796). Both new tests fail before, pass after."},
+  {ids:["D1","D2"], repo:"scala/scala3", status:"pr", pr:"https://github.com/retronym/scala3/pull/74", note:"Lazy visited walk and a transitive maximally-specific check, as in scala/scala#10404 / #10415. Two of three new cases failed before; 106 targeted optimizer tests pass."},
+  {ids:["R2"], repo:"scala/scala", status:"pr", pr:"https://github.com/retronym/scala/pull/168", note:"Separate skip flag ported from scala3#18491, so NUL survives in Java string constants. New partest fails before, passes after; t12290, t9915 and neg/text-blocks pass."},
+];
+function renderFixes(){
+  const tb = document.getElementById('fixb'); if (!tb) return; tb.innerHTML = '';
+  for (const x of FIXES) {
+    const tr = document.createElement('tr');
+    const pill = x.status === 'pr' ? '<span class="pill done">draft PR</span>' : x.status === 'oos' ? '<span class="pill">out of scope</span>' : '<span class="pill running">running</span>';
+    const pr = x.pr ? `<a href="${x.pr}">${x.pr.replace('https://github.com/','').replace('/pull/','#')}</a>` : '<span class="conf">pending</span>';
+    tr.innerHTML = `<td class="mono">${x.ids.join(', ')}</td><td><code>${x.repo}</code></td><td>${pill}</td><td>${pr}</td><td>${linkify(x.note)}</td>`;
+    tb.appendChild(tr);
+  }
+}
 const SEV = {high:0, medium:1, low:2};
 FINDINGS.sort((a,b) => SEV[a.sev]-SEV[b.sev]);
 
@@ -430,6 +464,7 @@ document.getElementById('chips').addEventListener('click', e => {
   render();
 });
 render();
+renderFixes();
 </script>
 
   <section>
