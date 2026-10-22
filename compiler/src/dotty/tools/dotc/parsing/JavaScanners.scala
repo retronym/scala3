@@ -497,7 +497,7 @@ object JavaScanners {
       var lineWhiteSpacePrefix = 0
       var lineIsOnlyWhitespace = true
       val in = LookaheadScanner()
-      while (!blockClosed && (isUnicodeEscape || ch != SU)) {
+      while (!blockClosed && (in.isUnicodeEscape || in.ch != SU)) {
         if (in.ch == '\"') { // Potential end of the block
           in.nextChar()
           if (in.ch == '\"') {
