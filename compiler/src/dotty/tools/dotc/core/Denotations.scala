@@ -1069,6 +1069,16 @@ object Denotations {
           case noMatch =>
             false
 
+    /** `matches` is false by target names or signatures alone. Unlike `matches`, this does not depend on the
+     *  typer state: inconsistent parameter signatures stay so as type variables are instantiated.
+     */
+    def mismatchesBySignature(other: SingleDenotation)(using Context): Boolean =
+      !symbol.hasTargetName(other.symbol.targetName)
+      || !isType && {
+        val commonLanguage = SourceLanguage.commonLanguage(SourceLanguage(symbol), SourceLanguage(other.symbol))
+        signature(commonLanguage).matchDegree(other.signature(commonLanguage)) == NoMatch
+      }
+
     def mapInherited(ownDenots: PreDenotation, prevDenots: PreDenotation, pre: Type)(using Context): SingleDenotation =
       if hasUniqueSym && prevDenots.containsSym(symbol) then NoDenotation
       else if isType then filterDisjoint(ownDenots).asSeenFrom(pre)
@@ -1250,8 +1260,47 @@ object Denotations {
 
   final case class DenotUnion(denot1: PreDenotation, denot2: PreDenotation) extends MultiPreDenotation {
     def exists: Boolean = true
+
+    // The result of `toDenot` in period `toDenotPeriod`, kept only when no alternative can merge with another: their
+    // target names or signatures differ (`mismatchesBySignature`), so `meet` overloads them all. That result depends
+    // on neither the prefix nor the typer state, only on the alternatives and, through their signatures, the period.
+    // Heavily overloaded members (`Array.apply`, `Int.==`, `StringBuilder.append`) are looked up over and over, and
+    // `meet` compares every pair of alternatives each time.
+    private var toDenotCache: Denotation = uninitialized
+    private var toDenotPeriod: Period = Nowhere
+
     def toDenot(pre: Type)(using Context): Denotation =
-      denot1.toDenot(pre).meet(denot2.toDenot(pre), pre)
+      if toDenotPeriod == ctx.period then
+        if Config.checkMemberMergeCache then
+          val expected = denot1.toDenot(pre).meet(denot2.toDenot(pre), pre)
+          assert(expected.alternatives.corresponds(toDenotCache.alternatives)(_ eq _), i"$expected != $toDenotCache")
+        toDenotCache
+      else
+        val d1 = denot1.toDenot(pre)
+        val d2 = denot2.toDenot(pre)
+        if overloadsOnly(denot1) && overloadsOnly(denot2) && cannotMerge(d1, d2) then
+          // what `meet` returns when no `mergeDenot` succeeds
+          val d = d2.alternatives.foldLeft(d1)(MultiDenotation(_, _))
+          toDenotCache = d
+          toDenotPeriod = ctx.period
+          d
+        else d1.meet(d2, pre)
+
+    /** `toDenot` of `pd` in this period merged nothing, if it had to merge anything. */
+    private def overloadsOnly(pd: PreDenotation)(using Context): Boolean = pd match
+      case pd: DenotUnion => pd.toDenotPeriod == ctx.period
+      case _ => true
+
+    /** `d1.meet(d2)` merges nothing: it tries each alternative of `d2` in turn against those of `d1` and the
+     *  alternatives of `d2` before it.
+     */
+    private def cannotMerge(d1: Denotation, d2: Denotation)(using Context): Boolean =
+      var prev = d1.alternatives
+      d2.alternatives.forall: alt =>
+        val ok = prev.forall(p => (p ne alt) && p.mismatchesBySignature(alt))
+        prev = alt :: prev
+        ok
+
     def containsSym(sym: Symbol): Boolean =
       denot1.containsSym(sym) || denot2.containsSym(sym)
     type AsSeenFromResult = PreDenotation
