@@ -182,6 +182,13 @@ class InteractiveDriver(
    */
   private val logRequests: Boolean = myInitCtx.settings.YinteractiveLog.value(using myInitCtx)
 
+  /** The last segment of `uri`, for the log; a `jar:` URI (a source in a
+   *  sources jar, opened by a jump into the library) has no path.
+   */
+  private def fileNameOf(uri: URI): String =
+    val p = uri.getPath
+    (if p == null then uri.toString else p).split('/').last
+
   private def logged[T](what: String)(body: => T)(outcome: => String): T =
     if !logRequests then body
     else
@@ -192,7 +199,7 @@ class InteractiveDriver(
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     val before = mySession
     val skippedBefore = if before == null then -1 else before.skipped.size
-    logged(s"runUpTo ${uri.getPath.nn.split('/').last}@${target.start}")(runUpTo0(uri, source, target)) {
+    logged(s"runUpTo ${fileNameOf(uri)}@${target.start}")(runUpTo0(uri, source, target)) {
       val s = mySession
       val how =
         if s eq null then "whole-file"
@@ -401,7 +408,7 @@ class InteractiveDriver(
     s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
 
   private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    logged(s"run ${uri.getPath.nn.split('/').last}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
+    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
       s"run=${runIdOf(uri)} typedTop=${typedPrefixLength(uri)} skipped=${untypedSpans(uri).size}"
     }
 
