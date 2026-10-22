@@ -107,7 +107,52 @@ class InteractiveDriver(
 
   def run(uri: URI, sourceCode: String): List[Diagnostic] = run(uri, SourceFile.virtual(uri, sourceCode))
 
-  def run(uri: URI, source: SourceFile): List[Diagnostic] = run(uri, source, NoSpan)
+  def run(uri: URI, source: SourceFile): List[Diagnostic] =
+    mySession match
+      case s: Session if targetedRequests && s.uri == uri && s.source.textContent() == source.textContent()
+          && !s.run.isTainted && !s.poisoned && s.skipped.nonEmpty =>
+        completeSession(s)
+      case _ => run(uri, source, NoSpan)
+
+  /** A whole-file run on the content of the session completes the session
+   *  instead of replacing it: every statement still skipped is typed whole,
+   *  in source order, in its recorded context, and all are spliced in one
+   *  pass; the run then holds the whole file typed, and the requests after
+   *  it are served from it. (A whole-file request from the editor, document
+   *  highlight on every cursor move, used to start a new run and so made the
+   *  hover after it a fresh run again.)
+   */
+  private def completeSession(s: Session): List[Diagnostic] =
+    logged(s"run ${fileNameOf(s.uri)} (completes the session)")({
+      myCancelled = false
+      while s.skipped.nonEmpty do
+        val batch = s.skipped.sortBy(_.stat.span.start)
+        s.skipped = Nil
+        s.run.skippedStats.clear()
+        s.run.typingTarget = NoSpan // no target: each statement typed whole
+        val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
+        try
+          for sk <- batch do
+            val ctx0 = sk.ctx
+            s.run.targetedStatsOwner = NoSymbol
+            s.run.targetedStatsInBlock = false
+            try typed += ((sk, ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)._1))
+            catch case ex: CompilationUnit.CancelledCompilation =>
+              // the ones typed so far are kept; the aborted one is replaced
+              // or poisons the session, as in a resume
+              s.reporter.removeBufferedMessages(using sk.ctx)
+              s.skipped = s.skipped ++ batch.dropWhile(_ ne sk).drop(1)
+              if !replacePoisoned(s, sk) then s.poisoned = true
+              throw ex
+        finally
+          val entries = typed.result()
+          if entries.nonEmpty then spliceAll(s, entries)(using entries.head._1.ctx)
+          s.skipped = s.skipped ++ s.run.skippedStats.toList
+          s.run.skippedStats.clear()
+      s.diagnostics
+    }) {
+      s"run=${runIdOf(s.uri)} typedTop=${typedPrefixLength(s.uri)} skipped=${untypedSpans(s.uri).size} trees=${s.run.typedTrees}"
+    }
 
   /** The state of a targeted run (see `runUpTo`): the run, the unit with
    *  the partially typed tree, the statements the run skipped (with the
@@ -273,7 +318,7 @@ class InteractiveDriver(
       s.run.targetedStatsInBlock = sk.inBlock
       val (stats, _) = ctx0.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx0)
       s.skipped = s.skipped ++ s.run.skippedStats.toList
-      splice(s, sk, stats)(using ctx0)
+      spliceAll(s, List((sk, stats)))(using ctx0)
       s.diagnostics
     catch case ex: CompilationUnit.CancelledCompilation =>
       // The statement being typed can not be typed a second time: typing
@@ -381,37 +426,47 @@ class InteractiveDriver(
    *  unit's typed tree (the package for a package class, the template for
    *  a local dummy), in source order, and update what depends on the tree.
    */
-  private def splice(s: Session, sk: Run.SkippedStat, stats: List[Tree])(using Context): Unit =
-    val owner = sk.owner
-    // a skipped block statement left stubs with its span in the typed `Block`
-    // (one per symbol it defines): the typed statement takes their place
-    def isStubOf(t: Tree) = t.span == sk.stat.span && (t.source eq s.unit.source)
-    def insert(into: List[Tree]): List[Tree] =
-      val start = stats.headOption.map(_.span.start).getOrElse(-1)
-      val (before, after) = into.span(t => !t.span.exists || t.span.start <= start)
-      before ++ stats ++ after
+  private def spliceAll(s: Session, entries: List[(Run.SkippedStat, List[Tree])])(using Context): Unit =
+    val src = s.unit.source
+    def isStubOf(sk: Run.SkippedStat)(t: Tree) = t.span == sk.stat.span && (t.source eq src)
+    /** `stats` inserted into `into` in source order */
+    def insert(into: List[Tree], stats: List[Tree]): List[Tree] =
+      stats.foldLeft(into) { (acc, st) =>
+        val (before, after) = acc.span(t => !t.span.exists || t.span.start <= st.span.start)
+        before ++ (st :: after)
+      }
+    val ofOwner = entries.filter(!_._1.inBlock).groupBy(_._1.owner)
+    val inBlocks = entries.filter(_._1.inBlock)
     val mapper = new tpd.TreeMap:
       override def transform(tree: Tree)(using Context): Tree = tree match
         // a skipped block definition's stub has an untyped type tree: not entered
         case t if !t.hasType => t
-        case t: PackageDef if !sk.inBlock && owner.is(Flags.PackageClass) && t.symbol.moduleClass == owner =>
-          tpd.cpy.PackageDef(t)(t.pid, insert(t.stats))
-        case t: Template if !sk.inBlock && t.symbol == owner =>
-          tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body))
-        // the innermost typed block containing the statement's span: its
-        // stubs (a definition's) go, the typed statement is inserted in order
-        // (an expression statement left no stub); a block nested in one of
-        // its statements is reached by the traversal
-        case b: Block if sk.inBlock && (b.source eq s.unit.source) && b.span.contains(sk.stat.span)
-            && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) =>
-          tpd.cpy.Block(b)(insert(b.stats.filterNot(isStubOf)), b.expr)
+        case t: PackageDef if t.symbol.moduleClass.is(Flags.PackageClass) && ofOwner.contains(t.symbol.moduleClass) =>
+          val t1 = tpd.cpy.PackageDef(t)(t.pid, insert(t.stats, ofOwner(t.symbol.moduleClass).flatMap(_._2)))
+          if inBlocks.isEmpty then t1 else super.transform(t1)
+        case t: Template if ofOwner.contains(t.symbol) =>
+          val t1 = tpd.cpy.Template(t)(t.constr, t.parents, t.derived, t.self, insert(t.body, ofOwner(t.symbol).flatMap(_._2)))
+          if inBlocks.isEmpty then t1 else super.transform(t1)
+        // the innermost typed block containing a statement's span: its stubs
+        // (a definition's) go, the typed statement is inserted in order (an
+        // expression statement left no stub); a block nested in one of the
+        // block's statements is reached by the traversal
+        case b: Block if inBlocks.nonEmpty && (b.source eq src) =>
+          val here = inBlocks.filter { (sk, _) =>
+            b.span.contains(sk.stat.span)
+            && !(b.stats :+ b.expr).exists(t => t.span.exists && !isStubOf(sk)(t) && t.span != sk.stat.span && t.span.contains(sk.stat.span)) }
+          if here.isEmpty then super.transform(b)
+          else
+            val stubs = here.map(_._1)
+            val b1 = tpd.cpy.Block(b)(insert(b.stats.filterNot(t => stubs.exists(sk => isStubOf(sk)(t))), here.flatMap(_._2)), b.expr)
+            if inBlocks.size == here.size then b1 else super.transform(b1)
         case _ => super.transform(tree)
     val t = mapper.transform(s.unit.tpdTree)
     s.unit.tpdTree = t
     // What `SetRootTree` would have done had the statements been typed in the phase
     inContext(ctx.fresh.setCompilationUnit(s.unit)):
       new transform.SetRootTree().run
-    stats.foreach(cleanup(_, errorOutCompleters = false))
+    entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
     myOpenedTrees(s.uri) = topLevelTrees(t, s.source)
     s.diagnostics = s.diagnostics ++ s.reporter.removeBufferedMessages
 

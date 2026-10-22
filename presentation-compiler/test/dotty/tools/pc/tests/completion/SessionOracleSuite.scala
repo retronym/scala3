@@ -117,6 +117,11 @@ class SessionOracleSuite extends BasePCSuite:
     try
       for step <- 1 to requests do
         val (o, name) = idents(rng.nextInt(idents.size))
+        if step % 40 == 0 then
+          // what document highlight does between hovers: a whole-file run,
+          // which completes the session; the answers after it must still match
+          driver.runUpTo(uri, source, Span(o)); driver.run(uri, source)
+          log += s"$step run (whole file) run=${driver.runIdOf(uri)} fully=${driver.isFullyTyped(uri)}"
         if step % cancelEvery == 0 then
           val k = 1 + rng.nextInt(3)
           var p = 0

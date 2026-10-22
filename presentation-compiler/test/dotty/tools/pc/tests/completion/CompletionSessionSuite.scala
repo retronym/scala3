@@ -338,6 +338,28 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     assert(!after.exists(_.startsWith("while")), s"the while is typed by the second: $after")
     assert(resumed.contains("Select toByte"), s"the tree at the target is the typed select: $resumed")
 
+  @Test def `a-whole-file-run-completes-the-session` =
+    // A whole-file run on the session's content (document highlight asks for
+    // one on every cursor move) types what is still skipped and keeps the run:
+    // the request after it is served, not a fresh run.
+    val code = (0 until 20).map(i => s"object W$i {\n  def m$i(xs: List[Int]): Int = xs.map(_ + $i).filter(_ > $i).sum\n  val r = this.m$i\n}").mkString("\n") + "\n"
+    val uri = URI.create("file:///W.scala")
+    val src = SourceFile.virtual(uri, code)
+    val at3 = code.indexOf(".filter(_ > 3)") + 4
+    val at15 = code.indexOf(".filter(_ > 15)") + 4
+    val (run0, skipped0, run1, fully, run2, skipped2) = withDriver { d =>
+      d.runUpTo(uri, src, Span(at3))
+      val run0 = d.runIdOf(uri); val skipped0 = d.untypedSpans(uri).size
+      d.run(uri, src)
+      val run1 = d.runIdOf(uri); val fully = d.isFullyTyped(uri)
+      d.runUpTo(uri, src, Span(at15))
+      (run0, skipped0, run1, fully, d.runIdOf(uri), d.untypedSpans(uri).size)
+    }
+    println(s"[a-whole-file-run-completes-the-session] targeted run $run0 skipped $skipped0; after run: run $run1 fully typed $fully; after the next request: run $run2 skipped $skipped2")
+    assert(skipped0 > 0, "the targeted run skipped something")
+    assert(run1 == run0 && fully, "the whole-file run completed the session in the same run")
+    assert(run2 == run0 && skipped2 == 0, "the request after it is served from the same run")
+
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
     val heavy = Set(300)
