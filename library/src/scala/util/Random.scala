@@ -297,7 +297,7 @@ class Random(val self: java.util.Random^) extends AnyRef with Serializable {
 /** The object `Random` offers a default implementation
  *  of scala.util.Random and random-related convenience methods.
  */
-object Random extends Random {
+object Random extends Random uses caps.any {
 
   implicit def javaRandomToRandom(r: java.util.Random): Random = new Random(r)
 
