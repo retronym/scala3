@@ -178,11 +178,20 @@ class InteractiveDriver(
         // effect (not a cycle, not a cancellation) holds state nothing should
         // be served or resumed from: the session is tainted, and the request
         // starts a fresh run, which is cheap for a targeted run.
-        if s.run.isTainted then run(uri, source, target)
+        // A poisoned session holds a statement that is neither typed nor
+        // skipped (its typing was aborted and it could not be replaced): a
+        // request anywhere starts a fresh run, since a request in that
+        // statement's range would otherwise be served from the tree without
+        // it (the hover found the package).
+        if s.run.isTainted || s.poisoned then run(uri, source, target)
         else s.skippedAt(target) match
           case None => s.diagnostics
           case Some(sk) =>
-            if s.poisoned then run(uri, source, target)
+            // A statement skipped inside a block left a stub in the typed
+            // `Block`, and a typed `Block` is not spliced: resuming into it
+            // would type the statement and leave the stub in place (a hover
+            // on it found the block, a completion in it found nothing).
+            if sk.inBlock then run(uri, source, target)
             else resume(s, sk, target)
       case _ =>
         run(uri, source, target)
@@ -217,6 +226,20 @@ class InteractiveDriver(
       s.run.targetedStatsOwner = NoSymbol
       s.run.skippedStats.clear()
 
+  /** Does `owner` define `name` in this file: the companion of a statement
+   *  to replace. A companion is not replaced alone: the synthetic members a
+   *  case class gives its object (`apply`, `unapply`) were merged into the
+   *  object's tree by the class's expansion, and a fresh parse of the object
+   *  alone lacks them (`SourceTree(imp, source)` failed with "object
+   *  SourceTree does not take parameters" after such a replacement).
+   */
+  private def hasCompanionHere(owner: Symbol, name: Name)(using Context): Boolean =
+    val cls = if owner.isClass then owner else owner.owner
+    cls.isClass && {
+      val sym = cls.asClass.classDenot.info.decls.lookup(name)
+      sym.exists && mySession != null && { val f = sym.associatedFile; f != null && f.path == mySession.nn.unit.source.file.nn.path }
+    }
+
   /** Replace the skipped statement `sk`, whose typing was aborted, by a
    *  fresh parse of its source range, indexed afresh in the same run and
    *  context: its symbols are unlinked from the owner's scope and re-created,
@@ -229,8 +252,9 @@ class InteractiveDriver(
     given Context = sk.ctx
     val head = sk.stat
     val replaceable = head match
-      case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic)
-      case _: untpd.TypeDef | _: untpd.DefDef | _: untpd.ValDef => true
+      case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic) && !hasCompanionHere(sk.owner, mdef.name.toTypeName)
+      case tdef: untpd.TypeDef => !hasCompanionHere(sk.owner, tdef.name.toTermName)
+      case _: untpd.DefDef | _: untpd.ValDef => true
       case _ => false
     if !replaceable then return false
     val parsed = new parsing.Parsers.Parser(s.source).parse()

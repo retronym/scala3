@@ -1599,22 +1599,27 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           }
     }
 
-  def typedBlockStats(stats: List[untpd.Tree])(using Context): (List[tpd.Tree], Context) =
+  def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
     // Targeted typing applies to the statements of a block too: a statement
     // that does not contain the target is skipped, and its symbol, indexed
     // just above, completes lazily (types ahead its right-hand side) if a
     // later statement refers to it. So a macro in an earlier statement is
     // expanded only when something depends on it.
+    // Only a block that contains the target: a block typed for another reason
+    // (the body of a method without a result type, typed ahead by its
+    // completer when an overload resolution elsewhere needs the type) is typed
+    // whole, since the typed-ahead body is cached and reused when the method
+    // is later typed with a target inside it; stubs made then stayed.
     val run = ctx.run
-    if run != null && run.typingTarget.exists then
+    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget) then
       run.targetedStatsOwner = ctx.owner
       run.targetedStatsInBlock = true
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
     val (stats1, exprCtx) = withoutMode(Mode.Pattern) {
-      typedBlockStats(tree.stats)
+      typedBlockStats(tree.stats, tree.span)
     }
 
     var expr1 = typedExpr(tree.expr, pt.dropIfProto)(using exprCtx)

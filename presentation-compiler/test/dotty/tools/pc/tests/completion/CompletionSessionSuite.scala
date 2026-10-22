@@ -11,6 +11,8 @@ import scala.meta.pc.CancelToken
 import scala.meta.pc.reports.EmptyReportContext
 
 import dotty.tools.dotc.CompilationUnit.CancelledCompilation
+import dotty.tools.dotc.core.Contexts.Context
+import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.util.SourceFile
 import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.pc.{CachingDriver, ScalaPresentationCompiler}
@@ -295,6 +297,43 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     println(s"[block-statements-are-skipped-too] fresh: $fresh; resumed: $resumed")
     assert(fresh.exists(_.startsWith("val b")) && fresh.exists(_.startsWith("val d")), s"b and d are skipped in a fresh run: $fresh")
     assert(resumed.exists(_.startsWith("val b")) && resumed.exists(_.startsWith("val d")), s"b and d are skipped in a resume: $resumed")
+
+  @Test def `a-target-in-a-skipped-block-statement-is-a-fresh-run` =
+    // A request in a block statement that an earlier request skipped (a stub
+    // in the typed `Block`) starts a fresh run: resuming would type the
+    // statement without splicing it, and the stub would be served.
+    val code =
+      """|object Blk2 {
+         |  def enc(src: Array[Byte]): Array[Byte] = {
+         |    val n = src.length
+         |    val dst = new Array[Byte](n)
+         |    var i = 0
+         |    while (i < n) {
+         |      dst(i) = (src(i) & 0x7f).toByte
+         |      i += 1
+         |    }
+         |    dst
+         |  }
+         |}
+         |""".stripMargin
+    val uri = URI.create("file:///Blk2.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atN = code.indexOf("val n =") + 5
+    val atToByte = code.indexOf(".toByte") + 7
+    val (before, after, resumed) = withDriver { d =>
+      d.runUpTo(uri, src, Span(atN))
+      val before = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 9)).trim)
+      d.runUpTo(uri, src, Span(atToByte))
+      val after = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 9)).trim)
+      val unit = d.compilationUnits(uri)
+      given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+      val path = Interactive.pathTo(unit.tpdTree, Span(atToByte))
+      (before, after, path.headOption.map(t => s"${t.getClass.getSimpleName} ${t.symbol.name}"))
+    }
+    println(s"[a-target-in-a-skipped-block-statement-is-a-fresh-run] before: $before; after: $after; at toByte: $resumed")
+    assert(before.exists(_.startsWith("while")), s"the while is skipped by the first request: $before")
+    assert(!after.exists(_.startsWith("while")), s"the while is typed by the second: $after")
+    assert(resumed.contains("Select toByte"), s"the tree at the target is the typed select: $resumed")
 
   @Test def `cancel-inside-a-member-driver-only` =
     // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
