@@ -600,7 +600,8 @@ class InteractiveDriver(
               case t: ValOrDefDef => t // members are not inside bodies
               case _ => super.transform(tree)
           install(mapper.transform(unit.tpdTree))
-        skippedHere.foreach(sk => skipped = skipped.filterNot(_ eq sk))
+        // the statement, or what the old body's blocks skipped: they go with it
+        skipped = skipped.filterNot(sk => d.span.contains(sk.stat.span))
         diagnostics = diagnostics.filterNot(dia => (dia.pos.source eq src) && d.span.contains(dia.pos.span))
         val shift = BodyEdit.Shift(r, d.span, src)
         shiftAll(shift, r, d.span)

@@ -148,6 +148,9 @@ private[interactive] object BodyEdit:
             else oi.zip(ni).forall(same) && (oi.hasNext == ni.hasNext || fail(o, "arity"))
           }
       case (o: List[?], n: List[?]) => sameList(o, n)
+      case (o: untpd.Modifiers, n: untpd.Modifiers) =>
+        (o.flags == n.flags || fail(o, s"flags ${o.flags} vs ${n.flags}"))
+        && same(o.privateWithin, n.privateWithin) && same(o.annotations, n.annotations) && same(o.mods, n.mods)
       case (o: Name, n: Name) => (o eq n) || unnumbered(o) == unnumbered(n) || fail(o, s"name $o vs $n")
       case _ => o == n || fail(o, s"$o vs $n")
 
@@ -200,6 +203,12 @@ private[interactive] object BodyEdit:
             case _ =>
           p match
             case t: tpd.Tree if t.hasType && t.symbol.exists && t.isDef => symbol(t.symbol)
+            // a source annotation in a type (`c: @switch`) is a tree in the type
+            case t: tpd.TypeTree if t.hasType =>
+              t.tpe.foreachPart {
+                case at: Types.AnnotatedType => tree(at.annot.tree)
+                case _ =>
+              }
             case _ =>
           p match
             case t: ast.Trees.Tree[?] =>
@@ -207,6 +216,7 @@ private[interactive] object BodyEdit:
             case _ =>
           p.asInstanceOf[Product].productIterator.foreach(tree)
       case xs: List[?] => xs.foreach(tree)
+      case m: untpd.Modifiers => tree(m.annotations); tree(m.mods)
       case _ =>
 
     def symbol(sym: Symbol): Unit =
@@ -214,7 +224,7 @@ private[interactive] object BodyEdit:
         if sym.coord.isSpan then
           sym.coord = spanCoord(r.span(sym.span, anchor))
           symbols += 1
-        sym.annotations.foreach(a => if a.isEvaluated then tree(a.tree))
+        sym.annotationsUNSAFE.foreach(a => if a.isEvaluated then tree(a.tree))
         sym.rawParamss.foreach(_.foreach(symbol))
         if sym.isClass then sym.asClass.unforcedDecls.foreach(symbol)
 end BodyEdit

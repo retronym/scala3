@@ -190,6 +190,30 @@ class SessionEditSuite extends BasePCSuite:
       Assert.assertNotEquals(s"$what: ${driver.lastEdit(uri)}", id, runId(driver))
       assertLikeFresh(driver, edited, s"after an edit of $what")
 
+  /** The typed body of an inline method is typed ahead by its completer and
+   *  kept as an annotation; its spans after an edit before it (`Chars`, the
+   *  oracle's `@switch` in `requiresFormat`).
+   */
+  @Test def `spans-after-an-edit-before-an-inline-method` =
+    val content =
+      """|import scala.annotation.switch
+         |object I {
+         |  def g(x: Int): Int = x + 1
+         |  private inline def f(c: Char): Boolean = (c: @switch) match
+         |    case 'a' => true
+         |    case _ => false
+         |  def h(c: Char): Boolean = f(c) || f('b')
+         |}
+         |""".stripMargin
+    val driver = newDriver()
+    driver.run(uri, source(content))
+    val id = runId(driver)
+    val edited = content.replace("x + 1", "x + 1 + x * 2")
+    driver.runUpTo(uri, source(edited), at(edited, "f(c)"))
+    Assert.assertTrue(driver.lastEdit(uri), driver.lastEdit(uri).startsWith("body edit of g"))
+    assertLikeFresh(driver, edited, "after an edit before an inline method")
+    Assert.assertEquals(id, runId(driver))
+
   /** The knob: without `-Yinteractive-body-edits` an edit is a fresh run, as before. */
   @Test def `off-by-default` =
     val driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
