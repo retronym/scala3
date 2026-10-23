@@ -153,22 +153,30 @@ object XrayServer:
   /** The whole test JVM's classpath, so that the compiler's own sources
    *  resolve against its classes (the generated file sees it too).
    */
-  private val settings =
+  private[xray] val baseSettings =
     List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", sys.props.getOrElse("java.class.path", BuildInfo.ideTestsDependencyClasspath.map(_.toPath.toString).mkString(File.pathSeparator)))
     // `-Dxray.readers=independent`: `-Yinteractive-readers` (step 4); otherwise serialised (step 3)
-    ++ (if sys.props.get("xray.readers").contains("independent") then List("-Yinteractive-readers") else Nil)
 
-  @volatile private var driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
+  /** The flags of the driver the page drives by hand (freeform mode), set by
+   *  `/reset?mode=` to one of the replay's modes. `-Dxray.readers=independent`
+   *  starts it with `-Yinteractive-readers` (step 4); otherwise serialised (step 3).
+   */
+  @volatile private[xray] var freeformMode: Replay.Mode =
+    if sys.props.get("xray.readers").contains("independent") then Replay.modeNamed("readers") else Replay.modeNamed("default")
+  private def settings: List[String] = baseSettings ++ freeformMode.flags
+
+  @volatile private[xray] var driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
 
   /** Reset the typer state: a fresh driver (a new symbol table, run ids from
    *  1), warmed up like the first one. */
-  private def resetDriver(): Map[String, Any] = lock.synchronized {
+  private[xray] def resetDriver(mode: Replay.Mode = freeformMode): Map[String, Any] = lock.synchronized {
     val t0 = System.nanoTime()
+    freeformMode = mode
     driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
     driver.run(generatedUri, SourceFile.virtual(generatedUri, generatedSource("warmup", 5)))
     backgroundState = Map("state" -> "idle")
-    Map("warmupMs" -> (System.nanoTime() - t0) / 1000000)
+    Map("warmupMs" -> (System.nanoTime() - t0) / 1000000, "mode" -> mode.key, "flags" -> mode.flags.mkString(" "))
   }
 
   // ---- the background pass: another reader completes the session (`readAll`)
@@ -176,7 +184,7 @@ object XrayServer:
   // read/write regime of step 3), and reports what the typed tree holds:
   // semantic tokens and diagnostics, for the page to paint.
 
-  @volatile private var backgroundState: Map[String, Any] = Map("state" -> "idle")
+  @volatile private[xray] var backgroundState: Map[String, Any] = Map("state" -> "idle")
   private val foregroundCount = new java.util.concurrent.atomic.AtomicInteger(0)
   /** The background reader and what it set out to type, for the progress the
    *  page polls: the skipped statements at the start, and those still skipped. */
@@ -293,7 +301,7 @@ object XrayServer:
   /** The identifiers of the typed tree with a symbol, by kind, for semantic
    *  highlighting: the name part of each `Ident`, `Select` and definition.
    */
-  private def semanticTokens(tree: tpd.Tree, source: SourceFile)(using Context): List[Map[String, Any]] =
+  private[xray] def semanticTokens(tree: tpd.Tree, source: SourceFile)(using Context): List[Map[String, Any]] =
     import dotty.tools.dotc.core.Flags.*
     val out = List.newBuilder[Map[String, Any]]
     def kindOf(sym: Symbol): String =
@@ -394,7 +402,7 @@ object XrayServer:
    *  `offset` in the unit's typed tree, by name position: the usages the
    *  editor highlights at the caret (only in the typed statements).
    */
-  private def usagesAt(tree: tpd.Tree, offset: Int, source: SourceFile)(using Context): Map[String, Any] =
+  private[xray] def usagesAt(tree: tpd.Tree, offset: Int, source: SourceFile)(using Context): Map[String, Any] =
     val sym0 = Interactive.pathTo(tree, Span(offset)).headOption.map(_.symbol).getOrElse(NoSymbol)
     val sym = if sym0.is(dotty.tools.dotc.core.Flags.ModuleVal) then sym0.moduleClass else sym0
     if !sym.exists then Map("found" -> false)
@@ -481,7 +489,7 @@ object XrayServer:
     }
     b.append('"').toString
 
-  private def json(v: Any): String = v match
+  private[xray] def json(v: Any): String = v match
     case null => "null"
     case s: String => jsonStr(s)
     case b: Boolean => b.toString
@@ -769,16 +777,16 @@ object XrayServer:
         .getOrElse(throw new IllegalStateException(s"xray.html not found from ${Paths.get("").toAbsolutePath}; pass -Dxray.page"))
     }
 
-  private def readBody(ex: HttpExchange): String =
+  private[xray] def readBody(ex: HttpExchange): String =
     new String(ex.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
 
   /** The request body is `{"kind","code","offset","cancelAfterMs"}`; the
    *  code is sent URL-encoded as a separate field to keep the parser trivial.
    */
-  private def field(body: String, name: String): Option[String] =
+  private[xray] def field(body: String, name: String): Option[String] =
     body.split('&').map(_.split("=", 2)).collectFirst { case Array(k, v) if k == name => java.net.URLDecoder.decode(v, StandardCharsets.UTF_8) }
 
-  private def reply(ex: HttpExchange, status: Int, contentType: String, body: String): Unit =
+  private[xray] def reply(ex: HttpExchange, status: Int, contentType: String, body: String): Unit =
     val bytes = body.getBytes(StandardCharsets.UTF_8)
     ex.getResponseHeaders.add("Content-Type", contentType)
     ex.getResponseHeaders.add("Cache-Control", "no-store")
@@ -864,7 +872,14 @@ object XrayServer:
           catch case scala.util.control.NonFatal(e) => Map("found" -> false, "error" -> e.toString)
         reply(ex, 200, "application/json", json(result))
       case "/reset" if ex.getRequestMethod == "POST" =>
-        reply(ex, 200, "application/json", json(resetDriver()))
+        val body = readBody(ex)
+        val mode = field(body, "mode").flatMap(k => Replay.modes.find(_.key == k)).getOrElse(freeformMode)
+        reply(ex, 200, "application/json", json(resetDriver(mode)))
+      case "/modes" =>
+        reply(ex, 200, "application/json", json(Map("freeform" -> freeformMode.key,
+          "modes" -> Replay.modes.map(m => Map("key" -> m.key, "title" -> m.title, "flags" -> m.flags.mkString(" "))))))
+      case p if p.startsWith("/replay") =>
+        Replay.route(ex, p)
       case "/background" if ex.getRequestMethod == "POST" =>
         val body = readBody(ex)
         reply(ex, 202, "application/json", json(startBackground(field(body, "code").getOrElse(""), field(body, "file").getOrElse(""),

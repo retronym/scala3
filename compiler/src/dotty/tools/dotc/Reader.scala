@@ -231,6 +231,12 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    */
   @volatile var statementWaitNanos: Long = 0L
 
+  /** The runs this reader started (interactive mode), and of them those
+   *  on the whole file, for tools (the x-ray's replay).
+   */
+  @volatile var runsStarted: Int = 0
+  @volatile var wholeFileRunsStarted: Int = 0
+
   /** Time this reader spent blocked on the completion lock, in nanoseconds. */
   @volatile var lockWaitNanos: Long = 0L
   @volatile var lockWaitCount: Int = 0

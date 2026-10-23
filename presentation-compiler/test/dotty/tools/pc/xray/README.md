@@ -48,6 +48,43 @@ sbt --mem 8192 -batch "scala3-presentation-compiler/Test/runMain dotty.tools.pc.
 
 Then open <http://127.0.0.1:8791/> (`-Dxray.port=...` to change; `-Dxray.page=<path>` if the page is not found relative to the working directory; `-Dxray.latch=<file>` enables latched requests, the sbt route sets neither, so for the latch run the server directly: `sbt "export scala3-presentation-compiler/Test/fullClasspath"`, then `java -Dxray.latch=/tmp/xray-latch -cp <that classpath> dotty.tools.pc.xray.XrayServer` from the worktree root). The first build is about 2.5 minutes; the server warms the driver up on a 5-object file before listening. `Ctrl/⌘-Space` in the editor is "Complete at cursor". The page is read from disk on every request, so it can be edited without a rebuild.
 
+## How to demo the replay
+
+The replay plays a Metals editing session recorded from an `lsp.trace.json` (by `trace_to_events.py` on `claude/mr-measure-37f089`, the format `QueueReplaySuite` reads) against a fresh driver once per mode, with the trace's own timing, and tabulates what each mode did per request kind. Start the server on the presentation compiler's test classpath with the events file, from the worktree root. First the classpath:
+
+```bash
+sbt --client "export scala3-presentation-compiler/Test/fullClasspath" | grep '^/' | tail -1 > out/pc-test-classpath.txt
+```
+
+Then the server:
+
+```bash
+java -Xmx6g -Dxray.port=8799 -Dxray.latch=/tmp/xray-latch-8799 -Dxray.replay.events=/Users/jzaugg-virtus/code/scratch/mr-measure/replay-events.json -cp "$(cat out/pc-test-classpath.txt)" dotty.tools.pc.xray.XrayServer
+```
+
+Open <http://127.0.0.1:8799/>, pick the Replay view (the circular arrow in the activity bar), choose a window of the trace, and press *Run all modes*. The view says which files and how many events and requests the window replays. While a mode runs, the editor shows the replayed file with the request in flight marked, the mode's card shows its progress, and the *Replay findings* tab fills in, per mode and request kind:
+
+- count, cancellations and errors;
+- latency (from when the request was due to its answer) median, p90 and max, and the time it queued behind the request before it in its lane;
+- time waiting on the completion lock (step 3) or on a completion root another reader holds (step 4), and on a statement another reader was typing; in the baseline, the wait for the other lane's run (`CachingDriver` has one compiler);
+- trees typed, runs started and how many of them on the whole file;
+- for the whole-file kinds, whether the diagnostics equal those of a whole-file run of the same content in a fresh driver;
+- answers that differ from the baseline's answer to the same event, with the first few (fresh-name numbers such as `contextual$3` are left out of the comparison: they follow the order of typing, which targeting changes).
+
+Each mode's card has *Run* to replay that mode again; *Export markdown* downloads the table (`/replay/report.md`), *Copy markdown* copies it.
+
+The modes:
+
+| mode | flags | what it is |
+|---|---|---|
+| baseline | `-Yno-targeted-requests` | every request types the whole file, with `CachingDriver`'s cache (no run when the file and content are those of the last run) |
+| default | none | targeting, the session, several readers serialised by the completion lock (step 3) |
+| readers | `-Yinteractive-readers` | independent readers (step 4) |
+
+Hover, definition and completion call `readUpTo`, as the providers' `runUpTo` does; document highlight, inlay hints and semantic tokens call `readAll`, as `run` does. The replay does not go through Metals' job queue, which serialises every request: *lanes* 1 is that one queue, 2 (the default) gives the cursor requests a lane of their own beside the whole-file ones, as a presentation compiler with several readers would. didClose drops the file's text only.
+
+Freeform: the selector next to the reset button sets the flags of the driver you drive by hand and resets it; the hovers, the background pass and the latch work as before, and the strip at the left of the status bar shows the latency of each request (the replay's too, coloured by mode).
+
 ## What the numbers were (60 objects, warm JVM)
 
 | request | typed | `typedTreeCount` | ms |

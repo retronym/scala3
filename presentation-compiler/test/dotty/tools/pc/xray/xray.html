@@ -164,6 +164,24 @@
   #ed { display: flex; position: relative; } #ed .CodeMirror { flex: 1; min-width: 0; }
   #stripe { width: 9px; flex: none; position: relative; background: #0f1520; border-left: 1px solid #222e43; } #stripe i { position: absolute; left: 1px; right: 1px; height: 3px; border-radius: 1px; cursor: pointer; }
   #stripe i.error { background: #e03131; } #stripe i.warning { background: #e8a317; } #stripe i.info { background: #4a90e2; } #stripe i:hover { transform: scaleY(1.8); }
+  /* ---- the replay: a recorded Metals session per mode, and its findings */
+  #replayView { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+  #replayView p { margin: 0; } #replayView label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+  #replayView select, #freeMode { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); max-width: 100%; }
+  #replayView .row2 { display: flex; flex-wrap: wrap; gap: 6px; } #replayView input[type=number] { width: 64px; }
+  #rpDesc { background: var(--code); border-radius: var(--r); padding: 6px 8px; line-height: 1.4; }
+  .rpMode { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .rpMode .top { display: flex; align-items: center; gap: 6px; } .rpMode .top b { flex: 1; } .rpMode .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; } .rpMode .bar i { display: block; height: 100%; background: var(--acc); width: 0; }
+  .rpMode.running { border-color: var(--acc); } .rpMode .fl { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--dim); }
+  #replay { flex: 1; overflow: auto; font-size: 12px; } #replay[hidden] { display: none; }
+  #replay table { border-collapse: collapse; width: 100%; } #replay td, #replay th { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  #replay th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); } #replay td.l, #replay th.l { text-align: left; }
+  #replay tr.all td { font-weight: 600; border-top: 2px solid var(--line); } #replay .bad { color: var(--cancelu); font-weight: 600; } #replay .good { color: var(--newu); }
+  #replay h4 { margin: 10px 10px 4px; font-size: 12px; } #replay .none { padding: 16px; } #replay .ex { padding: 0 10px; font-size: 11.5px; } #replay .ex div { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+  #rpRows td { text-align: left; } .m-baseline { color: #e8a317; } .m-default { color: #4a90e2; } .m-readers { color: #2f9e44; }
+  .replayHit { background: rgba(240,140,0,.45); outline: 1px solid #f08c00; } .line-replay { background: rgba(240,140,0,.12); }
+  #strip { display: inline-flex; align-items: flex-end; gap: 1px; height: 18px; width: 180px; flex: none; cursor: default; } #strip i { display: block; width: 2px; background: var(--acc); border-radius: 1px 1px 0 0; min-height: 1px; }
+  #strip i.cancelled { background: var(--cancelu); } #strip i.baseline { background: #e8a317; } #strip i.default { background: #4a90e2; } #strip i.readers { background: #2f9e44; }
 </style>
 </head>
 <body>
@@ -177,6 +195,7 @@
     <button class="chrome on" data-view="explorer" data-icon="files" title="Explorer"></button>
     <button class="chrome" data-view="structure" data-icon="structure" title="Structure: the definitions of the open file"></button>
     <button class="chrome" data-view="demos" data-icon="play" title="Demos"></button>
+    <button class="chrome" data-view="replay" data-icon="replay" title="Replay: a recorded Metals editing session, once per mode, and the findings"></button>
     <span class="sp"></span>
     <button class="chrome" id="actLog" data-icon="panel" title="Request log and demo transcript"></button>
   </nav>
@@ -187,6 +206,26 @@
         <div id="tree"><div class="row file sel" data-file="" data-icon="file">A.scala <span class="dim">(generated)</span></div><div id="treeroot" class="dim snap">no snapshot of the compiler sources found</div></div>
       </div>
       <div class="view" id="viewStructure" hidden><div id="struct" class="dim">loading…</div></div>
+      <div class="view" id="viewReplay" hidden>
+        <div id="replayView">
+          <p class="dim">A Metals editing session recorded from an <code>lsp.trace.json</code> (hovers while the cursor moves, definitions, completions, document highlights, inlay hints, semantic tokens, edits, cancellations), replayed with its own timing on a fresh driver per mode.</p>
+          <label>Window <select id="rpWindow">
+            <option value="0-175">TypeErasure.scala + TypeEval.scala (events 0–175)</option>
+            <option value="670-814">Typer.scala, typing: 15 edits (670–814)</option>
+            <option value="280-420">Scopes.scala (an edit) + TypeComparer.scala (280–420)</option>
+            <option value="420-560">Typer.scala + Phases.scala (420–560)</option>
+            <option value="0-60">short: the first 60 events</option>
+          </select></label>
+          <div class="row2"><label title="the requests of one trace second are spread over it at offsets drawn from this seed">seed <input id="rpSeed" type="number" value="1"></label>
+            <label title="pauses between the trace's seconds are capped at this">pause cap ms <input id="rpIdle" type="number" value="1000" step="100"></label>
+            <label title="1: one queue, as Metals' Scala3CompilerAccess serialises every request; 2: cursor requests (hover, definition, completion) get a lane of their own beside the whole-file ones">lanes <select id="rpLanes"><option value="2">2</option><option value="1">1</option></select></label></div>
+          <div id="rpDesc" class="dim">…</div>
+          <div class="row2"><button id="rpAll" class="primary" data-icon="play" title="baseline, default and -Yinteractive-readers in turn, each on a fresh driver">Run all modes</button><button id="rpStop" class="ghost" data-icon="cancel">Stop</button></div>
+          <div id="rpModes"></div>
+          <div class="row2"><a id="rpExport" href="/replay/report.md" download="replay-findings.md"><button class="ghost" data-icon="doc" tabindex="-1">Export markdown</button></a><button id="rpCopy" class="ghost" data-icon="doc">Copy markdown</button></div>
+          <p class="dim">Freeform: pick a mode next to the reset button above the editor, reset, and drive by hand; the strip in the status bar shows the latency of each request.</p>
+        </div>
+      </div>
       <div class="view" id="viewDemos" hidden>
         <div id="demos">
           <p class="dim">Each demo runs a short sequence of real requests and narrates what the driver reports, step by step.</p>
@@ -210,6 +249,7 @@
         <button id="complete" class="primary" data-icon="complete" title="runUpTo at the cursor, then Completion.completions (Ctrl/Cmd-Space)">Complete</button>
         <button id="full" class="icon" data-icon="doc" title="Type whole file: driver.run (completes the session if one exists on this content)"></button>
         <button id="reset" class="icon ghost" data-icon="trash" title="Reset the typer state: a fresh driver, nothing typed, run ids restart (Ctrl/Cmd-Shift-K)"></button>
+        <select id="freeMode" title="the flags of the driver you drive by hand: applied by the reset (Ctrl/Cmd-Shift-K)"></select>
         <span class="sep"></span>
         <label class="toggle" title="hovering an identifier sends a typeAt request (runUpTo at the offset, then the type of the tree there); moving to another identifier before the answer cancels it"><input type="checkbox" id="hoverMode" checked> Hover types</label>
         <label class="toggle" title="after each request, a background reader completes the session (driver.readAll on another thread, concurrently with hovers) and paints what it found: semantic colours from the typed tree, diagnostics in the gutter"><input type="checkbox" id="bgMode" checked> Background pass</label>
@@ -237,14 +277,16 @@
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the background pass's diagnostics">Problems <span id="probCount" class="dim"></span></button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the background pass's diagnostics">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
   <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
   <div id="problems" hidden><div class="none dim">No diagnostics: the background pass fills this list.</div></div>
+  <div id="replay" hidden><div class="none dim">Run the replay (the ▶︎ view in the activity bar): the findings per mode and request kind appear here, then the requests as they finish.</div><div id="rpFindings"></div><h4>Requests, newest first</h4><table><thead><tr><th class="l">#</th><th class="l">mode</th><th class="l">request</th><th>due ms</th><th>queued</th><th>latency</th><th>lock wait</th><th>stmt wait</th><th>trees</th><th class="l">how</th><th>diags</th><th class="l">answer</th></tr></thead><tbody id="rpRows"></tbody></table></div>
 </section>
 <div id="quick" hidden><input id="quickIn" placeholder="Go to file… (type to filter; Enter opens, Esc closes)" autocomplete="off"><div class="items" id="quickItems"></div><div class="hint" id="quickHint">Ctrl/Cmd-K · the snapshot's compiler sources and the generated A.scala</div></div>
 <div id="lookup" hidden></div>
 <footer id="status">
+  <span id="strip" title="latency of the last requests (by hand, the background pass's hovers, the replay): height on a log scale"></span>
   <span id="stLast" class="mono dim" title="latest request log entry">no request yet</span>
   <span><span id="stFile">A.scala</span> <span id="cur" class="mono">–</span></span>
   <span id="stDef" class="mono dim" title="the innermost definition at the caret, and the symbol whose usages are marked"></span>
@@ -283,6 +325,7 @@
     trash: svg('<path d="M3 4.5h10M6.5 4.5v-2h3v2M4.5 4.5l.7 9h5.6l.7-9"/>'),
     close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
     xray: svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 5.5h6M5 8h4M5 10.5h2"/>'),
+    replay: svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/><path d="M2.5 2.5v3h3"/><path d="M7 5.5v5l3.5-2.5z"/>'),
     structure: svg('<path d="M3 3h4M5 3v10M5 8h4M5 13h4"/><rect x="9" y="6.5" width="4" height="3" rx=".5"/><rect x="9" y="11.5" width="4" height="3" rx=".5"/>'),
   };
   document.querySelectorAll('[data-icon]').forEach((el) => el.insertAdjacentHTML('afterbegin', I[el.dataset.icon] || ''));
@@ -336,10 +379,10 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems'].forEach((n) => { $(n).hidden = name !== n; }); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay'].forEach((n) => { $(n).hidden = name !== n; }); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
-  const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos' };
+  const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
   let view = store.get('view') in views ? store.get('view') : 'explorer';
   function showView(v, toggle) {
     const hidden = document.body.classList.contains('sidebarHidden');
@@ -701,11 +744,11 @@
   async function resetTyper() {
     if (busy) return; setBusy(true, '… resetting the typer state (a fresh driver)');
     let r;
-    try { r = await (await fetch('/reset', { method: 'POST' })).json(); } catch (e) { r = { error: String(e) }; }
+    try { r = await (await fetch('/reset', { method: 'POST', body: new URLSearchParams({ mode: $('freeMode').value }) })).json(); } catch (e) { r = { error: String(e) }; }
     setBusy(false);
     clearBackground();
     lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
-    $('xray').innerHTML = emptyState('Typer state reset', r.error ? r.error : `A fresh driver: nothing typed, no session; warm-up ${r.warmupMs} ms. The next request starts run 1 of the new compiler.`);
+    $('xray').innerHTML = emptyState('Typer state reset', r.error ? r.error : `A fresh driver (${esc(r.mode)}: ${esc(r.flags || 'no flags')}): nothing typed, no session; warm-up ${r.warmupMs} ms. The next request starts run 1 of the new compiler.`);
     $('stSession').textContent = 'reset: no session'; $('stLast').textContent = 'typer state reset';
   }
   $('reset').onclick = resetTyper;
@@ -1010,6 +1053,7 @@
       <td>${r.runId}${r.runChanged ? ' <span class="changed">new</span>' : ''}</td><td>${r.prefixBefore === -1 ? '–' : r.prefixBefore}→${r.prefix === -1 ? '–' : r.prefix}</td><td>${r.typedTrees}</td><td>${r.touched}</td><td>${r.ms}</td>
       <td title="${esc((r.lockWaits || []).map((w) => `${w.ms} ms behind ${w.holder}: ${w.root}${w.current !== w.root ? ' / ' + w.current : ''}`).join('\n'))}">${r.lockWaitCount ? `${r.lockWaitMs} ms <span class="dim">×${r.lockWaitCount}${r.lockWaits && r.lockWaits[0] ? ' · ' + esc(r.lockWaits[0].root) : ''}</span>` : '<span class="dim">–</span>'}${r.concurrentWithBackground ? ' <span class="pill o-served" style="font-size:10px;padding:0 6px">beside bg</span>' : ''}</td>`;
     $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
+    stripAdd(r.ms, `#${r.seq} ${req}: ${r.ms} ms, ${r.outcome}`, r.outcome.startsWith('cancelled') ? 'cancelled' : '');
     // the status bar: the same entry in one line, and the session state the result reports
     $('stLast').textContent = `#${r.seq} ${req}${r.cancelAfterMs >= 0 ? ` (cancel ${r.cancelAfterMs} ms)` : ''}${r.latch ? (r.cancelledByButton ? ' (latched, cancelled)' : ' (latched, released)') : ''} · ${r.outcome}` +
       (r.outcome === 'error' ? `: ${String(r.error || '').slice(0, 80)}` : ` · run ${r.runId}${r.runChanged ? ' (new)' : ''} · ${r.typedTrees} trees · ${r.ms} ms`);
@@ -1098,6 +1142,108 @@
     li = storyStep('Complete in object 40', 'served from the completed run: nothing typed');
     gotoObject(40); const r2 = await send('complete', -1); storyResult(li, r2.outcome === 'served' && !r2.runChanged, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}`);
   };
+  // ---- the latency strip: one bar per request, newest on the right, height on a log scale
+  function stripAdd(ms, title, cls) {
+    const i = document.createElement('i'); i.style.height = Math.min(18, 1 + 4 * Math.log10(1 + Math.max(0, ms))) + 'px'; i.title = title; if (cls) i.className = cls;
+    const st = $('strip'); st.append(i); while (st.children.length > 80) st.firstChild.remove();
+  }
+  // ---- freeform: the mode of the driver driven by hand
+  try {
+    const ms = await (await fetch('/modes')).json();
+    $('freeMode').innerHTML = ms.modes.map((m) => `<option value="${esc(m.key)}" title="${esc(m.title)}">${esc(m.key)}${m.flags ? ': ' + esc(m.flags) : ''}</option>`).join('');
+    $('freeMode').value = ms.freeform;
+  } catch (e) { /* an older server */ }
+  $('freeMode').onchange = () => resetTyper();
+  // ---- the replay
+  const rp = { since: 0, polling: false, file: null, mark: null, line: null, saved: null, modes: [] };
+  const rpParams = () => { const [from, to] = $('rpWindow').value.split('-'); return new URLSearchParams({ from, to, seed: $('rpSeed').value, idleCap: $('rpIdle').value, lanes: $('rpLanes').value }); };
+  async function rpDescribe() {
+    try {
+      const d = await (await fetch('/replay/describe?' + rpParams())).json();
+      if (!d.eventsInTrace) { $('rpDesc').innerHTML = 'No events: start the server with <code>-Dxray.replay.events=&lt;replay-events.json&gt;</code>.'; return; }
+      $('rpDesc').innerHTML = `Replays events ${d.from}–${d.to} of <code title="${esc(d.eventsFile)}">${esc(d.eventsFile.split('/').pop())}</code> (${d.eventsInTrace} in the trace; trace seconds ${esc(d.traceSeconds)}): <b>${d.requests} requests</b> (${Object.entries(d.kinds).map(([k, n]) => `${n} ${k}`).join(', ')}), ${d.edits} edits, ${d.cancels} cancellations, over ${(d.durationMs / 1000).toFixed(1)} s.<br>Files: ${d.files.map((f) => `<code>${esc(f.file.split('/').pop())}</code> ${f.requests} requests, ${f.lines} lines`).join('; ')}.`;
+    } catch (e) { $('rpDesc').textContent = String(e); }
+  }
+  ['rpWindow', 'rpSeed', 'rpIdle', 'rpLanes'].forEach((id) => $(id).onchange = rpDescribe);
+  const fmt3 = (x) => `${x.median} / ${x.p90} / ${x.max}`;
+  function rpRenderModes(st) {
+    const byKey = Object.fromEntries((st.modes || []).map((m) => [m.mode, m]));
+    $('rpModes').innerHTML = rp.modes.map((m) => {
+      const r = byKey[m.key];
+      const pct = r && r.total ? Math.round(100 * r.done / r.total) : 0;
+      const line = !r ? 'not run' : r.state === 'running' ? `${r.done}/${r.total} requests, ${(r.elapsedMs / 1000).toFixed(1)} s${r.inFlight.length ? ' · now: ' + esc(r.inFlight.join(', ')) : ''}` : r.state === 'done' ? `done: ${r.total} requests in ${(r.wallMs / 1000).toFixed(1)} s` : esc(r.state + (r.error ? ': ' + r.error : ''));
+      return `<div class="rpMode${r && r.state === 'running' ? ' running' : ''}"><div class="top"><b class="m-${m.key}">${esc(m.key)}</b><button class="ghost" data-rerun="${esc(m.key)}" title="replay this mode again (a fresh driver)">${I.replay} Run</button></div><div class="fl">${esc(m.flags || 'no flags')}</div><div class="dim">${esc(m.title)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="dim">${line}</div></div>`;
+    }).join('');
+    $('rpModes').querySelectorAll('[data-rerun]').forEach((b) => b.onclick = () => rpRun([b.dataset.rerun]));
+  }
+  function rpRenderFindings(fs) {
+    if (!fs.length) return;
+    $('replay').querySelector('.none').hidden = true;
+    const rows = fs.map((f) => `<tr class="${f.kind === 'all' ? 'all' : ''}"><td class="l m-${f.mode}">${esc(f.mode)}</td><td class="l">${esc(f.kind)}</td><td>${f.count}</td><td>${f.cancelled || ''}</td><td>${f.errors ? `<span class="bad">${f.errors}</span>` : ''}</td>
+      <td>${fmt3(f.latency)}</td><td>${f.queued.median} / ${f.queued.p90}</td><td>${fmt3(f.lock)}</td><td>${f.statement.p90}</td><td>${f.treesMedian} <span class="dim">(${f.trees})</span></td><td>${f.runs} <span class="dim">(${f.wholeFileRuns})</span></td>
+      <td>${f.diagChecked ? `<span class="${f.diagMatch === f.diagChecked ? 'good' : 'bad'}" title="${esc(f.diagFirstMismatch)}">${f.diagMatch}/${f.diagChecked}</span>` : '–'}</td>
+      <td>${f.mode === 'baseline' ? '–' : `<span class="${f.differ ? 'bad' : 'good'}" title="${esc(f.differExamples.map((e) => `${e.where}\n  ${e.mode}\n  baseline: ${e.baseline}`).join('\n'))}">${f.differ}/${f.compared}</span>`}</td></tr>`).join('');
+    const ex = fs.filter((f) => f.kind !== 'all' && f.differ).flatMap((f) => f.differExamples.map((e) => `<div><b class="m-${f.mode}">${esc(f.mode)}</b> ${esc(e.where)}: <code>${esc(e.mode)}</code>; baseline <code>${esc(e.baseline)}</code></div>`)).join('');
+    $('rpFindings').innerHTML = `<table><thead><tr><th class="l">mode</th><th class="l">kind</th><th>n</th><th>cancelled</th><th>errors</th><th title="from when the request was due to its answer">latency ms<br>median / p90 / max</th><th title="behind the request before it in its lane">queued ms<br>median / p90</th><th title="on the completion lock (step 3) or a completion root another reader holds (step 4)">lock wait ms<br>median / p90 / max</th><th title="waiting for a statement another reader was typing">stmt wait<br>p90</th><th>trees<br>median (total)</th><th title="runs started by these requests (of them on the whole file)">runs<br>(whole-file)</th><th title="diagnostics of the whole-file kinds equal to a whole-file run of the same content">diags =<br>whole-file</th><th title="answers that differ from the baseline's answer to the same event">≠ baseline</th></tr></thead><tbody>${rows}</tbody></table>${ex ? `<h4>Answers that differ from the baseline</h4><div class="ex">${ex}</div>` : ''}`;
+  }
+  function rpRow(r) {
+    const tr = document.createElement('tr'); if (r.outcome !== 'ok') tr.className = 'cancelled';
+    tr.innerHTML = `<td>${r.seq}</td><td class="m-${r.mode}">${esc(r.mode)}</td><td>${esc(r.kind)} ${esc(r.file.split('/').pop())}:${r.line}${r.lane ? ' <span class="dim">lane 2</span>' : ''}</td><td>${r.dueMs}</td><td>${r.queuedMs}</td><td>${r.ms}</td><td>${r.lockMs ? r.lockMs + ` <span class="dim">×${r.lockCount}</span>` : '<span class="dim">–</span>'}</td><td>${r.statementMs || '<span class="dim">–</span>'}</td><td>${r.trees}</td><td>${esc(r.how)}${r.backedOff ? ` <span class="dim">backed off ×${r.backedOff}</span>` : ''}</td>
+      <td>${r.diagnostics < 0 ? '–' : r.diagnostics}${r.wholeFileDiagnostics >= 0 ? (r.diagnostics === r.wholeFileDiagnostics ? ' <span class="good">=</span>' : ` <span class="bad">≠ ${r.wholeFileDiagnostics}</span>`) : ''}</td><td class="mono" title="${esc(r.answer)}">${esc(r.answer.slice(0, 90))}</td>`;
+    $('rpRows').prepend(tr); while ($('rpRows').children.length > 400) $('rpRows').lastChild.remove();
+    stripAdd(r.ms, `${r.mode} ${r.kind} ${r.file.split('/').pop()}:${r.line}: ${r.ms} ms (${r.how})`, r.outcome === 'ok' ? r.mode : 'cancelled');
+  }
+  // the request starting now, in the editor: the replayed file's text, the offset marked
+  async function rpShow(c) {
+    if (!c || !c.file) return;
+    if (c.file !== rp.file) {
+      const r = await (await fetch('/replay/source?file=' + encodeURIComponent(c.file))).json();
+      if (!r.source) return;
+      rp.file = c.file; cm.setValue(r.source); clearBackground();
+      $('fname').textContent = $('stFile').textContent = 'replay: ' + c.file.split('/').pop();
+    }
+    if (rp.mark) rp.mark.clear(); if (rp.line != null) cm.removeLineClass(rp.line, 'background', 'line-replay');
+    const a = cm.posFromIndex(Math.max(0, c.offset)), b = c.endOffset > c.offset && c.kind === 'inlayHint' ? cm.posFromIndex(c.endOffset) : cm.posFromIndex(c.offset + 1);
+    if (c.offset >= 0) { rp.mark = cm.markText(a, b, { className: c.kind === 'inlayHint' ? 'line-replay' : 'replayHit', title: `${c.mode}: ${c.kind}` }); rp.line = a.line; cm.addLineClass(a.line, 'background', 'line-replay'); cm.setCursor(a); cm.scrollIntoView(a, 140); }
+    $('stLast').textContent = `replay ${c.mode}: #${c.seq} ${c.kind} @${c.offset}`;
+  }
+  async function rpPoll() {
+    if (rp.polling) return; rp.polling = true;
+    try {
+      while (true) {
+        let st; try { st = await (await fetch('/replay/status?since=' + rp.since)).json(); } catch (e) { await sleep(500); continue; }
+        rpRenderModes(st);
+        st.rows.forEach((r) => { rpRow(r); rp.since = Math.max(rp.since, r.seq); });
+        rpRenderFindings(st.findings);
+        if (st.running) await rpShow(st.cursor);
+        $('busy').textContent = st.running ? `replaying: ${st.current}` : '';
+        if (!st.running) break;
+        await sleep(150);
+      }
+    } finally {
+      rp.polling = false;
+      if (rp.saved) { const s = rp.saved; rp.saved = null; ['hoverMode', 'bgMode', 'usageMode'].forEach((id) => { $(id).checked = s[id]; }); }
+      // the driver the page now drives is the last mode's (the replay reset it)
+      try { $('freeMode').value = (await (await fetch('/modes')).json()).freeform; } catch (e) { /* ignore */ }
+    }
+  }
+  async function rpRun(modes) {
+    // the page's own requests would be readers of the same driver: off while the replay runs
+    if (!rp.saved) { rp.saved = Object.fromEntries(['hoverMode', 'bgMode', 'usageMode'].map((id) => [id, $(id).checked])); ['hoverMode', 'bgMode', 'usageMode'].forEach((id) => { $(id).checked = false; }); }
+    const p = rpParams(); if (modes) p.set('modes', modes.join(','));
+    const r = await (await fetch('/replay/run?' + p)).json();
+    if (r.error) { $('rpDesc').insertAdjacentHTML('beforeend', `<div class="bad">${esc(r.error)}</div>`); }
+    setLogCollapsed(false); panelTab('replay'); rp.file = null;
+    rpPoll();
+  }
+  $('rpAll').onclick = () => rpRun(null);
+  $('rpStop').onclick = () => fetch('/replay/stop', { method: 'POST' });
+  $('rpCopy').onclick = async () => { const t = await (await fetch('/replay/report.md')).text(); try { await navigator.clipboard.writeText(t); $('rpCopy').lastChild.textContent = ' Copied'; } catch (e) { /* not allowed */ } };
+  try { rp.modes = (await (await fetch('/modes')).json()).modes; } catch (e) { rp.modes = []; }
+  rpDescribe(); rpRenderModes({ modes: [] });
+  // a replay already running (or finished) when the page loads
+  fetch('/replay/status?since=0').then((r) => r.json()).then((st) => { if (st.rows.length || st.running) { rpRenderModes(st); st.rows.forEach((r) => { rpRow(r); rp.since = Math.max(rp.since, r.seq); }); rpRenderFindings(st.findings); if (st.running) rpPoll(); } }).catch(() => {});
+
   gotoObject(10);
   scheduleBackground(); // the first file too
 })();
