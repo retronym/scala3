@@ -994,7 +994,12 @@ class Namer { typer: Typer =>
         val saved = ictx
         val own = ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders
         if own then
-          ictx = saved.fresh.setNewTyperState()
+          // a typer state of its own, reporting to the creation context's
+          // reporter directly: a buffer flushed when the completion ends
+          // would be captured, with this state, by the completers of the
+          // members it indexes, and their diagnostics, issued when they are
+          // completed later, would land in it after its flush (I59)
+          ictx = saved.fresh.setTyperState(saved.typerState.fresh(reporter = saved.reporter))
           rebased()
         try
           completeInCreationContext(denot)
@@ -1008,12 +1013,11 @@ class Namer { typer: Typer =>
           if own then
             // the completion's result is published fully defined: its type
             // variables made permanent (not committed into the namer's state,
-            // which other readers derive from), and its diagnostics issued to
-            // the namer's reporter, where every reader of the session finds them
+            // which other readers derive from); its diagnostics went to the
+            // namer's reporter as they were issued, where every reader of the
+            // session finds them
             val ts = ictx.typerState
-            try
-              ts.gc()(using ictx)
-              ts.reporter.removeBufferedMessages(using ictx).foreach(saved.reporter.report(_)(using saved))
+            try ts.gc()(using ictx)
             finally
               ictx = saved
               rebased()
