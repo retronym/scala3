@@ -155,3 +155,244 @@ The Java toy gets a `dotc-concurrent` kernel and a deterministic scheduler that 
 - Is a fresh typer state per completion semantics-preserving? A completer's type-ahead today can leave constraints in the namer's typer state; whether anything relies on that is to check.
 - What does a waiter do when the owner is cancelled by a *writer*? It is cancelled too; the barrier only needs to release, not hand over. Hand-over is for owners unwound by their own failure.
 - The checkpoint gap in implicit search (I11) bounds write latency; is a checkpoint there a prerequisite?
+
+## 10. Ten diffs, sketched
+
+Plausible shapes for the changes the plan asks for, one per blocker, each small enough to read and annotated with the rule it serves. They are sketches against `track-i/dotc-session`, not patches: names and placement will move when built, and every one that touches a shared hot path is kept only after a perflab A/B (§5).
+
+### 10.1 `ContextBase`: a reader per thread (kind A, step 2)
+
+```diff
+ class ContextBase extends ContextState with Phases.PhasesBase with Plugins {
+-  private[dotc] val comparers = new ArrayBuffer[TypeComparer]
+-  private[dotc] var comparersInUse: Int = 0
+-  private[dotc] val exploreContextPool = ExploreContextPool()
+-  private[dotc] val freshTSContextPool = FreshTSContextPool()
+-  private[dotc] val generalContextPool = ContextPool()
+-  private[core] var findMemberCount: Int = 0
+-  private[core] var pendingUnderlying: util.HashSet[Type] = new util.HashSet[Type]
++  /** Scratch that belongs to the thread evaluating, not to the symbol
++   *  table: the comparer stack, the context pools, the recursion counters.
++   *  Batch mode has one thread and one Reader, reached through a plain
++   *  field; interactive mode has one per reader thread.
++   */
++  private val batchReader = new Reader
++  private val readers: ThreadLocal[Reader] = ThreadLocal.withInitial(() => new Reader)
++  private[dotc] def reader: Reader =
++    if isInteractive then readers.get() else batchReader
+```
+
+`Reader` holds exactly the fields the §3 table lists under A, with the session's targeting slots and `completing` moved there from `Run`. The batch path pays one branch; the field accesses that used to be `base.comparers` become `base.reader.comparers`, which is the same load count after inlining.
+
+### 10.2 `Run`: targeting slots move to the reader (kind A, step 2)
+
+```diff
+ class Run(comp: Compiler, ictx: Context) {
+-  var typingTarget: Span = Spans.NoSpan
+-  var skippedStats: List[SkippedStat] = Nil
+-  var targetedStatsOwner: Symbol = NoSymbol
+-  var targetingTyperState: TyperState | Null = null
+-  val completing: mutable.HashSet[Symbol] = mutable.HashSet.empty
+-  private var typedTreeCount = 0
+-  def checkCancelledTyping()(using Context): Unit = ...
++  // The session's per-request state lives on `ctx.base.reader` (Reader.scala):
++  // the target, the skipped statements, the statements-list marks, the set of
++  // completions in progress, the checkpoint counter. Two requests on one run
++  // never share a slot.
+```
+
+`Targeting.scala`'s "is this the request's own statement list" test, `ctx.typerState eq run.targetingTyperState`, becomes `ctx.typerState eq reader.targetingTyperState`, which is what it meant.
+
+### 10.3 `InteractiveDriver`: read and write actions (step 3)
+
+```diff
+ class InteractiveDriver(val settings: List[String]) extends Driver {
++  /** Readers run `runUpTo` and resumes concurrently; a writer (new content,
++   *  a re-index, `completeSymbolsOf`, the end of a run) raises the sticky
++   *  cancellation, waits for every reader to unwind, and runs alone.
++   *  IntelliJ's pending write action, with `checkCancelledTyping` as the
++   *  reader's `checkCanceled`.
++   */
++  private val regime = new ReadWriteRegime(cancelReaders = () => myCancelled = true)
++
+   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+-    runUpTo0(uri, source, target)
++    regime.read { runUpTo0(uri, source, target) }
++
++  private def freshSession(uri: URI, source: SourceFile): Session =
++    regime.write { startTargetedRun(uri, source) }
+```
+
+`ReadWriteRegime` is a `StampedLock`-shaped object with one addition: `write` sets the cancel flag before taking the lock, so readers reach their next checkpoint and release instead of finishing. A reader cancelled by a writer answers its default, as it does today for a cancel from Metals.
+
+### 10.4 `Session`: the typed tree as a persistent value (kind E, step 5)
+
+```diff
+ private class Session(val uri: URI, val source: SourceFile, val run: Run, ...) {
+-  var skipped: List[SkippedStat]
+-  def splice(stat: SkippedStat, typed: tpd.Tree): Unit =
+-    unit.tpdTree = Splicer(stat, typed).transform(unit.tpdTree)
+-    skipped = skipped.filterNot(_ eq stat)
++  /** One immutable value: the typed tree and the statements still skipped.
++   *  A resume publishes a new one by compare-and-set against the one it
++   *  read, so two resumes into different statements both land, in turn,
++   *  and a reader that lost the race re-reads and splices again (cheap:
++   *  the splice copies only the path to the owner).
++   */
++  final case class State(tpdTree: tpd.Tree, skipped: List[SkippedStat])
++  val state = new AtomicReference(State(unit.tpdTree, initialSkipped))
++  def splice(stat: SkippedStat, typed: tpd.Tree): Unit =
++    state.updateAndGet(s => State(Splicer(stat, typed).transform(s.tpdTree), s.skipped.filterNot(_ eq stat)))
+```
+
+`SkippedStat` itself gains an owner slot (`AtomicReference[Reader | Null]`) and a latch, the same shape as 10.6, so a reader that finds a resume in progress waits for its tree rather than typing the statement again.
+
+### 10.5 `Uniques`: interning chosen per mode (kind D, step 3)
+
+```diff
+ class ContextBase ... {
+-  private[core] val uniques: Uniques = Uniques()
+-  private[dotc] val uniqueAppliedTypes: AppliedUniques = AppliedUniques()
+-  private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
++  // Batch keeps the open-hashing WeakHashSets; interactive mode uses
++  // striped tables (a lock per bucket range) so that two readers creating
++  // the same type get one object, which `eq`-based reasoning needs.
++  private[core] val uniques: Uniques = if isInteractive then Uniques.concurrent() else Uniques()
++  private[dotc] val uniqueAppliedTypes: AppliedUniques = if isInteractive then AppliedUniques.concurrent() else AppliedUniques()
++  private[core] val uniqueNamedTypes: NamedTypeUniques = if isInteractive then NamedTypeUniques.concurrent() else NamedTypeUniques()
+
+-  def nextSymId: Int = { _nextSymId += 1; _nextSymId }
++  private val _nextSymId = new AtomicInteger(0)
++  def nextSymId: Int = _nextSymId.incrementAndGet()
+```
+
+The `Names` table needs nothing: `enterIfNew` and `derivedNames` are already `synchronized`. The sym id counter is on the batch path too; an uncontended `incrementAndGet` is one `lock xadd`, and the A/B decides whether batch keeps the plain field behind the same `isInteractive` test.
+
+### 10.6 `SymDenotations.lockAndComplete`: an owner and a barrier (kind B, step 4)
+
+```diff
+   private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
+-    val interactive = ctx.mode.is(Mode.Interactive)
+-    val run: Run | Null = if interactive then ctx.run else null
+-    if myFlags.is(Touched) && !healLeakedTouched(run) then
+-      if run != null then run.recordCyclePrevented(symbol)
+-      throw CyclicReference(this)(using ctx.withOwner(symbol))
+-    myFlags |= Touched
+-    if run != null then run.completing += symbol
+-    try atPhase(validFor.firstPhaseId)(completer.complete(this))
+-    catch case ex => onUnwind(ex, interactive, run); throw ex
+-    finally if run != null then run.completing -= symbol
++    if !ctx.mode.is(Mode.Interactive) then
++      // Batch: the one-bit black hole, as before.
++      if myFlags.is(Touched) then throw CyclicReference(this)(using ctx.withOwner(symbol))
++      myFlags |= Touched
++      atPhase(validFor.firstPhaseId)(completer.complete(this))
++    else
++      // Interactive: the root's completion state is Idle | InProgress(owner, latch) | Done.
++      // The owner sees its intermediate state (TempClassInfo, a re-entrant Touched
++      // is a cycle, as before); any other reader waits on the latch (10.7 decides
++      // whether the wait would close a cycle). An unwind restores Idle and opens
++      // the latch, so a waiter takes ownership and completes it itself.
++      val reader = ctx.base.reader
++      completionRoot.acquire(reader) match
++        case Acquired =>
++          try atPhase(validFor.firstPhaseId)(completer.complete(this))
++          catch case ex => completionRoot.release(reader, unwound = true); onUnwind(ex, reader); throw ex
++          completionRoot.release(reader, unwound = false)
++        case Reentrant =>
++          reader.recordCyclePrevented(symbol)
++          throw CyclicReference(this)(using ctx.withOwner(symbol))
++        case Waited =>
++          () // completed by another reader; `isCompleted` is now true
+```
+
+`completionRoot` is the class for a module class and its module, and the file for TASTy-loaded symbols (10.9), so that the loaders' "complete the pair together" stays one critical section. `Touched` in `myFlags` stays as the batch bit; the interactive state lives beside the denotation, allocated on first contention only.
+
+### 10.7 `CompletionRoot.acquire`: a wait that would close a cycle is a cycle (step 4)
+
+```diff
++  /** Wait-for check before blocking: follow owners from this root's barrier.
++   *  Each reader waits on at most one root at a time (`reader.waitingOn`), so
++   *  the chain is a path; if it reaches `me`, blocking would deadlock, and
++   *  sequentially the same pair is a CyclicReference, raised wherever the
++   *  evaluation order closes it. Raise it here, in the reader that would
++   *  close it; the other reader's wait then succeeds.
++   */
++  private def wouldDeadlock(me: Reader): Boolean =
++    var r: Reader | Null = owner
++    while r != null do
++      if r eq me then return true
++      r = r.waitingOn match { case null => null; case root => root.owner }
++    false
++
++  def acquire(me: Reader): Acquired.type | Reentrant.type | Waited.type =
++    val o = owner
++    if o eq me then Reentrant
++    else if o == null && ownerRef.compareAndSet(null, me) then Acquired
++    else if wouldDeadlock(me) then throw CyclicReference(denot)(using me.ctx)
++    else { me.waitingOn = this; try latch.await() finally me.waitingOn = null; if isDone then Waited else acquire(me) }
+```
+
+The check reads other readers' `waitingOn` fields without a lock; a stale read can miss a cycle that formed in the meantime, so `await` is bounded (`await(timeout)`) and re-checks, which is Salsa's shape (each blocked query records what it waits on, and the cycle is found by the last one to block).
+
+### 10.8 `isCompleting` means "on this reader" (§4.1, step 4)
+
+```diff
+-    final def isCompleting: Boolean = myFlags.is(Touched) && !isCompleted
++    /** A completion of this symbol is in progress on the calling reader. In
++     *  progress on another reader is not a peekable state: the thirteen sites
++     *  that choose a path by this test would otherwise choose by timing. They
++     *  wait instead (`ensureCompletedOrWait`) and then see a completed symbol.
++     */
++    final def isCompleting(using Context): Boolean =
++      !isCompleted && (if ctx.mode.is(Mode.Interactive) then completionRoot.owner eq ctx.base.reader else myFlags.is(Touched))
+```
+
+and at each site, for example `Typer.findRef`'s import check:
+
+```diff
+-            if imp.importSym.isCompleting then
++            if imp.importSym.isCompletingElsewhere then imp.importSym.ensureCompleted() // waits; 10.7 handles a cycle
++            if imp.importSym.isCompleting then
+               report.warning(i"cyclic ${imp.importSym}, ignored", pos)
+```
+
+`Desugar.scala:123`'s `ClassCompleter if !sym.isCompleting` and `TypeApplications.scala:494` get the same two-line treatment.
+
+### 10.9 `SymbolLoaders` and the TASTy `Completer`: the root is the file (kind B, step 4)
+
+```diff
+ class TreeUnpickler(...) {
++  /** One unpickler serves every lazy completer of its file and keeps per-file
++   *  address maps (`symAtAddr`, `treeAtAddr`). Those are the file's state, so
++   *  the file is the completion root: the first reader to force any symbol of
++   *  it owns the unpickler until that completion publishes.
++   */
++  val root: CompletionRoot = CompletionRoot.forFile(this)
+   class Completer(reader: TastyReader)(using @constructorOnly _ctx: Context) extends LazyType {
+     def complete(denot: SymDenotation)(using Context): Unit =
+-      treeAtAddr(currentAddr) = ...
++      root.owned(ctx.base.reader) { treeAtAddr(currentAddr) = ... }
+```
+
+A `MutableScope` that a loader `enter`s into while another reader does `lookupEntry` rehashes under the reader: the scope gets a `@volatile` table reference published after the rehash is complete, and `lookupEntry` reads the reference once, so a lookup during a rehash sees the old table whole (a miss for the entry being entered, which is the sequential answer before the enter).
+
+### 10.10 `Symbol.computeDenot`: publication order (kind C, step 3)
+
+```diff
+   private def computeDenot(lastd: SymDenotation)(using Context): SymDenotation = {
+     val now = ctx.period
+-    checkedPeriod = now
+-    if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
++    // Another reader must never see `checkedPeriod == now` with a `lastDenot`
++    // that is not valid in `now`: write the denotation first, the period last,
++    // and in interactive mode with release/acquire (a plain store on batch).
++    val d = if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
++    publishChecked(now)   // VarHandle.setRelease in interactive mode, plain store otherwise
++    d
+   }
+```
+
+The same reorder applies to `NamedType`'s triple (`lastDenotation`, `lastSymbol`, then `checkedPeriod`), where the invariants in the source already say which field implies which; packing the three into one immutable `CachedDenot(denot, sym, period)` and publishing the reference is the alternative when the A/B shows the ordered stores cost on the batch path.
+
+What the ten leave out, deliberately: diagnostics stored with the fact (§4.3), which is the stage 3 reporter change and larger than a sketch; a fresh typer state per completion, which is §9's open question; and non-destructive attachments (I8), which stage 3 lists first and 10.4 depends on.
