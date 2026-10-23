@@ -89,27 +89,26 @@ sequenceDiagram
 
     R2->>G: acquire(R2): Idle → InProgress(R2, latch)
     activate G
-    Note over G: R2 runs g's completer:<br/>fresh TyperState, StoreReporter
+    Note over G: R2 runs g's completer<br/>fresh TyperState, StoreReporter
     R1->>F: acquire(R1): Idle → InProgress(R1, latch)
     activate F
     Note over F: R1 types f's body ahead
     R1->>G: acquire(R1): InProgress(R2)
     Note over R1,G: wouldDeadlock? owner R2, R2.waitingOn = null → no
-    R1-->>G: R1.waitingOn = G; latch.await()
+    R1-->>G: R1.waitingOn = G, then latch.await()
     alt R2 publishes
-        Note over G: g.info = T_g, fully defined;<br/>diagnostics stored on the fact
+        Note over G: g.info = T_g, fully defined<br/>diagnostics stored on the fact
         R2->>G: release(R2): InProgress → Done, latch.open()
-        deactivate G
         G-->>R1: Waited (g.isCompleted)
-        R1->>G: read g.info; re-issue g's stored diagnostics to R1's reporter
+        R1->>G: read g.info, re-issue g's stored diagnostics to R1's reporter
     else R2 is cancelled or unwinds inside g
         Note over G: g.info restored to its LazyType,<br/>TyperState discarded, nothing published
         R2->>G: release(R2, unwound = true): InProgress → Idle, latch.open()
-        deactivate G
         G-->>R1: retry acquire(R1): Idle → InProgress(R1)
-        Note over R1,G: R1 completes g itself (rule 4:<br/>the next reader redoes the work)
+        Note over R1,G: R1 completes g itself (rule 4,<br/>the next reader redoes the work)
         R1->>G: release(R1): Done
     end
+    deactivate G
     Note over F: f.info = T_f (needs only T_g)
     R1->>F: release(R1): InProgress → Done
     deactivate F
