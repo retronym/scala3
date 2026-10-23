@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: publish
     steps:
-      - uses: sdkman/sdkman-default-action@38ca710dbacfada85ccfb609953e4c92a717e557
+      - uses: sdkman/sdkman-default-action@38ca710dbacfada85ccfb609953e4c92a717e557 # main 2025-12-01, no tags
         with:
           CONSUMER-KEY   : ${{ secrets.CONSUMER-KEY }}
           CONSUMER-TOKEN : ${{ secrets.CONSUMER-TOKEN }}

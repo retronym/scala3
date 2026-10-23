@@ -6,6 +6,22 @@ on:
       environment:
         required: true
         type: string
+    # The Maven repository credentials and SCALA_PGP_* are secrets of the
+    # environment, which take precedence over anything passed by the caller.
+    # PGP_SECRET and PGP_PW sign the LTS 3.3 artifacts and are passed in.
+    secrets:
+      PGP_SECRET:
+        required: false
+      PGP_PW:
+        required: false
+      MAVEN_REPOSITORY_USER:
+        required: false
+      MAVEN_REPOSITORY_TOKEN:
+        required: false
+      SCALA_PGP_KEY:
+        required: false
+      SCALA_PGP_PASSPHRASE:
+        required: false
 
 permissions:
   contents: read
@@ -22,7 +38,9 @@ jobs:
       NIGHTLYBUILD          : ${{ vars.NIGHTLYBUILD }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: 'temurin'
           java-version: 17
@@ -63,8 +81,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: scala/scala3-lts
+          persist-credentials: false
           ref: lts-3.3
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: 'temurin'
           java-version: 8
@@ -114,8 +133,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: scala/scala3-lts
+          persist-credentials: false
           ref: lts-3.9
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: 'temurin'
           java-version: 17

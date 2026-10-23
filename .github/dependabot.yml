@@ -4,11 +4,17 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Leave time for a compromised release to be caught before we adopt it
+    cooldown:
+      default-days: 7
     reviewers:
       - scala/infrastructure-maintainers
   - package-ecosystem: bundler
     directory: '/docs/_spec'
     schedule:
       interval: weekly
+    # Leave time for a compromised release to be caught before we adopt it
+    cooldown:
+      default-days: 7
     reviewers:
       - scala/infrastructure-maintainers
