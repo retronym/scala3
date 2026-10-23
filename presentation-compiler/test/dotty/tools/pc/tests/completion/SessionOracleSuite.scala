@@ -42,7 +42,44 @@ class SessionOracleSuite extends BasePCSuite:
     List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", sys.props.getOrElse("java.class.path", ""))
 
-  private def newDriver() = new InteractiveDriver(settings, CachedLogicalPackage.none)
+  private def newDriver(bodyEdits: Boolean = false) =
+    new InteractiveDriver(if bodyEdits then settings :+ "-Yinteractive-body-edits" else settings, CachedLogicalPackage.none)
+
+  /** The right-hand sides of the member definitions (of packages and
+   *  templates) of the unit of `uri` on `driver`.
+   */
+  private def memberBodies(driver: InteractiveDriver, uri: URI): List[Span] =
+    val out = mutable.ListBuffer.empty[Span]
+    given Context = driver.currentCtx
+    def stats(ts: List[tpd.Tree]): Unit = ts.foreach {
+      case p: tpd.PackageDef => stats(p.stats)
+      case t: tpd.TypeDef => t.rhs match
+        case impl: tpd.Template => stats(impl.body)
+        case _ =>
+      case d: tpd.ValOrDefDef if d.span.exists && !d.span.isSynthetic =>
+        if d.rhs.span.exists && !d.rhs.span.isZeroExtent then out += d.rhs.span
+      case _ =>
+    }
+    driver.compilationUnits.get(uri).foreach(u => stats(u.tpdTree :: Nil))
+    out.toList
+
+  /** An edit inside a member's body: a decimal integer literal there gets
+   *  one more digit (`0` becomes `10`), or None if there is none.
+   */
+  private def bodyEdit(driver: InteractiveDriver, uri: URI, content: String, rng: Random): Option[String] =
+    val bodies = memberBodies(driver, uri)
+    val scanner = new Scanners.Scanner(SourceFile.virtual(uri, content))(using driver.currentCtx)
+    val lits = mutable.ListBuffer.empty[(Int, Int)]
+    while scanner.token != Tokens.EOF do
+      if scanner.token == Tokens.INTLIT && bodies.exists(_.contains(Span(scanner.offset))) then
+        val end = scanner.offset + scanner.strVal.length
+        if content.substring(scanner.offset, end).forall(_.isDigit) && end - scanner.offset < 6 then lits += ((scanner.offset, end))
+      scanner.nextToken()
+    if lits.isEmpty then None
+    else
+      val (start, end) = lits(rng.nextInt(lits.size))
+      val lit = content.substring(start, end)
+      Some(content.substring(0, start) + (if lit == "0" then "10" else lit + "1") + content.substring(end))
 
   /** `compiler/src/dotty/tools/dotc`, from the working directory upwards. */
   private val sourcesRoot: Option[Path] =
@@ -82,21 +119,27 @@ class SessionOracleSuite extends BasePCSuite:
   /** `requests` hovers at random identifiers of `rel`, in one session; after
    *  each, `recheck` earlier offsets again. Every answer is the oracle's.
    */
-  private def oracle(rel: String, seed: Int, requests: Int, recheck: Int = 3, cancelEvery: Int = 7): Unit =
+  /** With `editEvery`, the driver keeps its run across edits inside bodies
+   *  (`-Yinteractive-body-edits`), and every `editEvery` requests an integer
+   *  literal in a member's body gets one more digit; the oracle is then a
+   *  fresh whole-file run of the new content.
+   */
+  private def oracle(rel: String, seed: Int, requests: Int, recheck: Int = 3, cancelEvery: Int = 7, editEvery: Int = 0): Unit =
     val root = sourcesRoot.getOrElse(throw new AssertionError(s"compiler sources not found from ${Paths.get("").toAbsolutePath}"))
     val path = root.resolve(rel)
-    val content = Files.readString(path)
+    var content = Files.readString(path)
     val uri = path.toUri
-    val source = SourceFile.virtual(uri, content)
+    var source = SourceFile.virtual(uri, content)
     val t0 = System.nanoTime()
-    val whole = newDriver()
+    var whole = newDriver()
     whole.run(uri, source)
-    val idents = identifierEnds(source)(using whole.currentCtx)
-    val expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
-    val tWhole = (System.nanoTime() - t0) / 1e6
+    var idents = identifierEnds(source)(using whole.currentCtx)
+    var expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
+    var tWhole = (System.nanoTime() - t0) / 1e6
+    val edits = mutable.Map.empty[String, Int].withDefaultValue(0)
     val mask = dotty.tools.dotc.Run.typerCheckpointMask
     dotty.tools.dotc.Run.typerCheckpointMask = 15
-    val driver = newDriver()
+    val driver = newDriver(bodyEdits = editEvery > 0)
     val rng = new Random(seed)
     val log = mutable.ListBuffer.empty[String]
     val asked = mutable.ArrayBuffer.empty[Int]
@@ -106,9 +149,10 @@ class SessionOracleSuite extends BasePCSuite:
       driver.runUpTo(uri, source, Span(o))
       val id = driver.runIdOf(uri)
       val how = if id != runId then { fresh += 1; runId = id; "fresh" } else "same run"
+      if what == "edit+hover" then edits(driver.lastEdit(uri).replaceAll(", shifted.*", "").replaceAll(" at \\[.*", "")) += 1
       val obtained = describe(driver, uri, o)
       val still = driver.untypedSpans(uri).filter(_.contains(Span(o)))
-      log += s"$step $what `$name`@$o $how run=$id skipped=${driver.untypedSpans(uri).size}${if still.nonEmpty then s" STILL SKIPPED ${still.mkString(",")}" else ""}"
+      log += s"$step $what `$name`@$o $how run=$id${if what == "edit+hover" then s" [${driver.lastEdit(uri)}]" else ""} skipped=${driver.untypedSpans(uri).size}${if still.nonEmpty then s" STILL SKIPPED ${still.mkString(",")}" else ""}"
       if expected(o) != obtained then
         val skipped = driver.untypedSpans(uri).map(sp => content.substring(sp.start, math.min(sp.end, sp.start + 24)).replace('\n', ' ')).mkString("[", " | ", "]")
         org.junit.Assert.fail(s"""[oracle $rel seed=$seed step $step] hover `$name` at $o ($what, $how) differs from the whole-file run
@@ -120,6 +164,20 @@ class SessionOracleSuite extends BasePCSuite:
           |${log.takeRight(8).map("    " + _).mkString("\n")}""".stripMargin)
     try
       for step <- 1 to requests do
+        if editEvery > 0 && step % editEvery == 0 then
+          bodyEdit(whole, uri, content, rng).foreach { now =>
+            val t1 = System.nanoTime()
+            content = now
+            source = SourceFile.virtual(uri, content)
+            whole = newDriver()
+            whole.run(uri, source)
+            idents = identifierEnds(source)(using whole.currentCtx)
+            expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
+            tWhole += (System.nanoTime() - t1) / 1e6
+            asked.clear()
+            val (o, name) = idents(rng.nextInt(idents.size))
+            check(step, "edit+hover", o, name)
+          }
         val (o, name) = idents(rng.nextInt(idents.size))
         if step % 40 == 0 then
           // what document highlight does between hovers: a whole-file run,
@@ -145,7 +203,9 @@ class SessionOracleSuite extends BasePCSuite:
         for _ <- 1 to recheck if asked.size > 1 do
           val p = asked(rng.nextInt(asked.size))
           check(step, "recheck", p, idents.find(_._1 == p).map(_._2).getOrElse("?"))
-      println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms")
+      println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms${if editEvery > 0 then edits.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") else ""}")
+      if editEvery > 0 then
+        org.junit.Assert.assertTrue(s"[oracle $rel seed=$seed] some body edits keep the run: $edits", edits.keys.exists(_.startsWith("body edit")))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
   /** Two readers (step 3 of the multi-reader notes): the hovers of `oracle`
@@ -264,3 +324,8 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `two-readers-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300)
   @Test def `two-readers-Contexts-seed-1` = oracle2("core/Contexts.scala", 1, 200)
   @Test def `two-readers-serialised-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300, independent = false)
+  // edits inside bodies keep the run (docs §12)
+  @Test def `ByteCodecs-body-edits` = oracle("core/classfile/ByteCodecs.scala", 1, 300, editEvery = 10)
+  @Test def `Chars-body-edits` = oracle("util/Chars.scala", 1, 300, editEvery = 10)
+  @Test def `Contexts-body-edits` = oracle("core/Contexts.scala", 1, 200, editEvery = 10)
+  @Test def `SimpleIdentityMap-body-edits` = oracle("util/SimpleIdentityMap.scala", 1, 300, editEvery = 10)
