@@ -361,7 +361,9 @@ class InteractiveDriver(
     private var diagnostics: List[Diagnostic] = Nil
 
     /** The skipped statements a reader is typing right now (`claim`). */
-    private val typing = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Run.SkippedStat, java.lang.Boolean])
+    // with the thread of the reader that claimed each: a claim whose owner
+    // is gone is a leak, not a statement being typed (I61)
+    private val typing = new java.util.IdentityHashMap[Run.SkippedStat, Thread]()
 
     /** The statements whose typing a cancellation unwound, to be abandoned
      *  (replaced or poisoning the session) by a writer (`abandonPending`).
@@ -396,12 +398,12 @@ class InteractiveDriver(
       // skipped until a write replaces it: it is not "typed" (finding I56,
       // a read of a unit without the statement, an empty answer)
       if pendingAbandons.exists(_.stat.span.contains(target)) then Session.Claim.Abandoned
-      else if typing.iterator().asScala.exists(_.stat.span.contains(target)) then Session.Claim.Wait
+      else if typing.keySet.iterator().asScala.exists(_.stat.span.contains(target)) then Session.Claim.Wait
       else skipped.find(_.stat.span.contains(target)) match
         case None => Session.Claim.Typed
         case Some(sk) =>
           skipped = skipped.filterNot(_ eq sk)
-          typing.add(sk)
+          typing.put(sk, Thread.currentThread)
           Session.Claim.Claimed(sk)
     }
 
@@ -415,12 +417,49 @@ class InteractiveDriver(
     }
 
     private def awaitTyping0(target: Span): Unit = {
-      while typing.iterator().asScala.exists(_.stat.span.contains(target)) do
+      val since = System.nanoTime()
+      while typing.keySet.iterator().asScala.exists(_.stat.span.contains(target)) do
         if reader.cancelChecker() then
           reader.cancelledByChecker = true
           throw CompilationUnit.CancelledCompilation()
         if writerPending then throw CompilationUnit.CancelledCompilation()
+        giveUpOnLeakedClaims(_.stat.span.contains(target), since)
         wait(20)
+    }
+
+    /** The longest a reader waits for a statement another reader is typing
+     *  before it takes the claim for leaked (a backstop: a claim's owner that
+     *  is alive releases it when it is done, however it ends).
+     */
+    private val claimWaitLimitNanos = 60_000_000_000L
+
+    /** A claim on a statement matching `which` whose owner thread is no
+     *  longer alive, or that has been waited on for longer than
+     *  `claimWaitLimitNanos`, was leaked: no reader will ever release it. The
+     *  statement is in neither the typed tree nor `skipped`, so the session
+     *  is poisoned and the waiting request is retried, which starts a fresh
+     *  run (I61: a request that waited on such a claim waited for ever,
+     *  holding the session's monitor). Called under the session's monitor.
+     */
+    private def giveUpOnLeakedClaims(which: Run.SkippedStat => Boolean, waitingSince: Long): Unit =
+      val overdue = System.nanoTime() - waitingSince > claimWaitLimitNanos
+      val leaked = typing.entrySet.iterator().asScala.filter(e => which(e.getKey) && (overdue || !e.getValue.isAlive)).map(_.getKey).toList
+      if leaked.nonEmpty then
+        leaked.foreach(typing.remove)
+        poisoned = true
+        notifyAll()
+        throw CompilationUnit.CancelledCompilation()
+
+    /** A claimed statement whose typing ended in an exception other than a
+     *  cancellation (a type error escaping, an assertion, a stack overflow):
+     *  its state is unknown, so it is not given back as skipped. The claim
+     *  is released, so that no reader waits on it, and the session poisoned:
+     *  the next request starts a fresh run (I61).
+     */
+    private def releaseFailed(sk: Run.SkippedStat): Unit = synchronized {
+      typing.remove(sk)
+      poisoned = true
+      notifyAll()
     }
 
     /** Give a claimed statement back, skipped again. */
@@ -504,11 +543,13 @@ class InteractiveDriver(
           // nothing left to claim: wait for the statements other readers are
           // typing, outside the lock
           synchronized {
+            val since = System.nanoTime()
             while skipped.isEmpty && !typing.isEmpty do
               if reader.cancelChecker() then
                 reader.cancelledByChecker = true
                 throw CompilationUnit.CancelledCompilation()
               if writerPending then throw CompilationUnit.CancelledCompilation()
+              giveUpOnLeakedClaims(_ => true, since)
               wait(20)
             done = skipped.isEmpty
           }
@@ -528,7 +569,7 @@ class InteractiveDriver(
           def rank(sk: Run.SkippedStat) = if visible.exists && sk.stat.span.overlaps(visible) then 0 else 1
           val sk = skipped.minBy(sk => (rank(sk), sk.stat.span.start))
           skipped = skipped.filterNot(_ eq sk)
-          typing.add(sk)
+          typing.put(sk, Thread.currentThread)
           sk
       }
       if next == null then false
@@ -544,6 +585,7 @@ class InteractiveDriver(
           case Some(ctx0) =>
             // in its own typer state, committed once typed (see `resumeIn`)
             val ctx1 = ctx0.fresh.setNewTyperState()
+            var released = false
             try
               currentlyTyping = sk.stat.span
               val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
@@ -555,12 +597,17 @@ class InteractiveDriver(
                 completedByPass += 1
                 notifyAll()
               }
+              released = true
             catch case ex: CompilationUnit.CancelledCompilation =>
               // the ones typed so far are kept; the aborted one is replaced
               // or poisons the session, as in a resume
               deferAbandon(sk)
+              released = true
               throw ex
-            finally currentlyTyping = NoSpan
+            finally
+              currentlyTyping = NoSpan
+              // any other exception: the claim is not left behind
+              if !released then releaseFailed(sk)
         true
 
     private def lineOf(sp: Span): String =
@@ -571,7 +618,7 @@ class InteractiveDriver(
      */
     @volatile var currentlyTyping: Span = NoSpan
     @volatile var completedByPass: Int = 0
-    def typingNow: List[Span] = synchronized(typing.iterator().asScala.map(_.stat.span).toList)
+    def typingNow: List[Span] = synchronized(typing.keySet.iterator().asScala.map(_.stat.span).toList)
 
     /** A skipped statement is a statement of the session's own source: one
      *  from an inlined macro's source would splice at the wrong offsets.
@@ -614,6 +661,7 @@ class InteractiveDriver(
       assertOwnSource(sk)
       reader.clearTargeting()
       reader.typingTarget = target
+      var released = false
       try
         // typed in its own typer state, committed into the session's only once
         // the statement is typed: a cancellation drops its constraints with it
@@ -629,12 +677,17 @@ class InteractiveDriver(
           spliceAll(List((sk, stats)))(using ctx0)
           typing.remove(sk)
           notifyAll()
+          released = true
           diagnostics
         }
       catch case ex: CompilationUnit.CancelledCompilation =>
         deferAbandon(sk)
+        released = true
         throw ex
-      finally reader.clearTargeting()
+      finally
+        reader.clearTargeting()
+        // any other exception: the claim is not left behind
+        if !released then releaseFailed(sk)
 
     /** Does `owner` define `name` in this file: the companion of a statement
      *  to replace. A companion is not replaced alone: the synthetic members a
