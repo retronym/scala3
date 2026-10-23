@@ -27,6 +27,7 @@ jobs:
           path: 'dotty'
           fetch-depth: 0
           ssh-key: ${{ secrets.DOCS_KEY }}
+          persist-credentials: false
 
       - name: Set up JDK 17
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0

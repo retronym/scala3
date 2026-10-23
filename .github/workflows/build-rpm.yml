@@ -22,6 +22,9 @@ env:
   # Release only happens when triggering CI by pushing a tag
   RELEASEBUILD: ${{ startsWith(github.event.ref, 'refs/tags/') && 'yes' || 'no' }}
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
