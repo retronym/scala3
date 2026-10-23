@@ -91,6 +91,12 @@ class InteractiveDriver(
    *  file as `run` does: the gate on the behaviour of this branch.
    */
   val targetedRequests: Boolean = !myInitCtx.settings.YnoTargetedRequests.value(using myInitCtx)
+
+  /** Does the session survive an edit inside the body of a definition with a
+   *  declared type (`-Yinteractive-body-edits`, docs §12)? Then a whole-file
+   *  run keeps a session too.
+   */
+  val bodyEdits: Boolean = targetedRequests && myInitCtx.settings.YinteractiveBodyEdits.value(using myInitCtx)
   def currentCtx: Context = myCtx
 
   private val compiler: Compiler = new InteractiveCompiler
@@ -109,7 +115,11 @@ class InteractiveDriver(
   def run(uri: URI, sourceCode: String): List[Diagnostic] = run(uri, SourceFile.virtual(uri, sourceCode))
 
   def run(uri: URI, source: SourceFile): List[Diagnostic] =
+    val edited = adoptEdit(uri, source)
     mySession match
+      case s: Session if bodyEdits && s.isOn(uri, source) && s.isResumable && s.skipped.isEmpty =>
+        // the session holds the whole file typed: it is the whole-file run
+        logged(s"run ${fileNameOf(s.uri)} (served${if edited then ", edited" else ""})")(s.diagnostics)(sessionSummary(uri))
       case s: Session if targetedRequests && s.isOn(uri, source) && s.isResumable && s.skipped.nonEmpty =>
         // A whole-file run on the content of the session completes the session
         // instead of replacing it, so the requests after it are served from the
@@ -122,8 +132,9 @@ class InteractiveDriver(
    *  context to type them in), and the diagnostics so far. Its operations
    *  mutate only the session, its unit and its run.
    */
-  private class Session(val uri: URI, val source: SourceFile, val run: Run, val reporter: StoreReporter,
-      val unit: CompilationUnit):
+  private class Session(val uri: URI, val source: SourceFile, val run: Run,
+      val reporter: StoreReporter & UniqueMessagePositions, val unit: CompilationUnit,
+      recorded: java.util.IdentityHashMap[Symbol, (Context, Symbol)] | Null):
     var skipped: List[Run.SkippedStat] = Nil
     var diagnostics: List[Diagnostic] = Nil
     /** Set when the typing of a skipped statement was aborted and the statement
@@ -441,13 +452,202 @@ class InteractiveDriver(
       assert(dropped.isEmpty, dropped.map { (sk, stats) =>
         s"${sk.stat.getClass.getSimpleName}${sk.stat.span} owner=${sk.owner.showLocated} inBlock=${sk.inBlock} typed=${stats.map(_.getClass.getSimpleName).mkString(",")} \"${unit.source.textContent.slice(sk.stat.span.start, sk.stat.span.start + 50).replace('\n', ' ')}\""
       }.mkString(s"spliced ${entries.size - dropped.size} of ${entries.size} typed statements; dropped: ", "; ", ""))
+      install(t)
+      entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
+      diagnostics = diagnostics ++ reporter.removeBufferedMessages
+
+    /** `t` is the unit's new typed tree. */
+    private def install(t: Tree)(using Context): Unit =
       unit.tpdTree = t
       // What `SetRootTree` would have done had the statements been typed in the phase
       inContext(ctx.fresh.setCompilationUnit(unit)):
         new transform.SetRootTree().run
-      entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
       myOpenedTrees(uri) = topLevelTrees(t, source)
-      diagnostics = diagnostics ++ reporter.removeBufferedMessages
+
+    // ---- An edit inside a body (`-Yinteractive-body-edits`, docs §12)
+
+    /** A parse of the content of `source` that no Namer has touched: the
+     *  Namer replaces the modifiers of what it indexes, so the unit's
+     *  untyped tree is not comparable. Made on the first edit, then the
+     *  parse of each accepted edit's new content.
+     */
+    private var pristine: untpd.Tree | Null = null
+
+    /** A parse of `src` in a unit of its own, whose fresh names (`_$1`)
+     *  are numbered as a fresh run's parse would number them.
+     */
+    private def parse(src: SourceFile, reporter: Reporter): untpd.Tree =
+      given Context = run.runContext.fresh.setReporter(reporter)
+      inContext(ctx.fresh.setCompilationUnit(CompilationUnit(src, mustExistIfNotNull = false))):
+        new parsing.Parsers.Parser(src).parse()
+
+    /** Carry the session over to the content of `now`, if the edit from the
+     *  session's content is inside the body of one definition with a declared
+     *  type (it is then re-indexed and skipped, to be typed when a request
+     *  needs it) or touches no tree at all. Everything else the session holds
+     *  is kept, with its spans shifted, and the unit's source holds the new
+     *  content. Returns false, with the session as it was, otherwise.
+     */
+    def adopt(now: SourceFile): Boolean =
+      val src = unit.source
+      val oldText = src.textContent()
+      val newText = now.textContent()
+      val old = pristine match
+        case null => parse(SourceFile.virtual(src.path, oldText), new StoreReporter(null))
+        case p: untpd.Tree => p
+      val r = BodyEdit.region(oldText, newText)
+      src.replaceContent(newText)
+      val parseErrors = new StoreReporter(null)
+      val parsed = parse(src, parseErrors)
+      def refuse(why: String): Boolean =
+        src.replaceContent(oldText)
+        myLastEdit = s"edit refused ($why)"
+        false
+      given Context = run.runContext.fresh.setCompilationUnit(unit)
+      BodyEdit.classify(old, parsed, r) match
+        case BodyEdit.Kind.Fresh(why) => refuse(why)
+        case BodyEdit.Kind.Layout =>
+          val shift = BodyEdit.Shift(r, r.regionSpan, src)
+          shiftAll(shift, r, r.regionSpan)
+          pristine = parsed
+          unit.untpdTree = parsed
+          myLastEdit = s"layout edit, shifted ${shift.trees} trees ${shift.symbols} symbols"
+          true
+        case BodyEdit.Kind.Body(d, d1) =>
+          val errors = parseErrors.removeBufferedMessages
+          if errors.exists(e => !d1.span.contains(e.pos.span)) then refuse("a syntax error outside the edited body")
+          else bodyEdit(d, d1, parsed, r, errors) match
+            case null => true
+            case why: String => refuse(why)
+
+    /** The member-level typed definitions (statements of a package or a
+     *  template) whose spans lie in `span`.
+     */
+    private def typedMembersIn(span: Span)(using Context): List[Tree] =
+      val found = List.newBuilder[Tree]
+      def stats(ts: List[Tree]): Unit = ts.foreach {
+        case t: PackageDef => stats(t.stats)
+        case t @ TypeDef(_, impl: Template) if t.span.contains(span) || !t.span.exists => stats(impl.body)
+        case t: ValOrDefDef if (t.source eq unit.source) && span.contains(t.span) => found += t
+        case _ =>
+      }
+      stats(unit.tpdTree :: Nil)
+      found.result()
+
+    /** The body edit of `d` (old) to `d1` (new); null when done, or why not,
+     *  before anything is changed.
+     */
+    private def bodyEdit(d: untpd.ValOrDefDef, d1: untpd.ValOrDefDef, parsed: untpd.Tree, r: BodyEdit.Region,
+        parseErrors: List[Diagnostic])(using Context): String | Null =
+      val src = unit.source
+      val typedHere = typedMembersIn(d.span)
+      val main = typedHere.find(t => t.span == d.span && t.symbol.name == d.name)
+      val skippedHere = skipped.find(sk => !sk.inBlock && sk.stat.span == d.span)
+      val (ctx0, owner) = main match
+        case Some(t) =>
+          recorded match
+            case null => return "no recorded contexts"
+            case rec: java.util.IdentityHashMap[Symbol, (Context, Symbol)] @unchecked =>
+              rec.get(t.symbol) match
+                case null => return "no recorded context"
+                case co => co
+        case None => skippedHere match
+          case Some(sk) => (sk.ctx, sk.owner)
+          case None => return "inside a statement skipped whole"
+      val ctx1 = liveContext(ctx0) match
+        case Some(c) => c
+        case None => return "no live typer state"
+      // a local subclass of a sealed class registered itself as a child
+      if main.exists(_.existsSubTree {
+        case td: TypeDef => td.isClassDef && td.symbol.asClass.parentSyms.exists(_.is(Flags.Sealed))
+        case _ => false
+      }) then return "a local child of a sealed class"
+      val cls = (if owner.isClass then owner else owner.owner).asClass
+      def ofD(sym: Symbol, span: Span) = definesHere(sym) && !sym.isConstructor && sym.span.exists && span.contains(sym.span)
+      val olds = cls.unforcedDecls.toList.filter(ofD(_, d.span))
+      if !main.forall(t => olds.contains(t.symbol)) then return "the definition's symbol is not a member"
+      val oldInfos = olds.filter(_.isCompleted).map(sym => sym -> sym.info)
+
+      // From here on the session changes: a failure poisons it.
+      var done = false
+      try
+        if typedHere.nonEmpty then
+          val gone = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+          typedHere.foreach(gone.add)
+          val mapper = new TreeMap:
+            override def transform(tree: Tree)(using Context): Tree = tree match
+              case t: PackageDef => super.transform(cpy.PackageDef(t)(t.pid, t.stats.filterNot(gone.contains)))
+              case t: Template => super.transform(cpy.Template(t)(t.constr, t.parents, t.derived, t.self, t.body.filterNot(gone.contains)))
+              case t: ValOrDefDef => t // members are not inside bodies
+              case _ => super.transform(tree)
+          install(mapper.transform(unit.tpdTree))
+        skippedHere.foreach(sk => skipped = skipped.filterNot(_ eq sk))
+        diagnostics = diagnostics.filterNot(dia => (dia.pos.source eq src) && d.span.contains(dia.pos.span))
+        val shift = BodyEdit.Shift(r, d.span, src)
+        shiftAll(shift, r, d.span)
+        // the old symbols are refined by the re-index: unlinked first, so that
+        // the Namer finds no conflict, and entered again by it
+        olds.foreach { sym =>
+          cls.delete(sym)
+          ctx1.typer.nestedTyper.remove(sym)
+          sym.defTree = EmptyTree
+        }
+        val stat = BodyEdit.copy(d1, src)
+        val refined = mutable.Set.empty[Symbol]
+        var active = true
+        val refine: (Name, Span) => Symbol = (name, span) =>
+          if !active then NoSymbol
+          else olds.find(sym => sym.name == name && sym.span.point == span.point && !refined(sym)) match
+            case Some(sym) => refined += sym; sym
+            case None => NoSymbol
+        try ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine))
+        finally active = false
+        skipped = Run.SkippedStat(stat, ctx0, owner) :: skipped
+        pristine = parsed
+        unit.untpdTree = parsed
+        diagnostics = diagnostics ++ parseErrors
+        val news = cls.unforcedDecls.toList.filter(ofD(_, d1.span))
+        if refined.size != olds.size || news.size != olds.size then
+          poisoned = true
+          myLastEdit = s"body edit of ${d.name} poisoned: refined ${refined.map(_.name).mkString(",")} of ${olds.map(_.name).mkString(",")}, now ${news.map(_.name).mkString(",")}"
+        else
+          // the backdating: the re-indexed signature gives the info it gave
+          val changed = oldInfos.filter((sym, info) => !(sym.info =:= info)(using ctx1))
+          if changed.nonEmpty then
+            poisoned = true
+            myLastEdit = s"body edit of ${d.name} poisoned: info of ${changed.map(_._1.name).mkString(", ")} changed"
+          else
+            myLastEdit = s"body edit of ${d.name}${if main.isDefined then " (typed)" else " (skipped)"}, shifted ${shift.trees} trees ${shift.symbols} symbols"
+        done = true
+        null
+      finally if !done then poisoned = true
+
+    /** Shift everything the session keeps of its source (§12). */
+    private def shiftAll(shift: BodyEdit.Shift, r: BodyEdit.Region, anchor: Span)(using Context): Unit =
+      val src = unit.source
+      shift.tree(unit.tpdTree)
+      skipped.foreach(sk => shift.tree(sk.stat))
+      // the file's packages: their members of this file, and what they hold
+      unit.tpdTree.foreachSubTree {
+        case p: PackageDef => p.symbol.moduleClass.asClass.unforcedDecls.foreach(shift.symbol)
+        case _ =>
+      }
+      diagnostics = diagnostics.map { dia =>
+        if !(dia.pos.source eq src) then dia
+        else
+          val pos = dia.pos.withSpan(r.span(dia.pos.span, anchor))
+          dia match
+            case e: Diagnostic.Error => Diagnostic.Error(e.msg, pos)
+            case w: Diagnostic.Warning => Diagnostic.Warning(w.msg, pos)
+            case i: Diagnostic.Info => Diagnostic.Info(i.msg, pos)
+            case _ => Diagnostic(dia.msg, pos, dia.level)
+      }
+      ctx.property(Comments.ContextDoc).foreach { docs =>
+        docs.docstrings.iterator.toList.foreach { (sym, c) =>
+          if definesHere(sym) then docs.addDocstring(sym, Some(c.copy(span = r.span(c.span, anchor))))
+        }
+      }
+      reporter.forgetPositions(src)
   end Session
 
   private var mySession: Session | Null = null
@@ -455,6 +655,20 @@ class InteractiveDriver(
   private def sessionOf(uri: URI): Session | Null = mySession match
     case s: Session if s.uri == uri => s
     case _ => null
+
+  /** Carry the session of `uri` over to the content of `source` if it is
+   *  an edit inside a body, or layout (`-Yinteractive-body-edits`, §12).
+   */
+  private def adoptEdit(uri: URI, source: SourceFile): Boolean = sessionOf(uri) match
+    case s: Session if bodyEdits && s.isResumable && !s.isOn(uri, source) =>
+      myCancelled = false
+      s.adopt(source)
+    case s: Session =>
+      myLastEdit = if bodyEdits && !s.isOn(uri, source) then s"no edit: the session is ${if s.run.isTainted then "tainted" else "poisoned"}" else ""
+      false
+    case null =>
+      myLastEdit = ""
+      false
 
   // ---- Introspection of the targeted session, for tests, the x-ray, the log
   // and `CachingDriver`; not used by the providers.
@@ -491,6 +705,12 @@ class InteractiveDriver(
   def isFullyTyped(uri: URI): Boolean = sessionOf(uri) match
     case s: Session => s.skipped.isEmpty
     case null => false
+
+  /** What the last request on `uri` did with an edit (§12), or "". */
+  def lastEdit(uri: URI): String = if sessionOf(uri) == null then "" else myLastEdit
+
+  /** What the last request did with an edit, for the log and the tests. */
+  private var myLastEdit: String = ""
 
   /** The id of the run that typed `uri`, or -1. */
   def runIdOf(uri: URI): Int = sessionOf(uri) match
@@ -564,25 +784,28 @@ class InteractiveDriver(
         else if !(s eq before) then "fresh"
         else if s.skipped.size != skippedBefore then "resumed"
         else "served"
-      s"$how ${sessionSummary(uri)}"
+      val edit = if myLastEdit.nonEmpty then s" [$myLastEdit]" else ""
+      s"$how ${sessionSummary(uri)}$edit"
     }
 
   private def runUpTo0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     if !targetedRequests then run(uri, source)
-    else mySession match
-      case s: Session if s.isOn(uri, source) =>
-        // Nothing is served or resumed from a tainted or poisoned session
-        // (a request in a poisoned statement's range would be served from the
-        // tree without it): the request starts a fresh run, which is cheap
-        // for a targeted run.
-        if !s.isResumable then run(uri, source, target)
-        else s.skippedAt(target) match
-          case None => s.diagnostics
-          // A statement skipped inside a block left a stub in the typed
-          // `Block`; the resume replaces the stub by the typed statement.
-          case Some(sk) => s.resume(sk, target)
-      case _ =>
-        run(uri, source, target)
+    else
+      adoptEdit(uri, source)
+      mySession match
+        case s: Session if s.isOn(uri, source) =>
+          // Nothing is served or resumed from a tainted or poisoned session
+          // (a request in a poisoned statement's range would be served from the
+          // tree without it): the request starts a fresh run, which is cheap
+          // for a targeted run.
+          if !s.isResumable then run(uri, source, target)
+          else s.skippedAt(target) match
+            case None => s.diagnostics
+            // A statement skipped inside a block left a stub in the typed
+            // `Block`; the resume replaces the stub by the typed statement.
+            case Some(sk) => s.resume(sk, target)
+        case _ =>
+          run(uri, source, target)
 
   /** Type the statement that defines `sym` if it is in the file of `uri` and
    *  the session skipped it: a resume into it (or a fresh run for a local
@@ -628,7 +851,10 @@ class InteractiveDriver(
         new StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages
 
       myCancelled = false
-      val run = compiler.newRun(using myInitCtx.fresh.setReporter(reporter).setProgressCallback(myProgressCallback))
+      val recorded = if bodyEdits then new java.util.IdentityHashMap[Symbol, (Context, Symbol)] else null
+      val runCtx = myInitCtx.fresh.setReporter(reporter).setProgressCallback(myProgressCallback)
+      if recorded != null then runCtx.setProperty(typer.Typer.RecordedDefContexts, recorded)
+      val run = compiler.newRun(using runCtx)
       startedRun = run
       myCtx = run.runContext.withRootImports
 
@@ -657,8 +883,8 @@ class InteractiveDriver(
       myCtx = myCtx.fresh.setPhase(myInitCtx.base.typerPhase)
 
       val diagnostics = reporter.removeBufferedMessages
-      if target.exists then
-        val s = Session(uri, source, run, reporter, unit)
+      if target.exists || bodyEdits then
+        val s = Session(uri, source, run, reporter, unit, recorded)
         s.diagnostics = diagnostics
         s.skipped = skipped
         mySession = s

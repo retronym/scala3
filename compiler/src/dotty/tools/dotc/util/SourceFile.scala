@@ -85,6 +85,17 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
         catch case _: FileSystemException => ""
       )
 
+  /** Replace the content, in place. Only for the interactive session's edit
+   *  inside a body (docs/_docs/internals/interactive-session.md §12), which
+   *  keeps every tree, context and unit of the file and shifts their spans:
+   *  they keep referring to this object, which now holds the new content.
+   */
+  private[dotc] def replaceContent(content: String): Unit =
+    myContent = content
+    cachedCharArrayContent = null
+    lineIndicesCache = null.asInstanceOf[Array[Int]]
+    lastLine = 0
+
   override def name: String =
     if file eq null then "" else file.name
   val ext: FileExtension =
