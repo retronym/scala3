@@ -78,6 +78,46 @@ An unwind (cancellation, a cycle, an exception) restores "not completed", releas
 
 What a completer reads must not be per-reader. Today a Namer completer runs in its creation context (`creationContext`, the namer's `ictx`): its typer state, its reporter, the `nestedTyper` map of the completer, `knownTypeSig`. Two readers completing two symbols of one file both write the namer's typer state. Each completion gets a fresh committable typer state of its own, whose result is fully defined when it is published (completers already call `fullyDefinedType` on inferred types), and its own reporter (§4.3).
 
+**Two readers racing on one inferred signature.** Reader R1 (a hover) needs `def f = g + 1`, whose result type is inferred, so its completer types `f`'s body and needs `g`'s type; reader R2 (a completion elsewhere) already needs `def g = ...`, also inferred. Neither types what the other is typing; R1 waits for `g`, then owns `f`.
+
+```mermaid
+sequenceDiagram
+    participant R1 as Reader R1 (hover on f)
+    participant F as f (root)
+    participant G as g (root)
+    participant R2 as Reader R2 (completion needs g)
+
+    R2->>G: acquire(R2): Idle → InProgress(R2, latch)
+    activate G
+    Note over G: R2 runs g's completer:<br/>fresh TyperState, StoreReporter
+    R1->>F: acquire(R1): Idle → InProgress(R1, latch)
+    activate F
+    Note over F: R1 types f's body ahead
+    R1->>G: acquire(R1): InProgress(R2)
+    Note over R1,G: wouldDeadlock? owner R2, R2.waitingOn = null → no
+    R1-->>G: R1.waitingOn = G; latch.await()
+    alt R2 publishes
+        Note over G: g.info = T_g, fully defined;<br/>diagnostics stored on the fact
+        R2->>G: release(R2): InProgress → Done, latch.open()
+        deactivate G
+        G-->>R1: Waited (g.isCompleted)
+        R1->>G: read g.info; re-issue g's stored diagnostics to R1's reporter
+    else R2 is cancelled or unwinds inside g
+        Note over G: g.info restored to its LazyType,<br/>TyperState discarded, nothing published
+        R2->>G: release(R2, unwound = true): InProgress → Idle, latch.open()
+        deactivate G
+        G-->>R1: retry acquire(R1): Idle → InProgress(R1)
+        Note over R1,G: R1 completes g itself (rule 4:<br/>the next reader redoes the work)
+        R1->>G: release(R1): Done
+    end
+    Note over F: f.info = T_f (needs only T_g)
+    R1->>F: release(R1): InProgress → Done
+    deactivate F
+    R1->>R1: answer the hover from f.info
+```
+
+What the diagram relies on, rule by rule: nobody but the owner sees `f` or `g` half-completed (rule 2, the barrier); whichever reader completes `g` writes the same `T_g`, since the completer is a function of the node and its owner's signatures and runs in its own typer state (rule 3); an unwound completion publishes nothing and leaves the root `Idle` (rule 4); and a wait is taken only after the wait-for check of §4.2, so if `g`'s completer in turn needed `f` (both inferred, each body referring to the other), R2 would find `R1.waitingOn = G` on its path and raise `CyclicReference` in R2 rather than block, which is the answer a sequential run gives for that pair.
+
 Groups: a symbol loader completes a class and its module together, and the TASTy completers of one file share one `TreeUnpickler`'s address maps. The barrier is per *root* (the pair, or the file), not per symbol. A completion that enters into a scope another reader may be looking up in (a package's declarations) needs that scope to be safe to read during an `enter`, or the enter to happen under the scope owner's barrier.
 
 `InheritedCache.locked` (base data, member names) is a second black hole with the same shape and gets the same treatment.
