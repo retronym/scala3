@@ -15,7 +15,7 @@ import typer.Nullables
 import core.Decorators.*
 import config.{SourceVersion, Feature}
 import scala.annotation.internal.sharable
-import scala.util.control.NoStackTrace
+import scala.util.control.{ControlThrowable, NoStackTrace}
 import transform.MacroAnnotations.isMacroAnnotation
 import scala.io.Codec
 
@@ -156,6 +156,18 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
 object CompilationUnit {
 
   class SuspendException extends Exception with NoStackTrace
+
+  /** Thrown from `Run.checkCancelledTyping` to abort an interactive run whose
+   *  progress callback reports cancellation. The run's partial results are
+   *  discarded by the catcher (`InteractiveDriver.run`); lazy state that was
+   *  being computed when the exception unwinds (symbol completions, lazy
+   *  annotations, symbol loaders) is reset so that the next run recomputes it.
+   *  The cause is a `CancellationException` so that clients which classify
+   *  exceptions by their cause chain (e.g. Metals) treat it as a cancellation.
+   */
+  class CancelledCompilation extends ControlThrowable:
+    private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
+    override def getCause: Throwable = myCause
 
   /** Make a compilation unit for top class `clsd` with the contents of the `unpickled` tree */
   def apply(clsd: ClassDenotation, unpickled: Tree, forceTrees: Boolean)(using Context): CompilationUnit =

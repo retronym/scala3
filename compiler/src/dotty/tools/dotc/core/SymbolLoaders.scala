@@ -422,6 +422,7 @@ abstract class SymbolLoader extends LazyType { self =>
                |$msg"""
     }
     var failure: Option[Diagnostic.LoadingFailure] = None
+    var cancelled = false
     try {
       val start = System.currentTimeMillis
       trace.onDebug("loading") {
@@ -445,10 +446,14 @@ abstract class SymbolLoader extends LazyType { self =>
       case ex: Exception =>
         println(s"exception caught when loading $root: $ex")
         throw ex
+      case ex: CompilationUnit.CancelledCompilation =>
+        // Leave the root to be loaded again by the next run
+        cancelled = true
+        throw ex
     }
     finally {
       def postProcess(denot: SymDenotation, other: Symbol) =
-        if !denot.isCompleted &&
+        if !cancelled && !denot.isCompleted &&
            !denot.completer.isInstanceOf[SymbolLoaders.SecondCompleter] then
           failure match
             case Some(failure) => denot.markLoadFailed(failure)

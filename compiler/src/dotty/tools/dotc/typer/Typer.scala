@@ -1599,13 +1599,24 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           }
     }
 
-  def typedBlockStats(stats: List[untpd.Tree])(using Context): (List[tpd.Tree], Context) =
+  def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
+    // Targeted typing applies to the statements of a block that contains the
+    // target (see `Targeting`): a skipped one's symbol, indexed just above,
+    // completes lazily if a later statement refers to it. A block typed for
+    // another reason is typed whole, and so is one inside an inline method
+    // (its body is kept whole for its callers) or one typed speculatively
+    // (see `Run.targetingTyperState`).
+    val run = ctx.run
+    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
+       && (ctx.typerState eq run.targetingTyperState)
+       && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
+    then run.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
     val (stats1, exprCtx) = withoutMode(Mode.Pattern) {
-      typedBlockStats(tree.stats)
+      typedBlockStats(tree.stats, tree.span)
     }
 
     var expr1 = typedExpr(tree.expr, pt.dropIfProto)(using exprCtx)
@@ -3556,6 +3567,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
+      // only a class that contains the target is typed along the path to it,
+      // and not one typed speculatively (a local class in a closure argument)
+      val run = ctx.run.nn
+      if run.typingTarget.exists && cdef.span.contains(run.typingTarget)
+         && (run.targetingTyperState == null || (ctx.typerState eq run.targetingTyperState))
+      then run.targetNextStats(dummy)
       val body1 =
         implementDeferredGivens(
           addParentRefinements(
@@ -3739,6 +3756,9 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
                   if !pobj.symbol.isCompleting then
                     pobj.symbol.ensureCompleted()
               case _ =>
+          // a package clause is never skipped as a statement, so one that does not
+          // contain the target is targeted too: all of its statements are skipped
+          if ctx.run.nn.typingTarget.exists then ctx.run.nn.targetNextStats(pkg.moduleClass)
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)
             stats1 = stats1 ++ typedBlockStats(MainProxies.proxies(stats1))._1
@@ -4150,9 +4170,11 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       record("typed total")
       if ctx.phase.isTyper then
         assertPositioned(tree)
+      val run = ctx.run.nn
+      run.checkCancelledTyping()
       if tree.source != ctx.source && tree.source.exists then
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
-      else if ctx.run.nn.isCancelled then
+      else if run.isCancelled then
         tree.withType(WildcardType)
       else adapt(typedUnadapted(tree, pt, locked), pt, locked)
     }
@@ -4169,11 +4191,21 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     var enumContexts: SimpleIdentityMap[Symbol, Context] = SimpleIdentityMap.empty
     val initialNotNullInfos = ctx.notNullInfos
       // A map from `enum` symbols to the contexts enclosing their definitions
+    val targeting = Targeting.of(this, stats, exprOwner, buf)
     @tailrec def traverse(stats: List[untpd.Tree])(using Context): (List[Tree], Context) = stats match {
       case (imp: untpd.Import) :: rest =>
         val imp1 = typed(imp)
         buf += imp1
         traverse(rest)(using ctx.importContext(imp, imp1.symbol))
+      case Thicket(stats) :: rest =>
+        traverse(stats ::: rest)
+      case (stat: untpd.Export) :: rest =>
+        buf +=  typed(stat)
+        buf ++= stat.attachmentOrElse(ExportForwarders, Nil)
+          // no attachment can happen in case of cyclic references
+        traverse(rest)
+      case stat :: rest if targeting != null && targeting.skip(stat) =>
+        traverse(rest)
       case (mdef: untpd.DefTree) :: rest =>
         mdef.removeAttachment(ExpandedTree) match {
           case Some(xtree) =>
@@ -4197,13 +4229,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
             }
             traverse(rest)
         }
-      case Thicket(stats) :: rest =>
-        traverse(stats ::: rest)
-      case (stat: untpd.Export) :: rest =>
-        buf +=  typed(stat)
-        buf ++= stat.attachmentOrElse(ExportForwarders, Nil)
-          // no attachment can happen in case of cyclic references
-        traverse(rest)
       case (stat: untpd.ExtMethods) :: rest =>
         val xtree = stat.removeAttachment(ExpandedTree).get
         traverse(xtree :: rest)

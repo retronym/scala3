@@ -316,7 +316,10 @@ class Completions(
         val constructors = if sym.isAllOf(ConstructorProxyModule) then
           sym.companionClass.info.member(nme.CONSTRUCTOR).allSymbols
         else
-          val companionApplies = denot.info.member(nme.apply).allSymbols
+          // A synthetic case-class `apply` that clashes with a user-defined one is
+          // marked absent only by its completer (`Namer.invalidateIfClashingSynthetic`);
+          // a targeted run may not have completed it yet.
+          val companionApplies = denot.info.member(nme.apply).allSymbols.filterNot(_.isAbsent())
           val classConstructors = if sym.companionClass.exists && !sym.companionClass.isOneOf(AbstractOrTrait) then
             safeConstructorMembers(sym.companionClass)
           else Nil
@@ -834,7 +837,7 @@ class Completions(
         // isField returns true for some classes
         def isJavaClass = sym.is(JavaDefined) && isModuleOrClass
         (sym.isField && !isJavaClass && !isModuleOrClass) || sym.getter != NoSymbol
-      catch case _ => false
+      catch case NonFatal(_) => false
 
     def isInheritedFromScalaLibrary(sym: Symbol) =
       sym.owner == defn.AnyClass ||

@@ -19,6 +19,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.Interactive.Include
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.dotc.util.SourcePosition
 import dotty.tools.io.FileExtension
 import dotty.tools.pc.utils.InteractiveEnrichments.*
@@ -43,10 +44,8 @@ class PcDefinitionProvider(
     val uri = params.uri().nn
     val text = params.text().nn
     val filePath = Paths.get(uri)
-    driver.run(
-      uri,
-      SourceFile.virtual(filePath.toString, text)
-    )
+    // only the path to the position is typed (unless -Yno-targeted-requests)
+    driver.runUpTo(uri, SourceFile.virtual(filePath.toString, text), Span(params.offset()))
 
     val pos = driver.sourcePosition(params)
     val path =
@@ -140,6 +139,10 @@ class PcDefinitionProvider(
   )(using ctx: Context): List[Location] =
     val isLocal = symbol.source == pos.source
     if isLocal then
+      // a definition the targeted run skipped is typed now (a resume); for an
+      // export forwarder, the forwarded definition too
+      driver.typeDefinitionOf(uri, symbol)
+      if symbol.sourceSymbol != symbol then driver.typeDefinitionOf(uri, symbol.sourceSymbol)
       val trees = driver.openedTrees(uri)
       val include = Include.definitions | Include.local
       val (exportedDefs, otherDefs) =
