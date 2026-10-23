@@ -39,6 +39,7 @@
   #activity .sp { flex: 1; }
   main { flex: 1; display: grid; grid-template-columns: 230px 5px minmax(360px, 1.2fr) 5px minmax(320px, 1fr); min-height: 0; min-width: 0; }
   body.sidebarHidden #explorer, body.sidebarHidden .gutter[data-i="0"] { display: none; }
+  body.narrow #xraysec, body.narrow .gutter[data-i="1"] { display: none; }
   .gutter { cursor: col-resize; background: var(--line); touch-action: none; }
   .gutter.h { cursor: row-resize; height: 5px; flex: none; }
   .gutter:hover, .gutter.active { background: var(--acc); }
@@ -84,6 +85,21 @@
   #ed .cm-keyword { color: #c792ea; } #ed .cm-def { color: #82aaff; } #ed .cm-string { color: #c3e88d; } #ed .cm-number { color: #f78c6c; } #ed .cm-comment { color: #637088; }
   #ed .cm-type, #ed .cm-variable-3 { color: #82aaff; } #ed .cm-atom, #ed .cm-builtin { color: #f78c6c; }
   .line-typed { background: rgba(28,126,214,.18); } .line-typednow { background: rgba(47,158,68,.25); } .line-cancel { background: rgba(224,49,49,.25); }
+  /* the background pass: semantic highlighting from the typed tree, diagnostics in the gutter */
+  #ed .sem-class, #ed .sem-trait { color: #ffcb6b; } #ed .sem-object { color: #f78c6c; } #ed .sem-type { color: #c3e88d; font-style: italic; }
+  #ed .sem-method { color: #82aaff; } #ed .sem-val { color: #d4deef; } #ed .sem-var { color: #ff8a80; text-decoration: underline dotted; } #ed .sem-param { color: #b2ccd6; } #ed .sem-package { color: #637088; }
+  #ed .sem-error { text-decoration: underline wavy #e03131; text-decoration-skip-ink: none; } #ed .sem-warning { text-decoration: underline wavy #e8a317; text-decoration-skip-ink: none; }
+  #ed .xray-diag { width: 10px; } .diag-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin: 5px 0 0 1px; }
+  .diag-dot.error { background: #e03131; } .diag-dot.warning { background: #e8a317; } .diag-dot.info { background: #4a90e2; }
+  /* go to file (Ctrl/Cmd-K): a quick-open over the snapshot's files */
+  #quick { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); width: min(640px, 90vw); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.5); z-index: 50; }
+  #quick[hidden] { display: none; } #quick input { width: 100%; box-sizing: border-box; padding: 10px 12px; font: 13px ui-monospace, Menlo, monospace; background: var(--code); color: var(--fg); border: 0; border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; outline: none; }
+  #quick .items { max-height: 50vh; overflow: auto; } #quick .item { padding: 5px 12px; cursor: pointer; display: flex; gap: 10px; align-items: baseline; } #quick .item .path { color: var(--dim); font-size: 11px; margin-left: auto; }
+  #quick .item.on, #quick .item:hover { background: var(--hover); } #quick .item b { font-weight: 600; color: var(--acc); } #quick .hint { padding: 4px 12px 8px; color: var(--dim); font-size: 11px; }
+  #bgProgress { display: inline-block; width: 90px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; overflow: hidden; } #bgProgress[hidden] { display: none; } #bgProgress i { display: block; height: 100%; background: var(--acc); width: 0; transition: width .15s; }
+  .line-bg { background: rgba(28,126,214,.10); }
+  #bgState { display: inline-flex; align-items: center; gap: 6px; } #bgState .spin { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--dim); border-top-color: var(--acc); animation: spin .8s linear infinite; }
+  #bgState .spin[hidden] { display: none; } @keyframes spin { to { transform: rotate(360deg); } }
   /* ---- the inspector */
   .pad { padding: 10px 12px; overflow: auto; }
   #xray { flex: 1; overflow: auto; }
@@ -131,6 +147,23 @@
   #menu div { padding: 4px 10px; border-radius: 4px; cursor: pointer; } #menu div:hover { background: var(--hover); }
   .CodeMirror .cm-deflink { text-decoration: underline; cursor: pointer; }
   .defhit { background: rgba(240,140,0,.35); }
+  /* ---- IDE bits: the lookup, kind badges, structure, breadcrumbs, problems, usages, the error stripe */
+  #lookup { position: fixed; z-index: 20; min-width: 260px; max-width: min(620px, 90vw); max-height: 230px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.4); font: 12px/18px ui-monospace, Menlo, monospace; padding: 2px 0; }
+  #lookup .row { display: flex; gap: 10px; padding: 1px 10px; cursor: pointer; white-space: nowrap; } #lookup .row b { font-weight: 600; } #lookup .row .dim { overflow: hidden; text-overflow: ellipsis; }
+  #lookup .row.on { background: var(--accsoft); } #lookup .row:hover { background: var(--hover); } #lookup .foot { padding: 2px 10px; color: var(--dim); font: 10.5px system-ui, sans-serif; border-top: 1px solid var(--line); }
+  .kb { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 3px; font: 600 9.5px/1 ui-monospace, Menlo, monospace; color: #0f1520; background: #9aa5b4; flex: none; }
+  .kb.k-class, .kb.k-trait, .kb.k-enum { background: #ffcb6b; } .kb.k-object { background: #f78c6c; } .kb.k-def { background: #82aaff; } .kb.k-type { background: #c3e88d; } .kb.k-var { background: #ff8a80; }
+  #quick .item .kb, #quick .item svg { align-self: center; } #quick .item svg { color: var(--dim); }
+  #struct { padding: 6px 8px; font-size: 12px; } #struct .row { display: flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #struct .row:hover { background: var(--hover); } #struct .row.cur { background: var(--accsoft); color: var(--acc); } #struct .row .dim { font-size: 11px; }
+  #crumbs { display: flex; align-items: center; gap: 2px; height: 22px; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--panel); font-size: 11.5px; white-space: nowrap; overflow: hidden; flex: none; }
+  #crumbs span.c { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; border-radius: 4px; cursor: pointer; } #crumbs span.c:hover { background: var(--hover); } #crumbs .gt { color: var(--dim); }
+  #problems { flex: 1; overflow: auto; font-size: 12px; } #problems .row { display: flex; gap: 8px; align-items: baseline; padding: 3px 12px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  #problems .row:hover { background: var(--hover); } #problems .row .diag-dot { margin: 0; flex: none; } #problems .row .msg { white-space: pre-wrap; word-break: break-word; flex: 1; } #problems .none { padding: 16px; }
+  #ed .use-read { background: rgba(130,170,255,.22); } #ed .use-write { background: rgba(247,140,108,.30); }
+  #ed { display: flex; position: relative; } #ed .CodeMirror { flex: 1; min-width: 0; }
+  #stripe { width: 9px; flex: none; position: relative; background: #0f1520; border-left: 1px solid #222e43; } #stripe i { position: absolute; left: 1px; right: 1px; height: 3px; border-radius: 1px; cursor: pointer; }
+  #stripe i.error { background: #e03131; } #stripe i.warning { background: #e8a317; } #stripe i.info { background: #4a90e2; } #stripe i:hover { transform: scaleY(1.8); }
 </style>
 </head>
 <body>
@@ -142,6 +175,7 @@
 <div id="shell">
   <nav id="activity">
     <button class="chrome on" data-view="explorer" data-icon="files" title="Explorer"></button>
+    <button class="chrome" data-view="structure" data-icon="structure" title="Structure: the definitions of the open file"></button>
     <button class="chrome" data-view="demos" data-icon="play" title="Demos"></button>
     <span class="sp"></span>
     <button class="chrome" id="actLog" data-icon="panel" title="Request log and demo transcript"></button>
@@ -152,6 +186,7 @@
       <div class="view" id="viewExplorer">
         <div id="tree"><div class="row file sel" data-file="" data-icon="file">A.scala <span class="dim">(generated)</span></div><div id="treeroot" class="dim snap">no snapshot of the compiler sources found</div></div>
       </div>
+      <div class="view" id="viewStructure" hidden><div id="struct" class="dim">loading…</div></div>
       <div class="view" id="viewDemos" hidden>
         <div id="demos">
           <p class="dim">Each demo runs a short sequence of real requests and narrates what the driver reports, step by step.</p>
@@ -170,11 +205,15 @@
         <span class="sp"></span>
         <span id="nav"><button id="back" class="icon ghost chrome" data-icon="left" title="back (Alt+←)" disabled></button><button id="fwd" class="icon ghost chrome" data-icon="right" title="forward (Alt+→)" disabled></button><span id="navpos" class="dim"></span></span>
       </div>
+      <div id="crumbs"></div>
       <div class="cmdbar">
         <button id="complete" class="primary" data-icon="complete" title="runUpTo at the cursor, then Completion.completions (Ctrl/Cmd-Space)">Complete</button>
         <button id="full" class="icon" data-icon="doc" title="Type whole file: driver.run (completes the session if one exists on this content)"></button>
+        <button id="reset" class="icon ghost" data-icon="trash" title="Reset the typer state: a fresh driver, nothing typed, run ids restart (Ctrl/Cmd-Shift-K)"></button>
         <span class="sep"></span>
         <label class="toggle" title="hovering an identifier sends a typeAt request (runUpTo at the offset, then the type of the tree there); moving to another identifier before the answer cancels it"><input type="checkbox" id="hoverMode" checked> Hover types</label>
+        <label class="toggle" title="after each request, a background reader completes the session (driver.readAll on another thread, concurrently with hovers) and paints what it found: semantic colours from the typed tree, diagnostics in the gutter"><input type="checkbox" id="bgMode" checked> Background pass</label>
+        <label class="toggle" title="resting the caret on an identifier for 400 ms asks /usages (a read action on the typed tree) and marks every typed reference to its symbol: definitions in a warmer shade"><input type="checkbox" id="usageMode" checked> Usages at caret</label>
         <span class="sp"></span>
         <button id="advToggle" class="ghost chrome" data-icon="sliders" aria-expanded="false" title="cancel-after, go to object, the latch">Advanced</button>
         <div id="advanced" hidden>
@@ -198,15 +237,20 @@
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
-  <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the background pass's diagnostics">Problems <span id="probCount" class="dim"></span></button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
+  <div id="problems" hidden><div class="none dim">No diagnostics: the background pass fills this list.</div></div>
 </section>
+<div id="quick" hidden><input id="quickIn" placeholder="Go to file… (type to filter; Enter opens, Esc closes)" autocomplete="off"><div class="items" id="quickItems"></div><div class="hint" id="quickHint">Ctrl/Cmd-K · the snapshot's compiler sources and the generated A.scala</div></div>
+<div id="lookup" hidden></div>
 <footer id="status">
   <span id="stLast" class="mono dim" title="latest request log entry">no request yet</span>
   <span><span id="stFile">A.scala</span> <span id="cur" class="mono">–</span></span>
+  <span id="stDef" class="mono dim" title="the innermost definition at the caret, and the symbol whose usages are marked"></span>
   <span id="stSession" class="mono dim" title="session state from the last result"></span>
   <span id="hoverState" class="dim"></span>
+  <span id="bgState" class="dim" title="the background reader: completes the session on another thread while hovers are served"><span class="spin" hidden></span><span id="bgProgress" hidden><i></i></span><span id="bgText">background: idle</span></span>
   <button id="logShow" class="ghost chrome" data-icon="panel" hidden title="show the request log panel">Log</button>
 </footer>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
@@ -239,12 +283,16 @@
     trash: svg('<path d="M3 4.5h10M6.5 4.5v-2h3v2M4.5 4.5l.7 9h5.6l.7-9"/>'),
     close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
     xray: svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 5.5h6M5 8h4M5 10.5h2"/>'),
+    structure: svg('<path d="M3 3h4M5 3v10M5 8h4M5 13h4"/><rect x="9" y="6.5" width="4" height="3" rx=".5"/><rect x="9" y="11.5" width="4" height="3" rx=".5"/>'),
   };
   document.querySelectorAll('[data-icon]').forEach((el) => el.insertAdjacentHTML('afterbegin', I[el.dataset.icon] || ''));
   const src = await (await fetch('/source')).json();
-  const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, indentUnit: 2, tabSize: 2, indentWithTabs: false,
+  // the state of the IDE bits below (declared here: loadFile, which runs early from the URL, records into it)
+  const ide = { defs: [], defsFile: null, defsP: null, index: [], recent: [], structCur: -1, useMarks: [], useTok: null, useSym: '', useTimer: null, useSeq: 0, diags: [] };
+  const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, gutters: ['CodeMirror-linenumbers', 'xray-diag'], indentUnit: 2, tabSize: 2, indentWithTabs: false,
     extraKeys: { Tab: (c) => c.replaceSelection('  ', 'end') }, configureMouse: () => ({ addNew: false }) });
-  cm.setSize('100%', '100%');
+  cm.setSize(null, '100%');
+  $('ed').insertAdjacentHTML('beforeend', '<div id="stripe" title="the error stripe: diagnostics by relative line"></div>');
   // ---- layout: the borders between the panels are drag handles; widths are kept in localStorage (xray.cols2), the log panel's height (xray.logh), it can be collapsed (xray.logCollapsed)
   const store = { get: (k) => { try { return localStorage.getItem('xray.' + k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem('xray.' + k, v); } catch (e) { /* ignore */ } } };
   const mainEl = document.querySelector('main'), panels = ['explorer', 'edsec', 'xraysec'].map($);
@@ -253,6 +301,9 @@
   try { const c = JSON.parse(store.get('cols2') || 'null'); if (Array.isArray(c) && c.length === 2 && c.every((n) => n > 40)) cols = c; } catch (e) { /* ignore */ }
   let logh = +store.get('logh') || 220;
   function applyCols() {
+    // narrower than the three columns need: the x-ray column folds away (the editor keeps the room)
+    const narrow = window.innerWidth < (document.body.classList.contains('sidebarHidden') ? 700 : 940); document.body.classList.toggle('narrow', narrow);
+    if (narrow) { const sbw = cols ? Math.round(cols[0]) : 230; mainEl.style.gridTemplateColumns = document.body.classList.contains('sidebarHidden') ? 'minmax(0, 1fr)' : `${Math.min(sbw, Math.round(window.innerWidth / 3))}px ${GUT}px minmax(0, 1fr)`; $('logsec').style.height = `${Math.round(logh)}px`; cm.refresh(); return; }
     const sb = !document.body.classList.contains('sidebarHidden');
     const w = cols ? cols.map((n) => `${Math.round(n)}px`) : ['230px', 'minmax(360px, 1.2fr)'];
     const rest = cols ? 'minmax(0, 1fr)' : 'minmax(320px, 1fr)';
@@ -260,6 +311,7 @@
     $('logsec').style.height = `${Math.round(logh)}px`;
     cm.refresh();
   }
+  window.addEventListener('resize', () => applyCols());
   document.querySelectorAll('.gutter').forEach((g) => {
     g.addEventListener('pointerdown', (ev) => {
       const i = +g.dataset.i, startX = ev.clientX, startY = ev.clientY;
@@ -284,10 +336,10 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); $('log').hidden = name !== 'log'; $('story').hidden = name !== 'story'; }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems'].forEach((n) => { $(n).hidden = name !== n; }); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
-  const views = { explorer: 'Explorer', demos: 'Demos' };
+  const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos' };
   let view = store.get('view') in views ? store.get('view') : 'explorer';
   function showView(v, toggle) {
     const hidden = document.body.classList.contains('sidebarHidden');
@@ -295,7 +347,7 @@
     else { document.body.classList.remove('sidebarHidden'); view = v; store.set('view', v); }
     const shown = !document.body.classList.contains('sidebarHidden');
     document.querySelectorAll('#activity [data-view]').forEach((b) => b.classList.toggle('on', shown && b.dataset.view === view));
-    $('sideTitle').textContent = views[view]; $('viewExplorer').hidden = view !== 'explorer'; $('viewDemos').hidden = view !== 'demos';
+    $('sideTitle').textContent = views[view]; Object.keys(views).forEach((k) => { $('view' + k[0].toUpperCase() + k.slice(1)).hidden = view !== k; });
     store.set('sidebarHidden', shown ? '0' : '1'); applyCols();
   }
   document.querySelectorAll('#activity [data-view]').forEach((b) => b.onclick = () => showView(b.dataset.view, true));
@@ -335,10 +387,15 @@
       : emptyState('The generated file is open', 'Place the cursor inside a method and press Complete, or run a demo.');
     if (loadFile.at) { const at = loadFile.at; loadFile.at = null; cm.setCursor(at); cm.scrollIntoView(null, 120); cm.focus(); showCursor(); }
     else if (file) gotoFirstMethodBody(); else gotoObject(10);
-    syncUrl();
+    syncUrl(); fileLoaded(file);
+    // opening a file starts the background pass, no request needed; deferred, since a file
+    // loaded during start-up comes before the pass's state exists (the end of start-up schedules it then)
+    setTimeout(() => { try { scheduleBackground(); } catch (e) { /* start-up not finished */ } }, 0);
   }
+  let allFiles = [];
   try {
     const fl = await (await fetch('/files')).json();
+    allFiles = fl.files;
     if (fl.files.length) {
       const root = {};
       fl.files.forEach((f) => { const parts = f.split('/'); let n = root; parts.slice(0, -1).forEach((p) => { n = n[p] = n[p] || {}; }); (n.__files = n.__files || []).push(f); });
@@ -400,8 +457,12 @@
   // while a request runs the action buttons are disabled; the frame's own buttons (.chrome) stay live
   const setBusy = (on, text) => { busy = on; $('busy').textContent = on ? text : ''; document.querySelectorAll('button:not(.chrome)').forEach((b) => { if (b.id !== 'release' && b.id !== 'cancelNow') b.disabled = on; }); navUpdate(); };
   function finish(r, code, cancelAfterMs) {
+    if (r && r.outcome !== 'error') scheduleBackground();
     r.seq = ++seq; r.cancelRequested = cancelAfterMs; r.code = code;
-    render(r); logRow(r); last = r; return r;
+    render(r); logRow(r); last = r;
+    // a completion at the caret, on the text still in the editor, opens the lookup (not during a demo)
+    if (r.kind === 'complete' && (r.completions || []).length && code === cm.getValue() && r.offset === offsetOf() && !demoRunning()) lookupShow(r.completions);
+    return r;
   }
   async function send(kind, cancelAfterMs) {
     for (let i = 0; i < 300 && busy; i++) await sleep(100); // a demo started while a request runs waits for it
@@ -479,6 +540,7 @@
   // a demo suppresses hover requests for a minute from its start: a pointer left over the editor
   // would otherwise send typeAt requests between the demo's own, and the demo's latched request would meet a busy server
   let demoStartedAt = 0;
+  const demoRunning = () => demoStartedAt && Date.now() - demoStartedAt < 60000;
   cm.getWrapperElement().addEventListener('mousemove', (ev) => {
     if (!$('hoverMode').checked || busy || (demoStartedAt && Date.now() - demoStartedAt < 60000)) return;
     const pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }, 'window');
@@ -569,6 +631,324 @@
   $('full').onclick = () => send('full', cancelMs());
   cm.on('keydown', (c, e) => { if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); send('complete', cancelMs()); } });
 
+  // ---- the quick overlay, one list in four modes: go to file (Ctrl/Cmd-K), go to symbol (Ctrl/Cmd-Shift-O), recent files (Ctrl/Cmd-E), search everywhere (Shift Shift)
+  const quick = { items: [], sel: 0, mode: 'file' };
+  const QUICK = { file: ['Go to file…', 'Ctrl/Cmd-K · the snapshot\'s compiler sources and the generated A.scala'], symbol: ['Go to symbol…', 'Ctrl/Cmd-Shift-O · the definitions of this file, then the snapshot\'s top-level definitions'],
+    recent: ['Recent files…', 'Ctrl/Cmd-E · the last 10 files opened'], all: ['Search everywhere…', 'Shift Shift · files, then symbols'] };
+  function quickScore(q, f) {
+    const l = f.toLowerCase(), base = l.split('/').pop(); let i = 0, score = 0;
+    if (!q) return 1;
+    if (base.startsWith(q)) return 1000 + (100 - base.length);
+    if (base.includes(q)) return 500 + (100 - base.length);
+    for (const c of q) { const j = l.indexOf(c, i); if (j < 0) return 0; score += (j === i ? 3 : 1); i = j + 1; }
+    return score;
+  }
+  // an entry: the key it is filtered on, its row, and what Enter does
+  const fileEntry = (f) => ({ key: f || 'A.scala (generated)', html: `${I.file}<b>${esc(f ? f.split('/').pop() : 'A.scala')}</b><span class="path">${esc(f ? f.split('/').slice(0, -1).join('/') : 'generated')}</span>`, go: () => { if (f !== currentFile) loadFile(f); } });
+  const defEntry = (d) => ({ key: d.name, html: `<span style="width:${d.depth * 10}px;flex:none"></span>${kb(d.kind)}<b>${esc(d.name)}</b><span class="dim">${d.kind}</span><span class="path">${esc(currentFile || 'A.scala')}</span>`, go: () => jumpTo(d.point) });
+  const idxEntry = (x) => ({ key: x.name, html: `<span class="kb" title="top-level definition">#</span><b>${esc(x.name)}</b><span class="dim">${esc(x.fqn)}</span><span class="path">${esc(x.file)}</span>`, go: () => openSymbol(x) });
+  function quickEntries(q) {
+    const rank = (list, cap) => { const s = list.map((e, i) => ({ e, i, s: quickScore(q, e.key) })).filter((x) => x.s > 0); if (q) s.sort((a, b) => b.s - a.s || a.i - b.i); return s.slice(0, cap).map((x) => x.e); };
+    const files = (cap) => rank([''].concat(allFiles).map(fileEntry), cap);
+    const syms = () => rank(ide.defs.map(defEntry), 80).concat(rank(ide.index.filter((x) => x.file !== currentFile || !ide.defs.some((d) => d.name === x.name)).map(idxEntry), 40));
+    return quick.mode === 'file' ? files(40) : quick.mode === 'symbol' ? syms() : quick.mode === 'recent' ? rank(ide.recent.map(fileEntry), 10) : files(q ? 12 : 6).concat(syms());
+  }
+  function quickRender() {
+    quick.items = quickEntries($('quickIn').value.trim().toLowerCase()); quick.sel = Math.min(quick.sel, Math.max(0, quick.items.length - 1));
+    $('quickItems').innerHTML = quick.items.map((e, i) => `<div class="item${i === quick.sel ? ' on' : ''}" data-i="${i}">${e.html}</div>`).join('') || '<div class="item dim">no match</div>';
+    $('quickItems').querySelectorAll('.item[data-i]').forEach((el) => { el.onmousedown = (ev) => { ev.preventDefault(); quickOpen(+el.dataset.i); }; });
+    const on = $('quickItems').querySelector('.item.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+  function quickShow(mode) {
+    quick.mode = mode || 'file'; $('quickIn').placeholder = QUICK[quick.mode][0] + ' (type to filter; Enter opens, Esc closes)'; $('quickHint').textContent = QUICK[quick.mode][1];
+    $('quick').hidden = false; $('quickIn').value = ''; quick.sel = quick.mode === 'recent' && ide.recent.length > 1 ? 1 : 0; quickRender();
+    // focus after the key event is done: CodeMirror's hidden textarea otherwise takes it back
+    $('quickIn').focus(); setTimeout(() => { if (!$('quick').hidden) $('quickIn').focus(); }, 0); // recent: the previous file, as IntelliJ
+  }
+  function quickHide() { $('quick').hidden = true; cm.focus(); }
+  function quickOpen(i) { const e = quick.items[i]; quickHide(); if (e) e.go(); }
+  // one toggle per key press: a shortcut can arrive as more than one keydown (auto-repeat, synthetic key events)
+  let quickToggledAt = 0;
+  const quickToggle = (mode) => {
+    const now = Date.now(); if (now - quickToggledAt < 250) return; quickToggledAt = now;
+    if ($('quick').hidden || quick.mode !== mode) quickShow(mode); else quickHide();
+  };
+  $('quickIn').oninput = () => { quick.sel = 0; quickRender(); };
+  $('quickIn').onkeydown = (ev) => {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); quick.sel = Math.min(quick.sel + 1, quick.items.length - 1); quickRender(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); quick.sel = Math.max(quick.sel - 1, 0); quickRender(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); quickOpen(quick.sel); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); quickHide(); }
+  };
+  // the shortcuts, in the capture phase so that CodeMirror (Ctrl-E: end of line) and the browser (Cmd-Shift-O, Cmd-P) do not see them
+  let shiftUp = 0; const isShift = (ev) => ev.key === 'Shift' || ev.keyCode === 16 || /^Shift/.test(ev.code || '');
+  document.addEventListener('keydown', (ev) => {
+    const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase();
+    if (!isShift(ev)) shiftUp = 0;
+    if (ev.repeat && mod && ['k', 'o', 'e', 'p'].includes(k)) { ev.preventDefault(); ev.stopPropagation(); return; }
+    if (mod && !ev.shiftKey && k === 'k') { ev.preventDefault(); ev.stopPropagation(); quickToggle('file'); }
+    else if (mod && ev.shiftKey && k === 'o') { ev.preventDefault(); ev.stopPropagation(); quickToggle('symbol'); }
+    else if (mod && !ev.shiftKey && k === 'e') { ev.preventDefault(); ev.stopPropagation(); quickToggle('recent'); }
+    else if (mod && !ev.shiftKey && k === 'p') { ev.preventDefault(); ev.stopPropagation(); paramInfo(); }
+  }, true);
+  document.addEventListener('keyup', (ev) => {
+    if (!isShift(ev)) return;
+    const now = Date.now(); if (shiftUp && now - shiftUp < 400) { shiftUp = 0; quickToggle('all'); } else shiftUp = now;
+  });
+  document.addEventListener('mousedown', (ev) => { if (!$('quick').hidden && !$('quick').contains(ev.target)) quickHide(); });
+
+  // ---- reset the typer state: a fresh driver on the server (Ctrl/Cmd-Shift-K, or the button)
+  async function resetTyper() {
+    if (busy) return; setBusy(true, '… resetting the typer state (a fresh driver)');
+    let r;
+    try { r = await (await fetch('/reset', { method: 'POST' })).json(); } catch (e) { r = { error: String(e) }; }
+    setBusy(false);
+    clearBackground();
+    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    $('xray').innerHTML = emptyState('Typer state reset', r.error ? r.error : `A fresh driver: nothing typed, no session; warm-up ${r.warmupMs} ms. The next request starts run 1 of the new compiler.`);
+    $('stSession').textContent = 'reset: no session'; $('stLast').textContent = 'typer state reset';
+  }
+  $('reset').onclick = resetTyper;
+  document.addEventListener('keydown', (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && (ev.key === 'K' || ev.key === 'k')) { ev.preventDefault(); resetTyper(); } });
+
+  // ---- the background pass: another reader completes the session (driver.readAll) while the page keeps hovering,
+  // then paints semantic colours from the typed tree and diagnostics in the gutter
+  let semMarks = [], bgTimer = null, bgSeq = 0;
+  function clearBackground() {
+    semMarks.forEach((m) => m.clear()); semMarks = [];
+    cm.clearGutter('xray-diag'); paintProblems([]);
+  }
+  function paintBackground(r) {
+    clearBackground();
+    (r.tokens || []).forEach((t) => {
+      const a = cm.posFromIndex(t.start), b = cm.posFromIndex(t.end);
+      semMarks.push(cm.markText(a, b, { className: 'sem-' + t.kind, title: t.info || t.kind }));
+    });
+    const byLine = new Map();
+    (r.diagnostics || []).forEach((d) => {
+      const a = cm.posFromIndex(d.start), b = cm.posFromIndex(Math.max(d.end, d.start + 1));
+      semMarks.push(cm.markText(a, b, { className: 'sem-' + d.level, title: d.message }));
+      const l = byLine.get(a.line) || { level: d.level, messages: [] }; l.messages.push(d.message); if (d.level === 'error') l.level = 'error'; byLine.set(a.line, l);
+    });
+    byLine.forEach((l, line) => { const el = document.createElement('span'); el.className = 'diag-dot ' + l.level; el.title = l.messages.join('\n'); cm.setGutterMarker(line, 'xray-diag', el); });
+    paintProblems(r.diagnostics || []);
+  }
+  function scheduleBackground() {
+    if (!$('bgMode').checked) return;
+    clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 250);
+  }
+  async function backgroundPass() {
+    const mine = ++bgSeq, code = cm.getValue();
+    $('bgState').querySelector('.spin').hidden = false; $('bgText').textContent = 'background: completing the session (another reader)…';
+    // the visible lines first: the editor's viewport as an offset range
+    const vp = cm.getViewport(), visibleFrom = cm.indexFromPos({ line: vp.from, ch: 0 }), visibleTo = cm.indexFromPos({ line: Math.min(vp.to, cm.lineCount() - 1), ch: 0 });
+    const body = new URLSearchParams({ code, file: currentFile, visibleFrom: String(visibleFrom), visibleTo: String(visibleTo) });
+    let st;
+    try { const resp = await fetch('/background', { method: 'POST', body }); st = await resp.json(); } catch (e) { $('bgText').textContent = 'background: ' + e; return; }
+    let bgLines = [];
+    const paintProgress = (st) => {
+      const total = st.spansAtStart || 0, done = total - (st.spansRemaining || 0);
+      $('bgProgress').hidden = false; $('bgProgress').querySelector('i').style.width = (total ? Math.round(100 * done / total) : 100) + '%';
+      $('bgText').textContent = `background: ${total ? `${done} of ${total} statements` : `${st.typedTrees || 0} trees`} typed by the other reader` +
+        `${st.lockWaitCount ? `, waited ${st.lockWaitMs} ms on the lock` : ''}${st.completionOwner ? ` · lock: ${st.completionOwner}` : ''}…`;
+      $('bgText').title = (st.typingSpans || []).map((sp) => `typing now: line ${cm.posFromIndex(sp.start).line + 1}`).join('\n');
+      (st.typedSpans || []).forEach((sp) => { const a = cm.posFromIndex(sp.start).line, b = cm.posFromIndex(sp.end).line; for (let l = a; l <= b; l++) if (!bgLines.includes(l)) { cm.addLineClass(l, 'background', 'line-bg'); bgLines.push(l); } });
+    };
+    while (st.state === 'running') {
+      if (mine === bgSeq) paintProgress(st);
+      await sleep(80);
+      try { st = await (await fetch('/background')).json(); } catch (e) { continue; }
+    }
+    bgLines.forEach((l) => cm.removeLineClass(l, 'background', 'line-bg')); bgLines = [];
+    $('bgProgress').hidden = true;
+    if (mine !== bgSeq) return; // a newer pass took over
+    $('bgState').querySelector('.spin').hidden = true;
+    if (st.state === 'error') { $('bgText').textContent = 'background: ' + st.error; return; }
+    if (st.code !== cm.getValue()) { scheduleBackground(); return; } // the text moved on: again
+    paintBackground(st);
+    const errs = (st.diagnostics || []).filter((d) => d.level === 'error').length, warns = (st.diagnostics || []).length - errs;
+    $('bgText').textContent = `background: ${st.outcome} in ${st.ms} ms (visible lines first, ${st.visibleFirstMs} ms) on run ${st.runId} (${st.tokens.length} tokens, ${errs} error${errs === 1 ? '' : 's'}, ${warns} warning${warns === 1 ? '' : 's'}` +
+      `${st.oracleDiagnosticCount !== undefined ? (st.diagnosticsMatch ? `; ${st.diagnosticCount} diagnostics = a whole-file run ✓` : `; ${st.diagnosticCount} diagnostics ≠ ${st.oracleDiagnosticCount} of a whole-file run ✗`) : ''}` +
+      `${st.foregroundDuring ? `; ${st.foregroundDuring} foreground request${st.foregroundDuring === 1 ? '' : 's'} served meanwhile` : ''}${st.lockWaitCount ? `; waited ${st.lockWaitMs} ms on the lock` : ''})`;
+  }
+  $('bgMode').onchange = () => { if ($('bgMode').checked) scheduleBackground(); else { clearBackground(); $('bgText').textContent = 'background: off'; } };
+  cm.on('change', () => { clearBackground(); $('bgText').textContent = 'background: edited, waiting for a request'; });
+
+  // ---- the lookup (IntelliJ's completion popup): the completions of the last request at the caret; typing filters by prefix, Up/Down move, Enter/Tab insert, Esc closes
+  const lk = { items: [], shown: [], sel: 0, from: null };
+  const lkOpen = () => !$('lookup').hidden;
+  function lookupShow(compl) {
+    const p = cm.getCursor(), line = cm.getLine(p.line); let a = p.ch; while (a > 0 && /[\w$]/.test(line[a - 1])) a--;
+    lk.from = { line: p.line, ch: a }; lk.sel = 0;
+    lk.items = compl.map((c) => { const i = c.indexOf(' '); return i < 0 ? { label: c, desc: '' } : { label: c.slice(0, i), desc: c.slice(i + 1) }; });
+    cm.focus(); lookupRender();
+  }
+  function lookupHide() { $('lookup').hidden = true; lk.from = null; }
+  function lookupRender() {
+    const p = cm.getCursor();
+    if (!lk.from || p.line !== lk.from.line || p.ch < lk.from.ch) { lookupHide(); return; }
+    const prefix = cm.getRange(lk.from, p), lc = prefix.toLowerCase();
+    if (/[^\w$]/.test(prefix)) { lookupHide(); return; } // typed past the identifier
+    // case-sensitive prefix matches first, then case-insensitive ones
+    lk.shown = lk.items.filter((x) => x.label.startsWith(prefix)).concat(lk.items.filter((x) => !x.label.startsWith(prefix) && x.label.toLowerCase().startsWith(lc)));
+    if (!lk.shown.length) { lookupHide(); return; }
+    lk.sel = Math.min(lk.sel, lk.shown.length - 1);
+    const el = $('lookup'), c = cm.cursorCoords(lk.from, 'window');
+    el.innerHTML = lk.shown.slice(0, 200).map((x, i) => `<div class="row${i === lk.sel ? ' on' : ''}" data-i="${i}"><b>${esc(x.label)}</b><span class="dim">${esc(x.desc)}</span></div>`).join('') + `<div class="foot">${lk.shown.length} of ${lk.items.length} · Enter inserts · Tab replaces · Esc closes</div>`;
+    el.hidden = false;
+    el.style.left = Math.max(4, Math.min(c.left - 4, window.innerWidth - el.offsetWidth - 8)) + 'px';
+    el.style.top = (c.bottom + el.offsetHeight + 4 > window.innerHeight ? c.top - el.offsetHeight - 2 : c.bottom + 2) + 'px'; // above the line when there is no room below
+    el.querySelectorAll('.row').forEach((r) => { r.onmousedown = (ev) => { ev.preventDefault(); lookupInsert(+r.dataset.i); }; });
+    const on = el.querySelector('.row.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+  // Enter inserts before the rest of the identifier, Tab replaces it (as IntelliJ)
+  function lookupInsert(i, replace) {
+    const x = lk.shown[i], from = lk.from, to = cm.getCursor(), line = cm.getLine(to.line); let b = to.ch;
+    if (replace) while (b < line.length && /[\w$]/.test(line[b])) b++;
+    lookupHide(); if (x) cm.replaceRange(x.label, from, { line: to.line, ch: b }); cm.focus();
+  }
+  cm.on('keydown', (c, e) => {
+    if (!lkOpen()) return;
+    const n = lk.shown.length;
+    if (e.key === 'ArrowDown') lk.sel = (lk.sel + 1) % n;
+    else if (e.key === 'ArrowUp') lk.sel = (lk.sel - 1 + n) % n;
+    else if (e.key === 'PageDown') lk.sel = Math.min(n - 1, lk.sel + 8);
+    else if (e.key === 'PageUp') lk.sel = Math.max(0, lk.sel - 8);
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupInsert(lk.sel, e.key === 'Tab'); return; }
+    else if (e.key === 'Escape') { e.preventDefault(); lookupHide(); return; }
+    else return;
+    e.preventDefault(); lookupRender();
+  });
+  cm.on('cursorActivity', () => { if (lkOpen()) lookupRender(); });
+  cm.on('blur', lookupHide); cm.on('scroll', () => { if (lkOpen()) lookupRender(); });
+
+  // ---- definitions of the open file (GET /symbols: parsed by the server from the file on disk, so offsets drift after edits) and the snapshot's index
+  function kb(kind) { const L = { object: 'o', class: 'c', trait: 't', enum: 'e', type: 'T', def: 'm', val: 'v', var: 'v' }; return `<span class="kb k-${esc(kind)}" title="${esc(kind)}">${L[kind] || '?'}</span>`; }
+  async function refreshSymbols(file) {
+    const p = (async () => {
+      let r; try { r = await (await fetch(`/symbols?file=${encodeURIComponent(file)}${ide.index.length ? '' : '&index=1'}`)).json(); } catch (e) { return; }
+      if (file !== currentFile) return;
+      ide.defs = (r.definitions || []).filter((d) => d.end > d.start && !/^[<$]/.test(d.name)); ide.defsFile = file;
+      if (r.index && r.index.length) ide.index = r.index;
+      renderStructure(); caretUpdate();
+    })();
+    ide.defsP = p; return p;
+  }
+  function fileLoaded(file) {
+    // recent files: most recent first, at most 10, kept in localStorage
+    if (!ide.recentLoaded) { ide.recentLoaded = true; try { const r = JSON.parse(store.get('recent') || '[]'); if (Array.isArray(r)) ide.recent = r.filter((f) => typeof f === 'string' && (f === '' || allFiles.includes(f))); } catch (e) { /* ignore */ } }
+    ide.recent = [file].concat(ide.recent.filter((f) => f !== file)).slice(0, 10); store.set('recent', JSON.stringify(ide.recent));
+    refreshSymbols(file);
+  }
+  function jumpTo(off) { navPush(); cm.setCursor(cm.posFromIndex(off)); cm.scrollIntoView(null, 160); cm.focus(); showCursor(); }
+  async function openSymbol(x) {
+    if (x.file !== currentFile) { await loadFile(x.file); }
+    await ide.defsP;
+    const top = ide.defs.filter((d) => d.name === x.name).sort((a, b) => a.depth - b.depth || (a.kind === 'object') - (b.kind === 'object')), d = top[0]; // the class before its companion
+    if (d) { cm.setCursor(cm.posFromIndex(d.point)); cm.scrollIntoView(null, 160); cm.focus(); showCursor(); }
+  }
+  // the structure view: an indented tree of the definitions; the innermost one at the caret is highlighted
+  function renderStructure() {
+    $('struct').className = ide.defs.length ? '' : 'dim';
+    $('struct').innerHTML = ide.defs.map((d, i) => `<div class="row" data-i="${i}" style="padding-left:${6 + d.depth * 12}px" title="${esc(d.kind + ' ' + d.name)} [${d.start}, ${d.end})">${kb(d.kind)}<span>${esc(d.name)}</span></div>`).join('') || 'no definitions';
+    $('struct').querySelectorAll('.row').forEach((el) => el.onclick = () => jumpTo(ide.defs[+el.dataset.i].point));
+    ide.structCur = -1;
+  }
+  // the definitions containing the caret, outermost first: the breadcrumbs, the structure highlight and the status bar
+  function caretUpdate() {
+    const off = offsetOf(), path = [];
+    if (ide.defsFile === currentFile) ide.defs.forEach((d, i) => { if (d.start <= off && off <= d.end) path.push(i); });
+    path.sort((a, b) => ide.defs[a].depth - ide.defs[b].depth);
+    $('crumbs').innerHTML = `<span class="c" data-i="-1">${I.file}${esc(currentFile ? currentFile.split('/').pop() : 'A.scala')}</span>` + path.map((i) => `<span class="gt">›</span><span class="c" data-i="${i}">${kb(ide.defs[i].kind)}${esc(ide.defs[i].name)}</span>`).join('');
+    $('crumbs').querySelectorAll('.c').forEach((el) => el.onclick = () => { const i = +el.dataset.i; if (i < 0) quickShow('symbol'); else jumpTo(ide.defs[i].point); });
+    const inner = path.length ? path[path.length - 1] : -1;
+    if (inner !== ide.structCur) {
+      const rows = $('struct').querySelectorAll('.row');
+      if (rows[ide.structCur]) rows[ide.structCur].classList.remove('cur');
+      if (rows[inner]) { rows[inner].classList.add('cur'); if (!$('viewStructure').hidden) rows[inner].scrollIntoView({ block: 'nearest' }); }
+      ide.structCur = inner;
+    }
+    statusDef();
+  }
+  function statusDef() {
+    const d = ide.defs[ide.structCur];
+    $('stDef').textContent = (d ? `in ${d.kind} ${d.name}` : '') + (ide.useSym ? `${d ? ' · ' : ''}${ide.useSym} (${ide.useMarks.length} usage${ide.useMarks.length === 1 ? '' : 's'})` : '');
+  }
+  // the definitions come from the file on disk: an edit shifts the offsets after it, so that they keep matching the editor
+  cm.on('change', (c, ch) => {
+    if (ch.origin === 'setValue') return;
+    const at = cm.indexFromPos(ch.from), rem = ch.removed.join('\n').length, delta = ch.text.join('\n').length - rem, end = at + rem;
+    ide.defs.forEach((d) => { ['start', 'end', 'point'].forEach((k) => { if (d[k] >= end) d[k] += delta; else if (d[k] > at) d[k] = at; }); });
+  });
+  let caretTimer = 0; // coalesced: one update per burst of cursor moves
+  cm.on('cursorActivity', () => { if (!caretTimer) caretTimer = setTimeout(() => { caretTimer = 0; caretUpdate(); }, 16); });
+
+  // ---- the problems panel and the error stripe: the background pass's diagnostics, as a list and by relative line at the editor's right edge
+  function paintProblems(diags) {
+    ide.diags = diags.slice().sort((a, b) => a.start - b.start);
+    const errs = diags.filter((d) => d.level === 'error').length;
+    $('probCount').textContent = diags.length ? `${diags.length}${errs ? ` · ${errs} error${errs === 1 ? '' : 's'}` : ''}` : '';
+    $('problems').innerHTML = ide.diags.map((d, i) => { const p = cm.posFromIndex(d.start); return `<div class="row" data-i="${i}"><span class="diag-dot ${esc(d.level)}"></span><span class="mono dim">${p.line + 1}:${p.ch + 1}</span><span class="msg">${esc(d.message)}</span></div>`; }).join('') || '<div class="none dim">No diagnostics: the background pass fills this list.</div>';
+    const n = Math.max(1, cm.lineCount());
+    $('stripe').innerHTML = ide.diags.map((d, i) => `<i class="${esc(d.level)}" data-i="${i}" style="top:calc(${(100 * cm.posFromIndex(d.start).line / n).toFixed(3)}% - 1px)" title="${esc(d.message)}"></i>`).join('');
+    const go = (el) => el.onclick = () => { const d = ide.diags[+el.dataset.i]; navPush(); cm.setCursor(cm.posFromIndex(d.start)); cm.scrollIntoView(null, 120); cm.focus(); };
+    $('problems').querySelectorAll('.row').forEach(go); $('stripe').querySelectorAll('i').forEach(go);
+  }
+
+  // ---- usages at the caret: resting on an identifier for 400 ms asks /usages (a read action on the typed tree) and marks every typed reference
+  function clearUsages() { ide.useMarks.forEach((m) => m.clear()); ide.useMarks = []; ide.useTok = null; ide.useSym = ''; ide.useSeq++; }
+  const sameTok = (a, b) => a && b && a.line === b.line && a.a === b.a;
+  function usagesSchedule() {
+    clearTimeout(ide.useTimer);
+    const tok = wordAt(cm.getCursor());
+    if (sameTok(tok, ide.useTok)) return; // still on the marked identifier
+    if (ide.useMarks.length || ide.useSym) { clearUsages(); statusDef(); }
+    if (!tok || !$('usageMode').checked) return;
+    ide.useTimer = setTimeout(() => usagesAt(tok), 400);
+  }
+  async function usagesAt(tok) {
+    if (!sameTok(tok, wordAt(cm.getCursor()))) return;
+    if (busy || hover.inFlight || lkOpen() || demoRunning()) { ide.useTimer = setTimeout(() => usagesAt(tok), 400); return; } // later, when the compiler is free
+    const mine = ++ide.useSeq, code = cm.getValue(), offset = cm.indexFromPos({ line: tok.line, ch: tok.a });
+    let r; try { r = await (await fetch('/usages', { method: 'POST', body: new URLSearchParams({ code, offset: String(offset), file: currentFile }) })).json(); } catch (e) { return; }
+    if (mine !== ide.useSeq || code !== cm.getValue() || !sameTok(tok, wordAt(cm.getCursor()))) return; // the caret or the text moved on
+    ide.useTok = tok;
+    if (!r.found) { ide.useSym = ''; statusDef(); return; }
+    ide.useSym = r.symbol;
+    ide.useMarks = (r.usages || []).map((u) => cm.markText(cm.posFromIndex(u.start), cm.posFromIndex(u.end), { className: u.write ? 'use-write' : 'use-read' }));
+    statusDef();
+  }
+  cm.on('cursorActivity', usagesSchedule);
+  cm.on('change', () => { clearTimeout(ide.useTimer); if (ide.useMarks.length || ide.useSym) clearUsages(); });
+  $('usageMode').checked = store.get('usages') !== '0';
+  $('usageMode').onchange = () => { store.set('usages', $('usageMode').checked ? '1' : '0'); clearTimeout(ide.useTimer); clearUsages(); statusDef(); if ($('usageMode').checked) usagesSchedule(); };
+
+  // ---- parameter info (Ctrl/Cmd-P): the callee of the innermost unclosed '(' before the caret, through a typeAt request
+  async function paramInfo() {
+    if (busy || $('quick').hidden === false) return;
+    const text = cm.getValue(), off = offsetOf(); let depth = 0, i = off - 1;
+    for (; i >= 0 && off - i < 4000; i--) { const c = text[i]; if (c === ')') depth++; else if (c === '(') { if (depth === 0) break; depth--; } }
+    if (i < 0 || text[i] !== '(') { $('hoverState').textContent = 'parameter info: not inside an argument list'; return; }
+    let j = i; while (j > 0 && /\s/.test(text[j - 1])) j--;
+    if (text[j - 1] === ']') { let d = 0; for (j--; j >= 0; j--) { if (text[j] === ']') d++; else if (text[j] === '[' && --d === 0) break; } } // skip type arguments
+    let a = j; while (a > 0 && /[\w$]/.test(text[a - 1])) a--;
+    if (a === j) { $('hoverState').textContent = 'parameter info: no callee before the ('; return; }
+    const name = text.slice(a, j);
+    if (hover.inFlight) { await cancelInFlight(); for (let k = 0; k < 100 && hover.inFlight; k++) await sleep(30); }
+    setBusy(true, `… parameter info for ${name}`);
+    let r; try { r = await (await fetch('/request', { method: 'POST', body: new URLSearchParams({ kind: 'typeAt', code: text, offset: String(j), cancelAfterMs: '-1', file: currentFile }) })).json(); } catch (e) { r = { outcome: 'error', error: String(e) }; }
+    setBusy(false); finish(r, text, -1);
+    const h = r.hover || {}, c = cm.cursorCoords(cm.posFromIndex(i), 'window');
+    popupAt({ clientX: c.left - 14, clientY: c.top - 50 }, '', h.found ? `<div class="t">${esc(h.symbol || name)}: ${esc(h.info || h.type)}</div><div class="x">parameter info · typeAt(${j}) · ${esc(r.outcome)} ${r.ms} ms</div>` : `<div class="t">${esc(name)}</div><div class="x">no typed tree at the callee (${esc(r.outcome)})</div>`);
+    const p = $('popup'); p.style.left = Math.max(4, Math.min(c.left, window.innerWidth - p.offsetWidth - 8)) + 'px';
+    if (c.top - p.offsetHeight - 4 > 0) p.style.top = (c.top - p.offsetHeight - 4) + 'px'; // above the line, IntelliJ style
+    const at = cm.getCursor(); cm.focus();
+    const away = () => { if (cm.getCursor().line !== at.line) { hidePopup(); cm.off('cursorActivity', away); } }; cm.on('cursorActivity', away);
+  }
+
+  if (!ide.defsP) fileLoaded(currentFile); // the generated file, opened without loadFile
+  caretUpdate();
+
   const OUT = { 'served': 'answered from what is typed: nothing typed', resumed: 'resumed the same run: the statement at the cursor was typed', fresh: 'fresh run (content changed or no session): only the path to the cursor typed',
     full: 'whole file typed by driver.run: a session on this content is completed in the same run, else a new run with no session', 'cancelled-resume': 'CANCELLED while resuming: the run survives', 'cancelled-fresh': 'CANCELLED during a fresh run: discarded', error: 'error' };
 
@@ -627,7 +1007,8 @@
     const tr = document.createElement('tr'); tr.className = r.outcome.startsWith('cancelled') ? 'cancelled' : '';
     const req = r.kind === 'full' ? 'type whole file' : `${r.kind === 'typeAt' ? 'typeAt' : r.kind === 'definition' ? 'definition' : 'complete'} @${r.offset}` + (r.cursorStatement >= 0 ? ` (${r.statements[r.cursorStatement].name})` : '');
     tr.innerHTML = `<td>${r.seq}</td><td>${esc(req)}${r.cancelAfterMs >= 0 ? ` <span class="dim">cancel ${r.cancelAfterMs} ms</span>` : ''}${r.latch ? ' <span class="dim">latched' + (r.cancelledByButton ? ', cancelled' : ', released') + '</span>' : ''}</td><td>${esc(r.outcome)}</td>
-      <td>${r.runId}${r.runChanged ? ' <span class="changed">new</span>' : ''}</td><td>${r.prefixBefore === -1 ? '–' : r.prefixBefore}→${r.prefix === -1 ? '–' : r.prefix}</td><td>${r.typedTrees}</td><td>${r.touched}</td><td>${r.ms}</td>`;
+      <td>${r.runId}${r.runChanged ? ' <span class="changed">new</span>' : ''}</td><td>${r.prefixBefore === -1 ? '–' : r.prefixBefore}→${r.prefix === -1 ? '–' : r.prefix}</td><td>${r.typedTrees}</td><td>${r.touched}</td><td>${r.ms}</td>
+      <td title="${esc((r.lockWaits || []).map((w) => `${w.ms} ms behind ${w.holder}: ${w.root}${w.current !== w.root ? ' / ' + w.current : ''}`).join('\n'))}">${r.lockWaitCount ? `${r.lockWaitMs} ms <span class="dim">×${r.lockWaitCount}${r.lockWaits && r.lockWaits[0] ? ' · ' + esc(r.lockWaits[0].root) : ''}</span>` : '<span class="dim">–</span>'}${r.concurrentWithBackground ? ' <span class="pill o-served" style="font-size:10px;padding:0 6px">beside bg</span>' : ''}</td>`;
     $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
     // the status bar: the same entry in one line, and the session state the result reports
     $('stLast').textContent = `#${r.seq} ${req}${r.cancelAfterMs >= 0 ? ` (cancel ${r.cancelAfterMs} ms)` : ''}${r.latch ? (r.cancelledByButton ? ' (latched, cancelled)' : ' (latched, released)') : ''} · ${r.outcome}` +
@@ -718,6 +1099,7 @@
     gotoObject(40); const r2 = await send('complete', -1); storyResult(li, r2.outcome === 'served' && !r2.runChanged, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}`);
   };
   gotoObject(10);
+  scheduleBackground(); // the first file too
 })();
 </script>
 </body>
