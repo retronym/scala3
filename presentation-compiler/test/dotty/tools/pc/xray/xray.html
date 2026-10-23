@@ -164,6 +164,7 @@
   #ed { display: flex; position: relative; } #ed .CodeMirror { flex: 1; min-width: 0; }
   #stripe { width: 9px; flex: none; position: relative; background: #0f1520; border-left: 1px solid #222e43; } #stripe i { position: absolute; left: 1px; right: 1px; height: 3px; border-radius: 1px; cursor: pointer; }
   #stripe i.error { background: #e03131; } #stripe i.warning { background: #e8a317; } #stripe i.info { background: #4a90e2; } #stripe i:hover { transform: scaleY(1.8); }
+  #editBadge { margin-left: 10px; font-size: 11px; font-weight: 600; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity .3s; }
   /* ---- the replay: a recorded Metals session per mode, and its findings */
   #replayView { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
   #replayView p { margin: 0; } #replayView label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
@@ -210,6 +211,7 @@
         <div id="replayView">
           <p class="dim">A Metals editing session recorded from an <code>lsp.trace.json</code> (hovers while the cursor moves, definitions, completions, document highlights, inlay hints, semantic tokens, edits, cancellations), replayed with its own timing on a fresh driver per mode.</p>
           <label>Window <select id="rpWindow">
+            <option value="bodyEdit:0-1000">Types.scala: 12 edits, 10 inside bodies (the body-edit scenario)</option>
             <option value="0-175">TypeErasure.scala + TypeEval.scala (events 0–175)</option>
             <option value="670-814">Typer.scala, typing: 15 edits (670–814)</option>
             <option value="280-420">Scopes.scala (an edit) + TypeComparer.scala (280–420)</option>
@@ -241,6 +243,7 @@
     <section id="edsec">
       <div id="tabs">
         <div class="tab"><span data-icon="file"></span><span id="fname">A.scala</span></div>
+        <span id="editBadge" class="pill" hidden title="what the last edit did to the session's run"></span>
         <span class="sp"></span>
         <span id="nav"><button id="back" class="icon ghost chrome" data-icon="left" title="back (Alt+←)" disabled></button><button id="fwd" class="icon ghost chrome" data-icon="right" title="forward (Alt+→)" disabled></button><span id="navpos" class="dim"></span></span>
       </div>
@@ -1054,6 +1057,9 @@
       <td title="${esc((r.lockWaits || []).map((w) => `${w.ms} ms behind ${w.holder}: ${w.root}${w.current !== w.root ? ' / ' + w.current : ''}`).join('\n'))}">${r.lockWaitCount ? `${r.lockWaitMs} ms <span class="dim">×${r.lockWaitCount}${r.lockWaits && r.lockWaits[0] ? ' · ' + esc(r.lockWaits[0].root) : ''}</span>` : '<span class="dim">–</span>'}${r.concurrentWithBackground ? ' <span class="pill o-served" style="font-size:10px;padding:0 6px">beside bg</span>' : ''}</td><td>${r.backedOff ? `<span class="changed">${r.backedOff}</span>` : '<span class="dim">–</span>'}</td>`;
     $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
     stripAdd(r.ms, `#${r.seq} ${req}: ${r.ms} ms, ${r.outcome}`, r.outcome.startsWith('cancelled') ? 'cancelled' : '');
+    // a request on edited content: did the edit keep the run?
+    if (r.lastEdit && !r.lastEdit.startsWith('edit refused') && !r.lastEdit.startsWith('no edit')) editBadge('kept', r.lastEdit + ` · ${r.ms} ms`);
+    else if (r.runChanged && r.outcome === 'fresh') editBadge('fresh', (r.lastEdit || 'new content') + ` · run ${r.runId} · ${r.ms} ms`);
     // the status bar: the same entry in one line, and the session state the result reports
     $('stLast').textContent = `#${r.seq} ${req}${r.cancelAfterMs >= 0 ? ` (cancel ${r.cancelAfterMs} ms)` : ''}${r.latch ? (r.cancelledByButton ? ' (latched, cancelled)' : ' (latched, released)') : ''} · ${r.outcome}` +
       (r.outcome === 'error' ? `: ${String(r.error || '').slice(0, 80)}` : ` · run ${r.runId}${r.runChanged ? ' (new)' : ''} · ${r.typedTrees} trees · ${r.ms} ms`);
@@ -1142,6 +1148,13 @@
     li = storyStep('Complete in object 40', 'served from the completed run: nothing typed');
     gotoObject(40); const r2 = await send('complete', -1); storyResult(li, r2.outcome === 'served' && !r2.runChanged, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}`);
   };
+  // ---- what the last edit did: the session's run kept (an edit inside a body, -Yinteractive-body-edits) or a fresh run
+  function editBadge(how, detail, expect) {
+    const b = $('editBadge'); b.hidden = false;
+    b.className = 'pill ' + (how === 'kept' ? 'o-resumed' : 'o-fresh');
+    b.textContent = (how === 'kept' ? 'run kept' : 'fresh run') + (expect ? (expect === how ? ' ✓' : ' ✗ expected ' + (expect === 'kept' ? 'run kept' : 'a fresh run')) : '') + ' · ' + detail;
+    b.title = detail;
+  }
   // ---- the latency strip: one bar per request, newest on the right, height on a log scale
   function stripAdd(ms, title, cls) {
     const i = document.createElement('i'); i.style.height = Math.min(18, 1 + 4 * Math.log10(1 + Math.max(0, ms))) + 'px'; i.title = title; if (cls) i.className = cls;
@@ -1156,12 +1169,15 @@
   $('freeMode').onchange = () => resetTyper();
   // ---- the replay
   const rp = { since: 0, polling: false, file: null, mark: null, line: null, saved: null, modes: [] };
-  const rpParams = () => { const [from, to] = $('rpWindow').value.split('-'); return new URLSearchParams({ from, to, seed: $('rpSeed').value, idleCap: $('rpIdle').value, lanes: $('rpLanes').value }); };
+  const rpParams = () => {
+    const v = $('rpWindow').value, source = v.includes(':') ? v.split(':')[0] : 'trace', [from, to] = (v.includes(':') ? v.split(':')[1] : v).split('-');
+    return new URLSearchParams({ source, from, to, seed: $('rpSeed').value, idleCap: $('rpIdle').value, lanes: $('rpLanes').value });
+  };
   async function rpDescribe() {
     try {
       const d = await (await fetch('/replay/describe?' + rpParams())).json();
       if (!d.eventsInTrace) { $('rpDesc').innerHTML = 'No events: start the server with <code>-Dxray.replay.events=&lt;replay-events.json&gt;</code>.'; return; }
-      $('rpDesc').innerHTML = `Replays events ${d.from}–${d.to} of <code title="${esc(d.eventsFile)}">${esc(d.eventsFile.split('/').pop())}</code> (${d.eventsInTrace} in the trace; trace seconds ${esc(d.traceSeconds)}): <b>${d.requests} requests</b> (${Object.entries(d.kinds).map(([k, n]) => `${n} ${k}`).join(', ')}), ${d.edits} edits, ${d.cancels} cancellations, over ${(d.durationMs / 1000).toFixed(1)} s.<br>Files: ${d.files.map((f) => `<code>${esc(f.file.split('/').pop())}</code> ${f.requests} requests, ${f.lines} lines`).join('; ')}.`;
+      $('rpDesc').innerHTML = `Replays events ${d.from}–${d.to} of <code title="${esc(d.eventsFile)}">${esc(d.eventsFile.split('/').pop())}</code> (${d.eventsInTrace} in the trace; trace seconds ${esc(d.traceSeconds)}): <b>${d.requests} requests</b> (${Object.entries(d.kinds).map(([k, n]) => `${n} ${k}`).join(', ')}), ${d.edits} edits${Object.keys(d.editsExpected || {}).filter((k) => k !== '?').length ? ` (${Object.entries(d.editsExpected).map(([k, n]) => `${n} must keep the run: ${k}`.replace('must keep the run: fresh', 'must take a fresh run').replace(': kept', '')).join(', ')})` : ''}, ${d.cancels} cancellations, over ${(d.durationMs / 1000).toFixed(1)} s.<br>Files: ${d.files.map((f) => `<code>${esc(f.file.split('/').pop())}</code> ${f.requests} requests, ${f.lines} lines`).join('; ')}.`;
     } catch (e) { $('rpDesc').textContent = String(e); }
   }
   ['rpWindow', 'rpSeed', 'rpIdle', 'rpLanes'].forEach((id) => $(id).onchange = rpDescribe);
@@ -1181,17 +1197,19 @@
     $('replay').querySelector('.none').hidden = true;
     const rows = fs.map((f) => `<tr class="${f.kind === 'all' ? 'all' : ''}"><td class="l m-${f.mode}">${esc(f.mode)}</td><td class="l">${esc(f.kind)}</td><td>${f.count}</td><td>${f.cancelled || ''}</td><td>${f.errors ? `<span class="bad">${f.errors}</span>` : ''}</td>
       <td>${fmt3(f.latency)}</td><td>${f.queued.median} / ${f.queued.p90}</td><td>${fmt3(f.lock)}</td><td>${f.statement.p90}</td><td>${f.treesMedian} <span class="dim">(${f.trees})</span></td><td>${f.runs} <span class="dim">(${f.wholeFileRuns})</span></td>
+      <td>${f.editsKept + f.editsFresh ? `${f.editsKept} / ${f.editsFresh} <span class="${f.editsAsExpected === f.editsExpected ? 'good' : 'bad'}">(${f.editsAsExpected} of ${f.editsExpected} as expected)</span>` : '–'}</td>
       <td>${f.diagChecked ? `<span class="${f.diagMatch === f.diagChecked ? 'good' : 'bad'}" title="${esc(f.diagFirstMismatch)}">${f.diagMatch}/${f.diagChecked}</span>` : '–'}</td>
       <td>${f.mode === 'baseline' ? '–' : `<span class="${f.differ ? 'bad' : 'good'}" title="${esc(f.differExamples.map((e) => `${e.where}\n  ${e.mode}\n  baseline: ${e.baseline}`).join('\n'))}">${f.differ}/${f.compared}</span>`}</td></tr>`).join('');
     const ex = fs.filter((f) => f.kind !== 'all' && f.differ).flatMap((f) => f.differExamples.map((e) => `<div><b class="m-${f.mode}">${esc(f.mode)}</b> ${esc(e.where)}: <code>${esc(e.mode)}</code>; baseline <code>${esc(e.baseline)}</code></div>`)).join('');
-    $('rpFindings').innerHTML = `<table><thead><tr><th class="l">mode</th><th class="l">kind</th><th>n</th><th>cancelled</th><th>errors</th><th title="from when the request was due to its answer">latency ms<br>median / p90 / max</th><th title="behind the request before it in its lane">queued ms<br>median / p90</th><th title="on the completion lock (step 3) or a completion root another reader holds (step 4)">lock wait ms<br>median / p90 / max</th><th title="waiting for a statement another reader was typing">stmt wait<br>p90</th><th>trees<br>median (total)</th><th title="runs started by these requests (of them on the whole file)">runs<br>(whole-file)</th><th title="diagnostics of the whole-file kinds equal to a whole-file run of the same content">diags =<br>whole-file</th><th title="answers that differ from the baseline's answer to the same event">≠ baseline</th></tr></thead><tbody>${rows}</tbody></table>${ex ? `<h4>Answers that differ from the baseline</h4><div class="ex">${ex}</div>` : ''}`;
+    $('rpFindings').innerHTML = `<table><thead><tr><th class="l">mode</th><th class="l">kind</th><th>n</th><th>cancelled</th><th>errors</th><th title="from when the request was due to its answer">latency ms<br>median / p90 / max</th><th title="behind the request before it in its lane">queued ms<br>median / p90</th><th title="on the completion lock (step 3) or a completion root another reader holds (step 4)">lock wait ms<br>median / p90 / max</th><th title="waiting for a statement another reader was typing">stmt wait<br>p90</th><th>trees<br>median (total)</th><th title="runs started by these requests (of them on the whole file)">runs<br>(whole-file)</th><th title="of the first requests after an edit: the session's run kept, or a fresh run; and how many as the scenario expects">edits kept /<br>fresh</th><th title="diagnostics of the whole-file kinds equal to a whole-file run of the same content">diags =<br>whole-file</th><th title="answers that differ from the baseline's answer to the same event">≠ baseline</th></tr></thead><tbody>${rows}</tbody></table>${ex ? `<h4>Answers that differ from the baseline</h4><div class="ex">${ex}</div>` : ''}`;
   }
   function rpRow(r) {
     const tr = document.createElement('tr'); if (r.outcome !== 'ok') tr.className = 'cancelled';
-    tr.innerHTML = `<td>${r.seq}</td><td class="m-${r.mode}">${esc(r.mode)}</td><td>${esc(r.kind)} ${esc(r.file.split('/').pop())}:${r.line}${r.lane ? ' <span class="dim">lane 2</span>' : ''}</td><td>${r.dueMs}</td><td>${r.queuedMs}</td><td>${r.ms}</td><td>${r.lockMs ? r.lockMs + ` <span class="dim">×${r.lockCount}</span>` : '<span class="dim">–</span>'}</td><td>${r.statementMs || '<span class="dim">–</span>'}</td><td>${r.trees}</td><td>${esc(r.how)}${r.backedOff ? ` <span class="dim">backed off ×${r.backedOff}</span>` : ''}</td>
+    tr.innerHTML = `<td>${r.seq}</td><td class="m-${r.mode}">${esc(r.mode)}</td><td title="${esc(r.label || '')}">${esc(r.kind)} ${esc(r.file.split('/').pop())}:${r.line}${r.lane ? ' <span class="dim">lane 2</span>' : ''}${r.editHow ? ` <span class="pill ${r.editHow === 'kept' ? 'o-resumed' : 'o-fresh'}" style="font-size:10px;padding:0 6px" title="${esc(r.editLabel + (r.lastEdit ? ': ' + r.lastEdit : ''))}">${r.editHow === 'kept' ? 'run kept' : 'fresh run'}${r.editExpect ? (r.editExpect === r.editHow ? ' ✓' : ' ✗') : ''}</span>` : ''}</td><td>${r.dueMs}</td><td>${r.queuedMs}</td><td>${r.ms}</td><td>${r.lockMs ? r.lockMs + ` <span class="dim">×${r.lockCount}</span>` : '<span class="dim">–</span>'}</td><td>${r.statementMs || '<span class="dim">–</span>'}</td><td>${r.trees}</td><td>${esc(r.how)}${r.backedOff ? ` <span class="dim">backed off ×${r.backedOff}</span>` : ''}</td>
       <td>${r.diagnostics < 0 ? '–' : r.diagnostics}${r.wholeFileDiagnostics >= 0 ? (r.diagnostics === r.wholeFileDiagnostics ? ' <span class="good">=</span>' : ` <span class="bad">≠ ${r.wholeFileDiagnostics}</span>`) : ''}</td><td class="mono" title="${esc(r.answer)}">${esc(r.answer.slice(0, 90))}</td>`;
     $('rpRows').prepend(tr); while ($('rpRows').children.length > 400) $('rpRows').lastChild.remove();
     stripAdd(r.ms, `${r.mode} ${r.kind} ${r.file.split('/').pop()}:${r.line}: ${r.ms} ms (${r.how})`, r.outcome === 'ok' ? r.mode : 'cancelled');
+    if (r.editHow) editBadge(r.editHow, `${r.mode}: ${r.editLabel}${r.lastEdit ? ' · ' + r.lastEdit : ''} · first request after it ${r.ms} ms`, r.editExpect);
   }
   // the request starting now, in the editor: the replayed file's text, the offset marked
   async function rpShow(c) {

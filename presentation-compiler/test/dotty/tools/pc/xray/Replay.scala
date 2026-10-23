@@ -55,7 +55,8 @@ object Replay:
   val modes: List[Mode] = List(
     Mode("baseline", "-Yno-targeted-requests (baseline: every request types the whole file)", List("-Yno-targeted-requests")),
     Mode("default", "default: targeting, the session, several readers serialised (step 3)", Nil),
-    Mode("readers", "-Yinteractive-readers: independent readers (step 4)", List("-Yinteractive-readers")))
+    Mode("readers", "-Yinteractive-readers: independent readers (step 4)", List("-Yinteractive-readers")),
+    Mode("bodyEdits", "-Yinteractive-body-edits: the session survives an edit inside a body (§12)", List("-Yinteractive-body-edits")))
 
   def modeNamed(key: String): Mode = modes.find(_.key == key).get
 
@@ -66,7 +67,8 @@ object Replay:
   // ---- the events ----
 
   /** One event of the trace: `t` in the trace's seconds. */
-  final case class Event(idx: Int, t: Double, kind: String, id: String, uri: String, offset: Int, endOffset: Int, text: String | Null):
+  final case class Event(idx: Int, t: Double, kind: String, id: String, uri: String, offset: Int, endOffset: Int, text: String | Null,
+      expect: String | Null = null, label: String | Null = null):
     def file: String = Replay.fileOf(uri)
 
   /** The path of a trace uri below `src/main/scala/` (or its last segments). */
@@ -76,38 +78,48 @@ object Replay:
       val i = uri.indexOf("/src/main/scala/")
       if i >= 0 then uri.substring(i + "/src/main/scala/".length) else uri.split('/').takeRight(3).mkString("/")
 
-  private val eventsPath: Option[Path] =
-    sys.props.get("xray.replay.events").map(Paths.get(_)).filter(Files.exists(_))
+  /** The event files: `trace` (`-Dxray.replay.events`, a recorded Metals
+   *  session) and `bodyEdit` (`-Dxray.replay.bodyEditEvents`, the seeded
+   *  scenario `BodyEditScenarioSuite` writes: edits inside bodies on
+   *  Types.scala, each with what it must do, `kept` or `fresh`).
+   */
+  val sources: List[(String, String)] = List("trace" -> "xray.replay.events", "bodyEdit" -> "xray.replay.bodyEditEvents")
 
-  private lazy val allEvents: Vector[Event] = eventsPath match
+  private def eventsPathOf(source: String): Option[Path] =
+    sources.find(_._1 == source).flatMap((_, prop) => sys.props.get(prop)).map(Paths.get(_)).filter(Files.exists(_))
+
+  private val loaded = new ConcurrentHashMap[String, Vector[Event]]()
+  private def eventsOf(source: String): Vector[Event] = loaded.computeIfAbsent(source, src => load(eventsPathOf(src))).nn
+
+  private def load(path: Option[Path]): Vector[Event] = path match
     case None => Vector.empty
     case Some(p) =>
       JsonParser.parseString(Files.readString(p)).getAsJsonArray.asScala.zipWithIndex.map { (j, i) =>
         val o = j.getAsJsonObject
         def str(k: String): String | Null = if o.has(k) && !o.get(k).isJsonNull then o.get(k).getAsString else null
         def int(k: String): Int = if o.has(k) && !o.get(k).isJsonNull then o.get(k).getAsInt else -1
-        Event(i, o.get("t").getAsDouble, o.get("kind").getAsString, str("id"), str("uri"), int("offset"), int("endOffset"), str("text"))
+        Event(i, o.get("t").getAsDouble, o.get("kind").getAsString, str("id"), str("uri"), int("offset"), int("endOffset"), str("text"), str("expect"), str("label"))
       }.toVector
 
   /** A selection of the trace: events [from, to), the pauses between the
    *  trace's seconds capped at `idleCapMs`, the requests of one second spread
    *  over it at offsets drawn from `seed` (the trace has whole seconds only).
    */
-  final case class Spec(from: Int, to: Int, seed: Long, idleCapMs: Long, lanes: Int)
+  final case class Spec(from: Int, to: Int, seed: Long, idleCapMs: Long, lanes: Int, source: String = "trace")
 
   val defaultSpec: Spec = Spec(0, 175, 1L, 1000L, 2)
 
   /** A scheduled event: due `atMs` after the start, with the text of its
    *  file at that point of the trace.
    */
-  final case class Step(ev: Event, atMs: Double, text: String | Null)
+  final case class Step(ev: Event, atMs: Double, text: String | Null, sinceEdit: Int = 0, edit: Event | Null = null)
 
   /** The steps of `spec`: the files open when the window starts are opened
    *  at time 0 (with the text they had then).
    */
   def schedule(spec: Spec): Vector[Step] =
     val texts = mutable.LinkedHashMap.empty[String, String]
-    val evs = allEvents
+    val evs = eventsOf(spec.source)
     for e <- evs.take(spec.from) do e.kind match
       case "didOpen" | "didChange" => texts(e.uri) = e.text
       case "didClose" => texts.remove(e.uri)
@@ -120,17 +132,27 @@ object Replay:
     val rng = new scala.util.Random(spec.seed)
     var clock = 0.0
     var prevT = window.headOption.map(_.t).getOrElse(0.0)
-    for (t, group) <- window.groupBy(_.t).toSeq.sortBy(_._1) do
+    // per file: the last edit and how many requests came since
+    val lastEdit = mutable.Map.empty[String, (Event, Int)]
+    val groups = window.groupBy(_.t).toSeq.sortBy(_._1)
+    for ((t, group), gi) <- groups.zipWithIndex do
       clock += math.min((t - prevT) * 1000, spec.idleCapMs.toDouble)
       prevT = t
-      // the order of the trace within the second, at sorted random offsets
-      val offsets = group.indices.map(_ => rng.nextDouble() * 900).sorted
+      // the order of the trace within its time step (a second, or less), at
+      // sorted random offsets inside the step
+      val step = if gi + 1 < groups.size then math.min(1000.0, (groups(gi + 1)._1 - t) * 1000) else 1000.0
+      val offsets = group.indices.map(_ => rng.nextDouble() * 0.9 * step).sorted
       for (e, off) <- group.sortBy(_.idx).zip(offsets) do
+        var since = 0
+        var edit: Event | Null = null
         e.kind match
-          case "didOpen" | "didChange" => texts(e.uri) = e.text
+          case "didOpen" => texts(e.uri) = e.text; lastEdit.remove(e.uri)
+          case "didChange" => texts(e.uri) = e.text; lastEdit(e.uri) = (e, 0)
           case "didClose" => texts.remove(e.uri)
+          case k if requestKinds(k) =>
+            lastEdit.get(e.uri).foreach { (ed, n) => since = n + 1; edit = ed; lastEdit(e.uri) = (ed, n + 1) }
           case _ =>
-        out += Step(e, clock + off, if e.uri == null then null else texts.get(e.uri).orNull)
+        out += Step(e, clock + off, if e.uri == null then null else texts.get(e.uri).orNull, since, edit)
     out.result().filter(s => !requestKinds(s.ev.kind) || s.text != null)
 
   // ---- one request ----
@@ -139,12 +161,14 @@ object Replay:
   final case class Row(seq: Int, mode: String, idx: Int, kind: String, file: String, offset: Int, line: Int, lane: Int,
       dueMs: Double, queuedMs: Double, ms: Double, lockMs: Double, lockCount: Int, statementMs: Double,
       trees: Int, runs: Int, wholeFileRuns: Int, backedOff: Int, how: String, outcome: String,
-      answer: String, key: String, diagnostics: Int, wholeFileDiagnostics: Int):
+      answer: String, key: String, diagnostics: Int, wholeFileDiagnostics: Int,
+      sinceEdit: Int = 0, editLabel: String = "", editExpect: String = "", editHow: String = "", lastEdit: String = "", label: String = ""):
     def toMap: Map[String, Any] = Map("seq" -> seq, "mode" -> mode, "idx" -> idx, "kind" -> kind, "file" -> file,
       "offset" -> offset, "line" -> line, "lane" -> lane, "dueMs" -> r1(dueMs), "queuedMs" -> r1(queuedMs), "ms" -> r1(ms),
       "lockMs" -> r1(lockMs), "lockCount" -> lockCount, "statementMs" -> r1(statementMs), "trees" -> trees, "runs" -> runs,
       "wholeFileRuns" -> wholeFileRuns, "backedOff" -> backedOff, "how" -> how, "outcome" -> outcome, "answer" -> answer,
-      "diagnostics" -> diagnostics, "wholeFileDiagnostics" -> wholeFileDiagnostics)
+      "diagnostics" -> diagnostics, "wholeFileDiagnostics" -> wholeFileDiagnostics,
+      "sinceEdit" -> sinceEdit, "editLabel" -> editLabel, "editExpect" -> editExpect, "editHow" -> editHow, "lastEdit" -> lastEdit, "label" -> label)
 
   private val freshNumber = "\\$\\d+".r
 
@@ -250,7 +274,7 @@ object Replay:
   def start(keys: List[String], spec: Spec): Map[String, Any] = synchronized {
     val r = runner
     if r != null && r.isAlive then Map("error" -> "a replay is running")
-    else if allEvents.isEmpty then Map("error" -> s"no events: start the server with -Dxray.replay.events=<replay-events.json>")
+    else if eventsOf(spec.source).isEmpty then Map("error" -> s"no events for ${spec.source}: start the server with -D${sources.find(_._1 == spec.source).map(_._2).getOrElse("?")}=<events.json>")
     else
       if spec != lastSpec then runs = Map.empty
       lastSpec = spec
@@ -330,7 +354,8 @@ object Replay:
     val e = s.ev
     val started = System.nanoTime()
     val id = seq.incrementAndGet()
-    cursor = Map("file" -> e.file, "offset" -> e.offset, "endOffset" -> e.endOffset, "kind" -> e.kind, "seq" -> id, "mode" -> mr.mode.key)
+    cursor = Map("file" -> e.file, "offset" -> e.offset, "endOffset" -> e.endOffset, "kind" -> e.kind, "seq" -> id, "mode" -> mr.mode.key,
+      "label" -> Option(e.label).getOrElse(""), "edit" -> (if s.edit == null then "" else Option(s.edit.nn.label).getOrElse("an edit")), "sinceEdit" -> s.sinceEdit)
     mr.inFlight.put(id, s"${e.kind} ${e.file.split('/').last}:${lineOf(s.text, e.offset)}")
     val uri = URI.create(e.uri)
     val source = SourceFile.virtual(uri, s.text)
@@ -403,7 +428,14 @@ object Replay:
       trees = trees, runs = runs, wholeFileRuns = if r == null then 0 else r.wholeFileRunsStarted,
       backedOff = if r == null then 0 else r.waitCyclesBackedOff, how = how, outcome = outcome,
       answer = shown, key = key, diagnostics = diags,
-      wholeFileDiagnostics = if wholeFileKinds(e.kind) && outcome == "ok" then wholeFileCount(e.uri, s.text) else -1)
+      wholeFileDiagnostics = if wholeFileKinds(e.kind) && outcome == "ok" then wholeFileCount(e.uri, s.text) else -1,
+      sinceEdit = s.sinceEdit,
+      editLabel = if s.edit == null then "" else Option(s.edit.nn.label).getOrElse(""),
+      editExpect = if s.edit == null then "" else Option(s.edit.nn.expect).getOrElse(""),
+      // the first request after an edit: whether the edit kept the session's run
+      editHow = if s.sinceEdit != 1 || outcome != "ok" then "" else if runs > 0 then "fresh" else "kept",
+      lastEdit = if s.sinceEdit == 1 then driver.lastEdit(uri) else "",
+      label = Option(e.label).getOrElse(""))
 
   // ---- the findings ----
 
@@ -419,8 +451,13 @@ object Replay:
     for
       m <- modes
       mr <- runs.get(m.key).toList
-      kind <- (List("all") ++ (cursorKinds.toList.sorted ++ wholeFileKinds.toList.sorted))
-      rs = mr.rows.asScala.toList.filter(r => kind == "all" || r.kind == kind)
+      kind <- (List("all") ++ (cursorKinds.toList.sorted ++ wholeFileKinds.toList.sorted) ++ List("first request after an edit") ++
+        (cursorKinds.toList.sorted ++ wholeFileKinds.toList.sorted).map(k => s"$k after an edit"))
+      rs = mr.rows.asScala.toList.filter(r => kind match
+        case "all" => true
+        case "first request after an edit" => r.sinceEdit == 1
+        case k if k.endsWith(" after an edit") => r.sinceEdit >= 1 && r.kind == k.stripSuffix(" after an edit")
+        case k => r.kind == k)
       if rs.nonEmpty
     yield
       val ok = rs.filter(_.outcome == "ok")
@@ -439,6 +476,10 @@ object Replay:
         "diagChecked" -> checked.size, "diagMatch" -> checked.count(r => r.diagnostics == r.wholeFileDiagnostics),
         "diagFirstMismatch" -> checked.find(r => r.diagnostics != r.wholeFileDiagnostics).map(r => s"${r.file.split('/').last}:${r.line} ${r.kind}: ${r.diagnostics} vs ${r.wholeFileDiagnostics}").getOrElse(""),
         "compared" -> (if m.key == "baseline" then 0 else ok.count(r => base.contains(r.idx))),
+        // edits: of the first requests after an edit, how many found the run kept, and as expected
+        "editsKept" -> rs.count(_.editHow == "kept"), "editsFresh" -> rs.count(_.editHow == "fresh"),
+        "editsAsExpected" -> rs.count(r => r.editHow.nonEmpty && r.editHow == r.editExpect),
+        "editsExpected" -> rs.count(r => r.editHow.nonEmpty && r.editExpect.nonEmpty),
         "differ" -> differ.size,
         "differExamples" -> differ.take(3).map((r, b) => Map("where" -> s"${r.kind} ${r.file.split('/').last}:${r.line} (event ${r.idx})", "idx" -> r.idx, "mode" -> r.answer, "baseline" -> b.answer)))
 
@@ -446,10 +487,12 @@ object Replay:
   def describe(spec: Spec): Map[String, Any] =
     val steps = schedule(spec)
     val reqs = steps.filter(s => requestKinds(s.ev.kind))
-    Map("eventsFile" -> eventsPath.map(_.toString).getOrElse(""), "eventsInTrace" -> allEvents.size,
+    val allEvents = eventsOf(spec.source)
+    Map("source" -> spec.source, "eventsFile" -> eventsPathOf(spec.source).map(_.toString).getOrElse(""), "eventsInTrace" -> allEvents.size,
       "from" -> spec.from, "to" -> spec.to, "seed" -> spec.seed, "idleCapMs" -> spec.idleCapMs, "lanes" -> spec.lanes,
       "events" -> steps.size, "requests" -> reqs.size,
       "edits" -> steps.count(_.ev.kind == "didChange"), "cancels" -> steps.count(_.ev.kind == "cancel"),
+      "editsExpected" -> steps.filter(_.ev.kind == "didChange").groupBy(s => Option(s.ev.expect).getOrElse("?")).view.mapValues(_.size).toMap,
       "durationMs" -> steps.lastOption.map(s => r1(s.atMs)).getOrElse(0.0),
       "traceSeconds" -> (if spec.to > spec.from && allEvents.nonEmpty then s"${allEvents(spec.from.min(allEvents.size - 1)).t}–${allEvents((spec.to - 1).min(allEvents.size - 1)).t}" else ""),
       "kinds" -> reqs.groupBy(_.ev.kind).view.mapValues(_.size).toMap,
@@ -477,12 +520,12 @@ object Replay:
     b ++= "Files: " + d("files").asInstanceOf[List[Map[String, Any]]].map(f => s"`${f("file")}` (${f("requests")} requests, ${f("lines")} lines)").mkString(", ") + ".\n\n"
     for m <- modes; mr <- runs.get(m.key) do
       b ++= s"- **${m.key}** (`${if m.flags.isEmpty then "no flags" else m.flags.mkString(" ")}`): ${m.title}; ${mr.state}, ${r1(mr.wallMs)} ms wall\n"
-    b ++= "\n| mode | kind | n | cancelled | latency ms median / p90 / max | queued ms median / p90 | lock wait ms median / p90 / max | statement wait ms p90 | trees median (total) | runs (whole-file) | diagnostics = whole-file | answers ≠ baseline |\n"
-    b ++= "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+    b ++= "\n| mode | kind | n | cancelled | latency ms median / p90 / max | queued ms median / p90 | lock wait ms median / p90 / max | statement wait ms p90 | trees median (total) | runs (whole-file) | edits kept / fresh (as expected) | diagnostics = whole-file | answers ≠ baseline |\n"
+    b ++= "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     def s3(m: Any) = { val x = m.asInstanceOf[Map[String, Any]]; s"${x("median")} / ${x("p90")} / ${x("max")}" }
     def s2(m: Any) = { val x = m.asInstanceOf[Map[String, Any]]; s"${x("median")} / ${x("p90")}" }
     for f <- findings do
-      b ++= s"| ${f("mode")} | ${f("kind")} | ${f("count")} | ${f("cancelled")} | ${s3(f("latency"))} | ${s2(f("queued"))} | ${s3(f("lock"))} | ${f("statement").asInstanceOf[Map[String, Any]]("p90")} | ${f("treesMedian")} (${f("trees")}) | ${f("runs")} (${f("wholeFileRuns")}) | ${if f("diagChecked") == 0 then "–" else s"${f("diagMatch")}/${f("diagChecked")}"} | ${if f("mode") == "baseline" then "–" else s"${f("differ")}/${f("compared")}"} |\n"
+      b ++= s"| ${f("mode")} | ${f("kind")} | ${f("count")} | ${f("cancelled")} | ${s3(f("latency"))} | ${s2(f("queued"))} | ${s3(f("lock"))} | ${f("statement").asInstanceOf[Map[String, Any]]("p90")} | ${f("treesMedian")} (${f("trees")}) | ${f("runs")} (${f("wholeFileRuns")}) | ${if f("editsKept").asInstanceOf[Int] + f("editsFresh").asInstanceOf[Int] == 0 then "–" else s"${f("editsKept")} / ${f("editsFresh")} (${f("editsAsExpected")} of ${f("editsExpected")})"} | ${if f("diagChecked") == 0 then "–" else s"${f("diagMatch")}/${f("diagChecked")}"} | ${if f("mode") == "baseline" then "–" else s"${f("differ")}/${f("compared")}"} |\n"
     val ex = findings.filter(f => f("kind") != "all" && f("differ").asInstanceOf[Int] > 0)
     if ex.nonEmpty then
       b ++= "\nAnswers that differ from the baseline (first few):\n\n"
@@ -502,7 +545,7 @@ object Replay:
     def spec: Spec = Spec(
       field(q, "from").map(_.toInt).getOrElse(lastSpec.from), field(q, "to").map(_.toInt).getOrElse(lastSpec.to),
       field(q, "seed").map(_.toLong).getOrElse(lastSpec.seed), field(q, "idleCap").map(_.toLong).getOrElse(lastSpec.idleCapMs),
-      field(q, "lanes").map(_.toInt).getOrElse(lastSpec.lanes))
+      field(q, "lanes").map(_.toInt).getOrElse(lastSpec.lanes), field(q, "source").getOrElse(lastSpec.source))
     path match
       case "/replay/describe" => reply(ex, 200, "application/json", json(describe(spec)))
       case "/replay/run" =>

@@ -710,7 +710,9 @@ object XrayServer:
       "touched" -> touched, "touchedBefore" -> touchedBefore, "completed" -> completed, "scopeSize" -> total,
       "diagnostics" -> diagnostics, "diagnosticText" -> diagnosticText,
       "completions" -> completions.map(c => c.label + (if c.description.nonEmpty then " " + c.description else "")).take(50),
-      "hover" -> hover
+      "hover" -> hover,
+      // what the request did with an edit (-Yinteractive-body-edits): kept the run, or why not
+      "lastEdit" -> driver.lastEdit(uri)
     ) ++ {
       // this request's reader (bound on this thread by the request): its waits on the completion lock
       val r = driver.readerOfThisThread
