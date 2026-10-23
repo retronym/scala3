@@ -1,6 +1,6 @@
 # To build the spec on Travis CI
 source "https://rubygems.org"
-ruby "~> 2.7"
+ruby "~> 3.4"
 
 gem "jekyll"
 gem "webrick"

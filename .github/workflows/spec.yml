@@ -26,33 +26,50 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Keep in sync with ./docs/_spec/Dockerfile
       - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
-          ruby-version: '2.7'
-      - name: Install required gems
-        run: |
-          gem install "rubygems-update:<3.5" --no-document
-          update_rubygems
-          gem install sass-embedded -v 1.58.0
-          gem install bundler:1.17.2 jekyll
-          bundle install
-          npm install bower
+          ruby-version: '3.4'
+          bundler-cache: true
+          working-directory: ./docs/_spec
 
       - name: Build the specification
         run: |
           bundle exec jekyll build
 
-      # Deploy
+      - name: Upload the specification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: specification
+          path: docs/_spec/_site/
+          if-no-files-found: error
+
+  # Only main of scala/scala3 publishes the specification. The deploy key is
+  # never available to the build, which runs on PRs and other branches.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: specification
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'scala/scala3'
+    # An older rsync must not finish after a newer one
+    concurrency:
+      group: spec-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Download the specification
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: specification
+          path: _site
+
       - name: Deployment
-        env:
-          USER_FOR_TEST: ${{ secrets.SPEC_DEPLOY_USER }}
-        if: ${{ env.USER_FOR_TEST != '' }}
         uses: burnett01/rsync-deployments@155b6d6c1219ab2224c20c58d423a3f1b850395f # 9.0.1
         with:
           switches: -rzv
-          path: docs/_spec/_site/
+          path: _site/
           remote_path: ${{ secrets.SPEC_DEPLOY_PATH }}
           remote_host: ${{ secrets.SPEC_DEPLOY_HOST }}
           remote_user: ${{ secrets.SPEC_DEPLOY_USER }}
