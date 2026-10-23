@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   add-to-backporting-project:
-    if: "!contains(github.event.push.head_commit.message, '[Next only]') &&
+    if: "!contains(github.event.head_commit.message, '[Next only]') &&
          github.repository == 'scala/scala3'"
     runs-on: ubuntu-latest
 
@@ -24,6 +24,9 @@ jobs:
           app-id: ${{ secrets.SCALA_APP_ID }}
           private-key: ${{ secrets.SCALA_APP_PRIVATE_KEY }}
           owner: scala
+          # The backporting projects belong to the organization, the token
+          # needs no access to other repositories of it
+          repositories: scala3
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

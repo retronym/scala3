@@ -6,6 +6,22 @@ on:
       environment:
         required: true
         type: string
+    # The Maven repository credentials and SCALA_PGP_* are secrets of the
+    # environment, which take precedence over anything passed by the caller.
+    # PGP_SECRET and PGP_PW sign the LTS 3.3 artifacts and are passed in.
+    secrets:
+      PGP_SECRET:
+        required: false
+      PGP_PW:
+        required: false
+      MAVEN_REPOSITORY_USER:
+        required: false
+      MAVEN_REPOSITORY_TOKEN:
+        required: false
+      SCALA_PGP_KEY:
+        required: false
+      SCALA_PGP_PASSPHRASE:
+        required: false
 
 permissions:
   contents: read

@@ -42,27 +42,22 @@ jobs:
   stdlib-tests:
     uses: ./.github/workflows/stdlib.yaml
     if: "github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')"
-    secrets: inherit
 
   mima-tests:
     uses: ./.github/workflows/mima.yaml
     if: "github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')"
-    secrets: inherit
 
   compiler-tests:
     uses: ./.github/workflows/compiler-tests.yaml
     if: "github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')"
-    secrets: inherit
 
   community-build-tests:
     uses: ./.github/workflows/community-build.yaml
     if: "github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')"
-    secrets: inherit
 
   misc-tests:
     uses: ./.github/workflows/misc-tests.yaml
     if: "github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')"
-    secrets: inherit
 
   test_windows_full:
     runs-on: [self-hosted, Windows]

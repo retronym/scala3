@@ -15,30 +15,27 @@ permissions:
 jobs:
   stdlib-tests:
     uses: ./.github/workflows/stdlib.yaml
-    secrets: inherit
 
   mima-tests:
     uses: ./.github/workflows/mima.yaml
-    secrets: inherit
 
   compiler-tests:
     uses: ./.github/workflows/compiler-tests.yaml
-    secrets: inherit
 
   community-build-tests:
     uses: ./.github/workflows/community-build.yaml
-    secrets: inherit
 
   misc-tests:
     uses: ./.github/workflows/misc-tests.yaml
-    secrets: inherit
 
   release-maven-artifacts:
     uses: ./.github/workflows/release-maven-artifacts.yml
     needs: [stdlib-tests, mima-tests, compiler-tests, community-build-tests, misc-tests]
     with:
       environment: release-nightly
-    secrets: inherit
+    secrets:
+      PGP_SECRET: ${{ secrets.PGP_SECRET }}
+      PGP_PW: ${{ secrets.PGP_PW }}
 
   release-documentation:
     runs-on: ubuntu-latest
@@ -64,6 +61,7 @@ jobs:
           private-key: ${{ secrets.SCALA_APP_PRIVATE_KEY }}
           owner: scala
           repositories: nightly.scala-lang.org
+          permission-contents: write
       - name: Deploy Website to https://nightly.scala-lang.org
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
