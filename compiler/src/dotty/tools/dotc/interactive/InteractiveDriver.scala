@@ -503,10 +503,14 @@ class InteractiveDriver(
           pristineErrors = oldErrors.removeBufferedMessages
           p
         case p: untpd.Tree => p
+      val t0 = System.nanoTime()
       val r = BodyEdit.region(oldText, newText)
       src.replaceContent(newText)
       val parseErrors = new StoreReporter(null)
       val parsed = parse(src, parseErrors)
+      val t1 = System.nanoTime()
+      var tCompared = t1
+      def took = f"; parse ${(t1 - t0) / 1e6}%.1f ms, compare ${(tCompared - t1) / 1e6}%.1f ms, shift ${shiftNanos / 1e6}%.1f ms, the rest ${(System.nanoTime() - tCompared) / 1e6 - shiftNanos / 1e6}%.1f ms"
       def refuse(why: String): Boolean =
         src.replaceContent(oldText)
         myLastEdit = s"edit refused ($why)"
@@ -520,7 +524,9 @@ class InteractiveDriver(
         val before = pristineErrors.filterNot(e => old.contains(e.pos.span)).map(e => key(e, r.span(e.pos.span, anchor)))
         val after = errors.filterNot(e => now.contains(e.pos.span)).map(e => key(e, e.pos.span))
         before.sortBy(_.toString) == after.sortBy(_.toString)
-      BodyEdit.classify(old, parsed, r) match
+      val kind = BodyEdit.classify(old, parsed, r)
+      tCompared = System.nanoTime()
+      kind match
         case BodyEdit.Kind.Fresh(why) => refuse(why)
         case BodyEdit.Kind.Layout if !sameErrorsOutside(NoSpan, NoSpan, r.regionSpan) => refuse("the syntax errors differ")
         case BodyEdit.Kind.Layout =>
@@ -529,13 +535,14 @@ class InteractiveDriver(
           shiftAll(shift, r, r.regionSpan)
           pristine = parsed
           unit.untpdTree = parsed
-          myLastEdit = s"layout edit, shifted ${shift.trees} trees ${shift.symbols} symbols"
+          myLastEdit = s"layout edit, shifted ${shift.trees} trees ${shift.symbols} symbols$took"
           true
         case BodyEdit.Kind.Body(d, d1) =>
           if !sameErrorsOutside(d.span, d1.span, d.span) then refuse("the syntax errors outside the edited body differ")
           else bodyEdit(d, d1, parsed, r, errors.filter(e => d1.span.contains(e.pos.span))) match
             case null =>
               pristineErrors = errors
+              myLastEdit += took
               true
             case why: String => refuse(why)
 
@@ -582,7 +589,14 @@ class InteractiveDriver(
         case _ => false
       }) then return "a local child of a sealed class"
       val cls = (if owner.isClass then owner else owner.owner).asClass
-      def ofD(sym: Symbol, span: Span) = definesHere(sym) && !sym.isConstructor && sym.span.exists && span.contains(sym.span)
+      // An inline accessor is made by typing an inline method that refers to
+      // the private member it accesses, positioned at the reference: not
+      // the Namer's, not re-indexed, kept.
+      def isInlineAccessor(sym: Symbol) =
+        val n = sym.name.unexpandedName.toTermName
+        n.is(NameKinds.InlineAccessorName) || n.isSetterName && n.getterName.is(NameKinds.InlineAccessorName)
+      def ofD(sym: Symbol, span: Span) =
+        definesHere(sym) && !sym.isConstructor && !isInlineAccessor(sym) && sym.span.exists && span.contains(sym.span)
       val olds = cls.unforcedDecls.toList.filter(ofD(_, d.span))
       if !main.forall(t => olds.contains(t.symbol)) then return "the definition's symbol is not a member"
       val oldInfos = olds.filter(_.isCompleted).map(sym => sym -> sym.info)
@@ -642,8 +656,12 @@ class InteractiveDriver(
         null
       finally if !done then poisoned = true
 
+    /** The time the last shift took, for the log. */
+    private var shiftNanos = 0L
+
     /** Shift everything the session keeps of its source (§12). */
     private def shiftAll(shift: BodyEdit.Shift, r: BodyEdit.Region, anchor: Span)(using Context): Unit =
+      val t0 = System.nanoTime()
       val src = unit.source
       shift.tree(unit.tpdTree)
       skipped.foreach(sk => shift.tree(sk.stat))
@@ -668,6 +686,7 @@ class InteractiveDriver(
         }
       }
       reporter.forgetPositions(src)
+      shiftNanos = System.nanoTime() - t0
   end Session
 
   private var mySession: Session | Null = null
