@@ -122,7 +122,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: 17
-          cache: 'sbt'
+          # No dependency cache: release artifacts are built only from what
+          # this job resolves, never from a cache another job wrote
 
       - uses: sbt/setup-sbt@ecad189dd245444b9ae0a0cd5922fd938b88906f # v1.5.12
 
@@ -335,7 +336,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: 17
-          cache: 'sbt'
+          # No dependency cache: release artifacts are built only from what
+          # this job resolves, never from a cache another job wrote
 
       - uses: sbt/setup-sbt@ecad189dd245444b9ae0a0cd5922fd938b88906f # v1.5.12
 
