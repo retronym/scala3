@@ -135,6 +135,9 @@ class InteractiveDriver(
 
     def skippedAt(target: Span): Option[Run.SkippedStat] = skipped.find(_.stat.span.contains(target))
 
+    /** The skipped statements that `target`, an offset or a range, touches. */
+    def skippedTouching(target: Span): List[Run.SkippedStat] = skipped.filter(_.stat.span.touches(target))
+
     /** Is this the session of `uri` on the content of `source`? */
     def isOn(uri: URI, source: SourceFile): Boolean =
       this.uri == uri && this.source.textContent() == source.textContent()
@@ -223,14 +226,16 @@ class InteractiveDriver(
     private def assertOwnSource(sk: Run.SkippedStat): Unit =
       assert(sk.ctx.source eq unit.source, s"skipped statement at ${sk.stat.span} is from ${sk.ctx.source}, not the session's ${unit.source}")
 
-    /** Type the skipped statement `sk` in the run and context it was skipped
-     *  in, with `target` as the target for the statements nested in it, and
-     *  splice the result into the unit's typed tree.
+    /** Type the skipped statements `sks` (the one a point target lands in,
+     *  or all those a range target touches) in the run and contexts they were
+     *  skipped in, with `target` as the target for the statements nested in
+     *  them, and splice the results into the unit's typed tree in one pass.
      */
-    def resume(sk: Run.SkippedStat, target: Span): List[Diagnostic] =
-      liveContext(sk.ctx) match
-        case None => InteractiveDriver.this.run(uri, source, target) // no typer state left to resume in
-        case Some(ctx0) => resumeIn(sk, ctx0, target)
+    def resume(sks: List[Run.SkippedStat], target: Span): List[Diagnostic] =
+      val inOrder = sks.sortBy(_.stat.span.start)
+      val live = inOrder.map(sk => liveContext(sk.ctx))
+      if live.exists(_.isEmpty) then InteractiveDriver.this.run(uri, source, target) // no typer state left to resume in
+      else resumeIn(inOrder.zip(live.map(_.get)), target)
 
     /** The recorded context of a skipped statement, in the nearest typer
      *  state that can still take constraints. A statement skipped inside an
@@ -252,29 +257,38 @@ class InteractiveDriver(
         case null => None
         case ts1 => Some(ctx0.fresh.setTyperState(ts1))
 
-    private def resumeIn(sk: Run.SkippedStat, ctx0: Context, target: Span): List[Diagnostic] =
+    private def resumeIn(batch: List[(Run.SkippedStat, Context)], target: Span): List[Diagnostic] =
       beginTyping()
-      assertOwnSource(sk)
-      skipped = skipped.filterNot(_ eq sk)
-      run.clearTargeting()
-      run.typingTarget = target
+      batch.foreach((sk, _) => assertOwnSource(sk))
+      skipped = skipped.filterNot(s => batch.exists(_._1 eq s))
+      val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
       try
-        // typed in its own typer state, committed into the session's only once
-        // the statement is typed: a cancellation drops its constraints with it
-        val ctx1 = ctx0.fresh.setNewTyperState()
-        run.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
-        // a resumed block statement continues the targeting of its block
-        run.targetingTyperState = ctx1.typerState
-        val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
-        ctx1.typerState.commit()(using ctx0)
-        collectSkipped()
-        assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")
-        spliceAll(List((sk, stats)))(using ctx0)
-        diagnostics
-      catch case ex: CompilationUnit.CancelledCompilation =>
-        abandon(sk)
-        throw ex
-      finally run.clearTargeting()
+        for ((sk, ctx0), i) <- batch.zipWithIndex do
+          run.clearTargeting()
+          run.typingTarget = target
+          try
+            // typed in its own typer state, committed into the session's only once
+            // the statement is typed: a cancellation drops its constraints with it
+            val ctx1 = ctx0.fresh.setNewTyperState()
+            run.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
+            // a resumed block statement continues the targeting of its block
+            run.targetingTyperState = ctx1.typerState
+            val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
+            ctx1.typerState.commit()(using ctx0)
+            collectSkipped()
+            typed += ((sk, stats))
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            // the ones typed so far are kept; the rest stay skipped
+            skipped = skipped ++ batch.drop(i + 1).map(_._1)
+            abandon(sk)
+            throw ex
+        assert(!skipped.exists(_.stat.span.touches(target)), s"target $target is still skipped in $uri after the resume of ${batch.map(_._1.stat.span).mkString(", ")}")
+      finally
+        // what the aborted statement skipped goes with it
+        run.clearTargeting()
+        val entries = typed.result()
+        if entries.nonEmpty then spliceAll(entries)(using batch.head._2)
+      diagnostics
 
     /** Does `owner` define `name` in this file: the companion of a statement
      *  to replace. A companion is not replaced alone: the synthetic members a
@@ -509,6 +523,9 @@ class InteractiveDriver(
     val p = uri.getPath
     (if p == null then uri.toString else p).split('/').last
 
+  private def showTarget(target: Span): String =
+    if target.isZeroExtent then s"${target.start}" else s"${target.start}-${target.end}"
+
   /** What the session of `uri` did, for the log. */
   private def sessionSummary(uri: URI): String =
     val trees = sessionOf(uri) match
@@ -545,9 +562,11 @@ class InteractiveDriver(
   /** Type `source` only along the path to `target`: of the statements of
    *  the outermost package and of each template on the path, only the one
    *  containing the target, as scalac's `typedStats` does for its target
-   *  position. Or resume the previous targeted run of `uri` if it was on the
+   *  position. A target that is a range (a visible range, for inlay hints and
+   *  semantic tokens) types every statement it touches, at each level. Or
+   *  resume the previous targeted run of `uri` if it was on the
    *  same content: a target within what is typed is served without typing
-   *  anything, a target within a skipped statement types that statement in
+   *  anything, a target within skipped statements types those statements in
    *  the same run and context, so that the denotations and completers of
    *  everything else stay valid. Any other content starts a fresh targeted
    *  run. The compilation unit of `uri` then holds the typed part of the
@@ -557,7 +576,7 @@ class InteractiveDriver(
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     val before = mySession
     val skippedBefore = if before == null then -1 else before.skipped.size
-    logged(s"runUpTo ${fileNameOf(uri)}@${target.start}")(runUpTo0(uri, source, target)) {
+    logged(s"runUpTo ${fileNameOf(uri)}@${showTarget(target)}")(runUpTo0(uri, source, target)) {
       val s = mySession
       val how =
         if s eq null then "whole-file"
@@ -576,11 +595,11 @@ class InteractiveDriver(
         // tree without it): the request starts a fresh run, which is cheap
         // for a targeted run.
         if !s.isResumable then run(uri, source, target)
-        else s.skippedAt(target) match
-          case None => s.diagnostics
+        else s.skippedTouching(target) match
+          case Nil => s.diagnostics
           // A statement skipped inside a block left a stub in the typed
           // `Block`; the resume replaces the stub by the typed statement.
-          case Some(sk) => s.resume(sk, target)
+          case sks => s.resume(sks, target)
       case _ =>
         run(uri, source, target)
 
@@ -600,7 +619,7 @@ class InteractiveDriver(
       case _ => false
 
   private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
+    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${showTarget(target)}" else " (whole file)"}")(run0(uri, source, target)) {
       sessionSummary(uri)
     }
 

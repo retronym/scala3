@@ -236,13 +236,16 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   //
   // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
   // a package, a template or a block on the path to the target, only those
-  // whose span contains the target (see `Targeting`); the others are recorded
+  // whose span touches the target (see `Targeting`); the others are recorded
   // in `skippedStats` with the context they would have been typed in and the
   // statement owner, for the driver to type later in this same run when a
   // request lands in one of them. Their symbols exist (the Namer indexed them)
   // and complete lazily as usual. Batch compilation never sets any of this.
 
-  /** The offset the run types towards; `NoSpan` for a run that types everything. */
+  /** What the run types towards: an offset (a zero-extent span), or a range
+   *  whose overlapping statements are typed; `NoSpan` for a run that types
+   *  everything.
+   */
   var typingTarget: Span = Spans.NoSpan
 
   /** The statements `typedStats` skipped, innermost lists last. */

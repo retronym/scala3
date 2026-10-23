@@ -12,7 +12,8 @@ import collection.mutable
  *  `Run.typingTarget` and `InteractiveDriver.runUpTo`).
  *
  *  Of the statements of a package, a template or a block on the path to the
- *  target only the statement whose span contains the target is typed (a class
+ *  target only those whose span touches the target are typed: the one that
+ *  contains a point target, every one that overlaps a range target (a class
  *  and its synthetic companion share the span, so both are); `skip` records
  *  the others on the run, with the context they would have been typed in, for
  *  the driver to type later in the same run. The rules, in the order `skip`
@@ -29,8 +30,9 @@ import collection.mutable
  *   - inline: never inside an inline method: its body is registered whole.
  *   - needed-before: the statements before the target's that it names are
  *     typed in order, so a chain of locals is not typed ahead recursively.
- *   - next-after: a target between statements types the next one (scaladoc
- *     completion needs the documented def).
+ *   - next-after: a point target between statements types the next one
+ *     (scaladoc completion needs the documented def); a range types only what
+ *     it touches.
  *   - the expansion of a kept definition that holds the target or comes next
  *     after it is typed whole (an `extension` block expands into methods whose
  *     own spans need not contain a target in the block's comment).
@@ -47,7 +49,7 @@ private[typer] final class Targeting(
   private val target = run.typingTarget
 
   private val nextAfterTarget: untpd.Tree | Null =
-    if !stats.exists(_.span.contains(target)) then
+    if target.isZeroExtent && !stats.exists(_.span.touches(target)) then
       stats.find(s => s.span.exists && s.span.start >= target.end).orNull
     else null
 
@@ -57,13 +59,14 @@ private[typer] final class Targeting(
   private val neededInBlock: Set[untpd.Tree] =
     if !inBlock then Set.empty
     else
-      val targetIdx = stats.indexWhere(_.span.contains(target))
+      // the statements touching a range are consecutive: what they name
+      val targetIdx = stats.indexWhere(_.span.touches(target))
       if targetIdx < 0 then Set.empty
       else
         val before = stats.take(targetIdx).toArray
         val defined = before.map(definedNames)
         val needed = new Array[Boolean](before.length)
-        var wanted = usedNames(stats(targetIdx))
+        var wanted = stats.drop(targetIdx).takeWhile(_.span.touches(target)).foldLeft(Set.empty[Name])(_ ++ usedNames(_))
         var i = before.length - 1
         while i >= 0 do
           if !needed(i) && defined(i).exists(wanted) then
@@ -81,7 +84,7 @@ private[typer] final class Targeting(
       && !stat.isInstanceOf[untpd.PackageDef]
       && !isSyntheticDef(stat) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
       && !neededInBlock.contains(stat)
-      && !stat.span.contains(target)
+      && !stat.span.touches(target)
       && !(stat eq nextAfterTarget)
       && !forcedSpan.contains(stat.span)
     if skipped then
@@ -89,7 +92,7 @@ private[typer] final class Targeting(
       run.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock)
     else stat match
       case _: untpd.DefTree | _: untpd.ExtMethods =>
-        if stat.span.contains(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
+        if stat.span.touches(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
       case _ =>
     skipped
 
