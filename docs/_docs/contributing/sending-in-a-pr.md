@@ -22,6 +22,8 @@ unique to the changes you're working on. It's important not to submit your PR on
 your `main` branch as this blocks maintainers from making any changes to your PR
 if necessary.
 
+Work in a full clone, not a shallow one (`git clone --depth ...`). In a shallow clone, `git commit --amend` or a rebase onto the shallow boundary creates a commit with no parent. Force-pushing that to a PR branch replaces its whole history, GitHub closes the PR, and it cannot be reopened. Check with `git rev-parse --is-shallow-repository` and fix with `git fetch --unshallow` before rewriting history.
+
 ### 3: Add Tests
 
 Add at least one test that replicates the problem in the issue, and that shows it is now resolved.

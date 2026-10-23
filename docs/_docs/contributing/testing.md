@@ -56,6 +56,43 @@ the name, so it is useful to use a unique name)
 The test groups – `pos`, `negAll`, etc. – are defined in [CompilationTests]. If you want to run a group
 of tests, e.g. `pos`, you can do so via `testOnly *CompilationTests -- *pos` command.
 
+### Running a Subset of Tests
+
+`testCompilation <filter>` runs the JUnit suites `dotty.tools.dotc.*CompilationTests` (in the root project: also `dotty.tools.dotc.coverage.*`), excluding `dotty.SlowTests`, with `-Ddotty.tests.filter=<filter>`. Every test group (`pos`, `negAll`, `runAll`, ...) still runs, but only over sources whose path contains the filter. This includes `tests/run`.
+
+```bash
+$ sbt --client "testCompilation i101"              # any test whose path contains "i101"
+$ sbt --client "testCompilation tests/run/i101"    # only the run test
+$ sbt --client "testCompilation i101,i102"         # several filters are comma-separated
+$ sbt --client "testCompilation --failed"          # re-run the tests that failed in the last run
+$ sbt --client "testCompilation --update-checkfiles tests/neg/i101"
+```
+
+Do not separate filters with spaces: `testCompilation i101 i102` passes `i102` to JUnit as a test-name filter, so no test runs at all and sbt reports `Passed: Total 0` without a Vulpix report.
+
+To run a single JUnit test method with a file filter, call `testOnly` on the compiler project directly:
+
+```bash
+$ sbt --client "scala3-compiler-nonbootstrapped/testOnly dotty.tools.dotc.CompilationTests -- --tests=runAll -Ddotty.tests.filter=tests/run/i101"
+```
+
+The other test methods of the class are reported as `ignored`. Without the project prefix, `testOnly` runs in every project aggregated by the root and ends with an unrelated `Passed: Total 0` line.
+
+#### Checking that a test actually ran
+
+A filter that matches nothing still passes. Look at the summary instead of the exit status:
+
+```
+== Vulpix Test Report: all 0 suites passed (47 skipped) ==   # nothing matched
+== Vulpix Test Report: all 2 suites passed (45 skipped) ==   # two test groups had matching sources
+```
+
+The `Passed: Total 22` line from sbt counts JUnit methods, not test files, and is the same either way. When a group has more than one matching source (and the `CI` environment variable is unset), Vulpix also prints `Testing <group>` and `completed (n/m, ...)` progress lines; a single matching file prints neither. To be sure a new test is exercised, break it once (e.g. add a line to its `.check` file) and watch it fail.
+
+On failure, the report lists the failed files and the groups that had no matching sources (`Skipped: ...`), and writes reproduction instructions to `testlogs/`.
+
+`testCompilation --failed` re-runs only the sources that failed in the last run. The Vulpix report then lists every other group as failed with `No tests available under target - erroneous test?`; ignore those lines, the sbt result reflects only the re-run sources.
+
 ### Testing a Single Input File
 
 If your issue is reproducible by only one file, put that file under an appropriate category.
@@ -124,6 +161,8 @@ Test output dumped in: tests/neg/Sample.check.out
     > mv tests/neg/Sample.check.out tests/neg/Sample.check
 ```
 
+Checkfiles live next to the test (`tests/run/i101.check` for `tests/run/i101.scala` or `tests/run/i101/`). Where the output differs by platform, `i101.jvm.check` or `i101.scala-js.check` takes precedence over `i101.check`. The coverage tests in `tests/coverage` use `.scoverage.check` and `.measurement.check` instead.
+
 ### Tips for creating Checkfiles
 
 To create a checkfile for a test, you can do one of the following:
@@ -132,7 +171,7 @@ To create a checkfile for a test, you can do one of the following:
    - then add arbitrary content
    - run the test
    - when it fails, use the `mv` command reported by the test to replace the initial checkfile with the actual output.
-2. Manually compile the file you are testing with `scala3/scalac`
+2. Manually compile the file you are testing with `scalac`
    - copy-paste whatever console output the compiler produces to the checkfile.
 
 ### Automatically Updating Checkfiles
@@ -158,19 +197,20 @@ $ sbt
 ### Bootstrapped-only tests
 
 To run `testCompilation` on a bootstrapped Dotty compiler, use
-`scala3-compiler-bootstrapped/testCompilation` (with the same syntax as above).
+`scala3-bootstrapped/testCompilation` (with the same syntax as above).
 Some tests can only be run in bootstrapped compilers; that includes all tests
-with `with-compiler` in their name.
+with `with-compiler`, `macros` or `staging` in their name, `tests/run-tasty-inspector`,
+`tests/run-bootstrapped` and the compiler plugin tests in `tests/plugins` (see [BootstrappedOnlyCompilationTests]).
+The root `testCompilation` silently skips them:
+
+```bash
+$ sbt --client "testCompilation tests/plugins"                     # all 0 suites passed
+$ sbt --client "scala3-bootstrapped/testCompilation tests/plugins"
+```
 
 ### From TASTy tests
 
-`testCompilation` has an additional mode to run tests that compile code from a `.tasty` file.
-Modify the lists in [compiler/test/dotc] to enable or disable tests from `.tasty` files.
-
-```bash
-$ sbt
-> testCompilation --from-tasty
-```
+`testCompilation --from-tasty` runs `dotty.tools.dotc.FromTastyTests`, which was removed in [#26868](https://github.com/scala/scala3/pull/26868); the flag currently runs no tests and reports `Passed: Total 0`.
 
 ## Debug Tests
 
@@ -199,7 +239,7 @@ result 42
 
 To run all the debug tests:
 ```
-sbt 'scala3-compiler/testOnly dotty.tools.debug.DebugTests'
+sbt 'scala3-compiler-nonbootstrapped/testOnly dotty.tools.debug.DebugTests'
 ```
 
 ### Debug Steps
@@ -331,7 +371,7 @@ comparing the differences and replacing the outdated expect files.
 If you are planning to update the SemanticDB output, you can do it in bulk by running the command
 ```bash
 $ sbt
-sbt:scala3> scala3-compiler/Test/runMain
+sbt:scala3> scala3-compiler-bootstrapped/Test/runMain
   dotty.tools.dotc.semanticdb.updateExpect
 ```
 
@@ -350,5 +390,5 @@ can try `git clean -xfd`.
 
 [CompilationTests]: https://github.com/scala/scala3/blob/master/compiler/test/dotty/tools/dotc/CompilationTests.scala
 [compiler/test]: https://github.com/scala/scala3/blob/master/compiler/test/
-[compiler/test/dotc]: https://github.com/scala/scala3/tree/master/compiler/test/dotc
 [SemanticdbTests]: https://github.com/scala/scala3/blob/master/compiler/test/dotty/tools/dotc/semanticdb/SemanticdbTests.scala
+[BootstrappedOnlyCompilationTests]: https://github.com/scala/scala3/blob/main/compiler/test/dotty/tools/dotc/BootstrappedOnlyCompilationTests.scala

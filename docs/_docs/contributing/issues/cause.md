@@ -63,7 +63,7 @@ The compiler issues user facing errors for code that is not valid, such as the t
 of assigning an `Int` to a `Boolean` value. Sometimes these errors do not match what is expected, which could be a bug.
 
 To discover why such a *spurious* error is generated, you can trace the code that generated the error by
-adding the `-Ydebug-error` compiler flag, e.g. `scala3/scalac -Ydebug-error Test.scala`.
+adding the `-Ydebug-error` compiler flag, e.g. `scalac -Ydebug-error Test.scala`.
 This flag forces a stack trace to be printed each time an error happens, from the site where it occurred.
 
 Analysing the trace will give you a clue about the objects involved in producing
