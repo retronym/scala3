@@ -106,15 +106,14 @@ jobs:
       # Setting the FORK_SIMULATE_ORIGIN repo variable lets a fork walk the
       # origin code path to test that the external-publish guards fire.
       IS_ORIGIN: ${{ github.repository == 'scala/scala3' || vars.FORK_SIMULATE_ORIGIN == 'true' }}
+      # The signing and Sonatype credentials are set only on the steps that publish
       HAS_SIGNING_KEY: ${{ secrets.PGP_SECRET != '' }}
-      PGP_PW: ${{ secrets.PGP_PW }}  # PGP passphrase
-      PGP_SECRET: ${{ secrets.PGP_SECRET }}  # Export your private and public PGP key to an *.asc file, take the file's contents as a string
-      SONATYPE_PW: ${{ secrets.SONATYPE_PW_ORGSCALALANG }}
-      SONATYPE_USER: ${{ secrets.SONATYPE_USER_ORGSCALALANG }}
 
     steps:
       - name: Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       ##############################################################################################
       ## WARNING: DO NOT CHANGE THE JAVA VERSION HERE. SCALA 3.8.0+ IS DISTRIBUTED USING JAVA 17. ##
@@ -138,8 +137,8 @@ jobs:
           version=$(./project/scripts/sbt "print scala3-compiler-bootstrapped/version" | tail -n1)
           echo "This build version: ${version}"
           echo "BUILD_VERSION=${version}" >> $GITHUB_ENV
-          if [ "${version}" != "${{ env.RELEASE_TAG }}" ]; then
-            echo "Compiler version for this build '${version}', does not match tag: ${{ env.RELEASE_TAG }}"
+          if [ "${version}" != "${RELEASE_TAG}" ]; then
+            echo "Compiler version for this build '${version}', does not match tag: ${RELEASE_TAG}"
             if [ "${IS_ORIGIN}" = "true" ]; then
               exit 1
             fi
@@ -157,11 +156,11 @@ jobs:
             # Build binaries
             ./project/scripts/sbt "all ${sbtProject}/Universal/packageBin ${sbtProject}/Universal/packageZipTarball"
 
-            artifactName="scala3-${{ env.RELEASE_TAG }}${distroSuffix}"
+            artifactName="scala3-${RELEASE_TAG}${distroSuffix}"
             # sbt names the archives after the built version. On scala/scala3 the
             # version check guarantees it equals the tag; on forks a test tag may
             # differ, so rename the archives to the tag the release will use.
-            builtName="scala3-${{ env.BUILD_VERSION }}${distroSuffix}"
+            builtName="scala3-${BUILD_VERSION}${distroSuffix}"
 
             # Caluclate SHA for each of archive files
             for ext in "zip" "tar.gz"; do
@@ -184,7 +183,7 @@ jobs:
       - name: Prepare MSI package
         shell: bash
         run: |
-          msiInstaller="scala3-${{ env.RELEASE_TAG }}.msi"
+          msiInstaller="scala3-${RELEASE_TAG}.msi"
           mv scala.msi "${msiInstaller}"
           sha256sum "${msiInstaller}" > "${msiInstaller}.sha256"
 
@@ -196,7 +195,7 @@ jobs:
       - name: Prepare deb package
         shell: bash
         run: |
-          debInstaller="scala3-${{ env.RELEASE_TAG }}-x86_64-pc-linux.deb"
+          debInstaller="scala3-${RELEASE_TAG}-x86_64-pc-linux.deb"
           mv scala.deb "${debInstaller}"
           sha256sum "${debInstaller}" > "${debInstaller}.sha256"
 
@@ -208,14 +207,9 @@ jobs:
       - name: Prepare rpm package
         shell: bash
         run: |
-          rpmInstaller="scala3-${{ env.RELEASE_TAG }}-x86_64-pc-linux.rpm"
+          rpmInstaller="scala3-${RELEASE_TAG}-x86_64-pc-linux.rpm"
           mv scala.rpm "${rpmInstaller}"
           sha256sum "${rpmInstaller}" > "${rpmInstaller}.sha256"
-
-      - name: Install GH CLI
-        uses: dev-hanz-ops/install-gh-cli-action@6089bdde54118ad7ca3d22053eb2d69387fd2779 # v0.3.0
-        with:
-          gh-cli-version: 2.59.0
 
       # Create the GitHub release
       - name: Create GitHub Release
@@ -223,7 +217,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
         shell: bash
         run: |
-          notesFile="./changelogs/${{ env.RELEASE_TAG }}.md"
+          notesFile="./changelogs/${RELEASE_TAG}.md"
           notesArgs=(--notes-file "${notesFile}")
           if [ "${IS_ORIGIN}" != "true" ] && [ ! -f "${notesFile}" ]; then
             # Fork test tags have no changelog entry
@@ -231,17 +225,17 @@ jobs:
           fi
           gh release create \
           --draft \
-          --title "${{ env.RELEASE_TAG }}" \
+          --title "${RELEASE_TAG}" \
           "${notesArgs[@]}" \
           --latest=${{ !contains(env.RELEASE_TAG, '-RC') }} \
           --prerelease=${{ contains(env.RELEASE_TAG, '-RC') }} \
-          --verify-tag ${{ env.RELEASE_TAG }} \
-          scala3-${{ env.RELEASE_TAG }}*.zip \
-          scala3-${{ env.RELEASE_TAG }}*.tar.gz \
-          scala3-${{ env.RELEASE_TAG }}*.deb \
-          scala3-${{ env.RELEASE_TAG }}*.rpm \
-          scala3-${{ env.RELEASE_TAG }}*.sha256 \
-          scala3-${{ env.RELEASE_TAG }}.msi
+          --verify-tag "${RELEASE_TAG}" \
+          "scala3-${RELEASE_TAG}"*.zip \
+          "scala3-${RELEASE_TAG}"*.tar.gz \
+          "scala3-${RELEASE_TAG}"*.deb \
+          "scala3-${RELEASE_TAG}"*.rpm \
+          "scala3-${RELEASE_TAG}"*.sha256 \
+          "scala3-${RELEASE_TAG}.msi"
 
       # Each namespace needs to be published separately
       # On forks, the artifacts are signed and staged (target/sona-staging) but the
@@ -249,6 +243,11 @@ jobs:
       # A fork without a signing key configured skips these steps entirely.
       - name: Publish Release (org.scala-lang)
         if: env.IS_ORIGIN == 'true' || env.HAS_SIGNING_KEY == 'true'
+        env:
+          PGP_PW: ${{ secrets.PGP_PW }}  # PGP passphrase
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}  # Export your private and public PGP key to an *.asc file, take the file's contents as a string
+          SONATYPE_PW: ${{ secrets.SONATYPE_PW_ORGSCALALANG }}
+          SONATYPE_USER: ${{ secrets.SONATYPE_USER_ORGSCALALANG }}
         run: |
           rm -rf ./target/sona-staging/
           publishCommand=" \
@@ -281,6 +280,11 @@ jobs:
 
       - name: Publish Release (org.scala-js)
         if: env.IS_ORIGIN == 'true' || env.HAS_SIGNING_KEY == 'true'
+        env:
+          PGP_PW: ${{ secrets.PGP_PW }}  # PGP passphrase
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}  # Export your private and public PGP key to an *.asc file, take the file's contents as a string
+          SONATYPE_PW: ${{ secrets.SONATYPE_PW_ORGSCALALANG }}
+          SONATYPE_USER: ${{ secrets.SONATYPE_USER_ORGSCALALANG }}
         run: |
           # Ensure the staging does not contain any stale artifacts
           rm -rf ./target/sona-staging/
