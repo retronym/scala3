@@ -21,7 +21,78 @@ The answer this note proposes:
 - **The batch compiler pays nothing it can measure.** The concurrent implementations (interning, caches that are maps, the completion barrier) are chosen when the `ContextBase` is built in interactive mode; the shared fast paths change only where a field's publication must be ordered, and that is measured with perflab before it is kept.
 - **Model first, as Track I did.** Two forcers over one `Query.Lazy` store with owned black holes: an interleaving that respects the barrier agrees with a sequential `forceAll`, a wait-for cycle implies a dependency cycle, and a peek at another thread's black hole is the counterexample. The Java toy gets a concurrent dotc kernel and a deterministic scheduler over its safepoints.
 
+**Status, 24 October 2026.** Step 0 (§0) and step 1 (§7) are done. Steps 2 and 3 are built on [retronym/scala3#84](https://github.com/retronym/scala3/pull/84) (branch `claude/mr-code-813f14`): the `Reader`, the coarse completion lock, the read/write regime, concurrent interners and caches per `ContextBase`, release/acquire publication, findings I34–I51 (§8), the x-ray's background pass as the demo, and a perflab A/B that puts the batch cost under about 2% without resolving below it (§5). The lock-wait milestone (§8) showed that readers outside the lock are fast (hovers 1 ms median beside a background pass) but wrong (I48: intermediate completion state is visible), and that every read under the lock is right but slow (141 ms median, 457 ms p90): step 3's premise, concurrency in body typing only, does not survive dotc's completers. Step 4 is in progress as a feature-flagged mode (off: step 3's serialised behaviour; on: the owner and barrier per root, a typer state and a reporter per completion, wait-for cycle detection). Beside it, on their own branches: a range target for inlay hints and semantic tokens (`claude/range-target`), a session that survives a body edit (`claude/body-edit`, design approved, implementing), and the fix for a stock mtags bug the measurement surfaced (`claude/stale-denot-run-451014`, I50: a job-queue reset leaves the old executor's backlog running on a second thread).
+
 Whether to build it at all is §1's question, and step 0 of the plan measures it.
+
+## 0. Measured
+
+23 October 2026, on the branch at `cb68840779` (the session, with targeting) plus one instrumentation commit: `Scala3CompilerAccess` prints a `[dotc-queue]` line per request under `-Yinteractive-log` (the time it waited in `CompilerJobQueue`, the request that was running when it was submitted), and `QueueReplaySuite` (presentation-compiler tests) replays an editor trace against `ScalaPresentationCompiler` with its real job queue. Logs, profiles, summaries and the scripts are under `/Users/jzaugg-virtus/code/scratch/mr-measure/` (`replay/`, `profile/`, `scripts/`); the scripts are also beside the other replay scripts in `jvm-lang-models/packages/scala/probes/interrupt/metals-demo/` (uncommitted there).
+
+### The trace
+
+The request trace is the VS Code session of §7 of [interactive-session.md](interactive-session.md), recorded in `~/code/scratch/dotc-session-dotc/.metals/lsp.trace.json` (Metals 1.6.9, the compiler's own sources as a project, semantic highlighting off in the settings but asked for by VS Code anyway): 46 files opened, 18 edits, and per cursor stop what VS Code sends, a document highlight, a hover, inlay hints for the visible range, semantic tokens after a change, definitions on ⌘-hover, 18 completions, and 42 `$/cancelRequest`s. `trace_to_events.py` turns it into 814 presentation-compiler events with the file's text at each moment and offsets instead of positions; requests that do not reach the presentation compiler (document symbol, code lens, folding, code actions) and sources opened from jars are dropped. The trace has whole-second timestamps, so a replay sends the requests of one second either back to back (`burst`, the upper bound on queueing) or spread evenly over the second (`spread`, the lower bound), and caps the pauses between seconds at one second: the 12 hours of the trace, most of it idle, replay in about four minutes, denser than the real session.
+
+Three replays, each on JDK 21.0.12 with `-Yinteractive-log`:
+
+- `burst` and `spread`: headless, `QueueReplaySuite` in the test JVM, the files typed against the test classpath (class directories).
+- `jars`: the same, typed against the Metals project's classpath from its Bloop config (the published compiler and library jars), under async-profiler.
+- `metals`: the same events through Metals 1.6.9 over stdio (`replay_trace_lsp.py`, on a copy of the project at `~/code/scratch/dotc-session-replay`), the instrumented presentation compiler installed into `~/.ivy2/local` as `3.10.2-RC1-bin-SNAPSHOT`; Metals adds its own requests to the queue (the references and definition fallbacks over other files, semanticdb for jar sources) and its 20 s timeout cancels what starves.
+
+```bash
+sbt -java-home ~/.sdkman/candidates/java/17.0.20-tem --client "; scala3-presentation-compiler/Test/compile ; export scala3-presentation-compiler/Test/fullClasspath"
+java -Xss8m -Xmx4g -Dreplay.events=replay-events.json -Dreplay.spread=burst -Dreplay.idleCap=1000 [-Dreplay.classpath=metals-classpath.txt] [-agentpath:/opt/homebrew/lib/libasyncProfiler.dylib=start,event=cpu,interval=1ms,collapsed,file=replay-cpu.collapsed] -cp <test classpath> org.junit.runner.JUnitCore dotty.tools.pc.tests.completion.QueueReplaySuite
+python3 -I replay_trace_lsp.py java -cp "$(coursier fetch -p org.scalameta:metals_2.13:1.6.9)" scala.meta.metals.Main -- ~/code/scratch/dotc-session-replay replay-events.json metals-burst.json 1000 burst
+python3 -I analyze_queue.py <log>; python3 -I completer_share.py <collapsed>
+```
+
+### 1. Queueing delay
+
+Per request, the time between its submission to `CompilerJobQueue` and the start of its job (`wait`), the job's own time (the provider and the driver), and the driver's time from the request log. Hover, definition and completion are targeted (`runUpTo`); inlay hints, semantic tokens and references type the whole file (`run`), and document highlight completes the session (§7 of the session notes).
+
+| replay | requests | waited behind another | hover wait median / p90 / max | hovers waiting > 50 ms / > 200 ms | hover job median | hover driver median |
+|---|---|---|---|---|---|---|
+| burst (test classpath) | 617 | 426 | 6 / 142 / 9,207 ms | 31 / 10 of 128 | 7.9 ms | 0.1 ms |
+| spread | 658 | 113 | 0.1 / 198 / 9,798 ms | 20 / 14 of 142 | 8.5 ms | 0.1 ms |
+| jars | 607 | 436 | 7 / 533 / 4,096 ms | 35 / 19 of 126 | 8.1 ms | 0.1 ms |
+| metals | 753 | 521 | 7 / 218 / 2,979 ms | 54 / 21 of 174 | 8.0 ms | 0.1 ms |
+
+The hover itself costs nothing in the driver once the session holds the file (served, 0.1 ms) and about 8 ms in the provider around it; what the editor waits for is the queue. The queue is LIFO (the newest request runs first), so a request that arrives during a burst waits for the request that was running and for every newer one: in the Metals replay 54 of the 534 waiting requests saw ten or more newer requests run first, and the 20 s timeout cancelled the ones that starved (49 of 153 hovers answered by cancellation, most of them timeouts, in a replay denser than the real session).
+
+Where the waiting time went, summed over all waiting requests, by what the jobs that ran in between did in the driver (`whole-file` is a `run` that typed the file; `cached-whole-file` is a provider over an already typed file, inlay hints or semantic tokens, which costs no driver time but 100 to 150 ms of provider time per request; `completes-session` is document highlight typing the session's skipped statements; `targeted-*` are `runUpTo` requests):
+
+| ran in between | burst | spread | jars | metals |
+|---|---|---|---|---|
+| whole-file run | 50% | 50% | 38% | 46% |
+| provider over a cached whole-file run | 40% | 33% | 30% | 35% |
+| completes the session | 3% | 5% | 15% | 8% |
+| targeted, fresh or resumed | 1% | 7% | 7% | 6% |
+| targeted, served | 2% | 1% | 3% | 5% |
+
+So 89 to 93 percent of all queueing is behind whole-file work: the run that the first inlay-hint, semantic-token or document-highlight request after an open or an edit costs (median 360 ms on these files, 1.7 s cold on `TypeErasure.scala`, 6.2 s cold on `Types.scala`), and the providers that walk the whole typed tree afterwards. Targeted requests behind targeted requests are 3 to 12 percent of the waiting, and a targeted request's job is 6 to 8 ms, so a hover queued behind a hover waits a frame, not a keystroke.
+
+What a second reader would buy here is the ability to serve a hover beside the whole-file run or the inlay-hint walk of the same file. What cancel-the-older-reader buys is already in: the LIFO order, and the session's cancellation that unwinds a whole-file run at its next checkpoint (none of the cancellations in these replays hit a run mid-way, since Metals cancels on the client's `$/cancelRequest` and the timeout only).
+
+### 2. Completer share
+
+async-profiler, `event=cpu`, 1 ms, over the `jars` replay (the compiler's sources against the published jars, 116,181 samples) and over the `burst` replay (test classpath, 99,006 samples), and over `SessionOracleSuite` (cold JVM, one driver per test, mostly fresh runs and resumes: 28,165 samples). Stacks are split by the driver entry point, `runUpTo0` (a targeted reader) or `run0` (a whole-file run), and classified: `completer` if any frame is inside a completion (`completeFrom`, `lockAndComplete`, a Namer completer, a symbol loader, `TreeUnpickler`, `ClassfileParser`, a lazy annotation, `InheritedCache`), including the typing a completer does and the completions forced from typing; `typing` if `Typer.typed` is on the stack with no completion above or below it; `other` for parsing, indexing, the splice and the providers. Classpath IO (`stat`, `open`, directory listings, zip lookups, from the symbol loaders) is the part of the completer share that is file-system probing.
+
+| profile | root | completers | of which Namer / TASTy / loaders | of which classpath IO | body typing | other |
+|---|---|---|---|---|---|---|
+| jars replay | `runUpTo0` (3,501 samples) | 79% | 39% / 27% / 12% | 38% | 6% | 15% |
+| jars replay | `run0` (23,156) | 64% | 46% / 13% / 5% | 14% | 30% | 6% |
+| burst replay (class dirs) | `runUpTo0` (1,421) | 78% | 55% / 5% / 18% | 56% | 5% | 17% |
+| burst replay (class dirs) | `run0` (24,657) | 70% | 48% / 13% / 8% | 28% | 25% | 5% |
+| oracle suite (cold) | `runUpTo0` (2,392) | 65% | 34% / 12% / 19% | 38% | 20% | 16% |
+| oracle suite (cold) | `run0` (2,774) | 69% | 45% / 11% / 12% | 34% | 24% | 8% |
+
+Two things the numbers say. A targeted reader spends 3 to 4 percent of the driver's CPU in a replay (3,501 of 26,657 driver samples in the `jars` run): with targeting, the readers are not where the time is; the whole-file runs are. And of a reader's own time, four fifths is inside completers, a fifth of it (two fifths on class directories) in the file system under the symbol loaders, and body typing is 5 to 20 percent; even a whole-file run is 64 to 70 percent completers. A coarse completion lock (step 3) would serialise four fifths of a reader and two thirds of a background run: two readers over one file would mostly wait for each other's completions, and the gain from concurrency would be bounded by the fifth to the third that is body typing. Flame graphs: `/Users/jzaugg-virtus/code/scratch/mr-measure/profile/replay-jars-cpu.html`, `replay-burst-cpu.html`, `oracle-cpu.html`; the collapsed stacks are beside them, gzipped.
+
+### Verdict
+
+Queueing delay after targeting is real at the tail (a hover's p90 wait is 140 to 530 ms in a replay denser than the editor session, its median 6 ms) but it is not the delay a second reader of §1 would remove: nine tenths of it is behind whole-file work, the first `run` after an open or an edit and the providers that walk the whole typed tree (inlay hints, semantic tokens), and a targeted request behind a targeted request waits a few milliseconds. The readers that would run concurrently are four fifths completers, so steps 3 and 4 would spend their complexity to overlap the remaining fifth. The cheaper moves come first: a session that survives an edit (the future work of the session notes), which removes the per-edit whole-file run from the queue; range forms of inlay hints and semantic tokens on the Metals side, which turn the two biggest provider walks into targeted requests; and a priority or a cancellation for the whole-file askers when a targeted request is waiting, since LIFO already prefers the newest request and the session's cancellation already unwinds a run. Cancel-the-older-reader is enough for the targeted requests; what is left is not a concurrency problem but a scheduling one. Re-measure once the whole-file askers are gone; until then, step 2 (the `Reader`, which is hygiene either way) can proceed and steps 3 to 5 are not justified by this trace.
+
+Caveats: the trace has whole-second timestamps and its pauses were capped, so `burst` overstates and `spread` understates the real burstiness; the first request on each file in a replay is cold for that file, as in the editor; the profile is CPU samples on one thread, so file-system waits inside the loaders are undercounted; the class-directory classpath of the test JVM inflates classpath IO, which the `jars` run corrects. One finding on the side: on `Typer.scala`, 14 of the `burst` replay's jobs, 25 of `jars`' and 5 of the Metals replay's failed with `AssertionError: denotation module class Trees$ invalid in run 3. ValidFor: Period(4.1-5)` (a classpath denotation validated in a later run than the current one, reached from a whole-file run by the inlay-hint provider and then from hovers), after which Metals restarts the compiler; it did not occur in the VS Code session's log and is not investigated here.
 
 ## 1. What a second reader buys
 
@@ -77,6 +148,45 @@ With several readers the state needs its owner:
 An unwind (cancellation, a cycle, an exception) restores "not completed", releases the barrier, and a waiter takes ownership and completes it itself. This is LL FIR's resolve state per declaration and phase, where `FirInProcessOfResolvingToPhaseStateWithBarrier` carries the latch that other threads wait on, and `Run.completing` becomes the owner field. It meets rule 2 because nobody but the owner sees the intermediate state, and rule 4 because an unwind restores the lazy type.
 
 What a completer reads must not be per-reader. Today a Namer completer runs in its creation context (`creationContext`, the namer's `ictx`): its typer state, its reporter, the `nestedTyper` map of the completer, `knownTypeSig`. Two readers completing two symbols of one file both write the namer's typer state. Each completion gets a fresh committable typer state of its own, whose result is fully defined when it is published (completers already call `fullyDefinedType` on inferred types), and its own reporter (§4.3).
+
+**Two readers racing on one inferred signature.** Reader R1 (a hover) needs `def f = g + 1`, whose result type is inferred, so its completer types `f`'s body and needs `g`'s type; reader R2 (a completion elsewhere) already needs `def g = ...`, also inferred. Neither types what the other is typing; R1 waits for `g`, then owns `f`.
+
+```mermaid
+sequenceDiagram
+    participant R1 as Reader R1 (hover on f)
+    participant F as f (root)
+    participant G as g (root)
+    participant R2 as Reader R2 (completion needs g)
+
+    R2->>G: acquire(R2): Idle → InProgress(R2, latch)
+    activate G
+    Note over G: R2 runs g's completer<br/>fresh TyperState, StoreReporter
+    R1->>F: acquire(R1): Idle → InProgress(R1, latch)
+    activate F
+    Note over F: R1 types f's body ahead
+    R1->>G: acquire(R1): InProgress(R2)
+    Note over R1,G: wouldDeadlock? owner R2, R2.waitingOn = null → no
+    R1-->>G: R1.waitingOn = G, then latch.await()
+    alt R2 publishes
+        Note over G: g.info = T_g, fully defined<br/>diagnostics stored on the fact
+        R2->>G: release(R2): InProgress → Done, latch.open()
+        G-->>R1: Waited (g.isCompleted)
+        R1->>G: read g.info, re-issue g's stored diagnostics to R1's reporter
+    else R2 is cancelled or unwinds inside g
+        Note over G: g.info restored to its LazyType,<br/>TyperState discarded, nothing published
+        R2->>G: release(R2, unwound = true): InProgress → Idle, latch.open()
+        G-->>R1: retry acquire(R1): Idle → InProgress(R1)
+        Note over R1,G: R1 completes g itself (rule 4,<br/>the next reader redoes the work)
+        R1->>G: release(R1): Done
+    end
+    deactivate G
+    Note over F: f.info = T_f (needs only T_g)
+    R1->>F: release(R1): InProgress → Done
+    deactivate F
+    R1->>R1: answer the hover from f.info
+```
+
+What the diagram relies on, rule by rule: nobody but the owner sees `f` or `g` half-completed (rule 2, the barrier); whichever reader completes `g` writes the same `T_g`, since the completer is a function of the node and its owner's signatures and runs in its own typer state (rule 3); an unwound completion publishes nothing and leaves the root `Idle` (rule 4); and a wait is taken only after the wait-for check of §4.2, so if `g`'s completer in turn needed `f` (both inferred, each body referring to the other), R2 would find `R1.waitingOn = G` on its path and raise `CyclicReference` in R2 rather than block, which is the answer a sequential run gives for that pair.
 
 Groups: a symbol loader completes a class and its module together, and the TASTy completers of one file share one `TreeUnpickler`'s address maps. The barrier is per *root* (the pair, or the file), not per symbol. A completion that enters into a scope another reader may be looking up in (a package's declarations) needs that scope to be safe to read during an `enter`, or the enter to happen under the scope owner's barrier.
 
@@ -150,13 +260,16 @@ Track I's method is to state the property over `Query.Lazy`, find the counterexa
 - **Peek.** A peek at another forcer's black hole gives two interleavings with different answers; a peek restricted to the forcer's own black holes gives none.
 - **Abort.** An owner unwound while others wait: the waiter that takes over reaches the same store as if the owner had never started (the `abort_*` theorems of `Query/Interrupt.lean`, with a waiter).
 
-The Java toy gets a `dotc-concurrent` kernel and a deterministic scheduler that interleaves two requests at every pair of safepoints, the way the Track I harness injects one request at every safepoint. On dotc itself, Lincheck (model checking of JVM concurrent code) for the completion state machine and the interner, and the soak and oracle suites run with two readers.
+**Done, 23 October** (`retronym/jvm-lang-models` at `0ff637b`: `packages/query/Query/Concurrent.lean`, `packages/scala/probes/interrupt/src/pctoy/ConcurrentKernel.java`, write-up `packages/scala/docs/track-i-concurrent.md`). All four hold; one was sharper than asked. Linearizability (`run_agree`) needs no ranking and no fairness: with holes tagged by owner and a barrier, every value either forcer stores or answers is the fixed point's under every schedule of steps and aborts, so the owner and barrier are the whole correctness argument and cycles, peeks and aborts are about progress and where an error is reported. Under a ranked fixed point no schedule reports a cycle (`run_ranked_no_cyc`), so a `CyclicReference` raised where a wait would close a wait-for cycle reports a cycle of the rules; which reader names it varies with the schedule (15 of 81 interleavings in the toy, never a deadlock). A peek at the other reader's hole races (`peek_any_races`; the toy's implicit-view peek, 24 of 63 interleavings) and a peek at one's own does not (`peek_own_agrees`). An aborted owner's waiter takes over if the hole is released (`abort_waiter_takes_over`); with `Touched` left set, the waiter waits for the rest of the run (`abort_keep_hole_waiter_stuck`), so the reset belongs in the unwinding path of `lockAndComplete`, not in a later `healLeakedTouched`. Left to `decide` rather than proved: progress. Future work there: a progress theorem under a fair schedule, abort-with-waiter in the Java toy, more than two forcers.
+
+The Java toy's `dotc-concurrent` kernel and its scheduler interleave two requests at every pair of safepoints, the way the Track I harness injects one request at every safepoint. On dotc itself, Lincheck (model checking of JVM concurrent code) for the completion state machine and the interner, and the soak and oracle suites run with two readers.
 
 ## 8. Plan
 
-- [ ] **0. Measure.** Queueing delay in a Metals request trace on the compiler's own sources, with the session; the share of a reader's time inside completers versus body typing (JFR), which says whether a coarse completion lock (step 3) leaves enough concurrency.
-- [ ] **1. Model.** §7's four statements in Lean; the concurrent kernel and scheduler in the Java toy.
+- [x] **0. Measure.** Queueing delay in a Metals request trace on the compiler's own sources, with the session; the share of a reader's time inside completers versus body typing, which says whether a coarse completion lock (step 3) leaves enough concurrency. Done, §0 below.
+- [x] **1. Model.** §7's four statements in Lean; the concurrent kernel and scheduler in the Java toy. Done; see §7.
 - [x] **2. A `Reader`.** Move kind A (per-request scratch) off `Run` and `ContextBase` into a thread-confined reader: the target, the skipped-statement bookkeeping, `completing`, the cancellation checker, the comparers and context pools. Still one reader at a time; batch unchanged. *Done* (`Reader.scala`; `Context.reader` is `ContextBase.reader`). Found: the reader cannot be a field of the context, because contexts are captured and outlive the request that made them. The first version copied a reader field along the context chain, and `cancel-inside-a-given-class-completer` failed: the given's completion was forced through the `ContextualImplicits` of request 1's `import Givens.given`, whose contexts carried request 1's reader, so request 2's checkpoints counted on a dead reader and its checker was never polled. Completer creation contexts, import contexts and skipped statements' contexts all have this shape, so the reader is bound to the thread on `InteractiveContextBase` (a `ThreadLocal`, read in interactive mode only) and the batch `ContextBase` keeps a field; batch pays one more dependent load on `comparer` and `handleRecursive` (`ctx.base.reader.x` for `ctx.base.x`), measured with step 3's publication changes. `errorsToBeReported` is a fact about the run (an earlier request's error can leave a tree inconsistent for a later one), not the reader, and moved to `Run`. The typed-tree counter is per request now, which simplified the x-ray's accounting.
+- **The PoC harness is the x-ray, not Metals.** `XrayServer` drives `InteractiveDriver` directly, so it bypasses mtags-shared's single-thread `CompilerJobQueue` (the serialization point for every Metals request on a build target), and `Latch.await` holds a run at a known point while a second thread issues a hover. The case to show is the one step 0 found: a served hover beside a whole-file `run` or a session completion of the same file, and two resumes into different skipped statements. The page gets a toggle for a *background pass*: one reader types the whole file and collects its diagnostics, visible lines first (a range target, then the remaining skipped statements in order), while hover and completion from the page are served by another reader, near-instantly; the page shows the pass's progress and each foreground request's latency side by side. Its correctness check is the diagnostics count: the pass must report what a whole-file `run` reports, including the diagnostics of completers the foreground reader forced (§4.3).
 - [x] **3. Several readers, one completion lock.** The read/write regime in `InteractiveDriver`; kinds C and D made safe; every completion and every resume under one reentrant lock, so concurrency is in body typing only (K2 started from global locks too). Soak and oracle suites with two readers. *Done.* `InteractiveContextBase` answers `concurrentReaders`, and `ContextState` then chooses the synchronised interners (`ConcurrentUniques` and friends), an atomic symbol id, synchronised `EqHashMap`s for the member, base-type, implicit-scope, eligible-implicit and static-reference caches (`newEqHashMap`), a `TrieMap` for the typer's `nestedTyper` and the error messages; `Definitions.PerRun` publishes its pair as one object. One `completionLock` on the base covers every completion (`lockAndComplete`), every bring-forward to a new run (`Denotation.current`), the inherited caches' computations (base data, member names) and the lazy TASTy reads. The driver's regime: `readUpTo` and `readAll` are read actions that run the provider's read of the typed unit inside the read lock; a writer (a fresh run, a re-index after a cancellation, `completeSymbols` before leaving a file) raises `writerPending`, which every reader polls at its checkpoints and unwinds from, takes the write lock and runs alone; a pre-empted reader is retried by the driver, so its caller sees only its own checker's cancellation. The session's bookkeeping (what is skipped, claimed, typed; the splice; the diagnostics) is under the session's monitor, and a request landing in a statement another reader is typing waits for it. What the two-reader soak and oracle modes found, each fixed (the I-series continues Track I's):
   - I34: the base-type cache's `NoPrefix` sentinel (the in-progress mark of `ClassDenotation.baseTypeOf`) is a black hole the other reader meets as a cycle ("Cyclic reference involving class Any"). The mark is now on the reader (`Reader.pendingBaseTypes`, an identity set: a structural set made a structurally equal type in progress look cyclic too), cleared on every unwind including a cancellation, which the cache version leaked.
   - I35: the unpickler's address maps (`symAtAddr`, `treeAtAddr`) are one file's shared state, filled by completions under the lock and by lazy tree reads outside it ("key not found: Addr(417)" in `Predef.tasty`): lazy reads take the lock.
@@ -233,3 +346,244 @@ The Java toy gets a `dotc-concurrent` kernel and a deterministic scheduler that 
 - Is a fresh typer state per completion semantics-preserving? A completer's type-ahead today can leave constraints in the namer's typer state; whether anything relies on that is to check.
 - What does a waiter do when the owner is cancelled by a *writer*? It is cancelled too; the barrier only needs to release, not hand over. Hand-over is for owners unwound by their own failure.
 - The checkpoint gap in implicit search (I11) bounds write latency; is a checkpoint there a prerequisite?
+
+## 10. Ten diffs, sketched
+
+Plausible shapes for the changes the plan asks for, one per blocker, each small enough to read and annotated with the rule it serves. They are sketches against `track-i/dotc-session`, not patches: names and placement will move when built, and every one that touches a shared hot path is kept only after a perflab A/B (§5).
+
+### 10.1 `ContextBase`: a reader per thread (kind A, step 2)
+
+```diff
+ class ContextBase extends ContextState with Phases.PhasesBase with Plugins {
+-  private[dotc] val comparers = new ArrayBuffer[TypeComparer]
+-  private[dotc] var comparersInUse: Int = 0
+-  private[dotc] val exploreContextPool = ExploreContextPool()
+-  private[dotc] val freshTSContextPool = FreshTSContextPool()
+-  private[dotc] val generalContextPool = ContextPool()
+-  private[core] var findMemberCount: Int = 0
+-  private[core] var pendingUnderlying: util.HashSet[Type] = new util.HashSet[Type]
++  /** Scratch that belongs to the thread evaluating, not to the symbol
++   *  table: the comparer stack, the context pools, the recursion counters.
++   *  Batch mode has one thread and one Reader, reached through a plain
++   *  field; interactive mode has one per reader thread.
++   */
++  private val batchReader = new Reader
++  private val readers: ThreadLocal[Reader] = ThreadLocal.withInitial(() => new Reader)
++  private[dotc] def reader: Reader =
++    if isInteractive then readers.get() else batchReader
+```
+
+`Reader` holds exactly the fields the §3 table lists under A, with the session's targeting slots and `completing` moved there from `Run`. The batch path pays one branch; the field accesses that used to be `base.comparers` become `base.reader.comparers`, which is the same load count after inlining.
+
+### 10.2 `Run`: targeting slots move to the reader (kind A, step 2)
+
+```diff
+ class Run(comp: Compiler, ictx: Context) {
+-  var typingTarget: Span = Spans.NoSpan
+-  var skippedStats: List[SkippedStat] = Nil
+-  var targetedStatsOwner: Symbol = NoSymbol
+-  var targetingTyperState: TyperState | Null = null
+-  val completing: mutable.HashSet[Symbol] = mutable.HashSet.empty
+-  private var typedTreeCount = 0
+-  def checkCancelledTyping()(using Context): Unit = ...
++  // The session's per-request state lives on `ctx.base.reader` (Reader.scala):
++  // the target, the skipped statements, the statements-list marks, the set of
++  // completions in progress, the checkpoint counter. Two requests on one run
++  // never share a slot.
+```
+
+`Targeting.scala`'s "is this the request's own statement list" test, `ctx.typerState eq run.targetingTyperState`, becomes `ctx.typerState eq reader.targetingTyperState`, which is what it meant.
+
+### 10.3 `InteractiveDriver`: read and write actions (step 3)
+
+```diff
+ class InteractiveDriver(val settings: List[String]) extends Driver {
++  /** Readers run `runUpTo` and resumes concurrently; a writer (new content,
++   *  a re-index, `completeSymbolsOf`, the end of a run) raises the sticky
++   *  cancellation, waits for every reader to unwind, and runs alone.
++   *  IntelliJ's pending write action, with `checkCancelledTyping` as the
++   *  reader's `checkCanceled`.
++   */
++  private val regime = new ReadWriteRegime(cancelReaders = () => myCancelled = true)
++
+   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+-    runUpTo0(uri, source, target)
++    regime.read { runUpTo0(uri, source, target) }
++
++  private def freshSession(uri: URI, source: SourceFile): Session =
++    regime.write { startTargetedRun(uri, source) }
+```
+
+`ReadWriteRegime` is a `StampedLock`-shaped object with one addition: `write` sets the cancel flag before taking the lock, so readers reach their next checkpoint and release instead of finishing. A reader cancelled by a writer answers its default, as it does today for a cancel from Metals.
+
+### 10.4 `Session`: the typed tree as a persistent value (kind E, step 5)
+
+```diff
+ private class Session(val uri: URI, val source: SourceFile, val run: Run, ...) {
+-  var skipped: List[SkippedStat]
+-  def splice(stat: SkippedStat, typed: tpd.Tree): Unit =
+-    unit.tpdTree = Splicer(stat, typed).transform(unit.tpdTree)
+-    skipped = skipped.filterNot(_ eq stat)
++  /** One immutable value: the typed tree and the statements still skipped.
++   *  A resume publishes a new one by compare-and-set against the one it
++   *  read, so two resumes into different statements both land, in turn,
++   *  and a reader that lost the race re-reads and splices again (cheap:
++   *  the splice copies only the path to the owner).
++   */
++  final case class State(tpdTree: tpd.Tree, skipped: List[SkippedStat])
++  val state = new AtomicReference(State(unit.tpdTree, initialSkipped))
++  def splice(stat: SkippedStat, typed: tpd.Tree): Unit =
++    state.updateAndGet(s => State(Splicer(stat, typed).transform(s.tpdTree), s.skipped.filterNot(_ eq stat)))
+```
+
+`SkippedStat` itself gains an owner slot (`AtomicReference[Reader | Null]`) and a latch, the same shape as 10.6, so a reader that finds a resume in progress waits for its tree rather than typing the statement again.
+
+### 10.5 `Uniques`: interning chosen per mode (kind D, step 3)
+
+```diff
+ class ContextBase ... {
+-  private[core] val uniques: Uniques = Uniques()
+-  private[dotc] val uniqueAppliedTypes: AppliedUniques = AppliedUniques()
+-  private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
++  // Batch keeps the open-hashing WeakHashSets; interactive mode uses
++  // striped tables (a lock per bucket range) so that two readers creating
++  // the same type get one object, which `eq`-based reasoning needs.
++  private[core] val uniques: Uniques = if isInteractive then Uniques.concurrent() else Uniques()
++  private[dotc] val uniqueAppliedTypes: AppliedUniques = if isInteractive then AppliedUniques.concurrent() else AppliedUniques()
++  private[core] val uniqueNamedTypes: NamedTypeUniques = if isInteractive then NamedTypeUniques.concurrent() else NamedTypeUniques()
+
+-  def nextSymId: Int = { _nextSymId += 1; _nextSymId }
++  private val _nextSymId = new AtomicInteger(0)
++  def nextSymId: Int = _nextSymId.incrementAndGet()
+```
+
+The `Names` table needs nothing: `enterIfNew` and `derivedNames` are already `synchronized`. The sym id counter is on the batch path too; an uncontended `incrementAndGet` is one `lock xadd`, and the A/B decides whether batch keeps the plain field behind the same `isInteractive` test.
+
+### 10.6 `SymDenotations.lockAndComplete`: an owner and a barrier (kind B, step 4)
+
+```diff
+   private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
+-    val interactive = ctx.mode.is(Mode.Interactive)
+-    val run: Run | Null = if interactive then ctx.run else null
+-    if myFlags.is(Touched) && !healLeakedTouched(run) then
+-      if run != null then run.recordCyclePrevented(symbol)
+-      throw CyclicReference(this)(using ctx.withOwner(symbol))
+-    myFlags |= Touched
+-    if run != null then run.completing += symbol
+-    try atPhase(validFor.firstPhaseId)(completer.complete(this))
+-    catch case ex => onUnwind(ex, interactive, run); throw ex
+-    finally if run != null then run.completing -= symbol
++    if !ctx.mode.is(Mode.Interactive) then
++      // Batch: the one-bit black hole, as before.
++      if myFlags.is(Touched) then throw CyclicReference(this)(using ctx.withOwner(symbol))
++      myFlags |= Touched
++      atPhase(validFor.firstPhaseId)(completer.complete(this))
++    else
++      // Interactive: the root's completion state is Idle | InProgress(owner, latch) | Done.
++      // The owner sees its intermediate state (TempClassInfo, a re-entrant Touched
++      // is a cycle, as before); any other reader waits on the latch (10.7 decides
++      // whether the wait would close a cycle). An unwind restores Idle and opens
++      // the latch, so a waiter takes ownership and completes it itself.
++      val reader = ctx.base.reader
++      completionRoot.acquire(reader) match
++        case Acquired =>
++          try atPhase(validFor.firstPhaseId)(completer.complete(this))
++          catch case ex => completionRoot.release(reader, unwound = true); onUnwind(ex, reader); throw ex
++          completionRoot.release(reader, unwound = false)
++        case Reentrant =>
++          reader.recordCyclePrevented(symbol)
++          throw CyclicReference(this)(using ctx.withOwner(symbol))
++        case Waited =>
++          () // completed by another reader; `isCompleted` is now true
+```
+
+`completionRoot` is the class for a module class and its module, and the file for TASTy-loaded symbols (10.9), so that the loaders' "complete the pair together" stays one critical section. `Touched` in `myFlags` stays as the batch bit; the interactive state lives beside the denotation, allocated on first contention only.
+
+### 10.7 `CompletionRoot.acquire`: a wait that would close a cycle is a cycle (step 4)
+
+```diff
++  /** Wait-for check before blocking: follow owners from this root's barrier.
++   *  Each reader waits on at most one root at a time (`reader.waitingOn`), so
++   *  the chain is a path; if it reaches `me`, blocking would deadlock, and
++   *  sequentially the same pair is a CyclicReference, raised wherever the
++   *  evaluation order closes it. Raise it here, in the reader that would
++   *  close it; the other reader's wait then succeeds.
++   */
++  private def wouldDeadlock(me: Reader): Boolean =
++    var r: Reader | Null = owner
++    while r != null do
++      if r eq me then return true
++      r = r.waitingOn match { case null => null; case root => root.owner }
++    false
++
++  def acquire(me: Reader): Acquired.type | Reentrant.type | Waited.type =
++    val o = owner
++    if o eq me then Reentrant
++    else if o == null && ownerRef.compareAndSet(null, me) then Acquired
++    else if wouldDeadlock(me) then throw CyclicReference(denot)(using me.ctx)
++    else { me.waitingOn = this; try latch.await() finally me.waitingOn = null; if isDone then Waited else acquire(me) }
+```
+
+The check reads other readers' `waitingOn` fields without a lock; a stale read can miss a cycle that formed in the meantime, so `await` is bounded (`await(timeout)`) and re-checks, which is Salsa's shape (each blocked query records what it waits on, and the cycle is found by the last one to block).
+
+### 10.8 `isCompleting` means "on this reader" (§4.1, step 4)
+
+```diff
+-    final def isCompleting: Boolean = myFlags.is(Touched) && !isCompleted
++    /** A completion of this symbol is in progress on the calling reader. In
++     *  progress on another reader is not a peekable state: the thirteen sites
++     *  that choose a path by this test would otherwise choose by timing. They
++     *  wait instead (`ensureCompletedOrWait`) and then see a completed symbol.
++     */
++    final def isCompleting(using Context): Boolean =
++      !isCompleted && (if ctx.mode.is(Mode.Interactive) then completionRoot.owner eq ctx.base.reader else myFlags.is(Touched))
+```
+
+and at each site, for example `Typer.findRef`'s import check:
+
+```diff
+-            if imp.importSym.isCompleting then
++            if imp.importSym.isCompletingElsewhere then imp.importSym.ensureCompleted() // waits; 10.7 handles a cycle
++            if imp.importSym.isCompleting then
+               report.warning(i"cyclic ${imp.importSym}, ignored", pos)
+```
+
+`Desugar.scala:123`'s `ClassCompleter if !sym.isCompleting` and `TypeApplications.scala:494` get the same two-line treatment.
+
+### 10.9 `SymbolLoaders` and the TASTy `Completer`: the root is the file (kind B, step 4)
+
+```diff
+ class TreeUnpickler(...) {
++  /** One unpickler serves every lazy completer of its file and keeps per-file
++   *  address maps (`symAtAddr`, `treeAtAddr`). Those are the file's state, so
++   *  the file is the completion root: the first reader to force any symbol of
++   *  it owns the unpickler until that completion publishes.
++   */
++  val root: CompletionRoot = CompletionRoot.forFile(this)
+   class Completer(reader: TastyReader)(using @constructorOnly _ctx: Context) extends LazyType {
+     def complete(denot: SymDenotation)(using Context): Unit =
+-      treeAtAddr(currentAddr) = ...
++      root.owned(ctx.base.reader) { treeAtAddr(currentAddr) = ... }
+```
+
+A `MutableScope` that a loader `enter`s into while another reader does `lookupEntry` rehashes under the reader: the scope gets a `@volatile` table reference published after the rehash is complete, and `lookupEntry` reads the reference once, so a lookup during a rehash sees the old table whole (a miss for the entry being entered, which is the sequential answer before the enter).
+
+### 10.10 `Symbol.computeDenot`: publication order (kind C, step 3)
+
+```diff
+   private def computeDenot(lastd: SymDenotation)(using Context): SymDenotation = {
+     val now = ctx.period
+-    checkedPeriod = now
+-    if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
++    // Another reader must never see `checkedPeriod == now` with a `lastDenot`
++    // that is not valid in `now`: write the denotation first, the period last,
++    // and in interactive mode with release/acquire (a plain store on batch).
++    val d = if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
++    publishChecked(now)   // VarHandle.setRelease in interactive mode, plain store otherwise
++    d
+   }
+```
+
+The same reorder applies to `NamedType`'s triple (`lastDenotation`, `lastSymbol`, then `checkedPeriod`), where the invariants in the source already say which field implies which; packing the three into one immutable `CachedDenot(denot, sym, period)` and publishing the reference is the alternative when the A/B shows the ordered stores cost on the batch path.
+
+What the ten leave out, deliberately: diagnostics stored with the fact (§4.3), which is the stage 3 reporter change and larger than a sketch; a fresh typer state per completion, which is §9's open question; and non-destructive attachments (I8), which stage 3 lists first and 10.4 depends on.
