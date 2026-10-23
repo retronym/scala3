@@ -13,6 +13,19 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
   override def hash(x: Type): Int = x.hash
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
+/** `Uniques` for a `ContextBase` read by several threads (interactive mode,
+ *  see `ContextState.concurrentReaders`): every operation under the set's
+ *  monitor. Interning is on the hottest path of type creation, so the batch
+ *  compiler keeps the unsynchronised set; this class is loaded only when an
+ *  interactive base chooses it.
+ */
+class ConcurrentUniques extends Uniques:
+  override def put(elem: Type): Type = synchronized(super.put(elem))
+  override def lookup(elem: Type): Type | Null = synchronized(super.lookup(elem))
+  override def -=(elem: Type): Unit = synchronized(super.-=(elem))
+  override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
+  override def size: Int = synchronized(super.size)
+
 /** Defines operation `unique` for hash-consing types.
  *  Also defines specialized hash sets for hash consing uniques of a specific type.
  *  All sets offer a `enterIfNew` method which checks whether a type
@@ -35,7 +48,7 @@ object Uniques:
     if tp.hash == NotCached then tp
     else ctx.uniques.put(tp).asInstanceOf[T]
 
-  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
+  class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
     override def hash(x: NamedType): Int = x.hash
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
@@ -76,7 +89,17 @@ object Uniques:
 
   end NamedTypeUniques
 
-  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
+  /** `NamedTypeUniques` under its monitor (see `ConcurrentUniques`). */
+  final class ConcurrentNamedTypeUniques extends NamedTypeUniques:
+    override def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
+      synchronized(super.enterIfNew(prefix, designator, isTerm))
+    override def put(elem: NamedType): NamedType = synchronized(super.put(elem))
+    override def lookup(elem: NamedType): NamedType | Null = synchronized(super.lookup(elem))
+    override def -=(elem: NamedType): Unit = synchronized(super.-=(elem))
+    override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
+    override def size: Int = synchronized(super.size)
+
+  class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
     override def hash(x: AppliedType): Int = x.hash
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
@@ -104,4 +127,14 @@ object Uniques:
         linkedListLoop(oldHead)
       end if
   end AppliedUniques
+
+  /** `AppliedUniques` under its monitor (see `ConcurrentUniques`). */
+  final class ConcurrentAppliedUniques extends AppliedUniques:
+    override def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
+      synchronized(super.enterIfNew(tycon, args))
+    override def put(elem: AppliedType): AppliedType = synchronized(super.put(elem))
+    override def lookup(elem: AppliedType): AppliedType | Null = synchronized(super.lookup(elem))
+    override def -=(elem: AppliedType): Unit = synchronized(super.-=(elem))
+    override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
+    override def size: Int = synchronized(super.size)
 end Uniques

@@ -198,14 +198,19 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    *  Note: It would be more proper to move importedFromRoot into typedIdent.
    *  We should check that this has no performance degradation, however.
    */
-  private var unimported: Set[Symbol] = Set()
+  // (`Reader.unimported`: per request, since one typer serves every
+  // concurrent request of a run in interactive mode)
+  private def unimported(using Context): Set[Symbol] = ctx.reader.unimported
+  private def unimported_=(syms: Set[Symbol])(using Context): Unit = ctx.reader.unimported = syms
 
   /** Temporary data item for single call to typed ident:
    *  This symbol would be found under Scala2 mode, but is not
    *  in dotty (because dotty conforms to spec section 2
    *  wrt to package member resolution but scalac doe not).
+   *  (`Reader.foundUnderScala2`, likewise.)
    */
-  private var foundUnderScala2: Type = NoType
+  private def foundUnderScala2(using Context): Type = ctx.reader.foundUnderScala2
+  private def foundUnderScala2_=(tp: Type)(using Context): Unit = ctx.reader.foundUnderScala2 = tp
 
   // Overridden in derived typers
   def newLikeThis(nestingLevel: Int): Typer = new Typer(nestingLevel)
@@ -565,7 +570,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               previous // no more conflicts possible in this case
             else if (isPossibleImport(NamedImport) && curImport != null && (curImport ne outer.importInfo)) {
               def updateUnimported() =
-                if (curImport.unimported ne NoSymbol) unimported += curImport.unimported
+                if (curImport.unimported ne NoSymbol) unimported = unimported + curImport.unimported
               val namedImp = namedImportRef(curImport)
               if (namedImp.exists)
                 checkImportAlternatives(namedImp, NamedImport, ctx)(using outer)
@@ -3950,7 +3955,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       NoSymbol
   }
 
-  protected def localTyper(sym: Symbol): Typer = nestedTyper.remove(sym).get
+  protected def localTyper(sym: Symbol)(using Context): Typer = nestedTyper.remove(sym).get
 
   def typedUnadapted(initTree: untpd.Tree, pt: Type = WildcardType)(using Context): Tree =
     typedUnadapted(initTree, pt, ctx.typerState.ownedVars)

@@ -810,7 +810,13 @@ object Denotations {
 
       def toNewRun =
         util.Stats.record("current.bringForward")
-        if exists then initial.bringForward().current else this
+        if exists then
+          if ctx.base.isConcurrent then
+            // several readers (interactive mode): the bring-forward writes the
+            // flock's validity, one writer at a time (see `completionLock`)
+            ctx.base.completionLock.locked(CompletionLock.bringForward)(initial.bringForward().current)
+          else initial.bringForward().current
+        else this
 
       def goForward =
         var cur = this
