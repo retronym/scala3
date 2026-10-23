@@ -6,6 +6,7 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.language.unsafeNulls
+import scala.jdk.CollectionConverters.*
 
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Phases
@@ -53,18 +54,30 @@ class CompletionConcurrentSuite extends BasePCSuite:
   private def ask(driver: InteractiveDriver, uri: URI, source: SourceFile, offset: Int): String =
     driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => describe(ctx, unit, offset))
 
-  /** Run `a` and `b` on two threads released together; their results, or
-   *  the first failure; a hang fails the test.
+  /** The most times a request may back off from a wait-for cycle and be
+   *  retried (§4.2's deviation): a backoff that recurs without bound is a
+   *  livelock, which this makes a failing number instead of a hang.
    */
-  private def together[A, B](a: => A, b: => B): (A, B) =
+  private val maxBackoffs = 20
+
+  /** Backoffs per round, for the summary line. */
+  private val backoffs = new java.util.concurrent.ConcurrentLinkedQueue[Int]()
+
+  /** Run `a` and `b` on two threads released together, each in a request
+   *  scope of its own reader on `driver`; their results, or the first
+   *  failure. A hang fails the test with the readers' backoff counts, and so
+   *  does a request that backed off more than `maxBackoffs` times.
+   */
+  private def together[A, B](driver: InteractiveDriver)(a: => A, b: => B): (A, B) =
     val start = new CountDownLatch(1)
     val ra = new AtomicReference[Either[Throwable, A]]()
     val rb = new AtomicReference[Either[Throwable, B]]()
+    val readers = new java.util.concurrent.ConcurrentHashMap[String, dotty.tools.dotc.Reader]()
     def thread[T](name: String, body: => T, into: AtomicReference[Either[Throwable, T]]) =
       val t = new Thread((() => {
         start.await()
         into.set(
-          try Right(body)
+          try Right(driver.withCancelChecker(() => false) { readers.put(name, driver.readerOfThisThread); body })
           catch
             case ex: AssertionError => Left(ex)
             case ex: StackOverflowError => Left(ex)
@@ -78,7 +91,11 @@ class CompletionConcurrentSuite extends BasePCSuite:
     val tb = thread("reader-b", b, rb)
     start.countDown()
     ta.join(TimeUnit.SECONDS.toMillis(60)); tb.join(TimeUnit.SECONDS.toMillis(60))
-    assert(!ta.isAlive && !tb.isAlive, "a reader hung: a wait-for cycle that was not broken")
+    def counts = readers.asScala.map((n, r) => s"$n backed off ${r.waitCyclesBackedOff}x").mkString(", ")
+    assert(!ta.isAlive && !tb.isAlive, s"a reader hung: a wait-for cycle that was not broken ($counts)")
+    val most = readers.values.asScala.map(_.waitCyclesBackedOff).maxOption.getOrElse(0)
+    backoffs.add(readers.values.asScala.map(_.waitCyclesBackedOff).sum)
+    assert(most <= maxBackoffs, s"a request backed off more than $maxBackoffs times, a livelock in the making ($counts)")
     (ra.get, rb.get) match
       case (Right(x), Right(y)) => (x, y)
       case (Left(ex), _) => throw ex
@@ -119,11 +136,11 @@ class CompletionConcurrentSuite extends BasePCSuite:
       // a session in which both objects are skipped, so that the two
       // requests resume them concurrently
       d.runUpTo(uri, source, Span(cycleCode.indexOf("p = 0")))
-      val answer = together(ask(d, uri, source, atA), ask(d, uri, source, atB))
+      val answer = together(d)(ask(d, uri, source, atA), ask(d, uri, source, atB))
       seen = seen.updated(answer, seen.getOrElse(answer, 0) + 1)
       assert(orders.contains(answer) || answer._1 == answer._2 && orders.exists(o => o._1 == answer._1 || o._2 == answer._2),
         s"round $i: two readers answered $answer, which no single-reader order gives (${orders.mkString(" | ")})")
-    println(s"[concurrent cycle] 30 rounds, answers: ${seen.map((k, v) => s"$k x$v").mkString(", ")}")
+    println(s"[concurrent cycle] 30 rounds, answers: ${seen.map((k, v) => s"$k x$v").mkString(", ")}; ${backoffSummary()}")
 
   // ---- §4.1: peeks ----
 
@@ -155,13 +172,13 @@ class CompletionConcurrentSuite extends BasePCSuite:
     for i <- 1 to 30 do
       val d = newDriver()
       d.runUpTo(uri, source, Span(code.indexOf("object Defs")))
-      val answer = together(ask(d, uri, source, atY), ask(d, uri, source, atZ))
+      val answer = together(d)(ask(d, uri, source, atY), ask(d, uri, source, atZ))
       assert(answer == expected, s"round $i: two readers answered $answer, the whole-file run $expected")
       val diags = d.readAll(uri, source)((_, _, ds) => ds)
       assert(!diags.exists(_.msg.message.contains("cyclic")),
         s"round $i: a peek took the other reader's completion for a cycle: ${diags.map(_.msg.message).mkString("; ")}")
       assert(diags.size == wholeDiags.size, s"round $i: ${diags.size} diagnostics, the whole-file run ${wholeDiags.size}")
-    println(s"[concurrent peek import] 30 rounds, answers $expected")
+    println(s"[concurrent peek import] 30 rounds, answers $expected; ${backoffSummary()}")
 
   private val packageObjectCode =
     """|package p {
@@ -188,9 +205,15 @@ class CompletionConcurrentSuite extends BasePCSuite:
     for i <- 1 to 30 do
       val d = newDriver()
       d.runUpTo(uri, source, Span(code.indexOf("package p")))
-      val answer = together(ask(d, uri, source, atV), ask(d, uri, source, atW))
+      val answer = together(d)(ask(d, uri, source, atV), ask(d, uri, source, atW))
       assert(answer == expected, s"round $i: two readers answered $answer, the whole-file run $expected")
-    println(s"[concurrent peek package object] 30 rounds, answers $expected")
+    println(s"[concurrent peek package object] 30 rounds, answers $expected; ${backoffSummary()}")
+
+  /** The backoffs of the rounds since the last summary: total and most in a round. */
+  private def backoffSummary(): String =
+    val xs = backoffs.asScala.toList
+    backoffs.clear()
+    s"backoffs ${xs.sum} in ${xs.size} rounds, at most ${xs.maxOption.getOrElse(0)} in one (bound $maxBackoffs per request)"
 
   private def describeWhole(d: InteractiveDriver, uri: URI, offset: Int): String =
     describe(d.currentCtx, d.compilationUnits(uri), offset)
