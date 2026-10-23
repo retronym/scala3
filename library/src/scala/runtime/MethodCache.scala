@@ -1,0 +1,95 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc. dba Akka
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package scala
+package runtime
+
+import scala.language.`2.13`
+import java.lang.reflect.{ Method => JMethod }
+import java.lang.{ Class => JClass }
+
+import scala.annotation.tailrec
+
+/** An element of a polymorphic object cache.
+ *  This class is referred to by the `CleanUp` phase. Each `PolyMethodCache` chain
+ *  must only relate to one method as `PolyMethodCache` does not identify
+ *  the method name and argument types. In practice, one variable will be
+ *  generated per call point, and will uniquely relate to the method called
+ *  at that point, making the method name and argument types irrelevant. 
+ */
+/* TODO: if performance is acceptable, PolyMethodCache should be made generic on the method type */
+private[scala] sealed abstract class MethodCache {
+  /** Searches for a cached method in the `MethodCache` chain that
+   *  is compatible with receiver class `forReceiver`. If none is cached,
+   *  `null` is returned. If `null` is returned, find's caller should look-
+   *  up the right method using whichever means it prefers, and add it to
+   *  the cache for later use. 
+   *
+   *  @param forReceiver the runtime `Class` of the receiver object to look up in the cache
+   *  @return the cached `JMethod` compatible with `forReceiver`, or `null` if no such method is cached (in which case the caller should look up the method and `add` it)
+   */
+  def find(forReceiver: JClass[?]): JMethod | Null
+  def add(forReceiver: JClass[?], forMethod: JMethod): MethodCache
+}
+
+private[scala] final class EmptyMethodCache extends MethodCache {
+
+  def find(forReceiver: JClass[?]): JMethod | Null = null
+
+  def add(forReceiver: JClass[?], forMethod: JMethod): MethodCache =
+    new PolyMethodCache(this, forReceiver, forMethod, 1)
+
+}
+
+private[scala] final class MegaMethodCache(
+  private val forName: String,
+  private val forParameterTypes: Array[JClass[?]]
+) extends MethodCache {
+
+  def find(forReceiver: JClass[?]): JMethod | Null =
+    forReceiver.getMethod(forName, forParameterTypes*)
+
+  def add(forReceiver: JClass[?], forMethod: JMethod): MethodCache = this
+
+}
+
+private[scala] final class PolyMethodCache(
+  private val next: MethodCache,
+  private val receiver: JClass[?],
+  private val method: JMethod,
+  private val complexity: Int
+) extends MethodCache {
+
+  /** To achieve tail recursion this must be a separate method
+   *  from `find`, because the type of next is not `PolyMethodCache`.
+   *
+   *  @param forReceiver the runtime `Class` of the receiver object to look up in the cache chain via tail recursion
+   *  @return the cached `JMethod` whose receiver class is reference-equal to `forReceiver` anywhere in this chain, or `null` if no match exists
+   */
+  @tailrec private def findInternal(forReceiver: JClass[?]): JMethod | Null =
+    if (forReceiver eq receiver) method
+    else next match {
+      case x: PolyMethodCache => x findInternal forReceiver
+      case _                  => next find forReceiver
+    }
+
+  def find(forReceiver: JClass[?]): JMethod | Null = findInternal(forReceiver)
+
+  // TODO: come up with a more realistic number
+  final private val MaxComplexity = 160
+
+  def add(forReceiver: JClass[?], forMethod: JMethod): MethodCache =
+    if (complexity < MaxComplexity)
+      new PolyMethodCache(this, forReceiver, forMethod, complexity + 1)
+    else
+      new MegaMethodCache(forMethod.getName, forMethod.getParameterTypes)
+}

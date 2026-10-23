@@ -1,0 +1,87 @@
+[[syntax trees at end of MegaPhase{dropOuterAccessors, dropParentRefinements, checkNoSuperThis, flatten, transformWildcards, moveStatic, expandPrivate, restoreScopes, selectStatic, repeatableAnnotations}]] // tests/printing/transformed/lazy-vals-new.scala
+package <empty> {
+  final module class A extends Object {
+    def <init>(): Unit =
+      {
+        super()
+        ()
+      }
+    @static private def <clinit>(): Unit =
+      {
+        A.x$lzy1$lzyHandle =
+          java.lang.invoke.MethodHandles.lookup().findVarHandle(
+            classOf[Object {...}], "x$lzy1", classOf[Object])
+        ()
+      }
+    @static private val x$lzy1$lzyHandle: java.lang.invoke.VarHandle =
+      java.lang.invoke.MethodHandles.lookup().findVarHandle(
+        classOf[Object {...}], "x$lzy1", classOf[Object])
+    private def writeReplace(): Object =
+      new scala.runtime.ModuleSerializationProxy(classOf[A])
+    @volatile private lazy var x$lzy1: Object = null.asInstanceOf[Object]
+    lazy def x(): Int =
+      {
+        val result: Object = A.x$lzy1
+        if result.isInstanceOf[Int] then Int.unbox(result) else
+          if result eq scala.runtime.LazyVals.NullValue then Int.unbox(null)
+             else Int.unbox(A.x$lzyINIT1())
+      }
+    private def x$lzyINIT1(): Object =
+      while <empty> do
+        {
+          val current: Object = A.x$lzy1
+          if current eq null then
+            if
+              A.x$lzy1$lzyHandle.compareAndSet(this, null,
+                scala.runtime.LazyVals.Evaluating)
+             then
+              {
+                var result: Object = null
+                var resultNullable: Object = null
+                try
+                  {
+                    resultNullable = Int.box(2)
+                    if resultNullable eq null then
+                      result = scala.runtime.LazyVals.NullValue else
+                      result = resultNullable
+                    ()
+                  }
+                 finally
+                  if
+                    A.x$lzy1$lzyHandle.compareAndSet(this,
+                      scala.runtime.LazyVals.Evaluating, result).unary_!()
+                   then
+                    {
+                      val lock: scala.runtime.LazyVals.LazyVals$Waiting =
+                        A.x$lzy1.asInstanceOf[
+                          scala.runtime.LazyVals.LazyVals$Waiting]
+                      A.x$lzy1$lzyHandle.compareAndSet(this, lock, result)
+                      lock.countDown()
+                    }
+                   else ()
+                return resultNullable
+              }
+             else ()
+           else
+            if
+              current.isInstanceOf[
+                scala.runtime.LazyVals.LazyVals$LazyValControlState]
+             then
+              if current eq scala.runtime.LazyVals.Evaluating then
+                {
+                  A.x$lzy1$lzyHandle.compareAndSet(this, current,
+                    new scala.runtime.LazyVals.LazyVals$Waiting())
+                  ()
+                }
+               else
+                if current.isInstanceOf[scala.runtime.LazyVals.LazyVals$Waiting]
+                   then
+                  current.asInstanceOf[scala.runtime.LazyVals.LazyVals$Waiting].
+                    await()
+                 else return null
+             else return current
+        }
+  }
+  final lazy module val A: A = new A()
+}
+

@@ -1,0 +1,1 @@
+. // error: expected class or object definition

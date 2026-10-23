@@ -1,0 +1,8 @@
+-- [E029] Pattern Match Exhaustivity Warning: tests/patmat/i4880.scala:10:32 ---
+10 |  def foo(file: AbstractFile) = file match {
+   |                                ^^^^
+   |match may not be exhaustive.
+   |
+   |It would fail on pattern case: _: PlainFile, _: VirtualFile, _: ZipArchive
+   |
+   | longer explanation available when compiling with `-explain`

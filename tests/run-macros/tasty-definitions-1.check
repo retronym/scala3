@@ -1,0 +1,150 @@
+_root_
+scala
+Any
+AnyVal
+Object
+AnyRef
+Null
+Nothing
+Unit
+Byte
+Short
+Char
+Int
+Long
+Float
+Double
+Boolean
+String
+Class
+Array
+Predef
+lang
+Array
+apply
+clone
+length
+update
+<repeated>
+Option
+None
+Some
+Product
+Function0
+Function1
+Function2
+Function3
+Function4
+Function5
+Function6
+Function7
+Function8
+Function9
+Function10
+Function11
+Function12
+Function13
+Function14
+Function15
+Function16
+Function17
+Function18
+Function19
+Function20
+Function21
+Function22
+Function23
+Function24
+Function25
+ContextFunction0
+ContextFunction0
+ContextFunction1
+ContextFunction1
+ContextFunction2
+ContextFunction2
+ContextFunction3
+ContextFunction3
+ContextFunction4
+ContextFunction4
+ContextFunction5
+ContextFunction5
+ContextFunction6
+ContextFunction6
+ContextFunction7
+ContextFunction7
+ContextFunction8
+ContextFunction8
+ContextFunction9
+ContextFunction9
+ContextFunction10
+ContextFunction10
+ContextFunction11
+ContextFunction11
+ContextFunction12
+ContextFunction12
+ContextFunction13
+ContextFunction13
+ContextFunction14
+ContextFunction14
+ContextFunction15
+ContextFunction15
+ContextFunction16
+ContextFunction16
+ContextFunction17
+ContextFunction17
+ContextFunction18
+ContextFunction18
+ContextFunction19
+ContextFunction19
+ContextFunction20
+ContextFunction20
+ContextFunction21
+ContextFunction21
+ContextFunction22
+ContextFunction22
+ContextFunction23
+ContextFunction23
+ContextFunction24
+ContextFunction24
+ContextFunction25
+ContextFunction25
+class java.lang.Exception: Erased function classes are not supported. Use a refined `scala.PolyFunction`
+PolyFunction
+Tuple2
+Tuple3
+Tuple4
+Tuple5
+Tuple6
+Tuple7
+Tuple8
+Tuple9
+Tuple10
+Tuple11
+Tuple12
+Tuple13
+Tuple14
+Tuple15
+Tuple16
+Tuple17
+Tuple18
+Tuple19
+Tuple20
+Tuple21
+Tuple22
+List(Unit, Boolean, Byte, Short, Int, Long, Float, Double, Char)
+List(Byte, Short, Int, Long, Float, Double, Char)
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Unit")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Byte")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Char")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Int")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Long")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Float")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Double")
+TypeRef(ThisType(TypeRef(NoPrefix(), "scala")), "Boolean")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "<root>")), "scala"), "Any")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "<root>")), "scala"), "AnyVal")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "java")), "lang"), "Object")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "java")), "lang"), "Object")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "<root>")), "scala"), "Nothing")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "<root>")), "scala"), "Null")
+TypeRef(TermRef(ThisType(TypeRef(NoPrefix(), "java")), "lang"), "String")

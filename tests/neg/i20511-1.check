@@ -1,0 +1,18 @@
+-- [E083] Type Error: tests/neg/i20511-1.scala:7:7 ---------------------------------------------------------------------
+7 |export toppingPrice.apply, crustPrice.apply, crustPrice.unlift // error // error // error
+  |       ^^^^^^^^^^^^
+  |       Int => Double is not a valid export prefix, since it is not an immutable path
+  |
+  | longer explanation available when compiling with `-explain`
+-- [E083] Type Error: tests/neg/i20511-1.scala:7:27 --------------------------------------------------------------------
+7 |export toppingPrice.apply, crustPrice.apply, crustPrice.unlift // error // error // error
+  |                           ^^^^^^^^^^
+  |                           Double => Double is not a valid export prefix, since it is not an immutable path
+  |
+  | longer explanation available when compiling with `-explain`
+-- [E083] Type Error: tests/neg/i20511-1.scala:7:45 --------------------------------------------------------------------
+7 |export toppingPrice.apply, crustPrice.apply, crustPrice.unlift // error // error // error
+  |                                             ^^^^^^^^^^
+  |                                  Double => Double is not a valid export prefix, since it is not an immutable path
+  |
+  | longer explanation available when compiling with `-explain`

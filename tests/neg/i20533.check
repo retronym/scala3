@@ -1,0 +1,12 @@
+-- [E081] Type Error: tests/neg/i20533.scala:5:12 ----------------------------------------------------------------------
+5 |    [X] => (x, y) => Map(x -> y) // error // error
+  |            ^
+  |            Missing parameter type
+  |
+  |            I could not infer the type of the parameter x
+-- [E081] Type Error: tests/neg/i20533.scala:5:15 ----------------------------------------------------------------------
+5 |    [X] => (x, y) => Map(x -> y) // error // error
+  |               ^
+  |               Missing parameter type
+  |
+  |               I could not infer the type of the parameter y

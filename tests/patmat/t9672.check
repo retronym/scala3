@@ -1,0 +1,8 @@
+-- [E029] Pattern Match Exhaustivity Warning: tests/patmat/t9672.scala:22:25 ---
+22 |  def func(expr: Expr) = expr match {
+   |                         ^^^^
+   |                    match may not be exhaustive.
+   |
+   |                    It would fail on pattern case: SimpleExpr.IntExpr(_)
+   |
+   | longer explanation available when compiling with `-explain`

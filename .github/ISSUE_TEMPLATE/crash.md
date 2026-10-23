@@ -1,0 +1,36 @@
+---
+name: "\U0001F4A5 Crash report"
+about: Report a Scala 3 compiler crash
+title: ''
+labels: itype:bug, itype:crash, stat:needs triage
+assignees: ''
+
+---
+
+## Compiler version
+
+If you're not sure what version you're using, run `print scalaVersion` from sbt
+(if you're running scalac manually, use `scalac -version` instead).
+
+## Minimized code
+
+<!--
+This code should be self contained, compilable (with possible failures) and as small as possible.
+
+Ideally, we should be able to just copy this code in a file and run `scalac` (and maybe `scala`) to reproduce the issue.
+-->
+
+```Scala
+println("hello, world")
+```
+
+## Output (click arrow to expand)
+<!--
+Note: to get a full crash log when using scala-cli, run compilation with the flag `--server=false`
+-->
+<details>
+
+```scala
+// TODO add output here
+```
+</details>

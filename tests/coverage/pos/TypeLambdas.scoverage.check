@@ -1,0 +1,105 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+TypeLambdas.scala
+covtest
+TypeLambdas
+Object
+covtest.TypeLambdas
+test
+306
+319
+14
+apply
+Apply
+false
+0
+false
+Map(1 -> "1")
+
+1
+TypeLambdas.scala
+covtest
+TypeLambdas
+Object
+covtest.TypeLambdas
+test
+324
+334
+15
+println
+Apply
+false
+0
+false
+println(m)
+
+2
+TypeLambdas.scala
+covtest
+TypeLambdas
+Object
+covtest.TypeLambdas
+test
+367
+377
+17
+apply
+Apply
+false
+0
+false
+("a", "b")
+
+3
+TypeLambdas.scala
+covtest
+TypeLambdas
+Object
+covtest.TypeLambdas
+test
+382
+396
+18
+println
+Apply
+false
+0
+false
+println(tuple)
+
+4
+TypeLambdas.scala
+covtest
+TypeLambdas
+Object
+covtest.TypeLambdas
+test
+259
+267
+13
+test
+DefDef
+false
+0
+false
+def test
+

@@ -1,0 +1,171 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc. dba Akka
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package scala
+
+import scala.language.`2.13`
+
+/** `Boolean` (equivalent to Java's `boolean` primitive type) is a
+ *  subtype of [[scala.AnyVal]]. Instances of `Boolean` are not
+ *  represented by an object in the underlying runtime system.
+ *
+ *  The companion object provides useful non-primitive operations as extension methods.
+ */
+final abstract class Boolean private extends AnyVal {
+  /** Negates a Boolean expression.
+   *
+   *  - `!a` results in `false` if and only if `a` evaluates to `true` and
+   *  - `!a` results in `true` if and only if `a` evaluates to `false`.
+   *
+   *  @return the negated expression
+   */
+  def unary_! : Boolean
+
+  /** Compares two Boolean expressions and returns `true` if they evaluate to the same value.
+   *
+   *  `a == b` returns `true` if and only if
+   *  - `a` and `b` are `true` or
+   *  - `a` and `b` are `false`.
+   */
+  def ==(x: Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if they evaluate to a different value.
+   *
+   *  `a != b` returns `true` if and only if
+   *  - `a` is `true` and `b` is `false` or
+   *  - `a` is `false` and `b` is `true`.
+   */
+  def !=(x: Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if one or both of them evaluate to true.
+   *
+   *  `a || b` returns `true` if and only if
+   *  - `a` is `true` or
+   *  - `b` is `true` or
+   *  - `a` and `b` are `true`.
+   *
+   *  @note This method uses 'short-circuit' evaluation and
+   *       behaves as if it was declared as `def ||(x: => Boolean): Boolean`.
+   *       If `a` evaluates to `true`, `true` is returned without evaluating `b`.
+   *
+   *  @param x the right-hand operand, only evaluated if `this` is `false`
+   *  @return `true` if at least one operand is `true`, `false` otherwise
+   */
+  def ||(x: Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if both of them evaluate to true.
+   *
+   *  `a && b` returns `true` if and only if
+   *  - `a` and `b` are `true`.
+   *
+   *  @note This method uses 'short-circuit' evaluation and
+   *       behaves as if it was declared as `def &&(x: => Boolean): Boolean`.
+   *       If `a` evaluates to `false`, `false` is returned without evaluating `b`.
+   *
+   *  @param x the right-hand operand, only evaluated if `this` is `true`
+   *  @return `true` if both operands are `true`, `false` otherwise
+   */
+  def &&(x: Boolean): Boolean
+
+  // Compiler won't build with these seemingly more accurate signatures
+  // def ||(x: => Boolean): Boolean
+  // def &&(x: => Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if one or both of them evaluate to true.
+   *
+   *  `a | b` returns `true` if and only if
+   *  - `a` is `true` or
+   *  - `b` is `true` or
+   *  - `a` and `b` are `true`.
+   *
+   *  @note This method evaluates both `a` and `b`, even if the result is already determined after evaluating `a`.
+   *
+   *  @param x the right-hand operand, always evaluated
+   *  @return `true` if at least one operand is `true`, `false` otherwise
+   */
+  def |(x: Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if both of them evaluate to true.
+   *
+   *  `a & b` returns `true` if and only if
+   *  - `a` and `b` are `true`.
+   *
+   *  @note This method evaluates both `a` and `b`, even if the result is already determined after evaluating `a`.
+   *
+   *  @param x the right-hand operand, always evaluated
+   *  @return `true` if both operands are `true`, `false` otherwise
+   */
+  def &(x: Boolean): Boolean
+
+  /** Compares two Boolean expressions and returns `true` if they evaluate to a different value.
+   *
+   *  `a ^ b` returns `true` if and only if
+   *  - `a` is `true` and `b` is `false` or
+   *  - `a` is `false` and `b` is `true`.
+   *
+   *  @param x the right-hand operand
+   *  @return `true` if the operands evaluate to different values, `false` otherwise
+   */
+  def ^(x: Boolean): Boolean
+
+}
+
+object Boolean extends AnyValCompanion {
+
+  /** Transforms a value type into a boxed reference type.
+   *
+   *  Runtime implementation determined by `scala.runtime.BoxesRunTime.boxToBoolean`. See [src/library/scala/runtime/BoxesRunTime.java](https://github.com/scala/scala).
+   *
+   *  @param  x   the Boolean to be boxed
+   *  @return     a java.lang.Boolean offering `x` as its underlying value.
+   */
+  def box(x: Boolean): java.lang.Boolean = ???
+
+  /** Transforms a boxed type into a value type.  Note that this
+   *  method is not typesafe: it accepts any Object, but will throw
+   *  an exception if the argument is not a java.lang.Boolean.
+   *
+   *  Runtime implementation determined by `scala.runtime.BoxesRunTime.unboxToBoolean`. See [src/library/scala/runtime/BoxesRunTime.java](https://github.com/scala/scala).
+   *
+   *  @param  x   the java.lang.Boolean to be unboxed.
+   *  @return     the Boolean resulting from calling booleanValue() on `x`
+   *  @throws     ClassCastException  if the argument is not a java.lang.Boolean
+   */
+  def unbox(x: java.lang.Object): Boolean = ???
+
+  /** The String representation of the scala.Boolean companion object. */
+  override def toString() = "object scala.Boolean"
+
+  extension (self: Boolean) {
+
+    /** Compares `this` to `that` according to the standard total ordering.
+      *
+      * Returns:
+      * - a positive value if `this` is `true` and `that` is `false`
+      * - a negative value if `this` is `false` and `that` is `true`
+      * - `0` if `this == that`
+      */
+    def compare(that: Boolean): Int = java.lang.Boolean.compare(self, that)
+
+    /** Returns true iff `this` is `false` and `that` is `true`. */
+    def <(that: Boolean): Boolean = !self & that
+
+    /** Returns true iff `this` is `true` and `that` is `false`. */
+    def >(that: Boolean): Boolean = self & !that
+
+    /** Returns true iff `this` is `false` or `that` is `true`. */
+    def <=(that: Boolean): Boolean = !self | that
+
+    /** Returns true iff `this` is `true` or `that` is `false`. */
+    def >=(that: Boolean): Boolean = self | !that
+  }
+}

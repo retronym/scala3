@@ -1,0 +1,275 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+28
+36
+4
+<init>
+DefDef
+false
+0
+false
+def this
+
+1
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+69
+72
+6
+g
+Apply
+false
+0
+false
+g()
+
+2
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+80
+88
+9
+<init>
+DefDef
+false
+0
+false
+def this
+
+3
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+108
+128
+10
++
+Apply
+false
+0
+false
+x.toString() + "foo"
+
+4
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+f
+133
+138
+12
+f
+DefDef
+false
+0
+false
+def f
+
+5
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+x
+161
+162
+13
+<none>
+Literal
+false
+0
+false
+1
+
+6
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+x
+153
+158
+13
+x
+DefDef
+false
+0
+false
+def x
+
+7
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+165
+169
+14
+f
+Apply
+false
+0
+false
+f(x)
+
+8
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+<init>
+167
+168
+14
+x
+Select
+false
+0
+false
+x
+
+9
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+g
+188
+189
+16
+<none>
+Literal
+false
+0
+false
+2
+
+10
+Constructor.scala
+covtest
+C
+Class
+covtest.C
+g
+173
+178
+16
+g
+DefDef
+false
+0
+false
+def g
+
+11
+Constructor.scala
+covtest
+O
+Object
+covtest.O
+g
+203
+208
+19
+g
+DefDef
+false
+0
+false
+def g
+
+12
+Constructor.scala
+covtest
+O
+Object
+covtest.O
+y
+231
+232
+20
+<none>
+Literal
+false
+0
+false
+1
+
+13
+Constructor.scala
+covtest
+O
+Object
+covtest.O
+y
+223
+228
+20
+y
+DefDef
+false
+0
+false
+def y
+
+14
+Constructor.scala
+covtest
+O
+Object
+covtest.O
+<init>
+235
+239
+21
+g
+Apply
+false
+0
+false
+g(y)
+

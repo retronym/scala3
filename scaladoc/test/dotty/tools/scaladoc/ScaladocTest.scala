@@ -1,0 +1,41 @@
+package dotty.tools.scaladoc
+
+import scala.jdk.CollectionConverters.{ListHasAsScala, SeqHasAsJava}
+import org.junit.Rule
+import org.junit.rules.{TemporaryFolder, ErrorCollector}
+import java.io.File
+
+abstract class ScaladocTest(val name: String):
+
+  /** The compiler context the Scaladoc run uses; override to set compiler settings. */
+  protected def compilerContext: CompilerContext = testContext
+
+  def afterRendering(op: DocContext ?=> Unit) =
+    val ctx = Scaladoc.run(args)(using compilerContext)
+    op(using ctx)
+
+  def moduleDocContext = testDocContext(tastyFiles(name))
+
+  def withModule(op: DocContext ?=> Module => Unit) =
+    given DocContext = moduleDocContext
+    op(ScalaModuleProvider.mkModule())
+
+  protected def getTempDir() : TemporaryFolder =
+    val folder = new TemporaryFolder()
+    folder.create()
+    folder
+
+  def args = Scaladoc.Args(
+      name = "test",
+      tastyFiles = tastyFiles(name),
+      output = getTempDir().getRoot,
+      projectVersion = Some("1.0"),
+      sourceLinks = List("github://scala/scala3/master")
+    )
+
+  @Rule
+  def collector = _collector
+  private val _collector = new ErrorCollector();
+  def reportError(msg: String) = collector.addError(new AssertionError(msg))
+
+

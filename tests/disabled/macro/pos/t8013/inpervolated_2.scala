@@ -1,0 +1,9 @@
+//> using options -Werror -Wshadow
+package t8013
+
+// unsuspecting user of perverse macro
+trait User {
+  import Perverse.Impervolator
+  val foo = "bar"
+  Console println p"Hello, $foo"
+}

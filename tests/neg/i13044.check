@@ -1,0 +1,28 @@
+-- [E172] Type Error: tests/neg/i13044.scala:61:40 ---------------------------------------------------------------------
+61 |   implicit def typeSchema: Schema[A] = Schema.gen // error
+   |                                        ^^^^^^^^^^
+   |                                 No given instance of type Schema[B] was found.
+   |                                 I found:
+   |
+   |                                     Schema.gen[B]
+   |
+   |                                 But given instance gen in trait SchemaDerivation does not match type Schema[B].
+   |--------------------------------------------------------------------------------------------------------------------
+   |Inline stack trace
+   |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   |This location contains code that was inlined from i13044.scala:17
+17 |        val builder = summonInline[Schema[t]].asInstanceOf[Schema[Any]]
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^
+   |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   |This location contains code that was inlined from i13044.scala:17
+18 |        builder :: recurse[ts]
+   |                   ^^^^^^^^^^^
+   |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   |This location contains code that was inlined from i13044.scala:17
+29 |        lazy val fields = recurse[m.MirroredElemTypes]
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+   |This location contains code that was inlined from i13044.scala:17
+33 |  inline given gen[A]: Schema[A] = derived
+   |                                   ^^^^^^^
+    --------------------------------------------------------------------------------------------------------------------

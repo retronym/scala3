@@ -1,0 +1,12 @@
+-- [E008] Not Found Error: tests/neg/i8623.scala:11:9 ------------------------------------------------------------------
+11 |  unseal.pos  // error
+   |  ^^^^^^^^^^
+   |  value pos is not a member of ?1.tasty.Tree.
+   |  Extension methods were tried, but the search failed with:
+   |
+   |      cannot construct a tree referring to ?1.tasty.type because of skolem prefix (?1 : QC)
+   |      
+   |      where:    ?1 is an unknown value of type QC
+   |      
+   |
+   |  where:    ?1 is an unknown value of type QC

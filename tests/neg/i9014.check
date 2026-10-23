@@ -1,0 +1,4 @@
+-- Error: tests/neg/i9014.scala:4:25 -----------------------------------------------------------------------------------
+4 |  val tests = summon[Bar] // error: Failed to expand!
+  |                         ^
+  |                         Failed to expand!

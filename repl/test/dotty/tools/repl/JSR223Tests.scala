@@ -1,0 +1,22 @@
+package dotty.tools
+package repl
+
+import org.junit.Test
+import org.junit.AfterClass
+
+import vulpix.*
+
+final class JSR223Tests:
+  import JSR223Tests.{*, given}
+
+  @Test def filetests: Unit =
+    given TestGroup = TestGroup("runWithCompiler")
+    // We want this test to run with the REPL inside the classpath so it can access the script engine,
+    // and by default Vulpix only gives a restricted class path, so pass the full one
+    compileFilesInDir("test-resources/jsr223", TestConfiguration.defaultOptions.withRunClasspath(System.getProperty("java.class.path")))
+      .checkRuns()
+  end filetests
+
+end JSR223Tests
+
+object JSR223Tests extends ParallelTesting

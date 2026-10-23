@@ -1,0 +1,8 @@
+-- [E029] Pattern Match Exhaustivity Warning: tests/patmat/anonym.scala:10:27 --
+10 |  def bar(x: Base): Unit = x match {
+   |                           ^
+   |                      match may not be exhaustive.
+   |
+   |                      It would fail on pattern case: _: Base (anonymous)
+   |
+   | longer explanation available when compiling with `-explain`

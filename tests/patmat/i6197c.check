@@ -1,0 +1,4 @@
+-- [E030] Match case Unreachable Warning: tests/patmat/i6197c.scala:3:7 --------
+3 |  case _: Some[?] =>         // unreachable
+  |       ^^^^^^^^^^
+  |       Unreachable case

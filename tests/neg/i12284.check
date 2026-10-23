@@ -1,0 +1,9 @@
+-- [E007] Type Mismatch Error: tests/neg/i12284.scala:6:26 -------------------------------------------------------------
+6 |  val y: Vector[F[Any]] = xx // error
+  |                          ^^
+  |                          Found:    (xx : Vector[Any])
+  |                          Required: Vector[F[Any]]
+  |
+  |                          where:    F is a type in method magic with bounds <: [_] =>> Any
+  |
+  | longer explanation available when compiling with `-explain`

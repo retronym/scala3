@@ -1,0 +1,12 @@
+-- Error: tests/neg-macros/i6432b/Test_2.scala:4:8 ---------------------------------------------------------------------
+4 |  foo"""abc${"123"}xyz${"456"}fgh""" // error // error // error
+  |        ^^^
+  |        abc
+-- Error: tests/neg-macros/i6432b/Test_2.scala:4:19 --------------------------------------------------------------------
+4 |  foo"""abc${"123"}xyz${"456"}fgh""" // error // error // error
+  |                   ^^^
+  |                   xyz
+-- Error: tests/neg-macros/i6432b/Test_2.scala:4:30 --------------------------------------------------------------------
+4 |  foo"""abc${"123"}xyz${"456"}fgh""" // error // error // error
+  |                              ^^^
+  |                              fgh

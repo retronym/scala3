@@ -1,0 +1,76 @@
+package dotty
+
+import java.nio.file.*
+import java.util.regex.{Matcher, Pattern}
+
+/** Runtime properties from defines or environment */
+object Properties {
+
+  /** If property is unset or FALSE we consider it `false` */
+  private def propIsTrue(name: String): Boolean =
+    sys.props.getOrElse(name, "FALSE") == "TRUE"
+
+  /** Are we running on the CI? */
+  val isRunByCI: Boolean = sys.env.isDefinedAt("CI")
+
+  /** Filter out tests not matching the regex supplied by "dotty.tests.filter"
+   *  define
+   */
+  val testsFilter: List[String] = sys.props.get("dotty.tests.filter").fold(Nil)(_.split(',').toList)
+
+  /** Run only failed tests */
+  val rerunFailed: Boolean = propIsTrue("dotty.tests.rerunFailed")
+
+  /** Tests should override the checkfiles with the current output */
+  val testsUpdateCheckfile: Boolean = propIsTrue("dotty.tests.updateCheckfiles")
+
+  /** Enable Scoverage instrumentation for compilation tests */
+  val testsInstrumentCoverage: Boolean = propIsTrue("dotty.tests.instrumentCoverage")
+
+  /** dotty-interfaces jar */
+  def dottyInterfaces: String = sys.props("dotty.tests.classes.dottyInterfaces").nn
+
+  /** dotty-compiler jar */
+  def dottyCompiler: String = sys.props("dotty.tests.classes.dottyCompiler").nn
+
+  /** dotty-staging jar */
+  def dottyStaging: String = sys.props("dotty.tests.classes.dottyStaging").nn
+
+  /** dotty-tasty-inspector jar */
+  def dottyTastyInspector: String = sys.props("dotty.tests.classes.dottyTastyInspector").nn
+
+  /** tasty-core jar */
+  def tastyCore: String = sys.props("dotty.tests.classes.tastyCore").nn
+
+  /** compiler-interface jar */
+  def compilerInterface: String = sys.props("dotty.tests.classes.compilerInterface").nn
+
+  /** scala-library jar */
+  def scalaLibrary: String = sys.props("dotty.tests.classes.scalaLibrary").nn
+
+  // TODO: Remove this once we migrate the test suite
+  def usingScalaLibraryCCTasty: Boolean = true
+
+  // TODO: Remove this once we migrate the test suite
+  def usingScalaLibraryTasty: Boolean = true
+
+  /** main ASM jar */
+  def asm: String = sys.props("dotty.tests.classes.asm").nn
+
+  /** all the ASM jars */
+  def asmAll: Seq[String] =
+    val sep = java.io.File.separator
+    Seq("", "-tree", "-util", "-commons", "-analysis")
+      .map(suffix =>
+        asm.replaceAll("asm", "asm" + suffix)
+          .replaceFirst(Pattern.quote(sep + "asm" + suffix + sep), Matcher.quoteReplacement(sep + "asm" + sep)))
+
+  /** scalajs-javalib jar */
+  def scalaJSJavalib: String = sys.props("dotty.tests.classes.scalaJSJavalib").nn
+
+  /** scalajs-scalalib jar */
+  def scalaJSScalalib: String = sys.props("dotty.tests.classes.scalaJSScalalib").nn
+
+  /** scalajs-library jar */
+  def scalaJSLibrary: String = sys.props("dotty.tests.classes.scalaJSLibrary").nn
+}

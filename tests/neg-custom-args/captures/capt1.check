@@ -1,0 +1,47 @@
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/capt1.scala:5:2 ------------------------------------------
+5 |  () => if x == null then y else y  // error
+  |  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |  Found:    () ->{x} C
+  |  Required: () -> C
+  |
+  |  Note that capability `x` cannot flow into capture set {}.
+  |
+  | longer explanation available when compiling with `-explain`
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/capt1.scala:8:2 ------------------------------------------
+8 |  () => if x == null then y else y  // error
+  |  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |  Found:    () ->{x} C^'s1
+  |  Required: Matchable
+  |
+  |  Note that capability `x` cannot flow into capture set {}.
+  |
+  | longer explanation available when compiling with `-explain`
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/capt1.scala:16:2 -----------------------------------------
+16 |  f  // error
+   |  ^
+   |  Found:    (y: Int) ->{x} Int
+   |  Required: Matchable
+   |
+   |  Note that capability `x` cannot flow into capture set {}.
+   |
+   | longer explanation available when compiling with `-explain`
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/capt1.scala:24:2 -----------------------------------------
+24 |  F(22)  // error
+   |  ^^^^^
+   |  Found:    A^{x}
+   |  Required: A
+   |
+   |  Note that capability `x` cannot flow into capture set {}.
+   |
+   | longer explanation available when compiling with `-explain`
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/capt1.scala:27:2 -----------------------------------------
+27 |  new A: // error
+   |  ^
+   |  Found:    A^{x}
+   |  Required: A
+   |
+   |  Note that capability `x` cannot flow into capture set {}.
+   |
+28 |    def m() = if x == null then y else y
+   |
+   | longer explanation available when compiling with `-explain`

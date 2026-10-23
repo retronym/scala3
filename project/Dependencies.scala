@@ -1,0 +1,81 @@
+import sbt.*
+import dotty.tools.sbtplugin.Versions
+
+import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport._
+
+/**
+ * All dependencies should be put here to ensure the same version of the dependency is used in all projects.
+ * PLEASE KEEP ALPHABETIZED!
+ */
+object Dependencies {
+  val asmUtil = "org.ow2.asm" % "asm-util" % "9.11"
+  val asmCommons = "org.ow2.asm" % "asm-commons" % "9.11"
+
+  /** Version of Coursier to use + download for initializing the local maven repo of Scala command */
+  val coursierJarVersion = "2.1.26"
+  val coursier = "io.get-coursier" %% "coursier" % coursierJarVersion
+  val coursierInterface = "io.get-coursier" % "interface" % "1.0.30"
+
+  private val flexmarkVersion = "0.64.8"
+  val flexmarkDeps = Seq(
+    "com.vladsch.flexmark" % "flexmark" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-util-ast" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-util-data" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-util-html" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-anchorlink" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-autolink" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-emoji" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-footnotes" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-gfm-strikethrough" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-gfm-tasklist" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-wikilink" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-tables" % flexmarkVersion,
+    "com.vladsch.flexmark" % "flexmark-ext-yaml-front-matter" % flexmarkVersion,
+  )
+
+  val guava = "com.google.guava" % "guava" % "33.7.2-jre"
+
+  val jacksonDataformatYaml = "tools.jackson.dataformat" % "jackson-dataformat-yaml" % "3.2.3"
+
+  private val jlineVersion = "4.4.8"
+  val jlineReader = "org.jline" % "jline-reader" % jlineVersion
+  val jlineTerminal = "org.jline" % "jline-terminal" % jlineVersion
+  val jlineTerminalJni = "org.jline" % "jline-terminal-jni" % jlineVersion
+
+  val jsoup = "org.jsoup" % "jsoup" % "1.23.2"
+
+  val liqp = "nl.big-o" % "liqp" % "0.9.2.3"
+  // otherwise the jackson versions are ancient, with known vulnerabilities
+  val liqpDependencyOverrides = Seq(
+    "com.fasterxml.jackson.core" % "jackson-annotations" % "2.22",
+    "com.fasterxml.jackson.core" % "jackson-core" % "2.22.3",
+    "com.fasterxml.jackson.core" % "jackson-databind" % "2.22.3",
+    "com.fasterxml.jackson.datatype" % "jackson-datatype-jsr310" % "2.22.3"
+  )
+
+  val lz4 = "at.yawk.lz4" % "lz4-java" % "1.12.0"
+
+  private val mtagsVersion = "1.6.9"
+  val mtagsInterfaces = "org.scalameta" % "mtags-interfaces" % mtagsVersion
+  val mtagsShared = "org.scalameta" % s"mtags-shared_${Versions.scala2Version}" % mtagsVersion
+
+  val sbtCompilerInterface = "org.scala-sbt" % "compiler-interface" % "1.12.1"
+  val sbtJunitInterface = "com.github.sbt" % "junit-interface" % "0.13.3"
+  val sbtZincApiInfo = "org.scala-sbt" %% "zinc-apiinfo" % "1.12.1"
+
+  val scalaCheck = "org.scalacheck" %% "scalacheck" % "1.20.0"
+
+  /** Version of Scala CLI to download */
+  val scalaCliLauncherVersion = "1.18.0"
+
+  val scalaJsDomVersion = "2.8.1" // needs %%% which isn't usable within a val here
+  val scalaJsEnvNodeJs = "org.scala-js" %% "scalajs-env-nodejs" % "1.6.0"
+  val scalaJsIr = "org.scala-js" %% "scalajs-ir" % scalaJSVersion
+  val scalaJsJavalib = "org.scala-js" % "scalajs-javalib" % scalaJSVersion
+  val scalaJsJunitTestRuntime = "org.scala-js" %% "scalajs-junit-test-runtime" % scalaJSVersion
+  val scalaJsLibrary = "org.scala-js" %% "scalajs-library" % scalaJSVersion
+  val scalaJsLinker = "org.scala-js" %% "scalajs-linker" % scalaJSVersion
+
+  /** Needed on the classpath of the users of `coursier`, which depends on it only as `provided` */
+  val scalaReflect = "org.scala-lang" % "scala-reflect" % Versions.scala2Version
+}

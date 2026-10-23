@@ -1,0 +1,133 @@
+package dotty.tools.dotc.core
+
+import dotty.tools.dotc.core.Contexts.Context
+import dotty.tools.dotc.core.Symbols.*
+
+import org.junit.Assert.*
+import org.junit.Test
+
+import dotty.tools.DottyTest
+
+class SealedDescendantsTest extends DottyTest {
+
+  @Test
+  def zincIssue979: Unit =
+    val source =
+      """
+      sealed trait Z
+      sealed trait A extends Z
+      class B extends A
+      class C extends A
+      class D extends A
+      """
+
+    expectedDescendents(source, "Z",
+      "Z" ::
+      "A" ::
+      "B" ::
+      "C" ::
+      "D" :: Nil
+    )
+  end zincIssue979
+
+  @Test
+  def enumOpt: Unit =
+    val source =
+      """
+      enum Opt[+T] {
+        case Some(t: T)
+        case None
+      }
+      """
+
+    expectedDescendents(source, "Opt",
+      "Opt"       ::
+      "Some"      ::
+      "None.type" :: Nil
+    )
+  end enumOpt
+
+  @Test
+  def javaEnum: Unit =
+    expectedDescendents("java.util.concurrent.TimeUnit",
+      "TimeUnit"          ::
+      "NANOSECONDS.type"  ::
+      "MICROSECONDS.type" ::
+      "MILLISECONDS.type" ::
+      "SECONDS.type"      ::
+      "MINUTES.type"      ::
+      "HOURS.type"        ::
+      "DAYS.type"         :: Nil
+    )
+
+  @Test
+  def hierarchicalSharedChildren: Unit =
+    // Q is a child of both Z and A and should appear once
+    // X is a child of both A and Q and should appear once
+    val source =
+      """
+      sealed trait Z
+      sealed trait A extends Z
+      sealed trait Q extends A with Z
+      trait X extends A with Q
+      case object Y extends Q
+      """
+
+    expectedDescendents(source, "Z",
+      "Z"      ::
+      "A"      ::
+      "Q"      ::
+      "X"      ::
+      "Y.type" :: Nil
+    )
+  end hierarchicalSharedChildren
+
+  @Test
+  def hierarchicalSharedChildrenB: Unit =
+    val source =
+      """
+      sealed trait Z
+      case object A extends Z with D with E
+      sealed trait B extends Z
+      trait C extends B
+      sealed trait D extends B
+      sealed trait E extends D
+      """
+
+    expectedDescendents(source, "Z",
+      "Z"      ::
+      "A.type" ::
+      "B"      ::
+      "C"      ::
+      "D"      ::
+      "E"      :: Nil
+    )
+  end hierarchicalSharedChildrenB
+
+  def assertMatchingDescenants(rootCls: Symbol, expected: List[String])(using Context): Unit =
+    val descendents = rootCls.sealedDescendants.map(sym => s"${sym.name}${if (sym.isTerm) ".type" else ""}")
+    assertEquals(expected.toString, descendents.toString)
+
+  def expectedDescendents(root: String, expected: List[String]): Unit =
+    exploreRootNoSource(root)(assertMatchingDescenants(_, expected))
+
+  def expectedDescendents(source: String, root: String, expected: List[String]): Unit =
+    exploreRoot(source, root)(assertMatchingDescenants(_, expected))
+
+  def exploreRootNoSource(root: String)(op: Context ?=> ClassSymbol => Unit) =
+    val source1 = s"""package testsealeddescendants
+                    |object Foo { def foo: $root = ??? }""".stripMargin
+    checkCompile("typer", source1) { (_, context) =>
+      given Context = context
+      op(requiredClass(root))
+    }
+
+  def exploreRoot(source: String, root: String)(op: Context ?=> ClassSymbol => Unit) =
+    val source0 = source.linesIterator.map(_.trim).mkString("\n|")
+    val source1 = s"""package testsealeddescendants
+                     |$source0""".stripMargin
+    checkCompile("typer", source1) { (_, context) =>
+      given Context = context
+      op(requiredClass(s"testsealeddescendants.$root"))
+    }
+}

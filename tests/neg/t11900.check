@@ -1,0 +1,16 @@
+-- Error: tests/neg/t11900.scala:44:16 ---------------------------------------------------------------------------------
+44 |      a => a + 1,   // error: weird comma
+   |                ^
+   |                end of statement expected but ',' found
+-- Error: tests/neg/t11900.scala:48:16 ---------------------------------------------------------------------------------
+48 |    println("a"),   // error: weird comma
+   |                ^
+   |                end of statement expected but ',' found
+-- Error: tests/neg/t11900.scala:52:16 ---------------------------------------------------------------------------------
+52 |    println("b"),   // error: weird comma
+   |                ^
+   |                end of statement expected but ',' found
+-- Error: tests/neg/t11900.scala:64:7 ----------------------------------------------------------------------------------
+64 |      _*, // error
+   |       ^
+   |       spread operator `*` not allowed here; must come last in a parameter list

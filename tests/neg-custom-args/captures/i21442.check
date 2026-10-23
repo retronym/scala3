@@ -1,0 +1,10 @@
+-- Error: tests/neg-custom-args/captures/i21442.scala:10:13 ------------------------------------------------------------
+10 |  val io = x.unbox // error: local reach capability {x*} leaks
+   |           ^^^^^^^
+   |           Local any in the type of parameter x leaks into capture scope of method foo.
+   |           You could try to abstract the capability in a capset variable.
+-- Error: tests/neg-custom-args/captures/i21442.scala:18:14 ------------------------------------------------------------
+18 |  val io = x1.unbox // error
+   |           ^^^^^^^^
+   |           Local any in the type of parameter x leaks into capture scope of method bar.
+   |           You could try to abstract the capability in a capset variable.

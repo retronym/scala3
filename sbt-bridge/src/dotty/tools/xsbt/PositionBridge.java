@@ -1,0 +1,176 @@
+/*
+ * Zinc - The incremental compiler for Scala.
+ * Copyright Lightbend, Inc. and Mark Harrah
+ */
+
+package dotty.tools.xsbt;
+
+import dotty.tools.dotc.util.SourceFile;
+import dotty.tools.dotc.util.SourcePosition;
+import dotty.tools.io.AbstractFile;
+import xsbti.Position;
+
+import java.io.File;
+import java.util.Optional;
+import java.util.function.Function;
+
+public class PositionBridge implements Position {
+  private final SourcePosition pos;
+  private final SourceFile src;
+  private final String pathId;
+
+  public static final Position noPosition = new Position() {
+    public Optional<java.io.File> sourceFile() {
+      return Optional.empty();
+    }
+    public Optional<String> sourcePath() {
+      return Optional.empty();
+    }
+    public Optional<Integer> line() {
+      return Optional.empty();
+    }
+    public String lineContent() {
+      return "";
+    }
+    public Optional<Integer> offset() {
+      return Optional.empty();
+    }
+    public Optional<Integer> pointer() {
+      return Optional.empty();
+    }
+    public Optional<String> pointerSpace() {
+      return Optional.empty();
+    }
+
+    public String toString() {
+      return "";
+    }
+  };
+
+  public PositionBridge(SourcePosition pos, String path) {
+    this.pos = pos;
+    this.src = pos.source();
+    this.pathId = path;
+  }
+
+  @Override
+  public Optional<Integer> line() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+
+    int line = pos.line();
+    if (line == -1) return Optional.empty();
+    else return Optional.of(line + 1);
+  }
+
+  @Override
+  public String lineContent() {
+    if (src.textContent().isEmpty())
+      return "";
+
+    String lineContent = pos.lineContent();
+    if (lineContent.endsWith("\r\n")) {
+      return lineContent.substring(0, lineContent.length() - 2);
+    } else if (lineContent.endsWith("\n") || lineContent.endsWith("\u000c")) {
+      return lineContent.substring(0, lineContent.length() - 1);
+    } else {
+      return lineContent;
+    }
+  }
+
+  @Override
+  public Optional<Integer> offset() {
+    return Optional.of(pos.point());
+  }
+
+  @Override
+  public Optional<String> sourcePath() {
+    return Optional.of(pathId);
+  }
+
+  @Override
+  public Optional<File> sourceFile() {
+    if (!src.exists()) return Optional.empty();
+    return src.jfile();
+  }
+
+  @Override
+  public Optional<Integer> pointer() {
+    if (src.textContent().isEmpty()) return Optional.empty();
+    return Optional.of(pos.point() - src.startOfLine(pos.point()));
+  }
+
+  @Override
+  public Optional<String> pointerSpace() {
+    if (!pointer().isPresent())
+      return Optional.empty();
+
+    // Don't crash if pointer is out-of-bounds (happens with some macros)
+    int fixedPointer = Math.min(pointer().get(), lineContent().length());
+    String lineContent = this.lineContent();
+    StringBuilder result = new StringBuilder();
+    for (int i = 0; i < fixedPointer; i++)
+      result.append(lineContent.charAt(i) == '\t' ? '\t' : ' ');
+    return Optional.of(result.toString());
+  }
+
+  @Override
+  public String toString() {
+    String path = sourcePath().orElse("");
+    Optional<Integer> l = line();
+    Integer column = pointer().orElse(1);
+    if (l.isPresent())
+      return String.format("%s:%d:%d", path, l.get(), column);
+    else
+      return path;
+  }
+
+  @Override
+  public Optional<Integer> startOffset() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.start());
+  }
+
+  @Override
+  public Optional<Integer> endOffset() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.end());
+  }
+
+  @Override
+  public Optional<Integer> startLine() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.startLine() + 1);
+  }
+
+  @Override
+  public Optional<Integer> endLine() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.endLine() + 1);
+  }
+
+  @Override
+  public Optional<Integer> startColumn() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.startColumn());
+  }
+
+  @Override
+  public Optional<Integer> endColumn() {
+    if (src.textContent().isEmpty())
+      return Optional.empty();
+    else
+      return Optional.of(pos.endColumn());
+  }
+
+}

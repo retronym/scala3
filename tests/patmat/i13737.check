@@ -1,0 +1,8 @@
+-- [E029] Pattern Match Exhaustivity Warning: tests/patmat/i13737.scala:14:2 ---
+14 |  res match // error
+   |  ^^^
+   |  match may not be exhaustive.
+   |
+   |  It would fail on pattern case: _: Success
+   |
+   | longer explanation available when compiling with `-explain`

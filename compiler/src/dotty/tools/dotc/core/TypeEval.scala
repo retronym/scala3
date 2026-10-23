@@ -1,0 +1,276 @@
+package dotty.tools
+package dotc
+package core
+
+import scala.reflect.Typeable
+
+import Types.*, Contexts.*, Symbols.*, Constants.*, Decorators.*
+import config.Printers.typr
+import reporting.trace
+import StdNames.tpnme
+import Flags.CaseClass
+import TypeOps.nestedPairs
+
+object TypeEval:
+
+  def tryCompiletimeConstantFold(tp: AppliedType)(using Context): Type = tp.tycon match
+    case tycon: TypeRef if defn.isCompiletimeAppliedType(tycon.symbol) =>
+
+      extension (tp: Type) def fixForEvaluation: Type =
+        tp.normalized.dealias match
+          // enable operations for constant singleton terms. E.g.:
+          // ```
+          // final val one = 1
+          // type Two = one.type + one.type
+          // ```
+          case tp: TypeProxy =>
+            val tp1 = tp.superType
+            if tp1.isStable then tp1.fixForEvaluation else tp
+          case tp => tp
+
+      extension (tp: Type) def constant[T: Typeable]: Option[T] =
+        TypeComparer.constValue(tp.fixForEvaluation).collect { case Constant(c: T) => c }
+
+      def constValue(tp: Type): Option[Any] = tp.constant[Any]
+
+      def boolValue(tp: Type): Option[Boolean] = tp.constant[Boolean]
+
+      def intValue(tp: Type): Option[Int] = tp.constant[Int]
+
+      def longValue(tp: Type): Option[Long] = tp.constant[Long]
+
+      def floatValue(tp: Type): Option[Float] = tp.constant[Float]
+
+      def doubleValue(tp: Type): Option[Double] = tp.constant[Double]
+
+      def stringValue(tp: Type): Option[String] = tp.constant[String]
+
+      // Returns Some(true) if the type is a constant.
+      // Returns Some(false) if the type is not a constant.
+      // Returns None if there is not enough information to determine if the type is a constant.
+      // The type is a constant if it is a constant type or a type operation composition of constant types.
+      // A type that is not concrete yet may still be instantiated to a constant, so it stays unknown.
+      def isConst(tp: Type): Option[Boolean] = tp.dealias match
+        // known to be constant
+        case ConstantType(_) => Some(true)
+        // constant if the term is constant
+        case t: TermRef =>
+          if t.symbol.flagsUNSAFE.is(Flags.Param) then
+            // might be substituted later
+            None
+          else
+            isConst(t.underlying)
+        // an operation type => recursively check all argument compositions
+        case applied: AppliedType if defn.isCompiletimeAppliedType(applied.typeSymbol) =>
+          val argsConst = applied.args.map(isConst)
+          if (argsConst.exists(_.isEmpty)) None
+          else Some(argsConst.forall(_.get))
+        case tp1 =>
+          // a type that still reduces is as constant as its reduction
+          val reduced = tp1.tryNormalize
+          if reduced.exists then isConst(reduced)
+          // only a concrete type is known not to be a constant; anything else
+          // (an abstract type, an application of an abstract type constructor,
+          // a stuck match type) may still become one
+          else if MatchTypes.isConcrete(tp1) then Some(false)
+          else None
+
+      def expectArgsNum(expectedNum: Int): Unit =
+      // We can use assert instead of a compiler type error because this error should not
+      // occur since the type signature of the operation enforces the proper number of args.
+        assert(tp.args.length == expectedNum, s"Type operation expects $expectedNum arguments but found ${tp.args.length}")
+
+      def natValue(tp: Type): Option[Int] = intValue(tp).filter(n => n >= 0 && n < Int.MaxValue)
+
+      // Runs the op and returns the result as a constant type.
+      // If the op throws an exception, then this exception is converted into a type error.
+      def runConstantOp[T](op: => T)(using Constant.ValueToConstant[T]): Type =
+        val result =
+          try op
+          catch case ex: Exception =>
+            throw TypeError(em"${ex.getMessage}")
+        ConstantType(Constant.fromValue(result))
+
+      def fieldsOf: Option[Type] =
+        expectArgsNum(1)
+        val arg = tp.args.head
+        val cls = arg.classSymbol
+        if MatchTypes.isConcrete(arg) && cls.is(CaseClass) then
+          val fields = cls.caseAccessors
+          val fieldLabels = fields.map: field =>
+            ConstantType(Constant(field.name.toString))
+          val fieldTypes = fields.map(arg.memberInfo)
+          Some:
+            defn.NamedTupleTypeRef.appliedTo:
+              nestedPairs(fieldLabels) :: nestedPairs(fieldTypes) :: Nil
+        else arg.widenDealias match
+          case arg @ defn.NamedTuple(_, _) => Some(arg)
+          case arg if arg.derivesFrom(defn.TupleClass) =>
+            val fieldTypesOpt = tupleElementTypes(arg)
+            fieldTypesOpt match
+              case Some(fieldTypes) =>
+                val fieldLabels = (for i <- 1 to fieldTypes.length yield ConstantType(Constant(s"_$i"))).toList
+                Some:
+                  defn.NamedTupleTypeRef.appliedTo:
+                    nestedPairs(fieldLabels) :: nestedPairs(fieldTypes) :: Nil
+              case _ => None
+          case _ => None
+
+      def constantFold1[T, U: Constant.ValueToConstant](extractor: Type => Option[T], op: T => U): Option[Type] =
+        expectArgsNum(1)
+        extractor(tp.args.head).map(a => runConstantOp(op(a)))
+
+      def constantFold2[T, U: Constant.ValueToConstant](extractor: Type => Option[T], op: (T, T) => U): Option[Type] =
+        constantFold2AB(extractor, extractor, op)
+
+      def constantFold2AB[TA, TB, U: Constant.ValueToConstant](extractorA: Type => Option[TA], extractorB: Type => Option[TB], op: (TA, TB) => U): Option[Type] =
+        expectArgsNum(2)
+        for
+          a <- extractorA(tp.args(0))
+          b <- extractorB(tp.args(1))
+        yield runConstantOp(op(a, b))
+
+      def constantFold3[TA, TB, TC, U: Constant.ValueToConstant](
+        extractorA: Type => Option[TA],
+        extractorB: Type => Option[TB],
+        extractorC: Type => Option[TC],
+        op: (TA, TB, TC) => U
+      ): Option[Type] =
+        expectArgsNum(3)
+        for
+          a <- extractorA(tp.args(0))
+          b <- extractorB(tp.args(1))
+          c <- extractorC(tp.args(2))
+        yield runConstantOp(op(a, b, c))
+
+      trace(i"compiletime constant fold $tp", typr, show = true) {
+        val sym = tycon.symbol
+        val name = sym.name
+        val owner = sym.owner
+        val constantType =
+          if defn.isCompiletime_S(sym) then
+            constantFold1(natValue, _ + 1)
+          else if defn.isNamedTuple_From(sym) then
+            fieldsOf
+          else if owner == defn.CompiletimeOpsAnyModuleClass then name match
+            case tpnme.Equals     => constantFold2(constValue, _ == _)
+            case tpnme.NotEquals  => constantFold2(constValue, _ != _)
+            case tpnme.ToString   => constantFold1(constValue, _.toString)
+            case tpnme.IsConst    => isConst(tp.args.head).map(b => ConstantType(Constant(b)))
+            case _ => None
+          else if owner == defn.CompiletimeOpsIntModuleClass then name match
+            case tpnme.Abs        => constantFold1(intValue, _.abs)
+            case tpnme.Negate     => constantFold1(intValue, x => -x)
+            // ToString is deprecated for ops.int, and moved to ops.any
+            case tpnme.ToString   => constantFold1(intValue, _.toString)
+            case tpnme.Plus       => constantFold2(intValue, _ + _)
+            case tpnme.Minus      => constantFold2(intValue, _ - _)
+            case tpnme.Times      => constantFold2(intValue, _ * _)
+            case tpnme.Div        => constantFold2(intValue, _ / _)
+            case tpnme.Mod        => constantFold2(intValue, _ % _)
+            case tpnme.Lt         => constantFold2(intValue, _ < _)
+            case tpnme.Gt         => constantFold2(intValue, _ > _)
+            case tpnme.Ge         => constantFold2(intValue, _ >= _)
+            case tpnme.Le         => constantFold2(intValue, _ <= _)
+            case tpnme.Xor        => constantFold2(intValue, _ ^ _)
+            case tpnme.BitwiseAnd => constantFold2(intValue, _ & _)
+            case tpnme.BitwiseOr  => constantFold2(intValue, _ | _)
+            case tpnme.ASR        => constantFold2(intValue, _ >> _)
+            case tpnme.LSL        => constantFold2(intValue, _ << _)
+            case tpnme.LSR        => constantFold2(intValue, _ >>> _)
+            case tpnme.Min        => constantFold2(intValue, _ min _)
+            case tpnme.Max        => constantFold2(intValue, _ max _)
+            case tpnme.NumberOfLeadingZeros => constantFold1(intValue, Integer.numberOfLeadingZeros(_))
+            case tpnme.ToLong     => constantFold1(intValue, _.toLong)
+            case tpnme.ToFloat    => constantFold1(intValue, _.toFloat)
+            case tpnme.ToDouble   => constantFold1(intValue, _.toDouble)
+            case _ => None
+          else if owner == defn.CompiletimeOpsLongModuleClass then name match
+            case tpnme.Abs        => constantFold1(longValue, _.abs)
+            case tpnme.Negate     => constantFold1(longValue, x => -x)
+            case tpnme.Plus       => constantFold2(longValue, _ + _)
+            case tpnme.Minus      => constantFold2(longValue, _ - _)
+            case tpnme.Times      => constantFold2(longValue, _ * _)
+            case tpnme.Div        => constantFold2(longValue, _ / _)
+            case tpnme.Mod        => constantFold2(longValue, _ % _)
+            case tpnme.Lt         => constantFold2(longValue, _ < _)
+            case tpnme.Gt         => constantFold2(longValue, _ > _)
+            case tpnme.Ge         => constantFold2(longValue, _ >= _)
+            case tpnme.Le         => constantFold2(longValue, _ <= _)
+            case tpnme.Xor        => constantFold2(longValue, _ ^ _)
+            case tpnme.BitwiseAnd => constantFold2(longValue, _ & _)
+            case tpnme.BitwiseOr  => constantFold2(longValue, _ | _)
+            case tpnme.ASR        => constantFold2(longValue, _ >> _)
+            case tpnme.LSL        => constantFold2(longValue, _ << _)
+            case tpnme.LSR        => constantFold2(longValue, _ >>> _)
+            case tpnme.Min        => constantFold2(longValue, _ min _)
+            case tpnme.Max        => constantFold2(longValue, _ max _)
+            case tpnme.NumberOfLeadingZeros =>
+              constantFold1(longValue, java.lang.Long.numberOfLeadingZeros(_))
+            case tpnme.ToInt      => constantFold1(longValue, _.toInt)
+            case tpnme.ToFloat    => constantFold1(longValue, _.toFloat)
+            case tpnme.ToDouble   => constantFold1(longValue, _.toDouble)
+            case _ => None
+          else if owner == defn.CompiletimeOpsFloatModuleClass then name match
+            case tpnme.Abs        => constantFold1(floatValue, _.abs)
+            case tpnme.Negate     => constantFold1(floatValue, x => -x)
+            case tpnme.Plus       => constantFold2(floatValue, _ + _)
+            case tpnme.Minus      => constantFold2(floatValue, _ - _)
+            case tpnme.Times      => constantFold2(floatValue, _ * _)
+            case tpnme.Div        => constantFold2(floatValue, _ / _)
+            case tpnme.Mod        => constantFold2(floatValue, _ % _)
+            case tpnme.Lt         => constantFold2(floatValue, _ < _)
+            case tpnme.Gt         => constantFold2(floatValue, _ > _)
+            case tpnme.Ge         => constantFold2(floatValue, _ >= _)
+            case tpnme.Le         => constantFold2(floatValue, _ <= _)
+            case tpnme.Min        => constantFold2(floatValue, _ min _)
+            case tpnme.Max        => constantFold2(floatValue, _ max _)
+            case tpnme.ToInt      => constantFold1(floatValue, _.toInt)
+            case tpnme.ToLong     => constantFold1(floatValue, _.toLong)
+            case tpnme.ToDouble   => constantFold1(floatValue, _.toDouble)
+            case _ => None
+          else if owner == defn.CompiletimeOpsDoubleModuleClass then name match
+            case tpnme.Abs        => constantFold1(doubleValue, _.abs)
+            case tpnme.Negate     => constantFold1(doubleValue, x => -x)
+            case tpnme.Plus       => constantFold2(doubleValue, _ + _)
+            case tpnme.Minus      => constantFold2(doubleValue, _ - _)
+            case tpnme.Times      => constantFold2(doubleValue, _ * _)
+            case tpnme.Div        => constantFold2(doubleValue, _ / _)
+            case tpnme.Mod        => constantFold2(doubleValue, _ % _)
+            case tpnme.Lt         => constantFold2(doubleValue, _ < _)
+            case tpnme.Gt         => constantFold2(doubleValue, _ > _)
+            case tpnme.Ge         => constantFold2(doubleValue, _ >= _)
+            case tpnme.Le         => constantFold2(doubleValue, _ <= _)
+            case tpnme.Min        => constantFold2(doubleValue, _ min _)
+            case tpnme.Max        => constantFold2(doubleValue, _ max _)
+            case tpnme.ToInt      => constantFold1(doubleValue, _.toInt)
+            case tpnme.ToLong     => constantFold1(doubleValue, _.toLong)
+            case tpnme.ToFloat    => constantFold1(doubleValue, _.toFloat)
+            case _ => None
+          else if owner == defn.CompiletimeOpsStringModuleClass then name match
+            case tpnme.Plus       => constantFold2(stringValue, _ + _)
+            case tpnme.Length     => constantFold1(stringValue, _.length)
+            case tpnme.Matches    => constantFold2(stringValue, _.matches(_))
+            case tpnme.Substring  =>
+              constantFold3(stringValue, intValue, intValue, (s, b, e) => s.substring(b, e))
+            case tpnme.CharAt     =>
+              constantFold2AB(stringValue, intValue, _.charAt(_))
+            case tpnme.LT         => constantFold2(stringValue, _ < _)
+            case tpnme.GT         => constantFold2(stringValue, _ > _)
+            case tpnme.LE         => constantFold2(stringValue, _ <= _)
+            case tpnme.GE         => constantFold2(stringValue, _ >= _)
+            case _ => None
+          else if owner == defn.CompiletimeOpsBooleanModuleClass then name match
+            case tpnme.Not        => constantFold1(boolValue, x => !x)
+            case tpnme.And        => constantFold2(boolValue, _ && _)
+            case tpnme.Or         => constantFold2(boolValue, _ || _)
+            case tpnme.Xor        => constantFold2(boolValue, _ ^ _)
+            case _ => None
+          else None
+
+        constantType.getOrElse(NoType)
+      }
+
+    case _ => NoType
+  end tryCompiletimeConstantFold
+end TypeEval

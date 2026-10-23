@@ -1,0 +1,48 @@
+package dotty.tools.pc
+
+import java.net.URI
+import java.nio.file.Path
+import java.nio.file.Paths
+
+import scala.util.Properties
+
+import dotty.tools.dotc.interactive.InteractiveDriver
+import dotty.tools.dotc.semanticdb
+import dotty.tools.dotc.semanticdb.TextDocument
+import dotty.tools.dotc.util.SourceFile
+
+class SemanticdbTextDocumentProvider(
+    driver: InteractiveDriver,
+    workspace: Option[Path]
+) extends WorksheetSemanticdbProvider:
+
+  def textDocument(
+      uri: URI,
+      sourceCode: String
+  ): Array[Byte] =
+    textDocumentData(uri, sourceCode).toByteArray
+
+  def textDocumentData(
+      uri: URI,
+      sourceCode: String
+  ): TextDocument =
+    val filePath = Paths.get(uri).nn
+    val validCode = removeMagicImports(sourceCode, filePath)
+    driver.run(
+      uri,
+      SourceFile.virtual(filePath.toString(), validCode)
+    )
+    val tree = driver.currentCtx.run.nn.units.head.tpdTree
+    val path = workspace
+      .flatMap { workspacePath =>
+        scala.util.Try(workspacePath.relativize(filePath)).toOption
+      }
+      .map { relativeUri =>
+        if Properties.isWin then relativeUri.toString().replace("\\", "/")
+        else relativeUri.toString()
+      }
+      .getOrElse(filePath.toString())
+
+    semanticdb.textDocument(tree, path.nn, sourceCode)(using driver.currentCtx)
+
+end SemanticdbTextDocumentProvider

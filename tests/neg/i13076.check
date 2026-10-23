@@ -1,0 +1,8 @@
+-- [E231] Declaration Error: tests/neg/i13076.scala:6:6 ----------------------------------------------------------------
+6 |class C[X, Y] extends T[X, Y] {} // error
+  |      ^
+  |      class C needs to be abstract, since it has 2 unimplemented members.
+  |
+  |      Members declared in T:
+  |      - def f(a: X): Y
+  |      - def g(a: X, b: Y): Unit

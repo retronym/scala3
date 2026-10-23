@@ -1,0 +1,309 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+simple
+68
+76
+4
+length
+Apply
+false
+0
+false
+b.length
+
+1
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+simple
+16
+26
+3
+simple
+DefDef
+false
+0
+false
+def simple
+
+2
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+hexa
+82
+90
+6
+hexa
+DefDef
+false
+0
+false
+def hexa
+
+3
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+195
+224
+10
+apply
+Apply
+false
+0
+false
+List("d", "o", "t", "t", "y")
+
+4
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+200
+203
+10
+<none>
+Literal
+false
+0
+false
+"d"
+
+5
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+205
+208
+10
+<none>
+Literal
+false
+0
+false
+"o"
+
+6
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+210
+213
+10
+<none>
+Literal
+false
+0
+false
+"t"
+
+7
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+215
+218
+10
+<none>
+Literal
+false
+0
+false
+"t"
+
+8
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+220
+223
+10
+<none>
+Literal
+false
+0
+false
+"y"
+
+9
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+229
+278
+11
+map
+Apply
+false
+0
+false
+xs.zipWithIndex.map((s, i) => println(s"$i: $s"))
+
+10
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+$anonfun
+259
+277
+11
+println
+Apply
+false
+0
+false
+println(s"$i: $s")
+
+11
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+284
+309
+13
+println
+Apply
+false
+0
+false
+println(simple(1, "abc"))
+
+12
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+292
+308
+13
+simple
+Apply
+false
+0
+false
+simple(1, "abc")
+
+13
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+314
+332
+14
+println
+Apply
+false
+0
+false
+println(hexa(127))
+
+14
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+322
+331
+14
+hexa
+Apply
+false
+0
+false
+hexa(127)
+
+15
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+337
+355
+15
+println
+Apply
+false
+0
+false
+println(raw"a\\nb")
+
+16
+interpolation/test.scala
+<empty>
+Test
+Object
+<empty>.Test
+main
+130
+138
+9
+main
+DefDef
+false
+0
+false
+def main
+

@@ -1,0 +1,23 @@
+read throws: class java.io.IOException
+read annotations: 
+readWith2 throws: class java.io.IOException, class java.lang.ClassCastException
+readWith2 annotations: 
+readMixed throws: class java.lang.NullPointerException, class java.io.IOException
+readMixed annotations: interface java.lang.Deprecated
+readMixed2 throws: class java.lang.NullPointerException, class java.io.IOException
+readMixed2 annotations: interface java.lang.Deprecated
+readNoEx throws: 
+readNoEx annotations: interface java.lang.Deprecated
+ThrowsCtor throws: class java.io.IOException
+ThrowsCtor annotations:
+Testing mirror class
+read throws: class java.io.IOException
+read annotations: 
+readWith2 throws: class java.io.IOException, class java.lang.ClassCastException
+readWith2 annotations: 
+readMixed throws: class java.lang.NullPointerException, class java.io.IOException
+readMixed annotations: interface java.lang.Deprecated
+readMixed2 throws: class java.lang.NullPointerException, class java.io.IOException
+readMixed2 annotations: interface java.lang.Deprecated
+readNoEx throws: 
+readNoEx annotations: interface java.lang.Deprecated

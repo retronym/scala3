@@ -1,0 +1,1 @@
+@main def Test: Any = new concurrent.ExecutionContext  // error

@@ -1,0 +1,14 @@
+package dotty.tools.scaladoc
+package snippets
+
+class SnippetE2eTestcase1 extends SnippetsE2eTest("snippetTestcase1", SCFlags.Compile)
+
+
+class SnippetE2eTestcase2 extends SnippetsE2eTest("snippetTestcase2", SCFlags.Compile)
+
+
+class SnippetE2eTestcase3 extends SnippetsE2eTest("snippetTestcase3", SCFlags.Compile)
+
+class SnippetE2eTestcaseMacro extends SnippetsE2eTest("snippetTestcaseMacro", SCFlags.Compile)
+
+class SnippetE2eTestcaseHidden extends SnippetsE2eTest("snippetTestcaseHidden", SCFlags.Compile)

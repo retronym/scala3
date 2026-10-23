@@ -1,0 +1,4 @@
+-- Error: tests/neg-macros/newClassParamsMissingArgument/Test_2.scala:2:2 ----------------------------------------------
+2 |  makeClass("foo") // error
+  |  ^^^^^^^^^^^^^^^^
+  |wrong number of arguments at inlining (while expanding macro) for (idx: Int): foo: (foo#<init> : (idx: Int): foo), expected: 1, found: 0

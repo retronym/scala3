@@ -1,0 +1,20 @@
+-- Error: tests/neg-custom-args/captures/sep-list.scala:38:14 ----------------------------------------------------------
+38 |  val h2 = xs.head // error after reach drop
+   |           ^^^^^^^
+   |Separation failure: Illegal access to {`any` of value xs} which is hidden by the previous definition
+   |of value h1 with type Ref^.
+   |This type hides capabilities  {any, any²}
+   |
+   |where:    ^    refers to a root capability classified as Unscoped in the type of value h1
+   |          any  is a root capability classified as Unscoped in the type of value xs
+   |          any² is a root capability classified as Unscoped created in value xs when instantiating method listFresh's type (n: Int): LIST[Ref^{fresh}]
+-- Error: tests/neg-custom-args/captures/sep-list.scala:39:6 -----------------------------------------------------------
+39 |  par(h1, h2) // error
+   |      ^^
+   |Separation failure: Illegal access to {`any` of value xs} which is hidden by the previous definition
+   |of value h2 with type Ref^.
+   |This type hides capabilities  {any, any²}
+   |
+   |where:    ^    refers to a root capability classified as Unscoped in the type of value h2
+   |          any  is a root capability classified as Unscoped in the type of value xs
+   |          any² is a root capability classified as Unscoped created in value xs when instantiating method listFresh's type (n: Int): LIST[Ref^{fresh}]

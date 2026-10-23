@@ -1,0 +1,47 @@
+package dotty.tools.dotc.config
+
+import dotty.tools.dotc.core.*
+import Contexts.*
+import Symbols.*
+
+import dotty.tools.backend.sjs.JSDefinitions
+import dotty.tools.dotc.interactive.LogicalPackage
+
+object SJSPlatform {
+  /** The `SJSPlatform` for the current context. */
+  def sjsPlatform(using Context): SJSPlatform =
+    ctx.platform.asInstanceOf[SJSPlatform]
+}
+
+class SJSPlatform(precomputedSourcePackages: Option[LogicalPackage] = None) extends JavaPlatform(precomputedSourcePackages) {
+
+  /** Scala.js-specific definitions. */
+  val jsDefinitions: JSDefinitions = new JSDefinitions()
+
+  override protected def supportsJava25MainClassDiscovery: Boolean = false
+
+  override def init()(using Context): Unit =
+    jsDefinitions.init()
+
+  /** Is the SAMType `cls` also a SAM under the rules of the Scala.js back-end? */
+  override def isSam(cls: ClassSymbol)(using Context): Boolean =
+    defn.isFunctionClass(cls)
+      || cls.superClass == jsDefinitions.JSFunctionClass
+
+  /** Is the given class symbol eligible for Java serialization-specific methods?
+   *
+   *  This is not simply false because we still want to add them to Scala classes
+   *  and objects. They might be transitively used by macros and other compile-time
+   *  code. It feels safer to have them be somewhat equivalent to the ones we would
+   *  get in a JVM project. The JVM back-end will slap an extends `java.io.Serializable`
+   *  to them, so we should be consistent and also emit the proper serialization methods.
+   */
+  override def shouldReceiveJavaSerializationMethods(sym: ClassSymbol)(using Context): Boolean =
+    !sym.isSubClass(jsDefinitions.JSAnyClass)
+
+  override def typeMightBeSubtypeAtRuntime(c: Symbol, potentialSuperClass: Symbol)(using Context): Boolean =
+    // because we deal with primitive types, we also have to deal with the boxed version,
+    // otherwise the compiler will error with, e.g., "cannot test if scala.Double is a subtype of java.lang.Integer"
+    (defn.ScalaNumericValueClasses()(c) || defn.ScalaNumericBoxedClasses()(c)) &&
+      (defn.ScalaNumericValueClasses()(potentialSuperClass) || defn.ScalaNumericBoxedClasses()(potentialSuperClass))
+}

@@ -1,0 +1,394 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+f
+32
+46
+3
+println
+Apply
+false
+0
+false
+println("O.f")
+
+1
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+f
+51
+60
+4
+<none>
+Literal
+false
+0
+false
+"O.f_res"
+
+2
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+f
+12
+17
+2
+f
+DefDef
+false
+0
+false
+def f
+
+3
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+g
+87
+101
+7
+println
+Apply
+false
+0
+false
+println("O.g")
+
+4
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+g
+106
+115
+8
+<none>
+Literal
+false
+0
+false
+"O.g_res"
+
+5
+parameterless/test.scala
+<empty>
+O
+Object
+<empty>.O
+g
+64
+69
+6
+g
+DefDef
+false
+0
+false
+def g
+
+6
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+f
+162
+174
+13
+println
+Apply
+false
+0
+false
+println("f")
+
+7
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+f
+179
+186
+14
+<none>
+Literal
+false
+0
+false
+"f_res"
+
+8
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+f
+142
+147
+12
+f
+DefDef
+false
+0
+false
+def f
+
+9
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+g
+213
+225
+17
+println
+Apply
+false
+0
+false
+println("g")
+
+10
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+g
+230
+237
+18
+<none>
+Literal
+false
+0
+false
+"g_res"
+
+11
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+g
+190
+195
+16
+g
+DefDef
+false
+0
+false
+def g
+
+12
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+249
+250
+20
+f
+Ident
+false
+0
+false
+f
+
+13
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+261
+262
+21
+g
+Ident
+false
+0
+false
+g
+
+14
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+265
+275
+22
+println
+Apply
+false
+0
+false
+println(f)
+
+15
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+278
+288
+23
+println
+Apply
+false
+0
+false
+println(g)
+
+16
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+286
+287
+23
+g
+Ident
+false
+0
+false
+g
+
+17
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+291
+303
+24
+println
+Apply
+false
+0
+false
+println(O.f)
+
+18
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+299
+302
+24
+f
+Select
+false
+0
+false
+O.f
+
+19
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+306
+318
+25
+println
+Apply
+false
+0
+false
+println(O.g)
+
+20
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+314
+317
+25
+g
+Select
+false
+0
+false
+O.g
+
+21
+parameterless/test.scala
+<empty>
+test$package
+Object
+<empty>.test$package
+Test
+117
+131
+11
+Test
+DefDef
+false
+0
+false
+@main\ndef Test
+

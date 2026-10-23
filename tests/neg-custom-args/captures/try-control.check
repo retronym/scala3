@@ -1,0 +1,15 @@
+-- [E007] Type Mismatch Error: tests/neg-custom-args/captures/try-control.scala:20:5 -----------------------------------
+20 |  b: b => // error
+   |     ^
+   |Capability `b.only[Control]` outlives its scope: it leaks into outer capture set 's1 which is owned by method try_b.
+   |The leakage occurred when trying to match the following types:
+   |
+   |Found:    (b: B^) ->'s2 scala.util.Try[Unit]^{b.only[Control]}
+   |Required: B^ => scala.util.Try[Unit]^'s1
+   |
+   |where:    => refers to a root capability created in method try_b when checking argument to parameter f of method b²
+   |          ^  refers to the root capability caps.any
+   |
+21 |    Try(b.hi)
+   |
+   | longer explanation available when compiling with `-explain`

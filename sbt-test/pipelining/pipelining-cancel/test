@@ -1,0 +1,6 @@
+# - Test depending on a project where upstream runs short of reaching backend,
+#   so Zinc is never signalled that the pipeline jar is written.
+# - Because `a` finishes its compile run anyway, sbt continues to the downstream project.
+# - The run still waits for the early TASTy it queued, so downstream project `b`
+#   compiles against a complete pipeline jar.
+> b/compile

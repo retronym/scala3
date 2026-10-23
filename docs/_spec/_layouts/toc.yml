@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
+
+  <link rel="icon" type="image/png" href="public/favicon.ico">
+  <link rel="shortcut icon" type="image/png" href="public/favicon.ico">
+
+  <title>{{ page.title }} | Scala {{ site.thisScalaVersion }}</title>
+
+  <link rel="stylesheet" type="text/css" href="public/stylesheets/screen.css">
+  <link rel="stylesheet" type="text/css" href="public/stylesheets/screen-toc.css">
+  <link rel="stylesheet" type="text/css" media="print" href="public/stylesheets/print.css">
+  <link rel="stylesheet" type="text/css" href="public/stylesheets/fonts.css">
+</head>
+
+<body>
+<header>
+  <div id="header-main">
+  <img id="scala-logo" src="public/images/scala-spiral-white.png" />
+  <span id="title">Scala Language Specification</span>
+  <a id="github" href="https://github.com/scala/scala3/tree/main/docs/_spec"><img src="public/images/github-logo@2x.png" alt="Edit at GitHub"></a>
+  </div>
+  <div id="header-sub">Version {{ site.thisScalaVersion }}</div>
+</header>
+<main>
+{% include version-notice.yml %}
+{{ content }}
+</main>
+
+<script>window.status = "loaded";</script>
+</body>
+</html>

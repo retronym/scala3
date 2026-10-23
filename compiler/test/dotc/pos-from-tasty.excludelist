@@ -1,0 +1,19 @@
+# Infinite loop
+t3612.scala
+
+# java.lang.AssertionError: assertion failed:
+# Found:    (File.this.parens0 : => Test.this.parens.BraceImpl)
+# Required: ((Test.this.parens : Test.this.ParensImpl) | (Test.this.bracks : Test.this.BracksImpl))#BraceImpl
+t802.scala
+
+# missing position
+rbtree.scala
+
+# transitive reduction of match types
+i10511.scala
+
+# Violates tightened condition in Retyper#typedTyped
+i11247.scala
+
+# Tree is huge and blows stack for printing Text
+i7034.scala

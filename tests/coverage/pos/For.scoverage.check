@@ -1,0 +1,224 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForLoop
+43
+77
+4
+foreach
+Apply
+false
+0
+false
+for i <- 1 to 10 do\n    println(i)
+
+1
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+$anonfun
+67
+77
+5
+println
+Apply
+false
+0
+false
+println(i)
+
+2
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForLoop
+17
+32
+3
+testForLoop
+DefDef
+false
+0
+false
+def testForLoop
+
+3
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+f
+134
+138
+8
+<none>
+Literal
+false
+0
+false
+true
+
+4
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+f
+109
+114
+8
+f
+DefDef
+false
+0
+false
+def f
+
+5
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForAdvanced
+141
+183
+9
+foreach
+Apply
+false
+0
+false
+for j <- 1 to 10 if f(j) do\n    println(j)
+
+6
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+$anonfun
+161
+165
+9
+f
+Apply
+false
+0
+false
+f(j)
+
+7
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+$anonfun
+173
+183
+10
+println
+Apply
+false
+0
+false
+println(j)
+
+8
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForAdvanced
+79
+98
+7
+testForAdvanced
+DefDef
+false
+0
+false
+def testForAdvanced
+
+9
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForeach
+301
+344
+14
+foreach
+Apply
+false
+0
+false
+Nil.foreach(_ => println("user code here"))
+
+10
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+$anonfun
+318
+343
+14
+println
+Apply
+false
+0
+false
+println("user code here")
+
+11
+For.scala
+covtest
+For$package
+Object
+covtest.For$package
+testForeach
+185
+200
+12
+testForeach
+DefDef
+false
+0
+false
+def testForeach
+

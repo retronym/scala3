@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    reviewers:
+      - scala/infrastructure-maintainers
+  - package-ecosystem: bundler
+    directory: '/docs/_spec'
+    schedule:
+      interval: weekly
+    reviewers:
+      - scala/infrastructure-maintainers

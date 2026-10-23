@@ -1,0 +1,173 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+block
+31
+50
+4
+println
+Apply
+false
+0
+false
+println("not this")
+
+1
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+block
+119
+121
+5
+<none>
+Literal
+false
+0
+false
+12
+
+2
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+block
+124
+128
+6
+<none>
+Literal
+false
+0
+false
+true
+
+3
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+block
+131
+135
+7
+<none>
+Literal
+false
+0
+false
+null
+
+4
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+block
+17
+26
+3
+block
+DefDef
+false
+0
+false
+def block
+
+5
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+f
+177
+180
+9
+???
+Ident
+false
+0
+false
+???
+
+6
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+f
+137
+142
+9
+f
+DefDef
+false
+0
+false
+def f
+
+7
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+main
+201
+212
+12
+f
+Apply
+false
+0
+false
+f(0,1,2)(3)
+
+8
+Literals.scala
+covtest
+Literals$package
+Object
+covtest.Literals$package
+main
+182
+190
+11
+main
+DefDef
+false
+0
+false
+def main
+

@@ -1,0 +1,4 @@
+-- Error: tests/neg/i14564.scala:5:26 ----------------------------------------------------------------------------------
+5 |def test = sum"${ List(42)* }" // error
+  |                          ^
+  |                          spread operator `*` not allowed here; must come last in a parameter list

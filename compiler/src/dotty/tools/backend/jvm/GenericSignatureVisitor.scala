@@ -1,0 +1,293 @@
+package dotty.tools.backend.jvm
+
+import org.objectweb.asm.{Type, Handle}
+import org.objectweb.asm.tree.*
+
+import scala.collection.mutable
+import scala.annotation.*
+import BTypes.InternalName
+
+// Backported from scala/scala, commit sha: 724be0e9425b9ad07c244d25efdad695d75abbcf
+// https://github.com/scala/scala/blob/724be0e9425b9ad07c244d25efdad695d75abbcf/src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala#L928
+abstract class GenericSignatureVisitor(nestedOnly: Boolean) {
+  // For performance (`Char => Boolean` is not specialized)
+  private trait CharBooleanFunction { def apply(c: Char): Boolean }
+
+  final def visitInternalName(internalName: String): Unit = visitInternalName(internalName, 0, if (internalName eq null) 0 else internalName.length)
+  def visitInternalName(internalName: String, beginIndex: Int, endIndex: Int): Unit
+
+  def visitClassSignature(sig: String): Unit = if (sig != null) {
+    val p = new Parser(sig, nestedOnly)
+    p.classSignature()
+  }
+
+  def visitMethodSignature(sig: String): Unit = if (sig != null) {
+    val p = new Parser(sig, nestedOnly)
+    p.methodSignature()
+  }
+
+  def visitFieldSignature(sig: String): Unit = if (sig != null) {
+    val p = new Parser(sig, nestedOnly)
+    p.fieldSignature()
+  }
+
+  private final class Parser(sig: String, nestedOnly: Boolean) {
+
+    private var index = 0
+    private val end = sig.length
+
+    private def current =
+      sig.charAt(index)
+
+    private def accept(c: Char): Unit = {
+      assert(current == c, s"Expected $c at $index, found $current, in $sig")
+      index += 1
+    }
+
+    private def skip(): Unit = { index += 1 }
+    private def getCurrentAndSkip(): Char = { val c = current; skip(); c }
+
+    private def skipUntil(isDelimiter: CharBooleanFunction): Unit = {
+      while (!isDelimiter(current)) { index += 1 }
+    }
+    private def skipUntilDelimiter(delimiter: Char): Unit = {
+      val idx = sig.indexOf(delimiter, index)
+      assert(idx >= 0, s"Out of bounds finding $delimiter from $index in $sig")
+      index = idx
+    }
+
+    private def appendUntil(builder: java.lang.StringBuilder, isDelimiter: CharBooleanFunction): Unit = {
+      val start = index
+      skipUntil(isDelimiter)
+      builder.append(sig, start, index)
+    }
+
+    def isBaseType(c: Char): Boolean = c match {
+      case 'B' | 'C' | 'D' | 'F' | 'I' | 'J' | 'S' | 'Z' => true
+      case _ => false
+    }
+
+    private val isClassNameEnd: CharBooleanFunction = (c: Char) => c == '<' || c == '.' || c == ';'
+
+    private def typeArguments(): Unit = if (current == '<') {
+      skip()
+      while (current != '>') current match {
+        case '*' | '+' | '-' =>
+          skip()
+        case _ =>
+          referenceTypeSignature()
+      }
+      accept('>')
+    }
+
+    @tailrec private def referenceTypeSignature(): Unit = getCurrentAndSkip() match {
+      case 'L' =>
+        val start = index
+        var seenDollar = false
+        while (!isClassNameEnd(current)) {
+          seenDollar ||= current == '$'
+          index += 1
+        }
+
+        // OPT: avoid allocations when collecting only nested classes and only a top-level class is encountered
+        val topLevelIndex = index
+        lazy val names = {
+          val n = new java.lang.StringBuilder(32)
+          n.append(sig, start, topLevelIndex)
+          n
+        }
+
+        if ((current == '.' || seenDollar) || !nestedOnly) {
+          visitInternalName(names.toString)
+        }
+        typeArguments()
+
+        while (current == '.') {
+          skip()
+          names.append('$')
+          appendUntil(names, isClassNameEnd)
+          visitInternalName(names.toString)
+          typeArguments()
+        }
+        accept(';')
+
+      case 'T' =>
+        skipUntilDelimiter(';')
+        skip()
+
+      case '[' =>
+        if (isBaseType(current)) skip()
+        else referenceTypeSignature()
+    }
+
+    private def typeParameters(): Unit = if (current == '<') {
+      skip()
+      while (current != '>') {
+        skipUntilDelimiter(':'); skip()
+        val c = current
+        // The ClassBound can be missing, but only if there's an InterfaceBound after.
+        // This is an assumption that's not in the spec, see https://stackoverflow.com/q/44284928
+        if (c != ':' && c != '>') { referenceTypeSignature() }
+        while (current == ':') { skip(); referenceTypeSignature() }
+      }
+      accept('>')
+    }
+
+    def classSignature(): Unit = {
+      typeParameters()
+      while (index < end) referenceTypeSignature()
+    }
+
+    def methodSignature(): Unit = {
+      typeParameters()
+
+      accept('(')
+      while (current != ')') {
+        if (isBaseType(current)) skip()
+        else referenceTypeSignature()
+      }
+      accept(')')
+
+      if (current == 'V' || isBaseType(current)) skip()
+      else referenceTypeSignature()
+
+      while (index < end) {
+        accept('^')
+        referenceTypeSignature()
+      }
+    }
+
+    def fieldSignature(): Unit =
+      if sig != null then referenceTypeSignature()
+  }
+}
+
+// Backported from scala/scala, commit sha: 724be0e9425b9ad07c244d25efdad695d75abbcf
+// https://github.com/scala/scala/blob/724be0e9425b9ad07c244d25efdad695d75abbcf/src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala#L790
+abstract class NestedClassesCollector[T](nestedOnly: Boolean) extends GenericSignatureVisitor(nestedOnly) {
+  def declaredNestedClasses(internalName: InternalName): List[T]
+  def getClassIfNested(internalName: InternalName): Option[T]
+
+  val declaredInnerClasses = mutable.Set.empty[T]
+  val referredInnerClasses = mutable.Set.empty[T]
+
+  def visit(classNode: ClassNode): Unit = {
+    visitInternalName(classNode.name)
+    declaredInnerClasses ++= declaredNestedClasses(classNode.name)
+
+    visitInternalName(classNode.superName)
+    classNode.interfaces.forEach(visitInternalName)
+    visitInternalName(classNode.outerClass)
+
+    visitAnnotations(classNode.visibleAnnotations)
+    visitAnnotations(classNode.visibleTypeAnnotations)
+    visitAnnotations(classNode.invisibleAnnotations)
+    visitAnnotations(classNode.invisibleTypeAnnotations)
+
+    visitClassSignature(classNode.signature)
+
+    classNode.fields.forEach(f =>
+      visitDescriptor(f.desc)
+      visitAnnotations(f.visibleAnnotations)
+      visitAnnotations(f.visibleTypeAnnotations)
+      visitAnnotations(f.invisibleAnnotations)
+      visitAnnotations(f.invisibleTypeAnnotations)
+      visitFieldSignature(f.signature)
+    )
+
+    classNode.methods.forEach(m =>
+      visitDescriptor(m.desc)
+
+      visitAnnotations(m.visibleAnnotations)
+      visitAnnotations(m.visibleTypeAnnotations)
+      visitAnnotations(m.invisibleAnnotations)
+      visitAnnotations(m.invisibleTypeAnnotations)
+      visitAnnotationss(m.visibleParameterAnnotations)
+      visitAnnotationss(m.invisibleParameterAnnotations)
+      visitAnnotations(m.visibleLocalVariableAnnotations)
+      visitAnnotations(m.invisibleLocalVariableAnnotations)
+
+      m.exceptions.forEach(visitInternalName)
+      m.tryCatchBlocks.forEach(tcb => visitInternalName(tcb.`type`))
+
+      m.instructions.forEach {
+        case ti: TypeInsnNode           => visitInternalNameOrArrayReference(ti.desc)
+        case fi: FieldInsnNode          => visitInternalNameOrArrayReference(fi.owner); visitDescriptor(fi.desc)
+        case mi: MethodInsnNode         => visitInternalNameOrArrayReference(mi.owner); visitDescriptor(mi.desc)
+        case id: InvokeDynamicInsnNode  => visitDescriptor(id.desc); visitHandle(id.bsm); id.bsmArgs foreach visitConstant
+        case ci: LdcInsnNode            => visitConstant(ci.cst)
+        case ma: MultiANewArrayInsnNode => visitDescriptor(ma.desc)
+        case _ =>
+      }
+
+      visitMethodSignature(m.signature)
+    )
+  }
+
+  private def containsChar(s: String, beginIndex: Int, endIndex: Int, char: Char): Boolean = {
+    val ix = s.indexOf(char, beginIndex)
+    beginIndex <= ix && ix < endIndex
+  }
+
+  def visitInternalName(internalName: String, beginIndex: Int, endIndex: Int): Unit = if (internalName != null && containsChar(internalName, beginIndex, endIndex, '$')) {
+    for (c <- getClassIfNested(internalName.substring(beginIndex, endIndex)))
+      if (!declaredInnerClasses.contains(c))
+        referredInnerClasses += c
+  }
+
+  // either an internal/Name or [[Linternal/Name; -- there are certain references in classfiles
+  // that are either an internal name (without the surrounding `L;`) or an array descriptor
+  // `[Linternal/Name;`.
+  def visitInternalNameOrArrayReference(ref: String): Unit = if (ref != null) {
+    val bracket = ref.lastIndexOf('[')
+    if (bracket == -1) visitInternalName(ref)
+    else if (ref.charAt(bracket + 1) == 'L') visitInternalName(ref, bracket + 2, ref.length - 1)
+  }
+
+  // we are only interested in the class references in the descriptor, so we can skip over
+  // primitives and the brackets of array descriptors
+  def visitDescriptor(desc: String): Unit = (desc.charAt(0): @switch) match {
+    case '(' =>
+      // skips over '[', ')', primitives
+      var i = 0
+      while
+        i = desc.indexOf('L', i + 1)
+        i != -1
+      do
+        val start = i + 1 // skip the L
+        val end = desc.indexOf(';', start)
+        visitInternalName(desc, start, end)
+        i = end
+
+    case 'L' =>
+      visitInternalName(desc, 1, desc.length - 1)
+
+    case '[' =>
+      visitInternalNameOrArrayReference(desc)
+
+    case _ => // skip over primitive types
+  }
+
+  def visitConstant(const: AnyRef): Unit = const match {
+    case t: Type => visitDescriptor(t.getDescriptor)
+    case _ =>
+  }
+
+  // in principle we could references to annotation types, as they only end up as strings in the
+  // constant pool, not as class references. however, the java compiler still includes nested
+  // annotation classes in the innerClass table, so we do the same. explained in detail in the
+  // large comment in class BTypes.
+  def visitAnnotation(annot: AnnotationNode): Unit = {
+    visitDescriptor(annot.desc)
+    if (annot.values != null) annot.values.forEach(visitConstant)
+  }
+
+  private def visitAnnotations(annots: java.util.List[? <: AnnotationNode] | Null) = if (annots != null) annots.forEach(visitAnnotation)
+  private def visitAnnotationss(annotss: Array[java.util.List[AnnotationNode]] | Null) = if (annotss != null) annotss.foreach(visitAnnotations)
+
+  private def visitHandle(handle: Handle): Unit = {
+    visitInternalNameOrArrayReference(handle.getOwner)
+    visitDescriptor(handle.getDesc)
+  }
+}
+

@@ -1,0 +1,112 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc. dba Akka
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package scala
+package io
+
+import scala.language.`2.13`
+import annotation.nowarn
+
+/** The object Position provides convenience methods to encode
+ *  line and column number in one single integer.  The encoded line
+ *  (column) numbers range from 0 to `LINE_MASK` (`COLUMN_MASK`),
+ *  where `0` indicates that the line (column) is undefined and
+ *  `1` represents the first line (column).
+ *
+ *  Line (Column) numbers greater than `LINE_MASK` (`COLUMN_MASK`) are
+ *  replaced by `LINE_MASK` (`COLUMN_MASK`). Furthermore, if the encoded
+ *  line number is `LINE_MASK`, the column number is always set to 0.
+ *
+ *  The following properties hold:
+ *
+ *  the undefined position is 0:   `encode(0,0) == 0`
+ *  encodings are non-negative :   `encode(line,column) >= 0`
+ *  position order is preserved:
+ *  ```scala sc:compile sc-name:lines-and-columns
+ *  val line1 = 1
+ *  val column1 = 2
+ *  val line2 = 1
+ *  val column2 = 3
+ *  ```
+ *  ```scala sc-compile-with:lines-and-columns
+ *  (line1 <= line2) || (line1 == line2 && column1 <= column2)
+ *  ```
+ *  implies
+ *  ```scala sc-compile-with:lines-and-columns
+ *  import scala.io.Position.encode
+ *  encode(line1, column1) <= encode(line2, column2)
+ *  ```
+ */
+@deprecated("this class will be removed", "2.10.0")
+private[scala] abstract class Position {
+  /** Definable behavior for overflow conditions.
+   *
+   *  @param line the 1-based line number to validate (0 for undefined, negative values throw)
+   *  @param column the 1-based column number to validate (must be 0 when `line` is 0, negative values throw)
+   */
+  def checkInput(line: Int, column: Int): Unit
+
+  /** Number of bits used to encode the line number. */
+  final val LINE_BITS   = 20
+  /** Number of bits used to encode the column number. */
+  final val COLUMN_BITS = 31 - LINE_BITS // no negatives => 31
+  /** Mask to decode the line number. */
+  final val LINE_MASK   = (1 << LINE_BITS) - 1
+  /** Mask to decode the column number. */
+  final val COLUMN_MASK = (1 << COLUMN_BITS) - 1
+
+  /** Encodes a position into a single integer.
+   *
+   *  @param line the 1-based line number, or 0 for undefined; values at or above `LINE_MASK` are clamped and the column is set to 0
+   *  @param column the 1-based column number, or 0 for undefined; clamped to `COLUMN_MASK`, ignored when `line` >= `LINE_MASK`
+   *  @return the encoded position as a non-negative integer that packs the line number in the high bits and the column number in the low bits, suitable for decoding with `line`, `column`, and `toString`
+   */
+  final def encode(line: Int, column: Int): Int = {
+    checkInput(line, column)
+
+    if (line >= LINE_MASK)
+      LINE_MASK << COLUMN_BITS
+    else
+      (line << COLUMN_BITS) | scala.math.min(COLUMN_MASK, column)
+  }
+
+  /** Returns the line number of the encoded position.
+   *
+   *  @param pos the encoded position as returned by `encode`
+   *  @return the 1-based line number decoded from `pos`, or 0 if the line is undefined
+   */
+  final def line(pos: Int): Int = (pos >> COLUMN_BITS) & LINE_MASK
+
+  /** Returns the column number of the encoded position.
+   *
+   *  @param pos the encoded position as returned by `encode`
+   *  @return the 1-based column number decoded from `pos`, or 0 if the column is undefined
+   */
+  final def column(pos: Int): Int = pos & COLUMN_MASK
+
+  /** Returns a string representation of the encoded position.
+   *
+   *  @param pos the encoded position as returned by `encode`
+   *  @return a string in the form `"line:column"` using the decoded line and column numbers
+   */
+  def toString(pos: Int): String = line(pos) + ":" + column(pos)
+}
+
+@nowarn
+private[scala] object Position extends Position {
+  def checkInput(line: Int, column: Int): Unit = {
+    if (line < 0)
+      throw new IllegalArgumentException(s"$line < 0")
+    if (line == 0 && column != 0 || column < 0)
+      throw new IllegalArgumentException(s"$line,$column not allowed")
+  }
+}

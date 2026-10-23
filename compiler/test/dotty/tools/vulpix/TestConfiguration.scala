@@ -1,0 +1,99 @@
+package dotty
+package tools
+package vulpix
+
+import scala.util.Properties.javaSpecVersion
+
+import java.io.File
+
+import dotc.config.ScalaSettingsProperties.supportedReleaseVersions
+
+object TestConfiguration {
+  /** Default target of the generated class files */
+  private val defaultTarget: String = "17"
+
+  val usingBaselineJava = javaSpecVersion.startsWith(supportedReleaseVersions.headOption.getOrElse(defaultTarget))
+
+  val pageWidth = 120
+
+  val noCheckOptions = Array(
+    "-pagewidth", pageWidth.toString,
+    "-color:never",
+    "-Xtarget", defaultTarget
+  )
+
+  val checkOptions = Array(
+    // "-Yscala2-unpickler", s"${Properties.scalaLibrary}",
+    "-Yno-deep-subtypes",
+    "-Yno-double-bindings",
+    "-Yforce-sbt-phases",
+    "-Xsemanticdb",
+    "-Xverify-signatures"
+  )
+
+  val silenceOptions = Array(
+    "-Wconf:id=E222:s", // name=EncodedPackageName don't warn about file names with hyphens
+  )
+
+  val basicClasspath = mkClasspath(List(Properties.scalaLibrary))
+
+  lazy val withCompilerClasspath = mkClasspath(Properties.asmAll ++ List(
+    Properties.scalaLibrary,
+    Properties.compilerInterface,
+    Properties.dottyInterfaces,
+    Properties.tastyCore,
+    Properties.dottyCompiler
+  ))
+
+  lazy val withStagingClasspath =
+    withCompilerClasspath + File.pathSeparator + mkClasspath(List(Properties.dottyStaging))
+
+  lazy val withTastyInspectorClasspath =
+    withCompilerClasspath + File.pathSeparator + mkClasspath(List(Properties.dottyTastyInspector))
+
+  lazy val scalaJSClasspath = mkClasspath(List(
+    Properties.scalaJSJavalib,
+    Properties.scalaJSScalalib,
+    Properties.scalaJSLibrary,
+  ))
+
+  def mkClasspath(classpaths: Iterable[String]): String =
+    classpaths.map({ p =>
+      val file = new java.io.File(p)
+      assert(file.exists, s"File $p couldn't be found.")
+      file.getAbsolutePath
+    }).mkString(File.pathSeparator)
+
+  val yCheckOptions = Array("-Ycheck:all")
+
+  val noYcheckCommonOptions = Array("-indent") ++ checkOptions ++ noCheckOptions
+  val commonOptions = noYcheckCommonOptions ++ yCheckOptions ++ silenceOptions
+  val defaultOptions = TestFlags(basicClasspath, commonOptions)
+  val noYcheckOptions = TestFlags(basicClasspath, noYcheckCommonOptions)
+  val bestEffortBaselineOptions = TestFlags(basicClasspath, noCheckOptions)
+  val unindentOptions = TestFlags(basicClasspath, Array("-no-indent") ++ checkOptions ++ noCheckOptions ++ yCheckOptions)
+  lazy val withCompilerOptions =
+    defaultOptions.and("-Yexplicit-nulls").withClasspath(withCompilerClasspath).withRunClasspath(withCompilerClasspath)
+  lazy val withStagingOptions =
+    defaultOptions.withClasspath(withStagingClasspath).withRunClasspath(withStagingClasspath)
+  lazy val withTastyInspectorOptions =
+    defaultOptions.withClasspath(withTastyInspectorClasspath).withRunClasspath(withTastyInspectorClasspath)
+  lazy val scalaJSOptions =
+    defaultOptions.and("-scalajs").withClasspath(scalaJSClasspath).withRunClasspath(scalaJSClasspath)
+  val allowDeepSubtypes = defaultOptions `without` "-Yno-deep-subtypes"
+  val allowDoubleBindings = defaultOptions `without` "-Yno-double-bindings"
+  val picklingOptions = defaultOptions `and` (
+    "-Xprint-types",
+    "-Ytest-pickler",
+    "-Yprint-pos",
+    "-Yprint-pos-syms"
+  )
+  lazy val picklingWithCompilerOptions =
+    picklingOptions.and("-Yexplicit-nulls").withClasspath(withCompilerClasspath).withRunClasspath(withCompilerClasspath)
+
+  val explicitNullsOptions = defaultOptions `and` "-Yexplicit-nulls"
+
+  val oldSyntax = defaultOptions `and` "-old-syntax"
+  val newSyntax = defaultOptions `and` "-new-syntax"
+
+}

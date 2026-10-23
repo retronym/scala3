@@ -1,0 +1,151 @@
+package dotty.tools
+package dotc
+package cc
+
+import core.*
+import Symbols.*, SymDenotations.*, Contexts.*, Flags.*, Types.*, Decorators.*
+import StdNames.nme
+import Names.Name
+import NameKinds.DefaultGetterName
+import config.Printers.capt
+import Capabilities.*
+
+/** Classification and transformation methods for function methods and
+ *  synthetic case class methods that need to be treated specially.
+ *  In particular, compute capturing types for some of these methods which
+ *  have inferred (result-)types that need to be established under separate
+ *  compilation.
+ */
+object Synthetics:
+  def isSyntheticCopyMethod(sym: SymDenotation)(using Context) =
+    sym.name == nme.copy && sym.is(Synthetic) && sym.owner.isClass && sym.owner.is(Case)
+
+  def isSyntheticCompanionMethod(sym: SymDenotation, names: Name*)(using Context): Boolean =
+     names.contains(sym.name) && sym.is(Synthetic) && sym.owner.is(Module) && sym.owner.companionClass.is(Case)
+
+  private def isSyntheticCopyDefaultGetterMethod(sym: SymDenotation)(using Context) = sym.name match
+    case DefaultGetterName(nme.copy, _) => sym.is(Synthetic) && sym.owner.isClass && sym.owner.is(Case)
+    case _ => false
+
+  private val functionCombinatorNames = Set[Name](
+    nme.andThen, nme.compose, nme.curried, nme.tupled)
+
+  /** Is `sym` a synthetic apply, copy, or copy default getter method?
+   *  The types of these symbols are transformed in a special way without
+   *  looking at the definitions's RHS
+   */
+  def needsTransform(symd: SymDenotation)(using Context): Boolean =
+       isSyntheticCompanionMethod(symd, nme.unapply, nme.fromProduct)
+    || isSyntheticCopyDefaultGetterMethod(symd)
+    || (symd.symbol eq defn.Object_eq)
+    || (symd.symbol eq defn.Object_ne)
+    || defn.isFunctionClass(symd.owner) && functionCombinatorNames.contains(symd.name)
+
+  /** Method is excluded from regular capture checking.
+   *  Excluded are synthetic class members
+   *   - that override a synthesized case class symbol, or
+   *   - the fromProduct method, or
+   *   - members transformed specially as indicated by `needsTransform`.
+   */
+  def isExcluded(sym: Symbol)(using Context): Boolean =
+    sym.is(Synthetic)
+    && sym.owner.isClass
+    && ( defn.caseClassSynthesized.exists(
+             ccsym => sym.overriddenSymbol(ccsym.owner.asClass) == ccsym)
+        || isSyntheticCompanionMethod(sym, nme.fromProduct)
+        || needsTransform(sym))
+
+  /** Transform the type of a method either to its type under capture checking
+   *  or back to its previous type.
+   *  @param  symd The method to transform @pre needsTransform(sym) must hold.
+   *  @param  info The possibly already mapped info of sym
+   */
+  def transform(symd: SymDenotation, info: Type)(using Context): SymDenotation =
+
+    /** Add capture information to the type of the default getter of a case class copy method
+     */
+    def transformDefaultGetterCaptures(info: Type, owner: Symbol, idx: Int)(using Context): Type = info match
+      case info: MethodOrPoly =>
+        info.derivedLambdaType(resType = transformDefaultGetterCaptures(info.resType, owner, idx))
+      case info: ExprType =>
+        info.derivedExprType(transformDefaultGetterCaptures(info.resType, owner, idx))
+      case CapturingType(parent, _) =>
+        transformDefaultGetterCaptures(parent, owner, idx)
+      case info @ AnnotatedType(parent, annot) =>
+        info.derivedAnnotatedType(transformDefaultGetterCaptures(parent, owner, idx), annot)
+      case _ if idx < owner.asClass.paramGetters.length =>
+        val param = owner.asClass.paramGetters(idx)
+        val pinfo = param.info
+        atPhase(ctx.phase.next) {
+          if pinfo.captureSet.isAlwaysEmpty then info
+          else CapturingType(pinfo.stripCapturing, CaptureSet(param.termRef))
+        }
+      case _ =>
+        info
+
+    /** Augment an unapply of type `(x: C): D` to `(x: C^{any}): x.type`
+     *  and an unapply of type `(consume x: C): D` to `(consume x: C^{any}): D^{any}`
+     */
+    def transformUnapplyCaptures(info: Type)(using Context): Type = info match
+      case info: MethodType =>
+        val paramInfo :: Nil = info.paramInfos.runtimeChecked
+        val newParamInfo = CapturingType(paramInfo, CaptureSet.universal)
+        val trackedParam = info.paramRefs.head
+        def newResult(tp: Type): Type = tp match
+          case tp: MethodOrPoly =>
+            tp.derivedLambdaType(resType = newResult(tp.resType))
+          case _ =>
+            if paramInfo.hasAnnotation(defn.ConsumeAnnot)
+            then CapturingType(tp, CaptureSet.universal)
+            else trackedParam
+        info.derivedLambdaType(paramInfos = newParamInfo :: Nil, resType = newResult(info.resType))
+          .showing(i"augment unapply type $info to $result", capt)
+      case info: PolyType =>
+        info.derivedLambdaType(resType = transformUnapplyCaptures(info.resType))
+
+    /** fromProduct(x: Product): this.MirroredMonoType^ */
+    def transformFromProductCaptures(info: Type) =
+      val (mt: MethodType) = info.runtimeChecked
+      mt.derivedLambdaType(resType = CapturingType(mt.resType, CaptureSet.universal))
+
+    def transformComposeCaptures(info: Type, owner: Symbol) =
+      val (pt: PolyType) = info.runtimeChecked
+      val (mt: MethodType) = pt.resType.runtimeChecked
+      val (enclThis: ThisType) = owner.thisType.runtimeChecked
+      val paramCaptures = CaptureSet(enclThis, GlobalAny)
+      pt.derivedLambdaType(resType = MethodType(mt.paramNames)(
+        mt1 => mt.paramInfos.map(_.capturing(paramCaptures)),
+        mt1 => CapturingType(mt.resType, CaptureSet(enclThis, mt1.paramRefs.head))))
+
+    def transformCurriedTupledCaptures(info: Type, owner: Symbol) =
+      val (et: ExprType) = info.runtimeChecked
+      val (enclThis: ThisType) = owner.thisType.runtimeChecked
+      def mapFinalResult(tp: Type, f: Type => Type): Type = tp match
+        case FunctionOrMethod(args, res) =>
+          tp.derivedFunctionOrMethod(args, mapFinalResult(res, f))
+        case _ =>
+          f(tp)
+      ExprType(mapFinalResult(et.resType, CapturingType(_, CaptureSet(enclThis))))
+
+    def transformCompareCaptures =
+      val (enclThis: ThisType) = symd.owner.thisType.runtimeChecked
+      MethodType(
+        defn.ObjectType.capturing(CaptureSet(GlobalAny, enclThis)) :: Nil,
+        defn.BooleanType)
+
+    symd.copySymDenotation(info = symd.name match
+      case DefaultGetterName(nme.copy, n) =>
+        transformDefaultGetterCaptures(info, symd.owner, n)
+      case nme.unapply =>
+        transformUnapplyCaptures(info)
+      case nme.fromProduct =>
+        transformFromProductCaptures(info)
+      case nme.andThen | nme.compose =>
+        transformComposeCaptures(info, symd.owner)
+      case nme.curried | nme.tupled =>
+        transformCurriedTupledCaptures(info, symd.owner)
+      case n if n == nme.eq || n == nme.ne =>
+        transformCompareCaptures)
+  end transform
+
+end Synthetics

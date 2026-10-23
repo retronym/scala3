@@ -1,0 +1,68 @@
+-- [E032] Syntax Error: tests/neg/t5702-neg-bad-and-wild.scala:10:22 ---------------------------------------------------
+10 |      case List(1, _*,) => // error: pattern expected
+   |                      ^
+   |                      pattern expected
+   |
+   | longer explanation available when compiling with `-explain`
+-- [E032] Syntax Error: tests/neg/t5702-neg-bad-and-wild.scala:12:23 ---------------------------------------------------
+12 |      case List(1, _*3,) => // error: pattern expected // error
+   |                       ^
+   |                       pattern expected
+   |
+   | longer explanation available when compiling with `-explain`
+-- [E040] Syntax Error: tests/neg/t5702-neg-bad-and-wild.scala:13:23 ---------------------------------------------------
+13 |      case List(1, _*3:) =>  // error // error
+   |                       ^
+   |                       an identifier expected, but ')' found
+-- Error: tests/neg/t5702-neg-bad-and-wild.scala:15:17 -----------------------------------------------------------------
+15 |      case List(x*, 1) => // error: pattern expected
+   |                 ^
+   |                 spread operator `*` not allowed here; must come last in a parameter list
+-- Error: tests/neg/t5702-neg-bad-and-wild.scala:16:16 -----------------------------------------------------------------
+16 |      case (1, x*) => // error: bad use of *
+   |                ^
+   |                bad use of `*` - sequence pattern not allowed here
+-- [E031] Syntax Error: tests/neg/t5702-neg-bad-and-wild.scala:17:18 ---------------------------------------------------
+17 |      case (1, x: _*) => // error: bad use of _* (sequence pattern not allowed)
+   |                  ^
+   |                  * can be used only for last argument
+   |
+   | longer explanation available when compiling with `-explain`
+-- Error: tests/neg/t5702-neg-bad-and-wild.scala:23:16 -----------------------------------------------------------------
+23 |    val K(ns @ _*, xx) = k // error: pattern expected
+   |                ^
+   |                spread operator `*` not allowed here; must come last in a parameter list
+-- Error: tests/neg/t5702-neg-bad-and-wild.scala:25:14 -----------------------------------------------------------------
+25 |    val (b, _ * ) = (5,6) // error: bad use of `*`
+   |              ^
+   |              bad use of `*` - sequence pattern not allowed here
+-- [E161] Naming Error: tests/neg/t5702-neg-bad-and-wild.scala:24:10 ---------------------------------------------------
+24 |    val K(x) = k // error: x is already defined as value x
+   |    ^^^^^^^^^^^^
+   |    x is already defined as value x
+   |
+   |    Note that overloaded methods must all be defined in the same group of toplevel definitions
+-- [E189] Not Found Error: tests/neg/t5702-neg-bad-and-wild.scala:12:20 ------------------------------------------------
+12 |      case List(1, _*3,) => // error: pattern expected // error
+   |                    ^
+   |                    no pattern match extractor named * was found
+   |
+   | longer explanation available when compiling with `-explain`
+-- [E189] Not Found Error: tests/neg/t5702-neg-bad-and-wild.scala:13:20 ------------------------------------------------
+13 |      case List(1, _*3:) =>  // error // error
+   |                    ^
+   |                    no pattern match extractor named * was found
+   |
+   | longer explanation available when compiling with `-explain`
+-- Error: tests/neg/t5702-neg-bad-and-wild.scala:22:10 -----------------------------------------------------------------
+22 |    val K(x @ _*) = k // error
+   |          ^^^^^^
+   |          Sequence wildcard pattern is not allowed for unapply, only unapplySeq is allowed
+-- Warning: tests/neg/t5702-neg-bad-and-wild.scala:22:20 ---------------------------------------------------------------
+22 |    val K(x @ _*) = k // error
+   |                    ^
+   |     pattern's type Int* does not match the right hand side expression's type Int
+   |
+   |     If the narrowing is intentional, this can be communicated by adding `.runtimeChecked` after the expression,
+   |     which may result in a MatchError at runtime.
+   |     This patch can be rewritten automatically under -rewrite -source 3.8-migration.

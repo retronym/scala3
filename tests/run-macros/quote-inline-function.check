@@ -1,0 +1,46 @@
+Normal function
+{
+  var i: scala.Int = 0
+  val j: scala.Int = 5
+  while (i.<(j)) {
+    f$proxy1.apply(i)
+    i = i.+(1)
+  }
+  while ({
+    f$proxy1.apply(i)
+    i = i.+(1)
+    i.<(j)
+  }) ()
+}
+
+By name function
+{
+  var i: scala.Int = 0
+  val j: scala.Int = 5
+  while (i.<(j)) {
+    f$proxy2.apply(i)
+    i = i.+(1)
+  }
+  while ({
+    f$proxy2.apply(i)
+    i = i.+(1)
+    i.<(j)
+  }) ()
+}
+
+Inline function
+{
+  var i: scala.Int = 0
+  val j: scala.Int = 5
+  while (i.<(j)) {
+    val x: scala.Int = i
+    scala.Predef.println(x)
+    i = i.+(1)
+  }
+  while ({
+    val `x₂`: scala.Int = i
+    scala.Predef.println(`x₂`)
+    i = i.+(1)
+    i.<(j)
+  }) ()
+}

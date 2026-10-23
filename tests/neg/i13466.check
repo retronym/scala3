@@ -1,0 +1,9 @@
+-- [E231] Declaration Error: tests/neg/i13466.scala:9:6 ----------------------------------------------------------------
+9 |given none: SomeTrait[Finally] with {} // error
+  |      ^^^^
+  |      object creation impossible, since it has 3 unimplemented members.
+  |
+  |      Members declared in SomeTrait:
+  |      - def foo: Finally[Unit]
+  |      - def withTV[A]: Finally[A]
+  |      - def withTV2[A, B]: Finally[(A, B)]

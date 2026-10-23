@@ -1,0 +1,70 @@
+package dotty.tools
+package dotc
+package config
+
+import classpath.ClassPath
+import io.AbstractFile
+import core.Contexts.*, core.Symbols.*
+import core.SymbolLoader
+import core.StdNames.nme
+import core.Flags.{Module, Trait}
+
+/** The platform dependent pieces of Global.
+ */
+abstract class Platform {
+
+  /** Initialize platform-specific definitions for the current run.
+   *  Called at the start of each compilation run.
+   */
+  def init()(using Context): Unit = ()
+
+  /** The root symbol loader. */
+  def rootLoader(root: TermSymbol)(using Context): SymbolLoader
+
+  /** The compiler classpath. */
+  def classPath(using Context): ClassPath
+
+  /** Update classpath with a substitution that maps entries to entries */
+  def updateClassPath(subst: Map[ClassPath, ClassPath]): Unit
+
+  /** Add new entry to classpath */
+  def addToClassPath(cPath: ClassPath)(using Context): Unit
+
+  /** Any platform-specific phases. */
+  //def platformPhases: List[SubComponent]
+
+  /** Is the SAMType `cls` also a SAM under the rules of the platform? */
+  def isSam(cls: ClassSymbol)(using Context): Boolean
+
+  /** The various ways a boxed primitive might materialize at runtime. */
+  def isMaybeBoxed(sym: ClassSymbol)(using Context): Boolean
+
+  /** Is the given class symbol eligible for Java serialization-specific methods? */
+  def shouldReceiveJavaSerializationMethods(sym: ClassSymbol)(using Context): Boolean
+
+  /** Create a new class loader to load class file `bin` */
+  def newClassLoader(bin: AbstractFile)(using Context): SymbolLoader
+
+  /** Create a new TASTy loader to load class file `bin` */
+  def newTastyLoader(bin: AbstractFile)(using Context): SymbolLoader
+
+  /** The given symbol is a method with the right name and signature to be a runnable program. */
+  def isMainMethod(sym: Symbol)(using Context): Boolean
+
+  /** The given class has a main method. */
+  final def hasMainMethod(sym: Symbol)(using Context): Boolean =
+    sym.info.member(nme.main).hasAltWith(d =>
+      isMainMethod(d.symbol) && (sym.is(Module) || d.symbol.isStatic))
+
+  /** Is the given class symbol eligible to be reported as a main class? */
+  def isMainClass(sym: ClassSymbol)(using Context): Boolean =
+    sym.isStatic && !sym.is(Trait) && hasMainMethod(sym)
+
+  /**
+   * Whether instances of the class represented by the class symbol `c` **might** be a subtype of
+   * the class represented by the class symbol `potentialSuperClass` at runtime on this platform.
+   * This does not imply that they always will be,
+   * only that the compiler cannot fold `x.isInstanceOf[potentialSuperClass]` to false for for `x: c`
+   */
+  def typeMightBeSubtypeAtRuntime(c: Symbol, potentialSuperClass: Symbol)(using Context): Boolean
+}

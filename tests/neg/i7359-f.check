@@ -1,0 +1,10 @@
+-- [E120] Naming Error: tests/neg/i7359-f.scala:1:6 --------------------------------------------------------------------
+1 |trait SAMTrait: // error
+  |      ^
+  |      Name clash between inherited members:
+  |      def equals[T >: Boolean <: Boolean](obj: Any): T in trait SAMTrait at line 3 and
+  |      override def equals(x$0: Any): Boolean in class Object
+  |      have the same type (x$0: Object): Boolean after erasure.
+  |
+  |      Consider adding a @targetName annotation to one of the conflicting definitions
+  |      for disambiguation.

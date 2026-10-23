@@ -1,0 +1,12 @@
+-- [E172] Type Error: tests/neg/i9568.scala:13:10 ----------------------------------------------------------------------
+13 |  blaMonad.foo(bla) // error: diverges
+   |          ^
+   |          No given instance of type => Monad[F] was found for parameter ev of method blaMonad in object Test.
+   |          I found:
+   |
+   |              Test.blaMonad[F, S]
+   |
+   |          But method blaMonad in object Test does not match type => Monad[F]
+   |
+   |          where:    F is a type variable with constraint <: [_] =>> Any
+   |          .

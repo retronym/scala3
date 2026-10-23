@@ -1,0 +1,270 @@
+package dotty
+package tools
+package vulpix
+
+import org.junit.AfterClass
+import java.io.{BufferedReader, IOException, InputStreamReader, PrintStream, File as JFile}
+import java.nio.file.Paths
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.concurrent.TimeoutException
+import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.collection.mutable
+import scala.util.control.NonFatal
+import ChildJVMMain.{MessageEnd, MessageStart}
+import Status.*
+import dotty.tools.debug.{Debugger, ExpressionEvaluator}
+
+import java.lang.management.ManagementFactory
+import scala.jdk.CollectionConverters.ListHasAsScala
+
+/** Vulpix spawns JVM subprocesses in order to run tests
+ *  without compromising the main JVM
+ *
+ *  These need to be orchestrated in a safe manner with a simple protocol. This
+ *  interface provides just that.
+ *
+ *  The protocol is defined as:
+ *
+ *  - master sends classpath to for which to run `Test#main` and waits for
+ *    `maxDuration`
+ *  - slave invokes the method and waits until completion
+ *  - upon completion it sends back a `RunComplete` message
+ *  - the master checks if the child is still alive
+ *    - child is still alive, the output was valid
+ *    - child is dead, the output is the failure message
+ *
+ *  If this whole chain of events is not completed within `maxDuration`, the
+ *  child process is destroyed and a new child is spawned.
+ */
+trait RunnerOrchestration:
+  protected val report: SummaryReporting = SummaryReport() // so it's overrideable by the Vulpix self-tests
+  given summaryReport: SummaryReporting = report
+
+  /** Open JDI connection for testing the debugger */
+  def debugMode: Boolean = false
+
+  /** Each method of Debuggee can be called only once, in the order of definition.*/
+  trait Debuggee:
+    /** read the jdi port to connect the debugger */
+    def readJdiPort(): Int
+    /** start the main method in the background */
+    def launch(): Unit
+    /** wait until the end of the main method */
+    def exit(): Status
+
+  @AfterClass
+  def cleanup(): Unit =
+    monitor.killAll()
+    summaryReport.echoSummary()
+
+  private val monitor = new RunnerMonitor
+  export monitor.debugMain
+  def runMain(classPath: String, toolArgs: ToolArgs)(using SummaryReporting): Status =
+    monitor.runMain(classPath, toolArgs) // scala-js overrides and requires toolArgs
+
+  /** checks if the current process is being debugged */
+  def isUserDebugging: Boolean =
+    val mxBean = ManagementFactory.getRuntimeMXBean
+    mxBean.getInputArguments.asScala.exists(_.contains("jdwp"))
+
+  def testTimeout: Duration =
+    if isUserDebugging then 3.hours else 60.seconds
+
+  /** The runner monitor object keeps track of child JVM processes by keeping
+   *  them in two structures - one for free, and one for busy children.
+   *
+   *  When a user calls `runMain` the monitor makes takes a free JVM and blocks
+   *  until the run is complete - or `maxDuration` has passed. It then performs
+   *  cleanup by returning the used JVM to the free list, or respawning it if
+   *  it died
+   */
+  private class RunnerMonitor:
+
+    /** Runs a `Test` class's main method from the specified `classpath`. */
+    def runMain(classPath: String, toolArgs: ToolArgs)(using SummaryReporting): Status =
+      withRunner(_.runMain(classPath))
+
+    /** Provide a Debuggee for debugging the Test class's main method.
+     *  @param f the debugging flow: set breakpoints, launch main class, pause, step, evaluate, exit etc
+     */
+    def debugMain(classPath: String, expressionEvaluator: ExpressionEvaluator)(f: (Debugger, Debuggee) => Unit)(using SummaryReporting): Status =
+      withRunner(_.debugMain(classPath, expressionEvaluator)(f))
+
+    private class RunnerProcess(p: Process):
+      private val stdout = BufferedReader(InputStreamReader(p.getInputStream(), UTF_8))
+      private val stdin = PrintStream(p.getOutputStream(), /* autoFlush = */ true)
+
+      def readLine(): String =
+        stdout.readLine() match
+          case s"Listening for transport dt_socket at address: $port" =>
+            throw IOException(
+              "Unexpected transport dt_socket message." +
+              " The port is going to be lost and no debugger will be able to connect."
+            )
+          case line => line
+
+      def printLine(line: String): Unit = stdin.println(line)
+
+      def getJdiPort(): Int =
+        // The JDWP agent of a reused child JVM may print diagnostics about the previous
+        // debugger connection before it starts listening again, e.g.
+        // 'ERROR: transport error 202: send failed: Broken pipe' (Linux) or
+        // '... Software caused connection abort' (Windows), when the debugger disconnects.
+        // Skip them.
+        val skipped = mutable.ListBuffer.empty[String]
+        def skippedReport = skipped.synchronized:
+          if skipped.isEmpty then "" else skipped.mkString(", got:\n", "\n", "")
+        def readPort(): Int =
+          while true do
+            stdout.readLine() match
+              case null =>
+                throw IOException("Failed getting JDI port of child JVM: unexpected end of output" + skippedReport)
+              case s"Listening for transport dt_socket at address: $port" => return port.toInt
+              case line => skipped.synchronized(skipped += line)
+          throw AssertionError("unreachable")
+        try Await.result(Future(readPort()), testTimeout)
+        catch case _: TimeoutException =>
+          p.destroy() // unblocks the reader thread
+          throw IOException("Timed out getting JDI port of child JVM" + skippedReport)
+
+      def isAlive: Boolean = p.isAlive // export p.isAlive sans parens
+
+      export p.{exitValue, destroy}
+    end RunnerProcess
+
+    private class Runner(process: RunnerProcess):
+      /** Checks whether the underlying process is still alive. */
+      def isAlive: Boolean = process.isAlive
+
+      /** Destroys the underlying process and kills IO streams. */
+      def kill(): Unit = process.destroy()
+
+      /** Blocks less than `maxDuration` while running `Test.main` from `dir`. */
+      def runMain(classPath: String): Status = awaitStatus(startMain(classPath))
+
+      def debugMain(classPath: String, expressionEvaluator: ExpressionEvaluator)(f: (Debugger, Debuggee) => Unit): Status =
+        val debuggee = new Debuggee:
+          private var mainFuture: Future[Status] | Null = null
+          def readJdiPort(): Int = process.getJdiPort()
+          def launch(): Unit = mainFuture = startMain(classPath)
+          def exit(): Status = awaitStatus(mainFuture.nn)
+
+        val debugger = Debugger(debuggee.readJdiPort(), expressionEvaluator, testTimeout /* , verbose = true */)
+        try
+          f(debugger, debuggee)
+          debuggee.exit()
+        finally
+          // closing the debugger must be done at the very end so that the
+          // 'Listening for transport dt_socket at address: <port>' message is ready to be read
+          // by the next DebugTest
+          debugger.dispose()
+      end debugMain
+
+      private def startMain(classPath: String): Future[Status] = {
+        // pass classpath to running process
+        process.printLine(classPath)
+
+        def readChildOutput =
+          val sb = StringBuilder()
+          var ok = false
+          while
+            val line = process.readLine()
+            line != null && {
+              ok = line == MessageStart
+              !ok
+            }
+          do () // Discard all messages until the test starts
+
+          if ok then
+            ok = false
+            var childOutput: String | Null = null
+            while
+              childOutput = process.readLine()
+              childOutput != null && {
+                ok = childOutput == MessageEnd
+                !ok
+              }
+            do // Collect all messages until the test ends
+              sb.append(childOutput).append(System.lineSeparator)
+
+          if ok && isAlive then
+            Success(sb.toString)
+          else
+            Failure(sb.toString)
+        Future(readChildOutput)
+      }
+
+      // wait status of the main class execution
+      private def awaitStatus(future: Future[Status]): Status =
+        try Await.result(future, testTimeout)
+        catch case _: TimeoutException => Timeout
+    end Runner
+
+    /** Create a process which has the classpath of the `ChildJVMMain` and the
+     *  scala library.
+     */
+    private def createProcess(): RunnerProcess =
+      val url = classOf[ChildJVMMain.type].getProtectionDomain.getCodeSource.getLocation
+      val cp = Paths.get(url.toURI).toString + JFile.pathSeparator + Properties.scalaLibrary
+      val javaBin = Paths.get(sys.props("java.home"), "bin", "java").toString
+      val args = Seq("-ea", "-Dfile.encoding=UTF-8", "-Duser.language=en", "-Duser.country=US", "-Xmx1g", "-cp", cp) ++
+        (if debugMode then Seq("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,quiet=n") else Seq.empty)
+      val command = (javaBin +: args) :+ "dotty.tools.vulpix.ChildJVMMain"
+      val process = new ProcessBuilder(command*)
+        .redirectErrorStream(true)
+        .redirectInput(ProcessBuilder.Redirect.PIPE)
+        .redirectOutput(ProcessBuilder.Redirect.PIPE)
+        .start()
+      RunnerProcess(process)
+
+    private val freeRunners = mutable.Queue.empty[Runner]
+    private val busyRunners = mutable.Set.empty[Runner]
+    private val numberOfWorkers = Runtime.getRuntime.availableProcessors()
+
+    private def getRunner(): Runner = synchronized {
+      while freeRunners.isEmpty && busyRunners.size >= numberOfWorkers
+      do wait()
+
+      val runner =
+        if freeRunners.isEmpty then Runner(createProcess())
+        else freeRunners.dequeue()
+      busyRunners += runner
+
+      notify()
+      runner
+    }
+
+    private def freeRunner(runner: Runner): Unit = synchronized {
+      freeRunners.enqueue(runner)
+      busyRunners -= runner
+      notify()
+    }
+
+    private def discardRunner(runner: Runner): Unit = synchronized {
+      runner.kill()
+      busyRunners -= runner
+      notify()
+    }
+
+    private def withRunner(op: Runner => Status)(using SummaryReporting): Status =
+      val runner = getRunner()
+      val status =
+        try op(runner)
+        catch case NonFatal(e) =>
+          discardRunner(runner) // don't leak a busy runner on unexpected failures
+          throw e
+      if !status.isSuccess then
+        discardRunner(runner)
+      else
+        freeRunner(runner)
+      status
+
+    def killAll(): Unit =
+      freeRunners.foreach(_.kill())
+      busyRunners.foreach(_.kill())
+
+    // On shutdown, we need to kill all runners:
+    sys.addShutdownHook(killAll())
+  end RunnerMonitor

@@ -1,0 +1,20 @@
+baseurl: /files/archive/spec/3.4
+latestScalaVersion: 3.4
+thisScalaVersion: 3.4
+versionCompareMessage: "an upcoming"
+safe: true
+lsi: false
+highlighter: false
+encoding: utf-8
+exclude:
+  - APPLIEDreference
+  - TODOreference
+  - docker-compose.yml
+  - Dockerfile
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+  - spec-toc.xslt
+  - package.json
+  - package-lock.json
+  - node_modules

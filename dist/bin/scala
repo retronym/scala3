@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# Try to autodetect real location of the script
+if [ -z "${PROG_HOME-}" ] ; then
+  ## resolve links - $0 may be a link to PROG_HOME
+  PRG="$0"
+
+  # need this for relative symlinks
+  while [ -h "$PRG" ] ; do
+    ls=`ls -ld "$PRG"`
+    link=`expr "$ls" : '.*-> \(.*\)$'`
+    if expr "$link" : '/.*' > /dev/null; then
+      PRG="$link"
+    else
+      PRG="`dirname "$PRG"`/$link"
+    fi
+  done
+
+  saveddir=`pwd`
+
+  PROG_HOME=`dirname "$PRG"`/..
+
+  # make it fully qualified
+  PROG_HOME=`cd "$PROG_HOME" && pwd`
+
+  cd "$saveddir"
+fi
+
+source "$PROG_HOME/libexec/common-shared"
+source "$PROG_HOME/libexec/cli-common-platform"
+
+SCALA_VERSION=""
+# iterate through lines in VERSION_SRC
+while IFS= read -r line; do
+  # if line starts with "version:=" then extract the version
+  if [[ "$line" == version:=* ]]; then
+    SCALA_VERSION="${line#version:=}"
+    break
+  fi
+done < "$PROG_HOME/VERSION"
+
+# assert that SCALA_VERSION is not empty
+if [ -z "$SCALA_VERSION" ]; then
+  echo "Failed to extract Scala version from $PROG_HOME/VERSION"
+  exit 1
+fi
+
+MVN_REPOSITORY="$PROG_HOME_URI/maven2"
+
+# escape all script arguments
+while [[ $# -gt 0 ]]; do
+  addScala "$1"
+  shift
+done
+
+# exec here would prevent onExit from being called, leaving terminal in unusable state
+[ -z "${ConEmuPID-}" -o -n "${cygwin-}" ] && export MSYSTEM= PWD= # workaround for #12405
+
+# SCALA_CLI_CMD_BASH is an array, set by cli-common-platform
+eval "${SCALA_CLI_CMD_BASH[@]}" \
+  "--prog-name scala" \
+  "--skip-cli-updates" \
+  "--cli-default-scala-version \"$SCALA_VERSION\"" \
+  "-r \"$MVN_REPOSITORY\"" \
+  "${scala_args[@]}"
+
+scala_exit_status=$?
+
+onExit

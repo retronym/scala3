@@ -1,0 +1,30 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc. dba Akka
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package scala.annotation
+
+import scala.language.`2.13`
+
+/** Mark an element unused for a given context.
+ *
+ *  Unused warnings are suppressed for elements known to be unused.
+ *
+ *  For example, a method parameter may be marked `@unused`
+ *  because the method is designed to be overridden by
+ *  an implementation that does use the parameter.
+ *
+ *  @param message a description of why the element is unused
+ */
+@meta.getter @meta.setter @meta.param
+class unused(message: String) extends StaticAnnotation {
+  def this() = this("")
+}

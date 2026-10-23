@@ -1,0 +1,258 @@
+# Coverage data, format version: 3.0
+# Statement data:
+# - id
+# - source path
+# - package name
+# - class name
+# - class type (Class, Object or Trait)
+# - full class name
+# - method name
+# - start offset
+# - end offset
+# - line number
+# - symbol name
+# - tree name
+# - is branch
+# - invocations count
+# - is ignored
+# - description (can be multi-line)
+# '' sign
+# ------------------------------------------
+0
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+151
+163
+8
+println
+Apply
+false
+0
+false
+println("a")
+
+1
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+148
+163
+8
+<none>
+Block
+true
+0
+false
+=> println("a")
+
+2
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+184
+196
+9
+println
+Apply
+false
+0
+false
+println("b")
+
+3
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+181
+196
+9
+<none>
+Block
+true
+0
+false
+=> println("b")
+
+4
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+225
+237
+10
+println
+Apply
+false
+0
+false
+println("c")
+
+5
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+222
+237
+10
+<none>
+Block
+true
+0
+false
+=> println("c")
+
+6
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+275
+285
+12
+println
+Apply
+false
+0
+false
+println(y)
+
+7
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+292
+304
+13
+println
+Apply
+false
+0
+false
+println("d")
+
+8
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+275
+304
+12
+<none>
+Block
+true
+0
+false
+println(y)\n      println("d")
+
+9
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+325
+337
+14
+println
+Apply
+false
+0
+false
+println("e")
+
+10
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+322
+337
+14
+<none>
+Block
+true
+0
+false
+=> println("e")
+
+11
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+352
+368
+15
+println
+Apply
+false
+0
+false
+println("other")
+
+12
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+349
+368
+15
+<none>
+Block
+true
+0
+false
+=> println("other")
+
+13
+MatchCaseClasses.scala
+covtest
+MatchCaseClasses
+Object
+covtest.MatchCaseClasses
+f
+101
+106
+7
+f
+DefDef
+false
+0
+false
+def f
+

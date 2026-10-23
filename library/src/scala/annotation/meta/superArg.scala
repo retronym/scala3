@@ -1,0 +1,46 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc. dba Akka
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
+package scala.annotation
+package meta
+
+import scala.language.`2.13`
+
+/** This internal annotation encodes arguments passed to annotation superclasses. Example:
+ *
+ * ```scala sc-hidden sc-name:superarg-imports
+ * import scala.annotation.Annotation
+ * ```
+ * ```scala sc-compile-with:superarg-imports
+ * class a(x: Int) extends Annotation
+ * class b extends a(42) // the compiler adds `@superArg("x", 42)` to class b
+ * ```
+ *
+ *  @param p the name of the parameter in the superclass annotation
+ *  @param v the value passed to the superclass annotation parameter
+ */
+class superArg(p: String, v: Any) extends StaticAnnotation
+
+/** This internal annotation encodes arguments passed to annotation superclasses. Example:
+ *
+ * ```scala sc-hidden sc-name:superarg-imports
+ * import scala.annotation.Annotation
+ * ```
+ * ```scala sc-compile-with:superarg-imports
+ * class a(x: Int) extends Annotation
+ * class b(y: Int) extends a(y) // the compiler adds `@superFwdArg("x", "y")` to class b
+ * ```
+ *
+ *  @param p the name of the parameter in the superclass annotation
+ *  @param n the name of the subclass parameter whose value is forwarded
+ */
+class superFwdArg(p: String, n: String) extends StaticAnnotation

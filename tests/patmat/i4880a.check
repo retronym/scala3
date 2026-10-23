@@ -1,0 +1,4 @@
+-- [E030] Match case Unreachable Warning: tests/patmat/i4880a.scala:14:9 -------
+14 |    case c1: ZipArchive#DirEntry =>
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+   |         Unreachable case

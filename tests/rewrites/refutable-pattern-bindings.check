@@ -1,0 +1,27 @@
+val xs: List[Any] = ???
+
+val hd :: tl = (xs match
+  case Nil => null :: xs
+  case _   => xs).runtimeChecked
+
+val h :: t = xs.runtimeChecked
+
+val a :: b =
+  (if xs.isEmpty then null :: xs
+  else xs).runtimeChecked
+
+val c :: d =
+  (try xs.head :: xs
+  catch case _: NoSuchElementException => null :: xs).runtimeChecked
+
+val e :: f =
+  {val zero = null :: Nil
+  if xs.isEmpty then zero
+  else xs}.runtimeChecked
+
+val j :: k =
+  (for
+    case (x: String) <- xs
+  yield x).runtimeChecked
+
+val (_: Int | _: AnyRef) = (??? : AnyRef).runtimeChecked

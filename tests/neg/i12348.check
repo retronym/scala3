@@ -1,0 +1,4 @@
+-- [E040] Syntax Error: tests/neg/i12348.scala:2:16 --------------------------------------------------------------------
+2 |  given inline x: Int = 0 // error
+  |                ^
+  |                an identifier expected, but ':' found

@@ -1,0 +1,8 @@
+# To build the spec on Travis CI
+source "https://rubygems.org"
+ruby "~> 2.7"
+
+gem "jekyll"
+gem "webrick"
+gem "rouge"
+gem "jekyll-sass-converter", "~> 3.0"

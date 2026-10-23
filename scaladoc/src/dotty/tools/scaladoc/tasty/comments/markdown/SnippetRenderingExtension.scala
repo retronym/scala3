@@ -1,0 +1,48 @@
+package dotty.tools.scaladoc
+package tasty.comments.markdown
+
+import dotty.tools.scaladoc.snippets._
+
+import com.vladsch.flexmark.html._
+import com.vladsch.flexmark.html.renderer._
+import com.vladsch.flexmark.parser._
+import com.vladsch.flexmark.ext.wikilink._
+import com.vladsch.flexmark.ext.wikilink.internal.WikiLinkLinkRefProcessor
+import com.vladsch.flexmark.util.ast._
+import com.vladsch.flexmark.util.options._
+import com.vladsch.flexmark.util.sequence.BasedSequence
+import com.vladsch.flexmark._
+import com.vladsch.flexmark.ast.FencedCodeBlock
+import com.vladsch.flexmark.util.data.MutableDataHolder
+import com.vladsch.flexmark.html.renderer.NodeRenderingHandler.CustomNodeRenderer
+import com.vladsch.flexmark.util.data.DataHolder
+
+/**
+ * SnippetRenderingExtension is responsible for running an analysis for scala codeblocks in the static documentation/scaladoc comments.
+ * For each codeblock we run compiler to check whether snippet works in the newest scala version and to produce rich html codeblocks with
+ * compiler warnings/errors for IDE-like live experience.
+ */
+case class SnippetRenderingExtension(showSnippetName: Boolean = true) extends HtmlRenderer.HtmlRendererExtension:
+  def rendererOptions(opt: MutableDataHolder): Unit = ()
+  object ExtendedFencedCodeBlockHandler extends CustomNodeRenderer[ExtendedFencedCodeBlock]:
+    override def render(node: ExtendedFencedCodeBlock, c: NodeRendererContext, html: HtmlWriter): Unit =
+      html.raw(
+        SnippetRenderer.renderSnippetWithMessages(node, showSnippetName)
+      )
+
+  object FencedCodeBlockHandler extends CustomNodeRenderer[FencedCodeBlock]:
+    override def render(node: FencedCodeBlock, c: NodeRendererContext, html: HtmlWriter): Unit =
+      html.raw(SnippetRenderer.renderSnippet(node.getContentChars.toString, node.getInfo.toString.split(" ").headOption))
+
+  object Render extends NodeRenderer:
+    override def getNodeRenderingHandlers: JSet[NodeRenderingHandler[?]] =
+      JSet(
+        new NodeRenderingHandler(classOf[ExtendedFencedCodeBlock], ExtendedFencedCodeBlockHandler),
+        new NodeRenderingHandler(classOf[FencedCodeBlock], FencedCodeBlockHandler)
+      )
+
+  object Factory extends NodeRendererFactory:
+    override def apply(options: DataHolder): NodeRenderer = Render
+
+  def extend(htmlRendererBuilder: HtmlRenderer.Builder, tpe: String): Unit =
+    htmlRendererBuilder.nodeRendererFactory(Factory)
