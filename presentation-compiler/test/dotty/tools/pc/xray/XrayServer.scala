@@ -199,6 +199,7 @@ object XrayServer:
       val waits = r.lockWaits.iterator().asScala.toList.sortBy(-_.nanos)
       // the times the reader backed off from a wait-for cycle and was retried (step 4): a livelock shows as a growing count
       Map("lockWaitMs" -> math.round(r.lockWaitNanos / 1e5) / 10.0, "lockWaitCount" -> r.lockWaitCount, "backedOff" -> r.waitCyclesBackedOff,
+        "statementWaitMs" -> math.round(r.statementWaitNanos / 1e5) / 10.0, "typedTrees" -> r.typedTrees,
         "lockWaits" -> waits.take(5).map(w => Map("ms" -> math.round(w.nanos / 1e5) / 10.0, "root" -> w.root, "current" -> w.current, "holder" -> w.holder)))
 
   /** Every itemised lock wait of the foreground requests since the last

@@ -67,7 +67,8 @@ def one_round(base, file, rng, viewport_lines, max_hovers):
     return {'file': file, 'viewport': [first + 1, first + viewport_lines], 'hovers': hovers, 'waits': waits,
             'background': {k: st.get(k) for k in ('state', 'outcome', 'ms', 'visibleFirstMs', 'statements', 'diagnosticCount',
                                                    'oracleDiagnosticCount', 'diagnosticsMatch', 'lockWaitMs', 'lockWaitCount',
-                                                   'foregroundDuring', 'error', 'missingDiagnostics', 'extraDiagnostics')},
+                                                   'foregroundDuring', 'error', 'missingDiagnostics', 'extraDiagnostics',
+                                                   'backedOff', 'statementWaitMs', 'typedTrees')},
             'wall': time.time() - t0}
 
 
@@ -81,13 +82,13 @@ def summarise(file, rounds):
     for w in long_waits:
         by_kind.setdefault(kind(w['root']), []).append(w['ms'])
     print(f"\n### {file}\n")
-    print("| pass | statements | visible first | whole pass | diagnostics | whole-file run | hovers beside it | pass lock wait |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| pass | statements | visible first | whole pass | diagnostics | whole-file run | hovers beside it | pass lock wait | pass statement wait | pass backoffs | pass trees |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for i, r in enumerate(rounds, 1):
         b = r['background']
         print(f"| {i} | {b.get('statements')} | {b.get('visibleFirstMs')} ms | {b.get('ms')} ms | {b.get('diagnosticCount')} | "
               f"{b.get('oracleDiagnosticCount')} {'✓' if b.get('diagnosticsMatch') else '✗'} | {sum(1 for h in r['hovers'] if h['beside'])} | "
-              f"{b.get('lockWaitMs')} ms ×{b.get('lockWaitCount')} |")
+              f"{b.get('lockWaitMs')} ms ×{b.get('lockWaitCount')} | {b.get('statementWaitMs')} ms | {b.get('backedOff')} | {b.get('typedTrees')} |")
     for i, r in enumerate(rounds, 1):
         b = r['background']
         for m in (b.get('missingDiagnostics') or [])[:3]:
