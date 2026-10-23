@@ -1,5 +1,3 @@
-//> using options -Yno-fuse-phases
-
 // A closure capturing a parameter of a @tailrec method must see that iteration's
 // argument, not the variable TailRec reassigns. This held only because TailRec and
 // CapturedVars were fused into one MegaPhase.

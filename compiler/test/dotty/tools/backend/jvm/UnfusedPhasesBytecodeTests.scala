@@ -5,15 +5,25 @@ import org.junit.Test
 
 import scala.jdk.CollectionConverters.*
 import dotty.DottyBytecodeTest
+import dotty.tools.dotc.Compiler
+import dotty.tools.dotc.core.Contexts.{Context, ContextBase, ctx}
 
-/** Compiled with -Yno-fuse-phases. Fusion is an optimization only, so the code should be the
- *  same as in a normal compile; these are cases where a mini-phase depended on it.
+/** Compiled with every miniphase in a traversal of its own (the research plugin
+ *  `plugins.UnfusedPhases`). Fusion is an optimization, so the code should be the same as in a
+ *  normal compile, up to fresh names and the order of synthetic members; these are cases where a
+ *  mini-phase depended on it.
  */
 class UnfusedPhasesBytecodeTests extends DottyBytecodeTest {
-  override def initCtx = {
-    val ctx0 = super.initCtx
-    ctx0.setSetting(ctx0.settings.YnoFusePhases, true)
-  }
+  override protected def newContextBase: ContextBase = dotty.tools.dotc.plugins.UnfusedPhases.contextBase
+
+  @Test
+  def thePluginUnfusesThePhases(): Unit =
+    // without it the tests below would pass on a fused compile too, saying nothing
+    given Context = initCtx
+    new Compiler().newRun.compileFromStrings(List("class C"))
+    // a group of one is not wrapped in a MegaPhase: a fused compile has several MegaPhases, an unfused one none
+    val fused = ctx.base.allPhases.toList.collect { case m: dotty.tools.dotc.transform.MegaPhase if m.miniPhases.length > 1 => m.phaseName }
+    assertTrue(s"some phases are still fused: $fused", fused.isEmpty)
 
   @Test
   def localLazyValHolderIsNotBoxed(): Unit = {

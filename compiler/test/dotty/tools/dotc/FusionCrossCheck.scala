@@ -13,7 +13,8 @@ import dotty.tools.vulpix.TestConfiguration
 /** Checks that MegaPhase fusion does not change the compiler's output.
  *
  *  Compiles each test in the given `tests/<category>` directories twice, normally and with
- *  `-Yno-fuse-phases`, and compares the output directories (class files, TASTy, SemanticDB)
+ *  every miniphase in a traversal of its own (the research plugin `plugins.UnfusedPhases`),
+ *  and compares the output directories (class files, TASTy, SemanticDB)
  *  byte for byte. Tests are found as in Vulpix: a file, or a directory whose `*_<n>.scala`
  *  files are compiled as separate groups in order. `//> using options` are honoured.
  *
@@ -67,8 +68,7 @@ object FusionCrossCheck:
     val fusedOpts = if conf.ycheck then List("-Ycheck:all") else Nil
     val unfusedOpts =
       if conf.self then fusedOpts
-      else "-Yno-fuse-phases" ::
-        (if conf.ycheck then List(phaseNames.filterNot(notCheckableUnfused).mkString("-Ycheck:", ",", "")) else Nil)
+      else if conf.ycheck then List(phaseNames.filterNot(notCheckableUnfused).mkString("-Ycheck:", ",", "")) else Nil
     println(s"[fusion-crosscheck] ${tests.length} tests, ${conf.jobs} jobs, results in ${conf.out.toAbsolutePath}/results.tsv")
 
     val pool = Executors.newFixedThreadPool(conf.jobs)
@@ -136,7 +136,7 @@ object FusionCrossCheck:
       compileAll(t, fusedDir, fusedOpts) match
         case Some(err) => Outcome(if err.startsWith("crash") then "fused-crash" else "fused-error", err)
         case None =>
-          compileAll(t, unfusedDir, unfusedOpts) match
+          compileAll(t, unfusedDir, unfusedOpts, unfused = !conf.self) match
             case Some(err) if unfusedLimits.exists(err.contains) => Outcome("unfused-limit", err)
             case Some(err) => Outcome(if err.startsWith("crash") then "UNFUSED-CRASH" else "UNFUSED-ERROR", err)
             case None =>
@@ -156,7 +156,7 @@ object FusionCrossCheck:
         errors += s"$pos ${dia.msg.message.linesIterator.nextOption().getOrElse("")}"
 
   /** Compiles the groups in order, each with the earlier ones on the classpath. */
-  private def compileAll(t: Test, out: Path, extra: List[String]): Option[String] =
+  private def compileAll(t: Test, out: Path, extra: List[String], unfused: Boolean = false): Option[String] =
     var classpath = libraryClasspath
     var failure: Option[String] = None
     for (g, i) <- t.groups.zipWithIndex if failure.isEmpty do
@@ -169,7 +169,7 @@ object FusionCrossCheck:
       ) ++ g.files.map(_.toString)
       val reporter = ErrorCollector()
       try
-        Main.process(args.toArray, reporter)
+        (if unfused then plugins.UnfusedPhases.driver else Main).process(args.toArray, reporter)
         if reporter.hasErrors then failure = Some("errors: " + reporter.errors.mkString(" | "))
       catch case e: (Exception | AssertionError | StackOverflowError) =>
         failure = Some(s"crash: ${e.toString.linesIterator.next().take(500)}")

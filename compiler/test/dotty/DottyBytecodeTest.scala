@@ -38,8 +38,11 @@ trait DottyBytecodeTest {
     val javaString     = "java/lang/String"
   }
 
+  /** The context base of a compile: a test can install plugins in it. */
+  protected def newContextBase: ContextBase = new ContextBase
+
   def initCtx = {
-    val ctx0 = (new ContextBase).initialCtx.fresh
+    val ctx0 = newContextBase.initialCtx.fresh
     val outputDir = io.virtualDirectory("<DottyBytecodeTest output>")
     ctx0.setSetting(ctx0.settings.silentWarnings, true)
     ctx0.setSetting(ctx0.settings.classpath, TestConfiguration.basicClasspath)
