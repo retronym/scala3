@@ -838,7 +838,7 @@ object Contexts {
           .updated(notNullInfosLoc, Nil)
           .updated(compilationUnitLoc, NoCompilationUnit)
           .updated(profilerLoc, Profiler.NoOp)
-      c._searchHistory = new SearchRoot
+      c._searchHistory = new SearchRoot(perThread = base.isConcurrent)
       c._gadtState = GadtState(GadtConstraint.empty)
       c._inlineTraitState = InlineTraitState()
       c
@@ -1074,6 +1074,15 @@ object Contexts {
     protected def concurrentReaders: Boolean = false
     final val isConcurrent: Boolean = concurrentReaders
 
+    /** Several readers that type concurrently, outside the completion lock
+     *  (`-Yinteractive-readers`, step 4 of the multi-reader notes): a
+     *  completion has an owner, its intermediate state is hidden from other
+     *  readers, and they wait for it. Off, readers are serialised with
+     *  completions (step 3). Set once by the interactive driver, before its
+     *  first run; batch compilation never sets it.
+     */
+    @volatile var independentReaders: Boolean = false
+
     /** Interactive mode with several readers: the lock every completion
      *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
      *  to a new run (`Denotation.current`) and every computation of an
@@ -1083,6 +1092,11 @@ object Contexts {
      *  used in batch compilation.
      */
     val completionLock: CompletionLock = CompletionLock(this)
+
+    /** The owners of completion roots with independent readers (see
+     *  `independentReaders`, `CompletionRoots`).
+     */
+    val completionRoots: CompletionRoots = CompletionRoots(this)
 
     /** An `EqHashMap` for a cache of this base: synchronised if several
      *  threads read the base.

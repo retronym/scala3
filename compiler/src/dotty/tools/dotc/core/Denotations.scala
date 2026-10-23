@@ -186,9 +186,8 @@ object Denotations {
      *  Uncompleted denotations set myInfo to a LazyType.
      */
     final def info(using Context): Type = {
-      def completeInfo = { // Written this way so that `info` is small enough to be inlined
-        this.asInstanceOf[SymDenotation].completeFrom(myInfo.asInstanceOf[LazyType]); info
-      }
+      def completeInfo = // Written this way so that `info` is small enough to be inlined
+        this.asInstanceOf[SymDenotation].infoAfterCompletion
       if (myInfo.isInstanceOf[LazyType]) completeInfo else myInfo
     }
 
@@ -814,7 +813,11 @@ object Denotations {
           if ctx.base.isConcurrent then
             // several readers (interactive mode): the bring-forward writes the
             // flock's validity, one writer at a time (see `completionLock`)
-            ctx.base.completionLock.locked(CompletionLock.bringForward)(initial.bringForward().current)
+            if ctx.base.independentReaders then
+              // one root for every bring-forward: cycles with completions are detected
+              ctx.base.completionRoots.locked(CompletionLock.bringForward, CompletionLock.bringForward,
+                () => CompletionRoots.backOff(symbol))(initial.bringForward().current)
+            else ctx.base.completionLock.locked(CompletionLock.bringForward)(initial.bringForward().current)
           else initial.bringForward().current
         else this
 

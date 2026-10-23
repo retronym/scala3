@@ -105,14 +105,12 @@ class InteractiveDriver(
    *  is released (it may write), before the retry or the rethrow.
    */
   private def reading[T](body0: => T)(afterCancel: () => Unit = () => (), serialiseWhole: Boolean = true): T =
-    // `-Dinteractive.readUnderCompletionLock`: every read action under the
+    // Without `-Yinteractive-readers` every read action runs under the
     // completion lock, so readers are serialised with completions and with
-    // each other (writers still pre-empt). With it the two-reader suites pass;
-    // without it, a reader can see a completion's intermediate info (a
-    // class's `TempClassInfo`, an unpickled type's placeholder bounds) and
-    // typer states shared between a completion and a reader's body typing
-    // (findings I42, I48). The cure is a typer state per completion and an
-    // owner and barrier per root: step 4 of the multi-reader notes.
+    // each other (writers still pre-empt): a reader outside it would see a
+    // completion's intermediate info and typer states shared with completers
+    // (findings I42, I48). With it, completions hide their intermediate state
+    // from other readers themselves (step 4 of the multi-reader notes).
     def body: T = if serialiseWhole then serialised(CompletionLock.readAction)(body0) else body0
     while true do
       val lock = regime.readLock
@@ -157,14 +155,23 @@ class InteractiveDriver(
   private def completionLocked[T](what: CompletionLock.What)(op: => T): T =
     base.completionLock.locked(what)(op)
 
-  /** `op` under the completion lock in the serialised mode
-   *  (`-Dinteractive.readUnderCompletionLock`), as it is otherwise: a request's
-   *  read action is one unit, a completing pass's statement is one unit (a
-   *  pass that held the lock for all of its statements would make every
-   *  request wait for the whole pass).
+  /** The context a provider's read action runs in. With independent readers
+   *  a typer state of its own, never committed: reads instantiate type
+   *  variables too (completion's implicit search, `isFullyDefined`), and two
+   *  readers in the run's root typer state raced on it (finding I52: a
+   *  completion that saw `filter` at `Nothing => Boolean`, a type variable
+   *  whose owner a commit had lost).
+   */
+  private def readCtx: Context =
+    if independentReaders then myCtx.fresh.setNewTyperState() else myCtx
+
+  /** `op` under the completion lock unless readers are independent
+   *  (`-Yinteractive-readers`): a request's read action is one unit, a
+   *  completing pass's statement is one unit (a pass that held the lock for
+   *  all of its statements would make every request wait for the whole pass).
    */
   private def serialised[T](what: => CompletionLock.What)(op: => T): T =
-    if InteractiveDriver.readUnderCompletionLock then completionLocked(what)(op) else op
+    if !independentReaders then completionLocked(what)(op) else op
 
   /** Abandon the statements whose typing a cancellation unwound (a re-index:
    *  a write), before a pre-empted or cancelled reader is retried or unwinds.
@@ -196,6 +203,12 @@ class InteractiveDriver(
    *  file as `run` does: the gate on the behaviour of this branch.
    */
   val targetedRequests: Boolean = !myInitCtx.settings.YnoTargetedRequests.value(using myInitCtx)
+
+  /** Do requests type concurrently, each completion with an owner
+   *  (`-Yinteractive-readers`)? Off, they are serialised with completions.
+   */
+  val independentReaders: Boolean = myInitCtx.settings.YinteractiveReaders.value(using myInitCtx)
+  myInitCtx.base.independentReaders = independentReaders
 
   def currentCtx: Context = myCtx
 
@@ -230,7 +243,8 @@ class InteractiveDriver(
   /** The holder of the completion lock and the root of its work, or "" (for
    *  the x-ray).
    */
-  def completionOwnerNow: String = base.completionLock.holderNow
+  def completionOwnerNow: String =
+    if independentReaders then base.completionRoots.holdersNow else base.completionLock.holderNow
 
   /** The reader bound to the calling thread (inside `withCancelChecker`, the
    *  scope's), for tools that watch a request from another thread.
@@ -300,7 +314,10 @@ class InteractiveDriver(
             val diags =
               if s.hasSkipped || !s.typingNow.isEmpty then logged(s"run ${fileNameOf(s.uri)} (completes the session)")(s.complete(visible))(sessionSummary(uri))
               else s.currentDiagnostics
-            if s.poisoned then None else Some(serialised(CompletionLock.readAction)(read(myCtx, s.unit, diags)))
+            // statements abandoned meanwhile (another reader's cancellation)
+            // are not in the unit: a write first, then again
+            if s.poisoned || s.hasPendingAbandons then None
+            else Some(serialised(CompletionLock.readAction)(read(readCtx, s.unit, diags)))
           case _ => None
       }(afterCancel = () => { val s = mySession; if s != null then abandonPending(s) }, serialiseWhole = false)
       served match
@@ -324,7 +341,7 @@ class InteractiveDriver(
   private def writtenAndRead[T](uri: URI, ran: => List[Diagnostic], read: (Context, CompilationUnit, List[Diagnostic]) => T): Option[T] =
     writing {
       val diags = ran
-      myCompilationUnits.synchronized(myCompilationUnits.get(uri)).map(unit => read(myCtx, unit, diags))
+      myCompilationUnits.synchronized(myCompilationUnits.get(uri)).map(unit => read(readCtx, unit, diags))
     }
 
   /** The state of a targeted run (see `runUpTo`): the run, the unit with
@@ -375,7 +392,11 @@ class InteractiveDriver(
      *  `skipped`, in `typing`), or a statement another reader is typing.
      */
     def claim(target: Span): Session.Claim = synchronized {
-      if typing.iterator().asScala.exists(_.stat.span.contains(target)) then Session.Claim.Wait
+      // a statement whose typing a cancellation unwound is neither typed nor
+      // skipped until a write replaces it: it is not "typed" (finding I56,
+      // a read of a unit without the statement, an empty answer)
+      if pendingAbandons.exists(_.stat.span.contains(target)) then Session.Claim.Abandoned
+      else if typing.iterator().asScala.exists(_.stat.span.contains(target)) then Session.Claim.Wait
       else skipped.find(_.stat.span.contains(target)) match
         case None => Session.Claim.Typed
         case Some(sk) =>
@@ -791,7 +812,7 @@ class InteractiveDriver(
 
   private object Session:
     enum Claim:
-      case Typed, Wait
+      case Typed, Wait, Abandoned
       case Claimed(sk: Run.SkippedStat)
 
   @volatile private var mySession: Session | Null = null
@@ -954,16 +975,20 @@ class InteractiveDriver(
             while !done do
               s.claim(target) match
                 case Session.Claim.Typed =>
-                  result = Some(read(myCtx, s.unit, s.currentDiagnostics))
+                  result = Some(read(readCtx, s.unit, s.currentDiagnostics))
                   done = true
                 case Session.Claim.Wait =>
                   // another reader is typing the statement: its result serves this request too
                   s.awaitTyping(target)
+                case Session.Claim.Abandoned =>
+                  // a write first (the re-index of the statement), then again
+                  result = None
+                  done = true
                 case Session.Claim.Claimed(sk) =>
                   // A statement skipped inside a block left a stub in the typed
                   // `Block`; the resume replaces the stub by the typed statement.
                   result = s.resume(sk, target) match
-                    case Some(diags) => Some(read(myCtx, s.unit, diags))
+                    case Some(diags) => Some(read(readCtx, s.unit, diags))
                     case None => None // no typer state left to resume in: a fresh run
                   done = true
             result
@@ -1171,5 +1196,3 @@ class InteractiveDriver(
   }
 }
 
-object InteractiveDriver:
-  private val readUnderCompletionLock: Boolean = java.lang.Boolean.getBoolean("interactive.readUnderCompletionLock")

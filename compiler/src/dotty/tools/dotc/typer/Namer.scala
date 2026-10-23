@@ -912,7 +912,20 @@ class Namer { typer: Typer =>
   }
 
   /** The completer of a symbol defined by a member def or import (except ClassSymbols) */
-  class Completer(val original: Tree)(ictx: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+  class Completer(val original: Tree)(ictx0: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+
+    /** The context with which this completer was created; with independent
+     *  readers (`-Yinteractive-readers`), for the duration of `complete`, the
+     *  same with a fresh committable typer state of its own (§3.1): two
+     *  readers completing two symbols of one file would otherwise both write
+     *  the namer's typer state, which readers' body typing derives from (I48).
+     */
+    protected var ictx: Context = ictx0
+
+    /** `ictx` was replaced or restored: a subclass that derived a context
+     *  from it once derives it again.
+     */
+    protected def rebased(): Unit = ()
 
     protected def localContext(owner: Symbol): FreshContext = ctx.fresh.setOwner(owner).setTree(original)
 
@@ -924,7 +937,7 @@ class Namer { typer: Typer =>
       if myNotNullInfos == null then ictx else ictx.withNotNullInfos(myNotNullInfos.nn)
 
     // make sure testing contexts are not captured by completers
-    assert(!ictx.reporter.isInstanceOf[ExploringReporter])
+    assert(!ictx0.reporter.isInstanceOf[ExploringReporter])
 
     def setNotNullInfos(infos: List[NotNullInfo]): Unit =
       myNotNullInfos = infos
@@ -978,6 +991,11 @@ class Namer { typer: Typer =>
         report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
+        val saved = ictx
+        val own = ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders
+        if own then
+          ictx = saved.fresh.setNewTyperState()
+          rebased()
         try
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
@@ -986,6 +1004,19 @@ class Namer { typer: Typer =>
             val completer = SuspendCompleter()
             denot.info = completer
             completer.complete(denot)
+        finally
+          if own then
+            // the completion's result is published fully defined: its type
+            // variables made permanent (not committed into the namer's state,
+            // which other readers derive from), and its diagnostics issued to
+            // the namer's reporter, where every reader of the session finds them
+            val ts = ictx.typerState
+            try
+              ts.gc()(using ictx)
+              ts.reporter.removeBufferedMessages(using ictx).foreach(saved.reporter.report(_)(using saved))
+            finally
+              ictx = saved
+              rebased()
     }
 
     private var completedTypeParamSyms: List[TypeSymbol] | Null = null
@@ -1131,8 +1162,8 @@ class Namer { typer: Typer =>
       knownTypeSig
   }
 
-  class TypeDefCompleter(original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx) with TypeParamsCompleter {
+  class TypeDefCompleter(original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0) with TypeParamsCompleter {
     private var myTypeParams: List[TypeSymbol] | Null = null
     private var nestedCtx: Context | Null = null
     assert(!original.isClassDef)
@@ -1181,7 +1212,10 @@ class Namer { typer: Typer =>
 
     override final def typeSig(sym: Symbol): Type =
       val tparamSyms = completerTypeParams(sym)(using ictx)
-      given ctx: Context = nestedCtx.nn
+      // made when the type parameters were first asked for, possibly under
+      // another completion's typer state (see `Completer.ictx`)
+      val nc = nestedCtx.nn
+      given ctx: Context = if nc.typerState eq ictx.typerState then nc else nc.fresh.setTyperState(ictx.typerState)
 
       def abstracted(tp: TypeBounds): TypeBounds =
         HKTypeLambda.boundsFromParams(tparamSyms, tp)
@@ -1265,11 +1299,14 @@ class Namer { typer: Typer =>
     end typeSig
   }
 
-  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx), CompleterWithCleanup {
-    withDecls(newScope(using ictx))
+  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0), CompleterWithCleanup {
+    withDecls(newScope(using ictx0))
 
-    protected given completerCtx: Context = localContext(cls)
+    private var myCompleterCtx: Context = localContext(cls)
+    protected given completerCtx[Dummy_so_its_a_def]: Context = myCompleterCtx
+    // derived from `ictx`: again when `ictx` is replaced or restored
+    override protected def rebased(): Unit = myCompleterCtx = localContext(cls)
 
     private var localCtx: Context = uninitialized
 

@@ -3212,19 +3212,33 @@ object Types extends TypeUtils {
     def ref(using Context): Type =
       if computed then
         if myRef == null then
+          if ctx.base.independentReaders && !ctx.base.completionRoots.ownedHere(this) then
+            // being computed by another reader (independent readers): wait for
+            // it, not a cycle (finding I57: a false "Cyclic reference", and a
+            // completion described with `...`)
+            ctx.base.completionRoots.locked(this, CompletionLock.lazyRef, () => CompletionRoots.backOff(this))(())
+            return ref
           // if errors were reported previously handle this by throwing a CyclicReference
           // instead of crashing immediately. A test case is neg/i6057.scala.
           assert(ctx.mode.is(Mode.CheckCyclic)
               || ctx.mode.is(Mode.Printing)
               || ctx.reporter.errorsReported)
           throw CyclicReference(NoDenotation)
-      else
-        computed = true
-        val result = refFn.nn(ctx)
-        refFn = null
-        if result != null then myRef = result
-        else assert(myRef != null)  // must have been `update`d
+      else if ctx.base.independentReaders then
+        // the computation has an owner, as a completion does
+        ctx.base.completionRoots.locked(this, CompletionLock.lazyRef, () => CompletionRoots.backOff(this)) {
+          if !computed then compute()
+        }
+        return ref
+      else compute()
       myRef.nn
+
+    private def compute()(using Context): Unit =
+      computed = true
+      val result = refFn.nn(ctx)
+      refFn = null
+      if result != null then myRef = result
+      else assert(myRef != null)  // must have been `update`d
 
     /** Update the value of the lazyref, discarding the compute function `refFn`
      *  Can be called only as long as the ref is still undefined.

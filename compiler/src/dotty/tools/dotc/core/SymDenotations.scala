@@ -103,7 +103,8 @@ object SymDenotations {
       def knownFlags(info: Type): FlagSet = info match
         case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
         case _ => AfterLoadFlags
-      !myInfo.isInstanceOf[LazyType] || fs <= knownFlags(myInfo)
+      val i = ownView
+      !i.isInstanceOf[LazyType] || fs <= knownFlags(i)
 
     final def relevantFlagsFor(fs: FlagSet)(using Context) =
       if (isCurrent(fs)) myFlags else flags
@@ -139,10 +140,10 @@ object SymDenotations {
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isAllOf(fs, butNot)
 
     /** The type info, or, if symbol is not yet completed, the completer */
-    final def infoOrCompleter: Type = myInfo
+    final def infoOrCompleter: Type = ownView
 
     /** Optionally, the info if it is completed */
-    final def unforcedInfo: Option[Type] = myInfo match {
+    final def unforcedInfo: Option[Type] = ownView match {
       case myInfo: LazyType => None
       case _ => Some(myInfo)
     }
@@ -178,7 +179,9 @@ object SymDenotations {
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
       val interactive = ctx.mode.is(Mode.Interactive)
-      if interactive && ctx.base.isConcurrent then
+      if interactive && ctx.base.isConcurrent && ctx.base.independentReaders then
+        completeIndependently(completer)
+      else if interactive && ctx.base.isConcurrent then
         // several readers: one completion at a time (step 3 of the
         // multi-reader notes; an owner and a barrier per root is step 4)
         val lock = ctx.base.completionLock
@@ -194,6 +197,99 @@ object SymDenotations {
         finally lock.unlockFor()
       else lockAndComplete0(completer, interactive)
 
+    /** Independent readers (`-Yinteractive-readers`, step 4): claim the
+     *  completion's root (`CompletionRoots`), waiting while another reader
+     *  owns it, then complete the symbol as it is now. While the completion
+     *  runs, the symbol's info is an `InProgress` that only this reader sees
+     *  through (`ownView`): the intermediate infos a completer sets (a class's
+     *  `TempClassInfo`, an unpickled type's placeholder bounds) are its own,
+     *  and another reader that asks for the info meets a lazy type and waits
+     *  on the root (I48). Whatever the completer leaves is published when it
+     *  returns or unwinds.
+     */
+    private def completeIndependently(completer0: LazyType)(using Context): Unit =
+      // another reader's completion in progress (its root may not be the one
+      // `completer0` names): wait for it first, then work from what is there
+      val completer = awaitOthers() match
+        case lt: LazyType => lt
+        case _ => return
+      val key = completer.completionRoot(this)
+      val roots = ctx.base.completionRoots
+      roots.acquire(key, CompletionLock.What(CompletionLock.completionKind(completer), symbol), () => cyclicWait())
+      try
+        // as it is now: completed meanwhile, or another info (I44)
+        ownView match
+          case current: LazyType if current.needsCompletion(this) =>
+            myInfo match
+              case _: InProgress =>
+                // our own completion in progress: a re-entry, a cycle as before
+                lockAndComplete0(current, interactive = true)
+              case _ =>
+                val ip = InProgress(current, Thread.currentThread.nn, key)
+                myInfo = ip
+                try lockAndComplete0(current, interactive = true)
+                finally if myInfo eq ip then myInfo = ip.current
+          case _ =>
+      finally roots.release(key)
+
+    /** A wait for a root would close a wait-for cycle between readers. The
+     *  roots are coarser than the facts they protect (a file, every
+     *  bring-forward), so such a cycle is often two roots taken in different
+     *  orders, not a dependency cycle: this reader backs off (it is
+     *  pre-empted, as by a writer, unwinds its completions and releases their
+     *  roots, and the driver retries the request), and the other reader goes
+     *  on. A dependency cycle then shows in that reader alone, as the
+     *  `CyclicReference` a single reader gets (finding I54; §4.2 proposed the
+     *  `CyclicReference` here, which made a false cycle out of a lock order).
+     */
+    private def cyclicWait()(using Context): Nothing =
+      CompletionRoots.backOff(symbol)
+
+    /** Make `myInfo` an `InProgress` owned by this thread for the duration of
+     *  a completion of another denotation of the same root (a symbol
+     *  loader's class and module), if it is still lazy. Returns whether it did.
+     */
+    private[core] def hideWhileCompleting(key: AnyRef): Boolean = myInfo match
+      case _: InProgress => false
+      case lt: LazyType =>
+        myInfo = InProgress(lt, Thread.currentThread.nn, key)
+        true
+      case _ => false
+
+    /** Publish what a completion left, ending `hideWhileCompleting`. */
+    private[core] def publishCompletion(): Unit = myInfo match
+      case ip: InProgress if ip.ownedHere => myInfo = ip.current
+      case _ =>
+
+    /** The info as this thread sees it: the owner of a completion in
+     *  progress (independent readers) sees its intermediate info, every other
+     *  thread the `InProgress`, a lazy type.
+     */
+    private def ownView: Type = myInfo match
+      case ip: InProgress if ip.ownedHere => ip.current
+      case i => i
+
+    /** The info as this thread may use it without completing: another
+     *  reader's completion in progress is waited for first (its root), so
+     *  that what is read is not that completion's intermediate state.
+     */
+    private def awaitOthers()(using Context): Type = myInfo match
+      case ip: InProgress if !ip.ownedHere =>
+        ctx.base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
+        awaitOthers()
+      case _ => ownView
+
+    /** The slow path of `Denotation.info`: the info is a lazy type. Complete
+     *  it; the owner of a completion in progress sees its intermediate info,
+     *  any other reader waits for it (`completeIndependently`).
+     */
+    private[core] final def infoAfterCompletion(using Context): Type =
+      ownView match
+        case lt: LazyType =>
+          completeFrom(lt)
+          info
+        case i => i
+
     private def lockAndComplete0(completer: LazyType, interactive: Boolean)(using Context): Unit =
       val reader: Reader | Null = if interactive then ctx.reader else null
       if myFlags.is(Touched) && !healLeakedTouched(reader) then
@@ -203,7 +299,7 @@ object SymDenotations {
       if reader != null then reader.completing += symbol
       try atPhase(validFor.firstPhaseId)(completer.complete(this))
       catch case ex =>
-        onUnwind(ex, interactive, reader)
+        onUnwind(ex, interactive, reader, completer)
         throw ex
       finally if reader != null then reader.completing -= symbol
 
@@ -232,7 +328,7 @@ object SymDenotations {
      *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
      *  stays set, as before. The caller rethrows.
      */
-    private def onUnwind(ex: Throwable, interactive: Boolean, reader: Reader | Null)(using Context): Unit =
+    private def onUnwind(ex: Throwable, interactive: Boolean, reader: Reader | Null, completer: LazyType)(using Context): Unit =
       ex match
         case _: CompilationUnit.CancelledCompilation =>
           untouchIfIncomplete()
@@ -240,6 +336,16 @@ object SymDenotations {
           // info before it types the parents, and the class is then
           // `isCompleted` with that info (see `Reader.cancelledCompletions`)
           ctx.reader.cancelledCompletions += symbol
+          // Independent readers: a Namer completer cannot run a second time
+          // (a method's had entered its parameters: a retry enters `xs$1`).
+          // With one reader the driver replaces the statement before anyone
+          // retries; with two, a reader waiting on the root would take over
+          // the completion (finding I53). The symbol is left with a completer
+          // that pre-empts any reader that reaches it, which retries on a
+          // fresh run.
+          if interactive && ctx.base.isConcurrent && ctx.base.independentReaders
+             && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
+          then info_=(UnwoundCompletion(completer, ctx.runId))
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>
@@ -262,7 +368,9 @@ object SymDenotations {
         }
         */
       if (Config.checkNoSkolemsInInfo) assertNoSkolems(tp)
-      myInfo = tp
+      myInfo match
+        case ip: InProgress if ip.ownedHere => ip.current = tp // hidden until the completion ends
+        case _ => myInfo = tp
     }
 
     /** The name, except
@@ -277,7 +385,7 @@ object SymDenotations {
     /** The privateWithin boundary, NoSymbol if no boundary is given.
      */
     @tailrec
-    final def privateWithin(using Context): Symbol = myInfo match {
+    final def privateWithin(using Context): Symbol = ownView match {
       case myInfo: ModuleCompleter =>
         // Instead of completing the ModuleCompleter, we can get `privateWithin`
         // directly from the module class, which might require less completions.
@@ -297,8 +405,8 @@ object SymDenotations {
      */
     protected[dotc] final def setPrivateWithin(pw: Symbol)(using Context): Unit = {
       if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
-        assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
-          s"Illegal call to `setPrivateWithin($pw)` while completing $this using completer $myInfo")
+        assert(ownView.isInstanceOf[ModuleCompleter | SymbolLoader],
+          s"Illegal call to `setPrivateWithin($pw)` while completing $this using completer $ownView")
       myPrivateWithin = pw
     }
 
@@ -453,7 +561,12 @@ object SymDenotations {
       leadParam(rawParamss)
 
     /** The denotation is completed: info is not a lazy type and attributes have defined values */
-    final def isCompleted: Boolean = !myInfo.isInstanceOf[LazyType]
+    final def isCompleted: Boolean =
+      val i = myInfo
+      !i.isInstanceOf[LazyType] || (i.isInstanceOf[InProgress] && {
+        val ip = i.asInstanceOf[InProgress]
+        ip.ownedHere && !ip.current.isInstanceOf[LazyType]
+      })
 
     /** The denotation is in train of being completed, by this reader. With
      *  several readers (interactive mode) a completion in progress on
@@ -470,7 +583,17 @@ object SymDenotations {
         !base.isConcurrent || isCompletingHere(base)
       }
 
-    private def isCompletingHere(base: ContextBase): Boolean =
+    private def isCompletingHere(base: ContextBase)(using Context): Boolean =
+      if base.independentReaders then
+        myInfo match
+          case ip: InProgress if !ip.ownedHere =>
+            // another reader's completion: wait for it and look again (§4.1)
+            base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
+            myFlags.is(Touched) && !isCompleted
+          case _ => true // this reader's own completion, or a leaked flag as before
+      else isCompletingHereCoarse(base)
+
+    private def isCompletingHereCoarse(base: ContextBase): Boolean =
       val lock = base.completionLock
       // under the coarse lock every completion in progress is the lock holder's
       lock.isHeldByCurrentThread ||
@@ -479,14 +602,14 @@ object SymDenotations {
         }
 
     /** The completer of this denotation. @pre: Denotation is not yet completed */
-    final def completer: LazyType = myInfo.asInstanceOf[LazyType]
+    final def completer: LazyType = ownView.asInstanceOf[LazyType]
 
     /** If this denotation is not completed, run the completer.
      *  The resulting info might be another completer.
      *
      *  @see ensureCompleted
      */
-    final def completeOnce()(using Context): Unit = myInfo match {
+    final def completeOnce()(using Context): Unit = ownView match {
       case myInfo: LazyType =>
         completeFrom(myInfo)
       case _ =>
@@ -508,7 +631,7 @@ object SymDenotations {
      *  3. When playing it safe in order not to raise CylicReferences, e.g. for printing things
      *     or taking more efficient shortcuts (e.g. the stillValid test).
      */
-    final def unforcedDecls(using Context): Scope = myInfo match {
+    final def unforcedDecls(using Context): Scope = awaitOthers() match {
       case cinfo: LazyType =>
         val knownDecls = cinfo.decls
         if (knownDecls ne EmptyScope) knownDecls
@@ -521,7 +644,7 @@ object SymDenotations {
      *  aliases such as AnyRef into a package class without forcing it.
      *  Right now, the only usage is for the AnyRef alias in Definitions.
      */
-    final private[core] def currentPackageDecls(using Context): MutableScope = myInfo match {
+    final private[core] def currentPackageDecls(using Context): MutableScope = awaitOthers() match {
       case pinfo: SymbolLoaders.PackageLoader => pinfo.currentDecls
       case _ => unforcedDecls.openForMutations
     }
@@ -702,16 +825,16 @@ object SymDenotations {
 
     private def setAbsentInfo(): Unit = {
       if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
-        assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
-          s"Illegal attempt to mark $this absent while completing using completer $myInfo")
-      myInfo = NoType
+        assert(ownView.isInstanceOf[ModuleCompleter | SymbolLoader],
+          s"Illegal attempt to mark $this absent while completing using completer $ownView")
+      info_=(NoType)
     }
 
     /** Make denotation not exist.
      *  @pre `isCompleting` is false, or this is a ModuleCompleter or SymbolLoader
      */
     final def markAbsent()(using Context): Unit = {
-      val wasAbsent = myInfo eq NoType
+      val wasAbsent = ownView eq NoType
       setAbsentInfo()
       if !wasAbsent && (ctx ne NoContext) && (symbol ne NoSymbol) then
         val failures = ctx.retainedSymbolLoadingFailures
@@ -729,7 +852,7 @@ object SymDenotations {
      *                   retain loading failures, report the failure for an absent symbol.
      */
     @tailrec
-    final def isAbsent(canForce: Boolean = true)(using Context): Boolean = myInfo match {
+    final def isAbsent(canForce: Boolean = true)(using Context): Boolean = awaitOthers() match {
       case myInfo: ModuleCompleter =>
         // Instead of completing the ModuleCompleter, we can check whether
         // the module class is absent, which might require less completions.
@@ -740,7 +863,7 @@ object SymDenotations {
         isAbsent(canForce)
       case _ =>
         // Otherwise, no completion is necessary, see the preconditions of `markAbsent()`.
-        val absent = myInfo `eq` NoType
+        val absent = ownView `eq` NoType
         if absent && canForce && (ctx ne NoContext) && (symbol ne NoSymbol) then
           val failures = ctx.retainedSymbolLoadingFailures
           if failures != null then
@@ -1275,10 +1398,10 @@ object SymDenotations {
      */
     final def moduleClass(using Context): Symbol =
       def notFound =
-        if (Config.showCompletions) println(s"missing module class for $name: $myInfo")
+        if (Config.showCompletions) println(s"missing module class for $name: $ownView")
         NoSymbol
       if this.is(ModuleVal) then
-        myInfo.stripAnnots match
+        awaitOthers().stripAnnots match
           case info: TypeRef            => info.symbol
           case ExprType(info: TypeRef)  => info.symbol // needed after uncurry, when module terms might be accessor defs
           case info: LazyType           => info.moduleClass
@@ -1297,7 +1420,7 @@ object SymDenotations {
      */
     final def sourceModule(using Context): Symbol =
       if (this.is(ModuleClass))
-        myInfo match {
+        awaitOthers() match {
           case ClassInfo(_, _, _, _, selfType) =>
             def sourceOfSelf(tp: TypeOrSymbol): Symbol = (tp: @unchecked) match {
               case tp: TermRef => tp.symbol
@@ -3113,7 +3236,46 @@ object SymDenotations {
      *  completed before nested types.
      */
     def needsCompletion(symd: SymDenotation)(using Context): Boolean = true
+
+    /** The root this completion belongs to, for independent readers
+     *  (`CompletionRoots`): what other readers wait on while it runs. The
+     *  symbol by default; a symbol loader's file (its class and module), a
+     *  TASTy file for the unpickler's completers.
+     */
+    def completionRoot(symd: SymDenotation)(using Context): AnyRef = symd.symbol
   }
+
+  /** The info of a symbol whose Namer completion a cancellation unwound, with
+   *  independent readers (see `SymDenotation.onUnwind`): a reader that
+   *  reaches it is pre-empted, and the run is not resumed, so that the retry
+   *  is a fresh run with fresh symbols.
+   */
+  final class UnwoundCompletion(original: LazyType, runId: Int) extends LazyType with SymbolLoaders.SecondCompleter:
+    def complete(denot: SymDenotation)(using Context): Unit =
+      if ctx.runId != runId then
+        // a later run: the original completer degrades the stale symbol
+        // itself, as it does with one reader ("left incomplete by an earlier
+        // run"); it does not run its body
+        original.complete(denot)
+      else
+        val run = ctx.run
+        if run != null then run.markTainted()
+        throw CompilationUnit.CancelledCompilation()
+
+  /** The info of a denotation whose completion is in progress on a reader,
+   *  with independent readers (`-Yinteractive-readers`): `current` is what
+   *  the completer has set so far, seen by the owner thread only
+   *  (`SymDenotation.ownView`); every other thread sees a lazy type and
+   *  waits on `rootKey` before it looks again.
+   */
+  final class InProgress(@volatile var current: Type, val owner: Thread, val rootKey: AnyRef) extends LazyType:
+    def ownedHere: Boolean = owner eq Thread.currentThread
+    def complete(denot: SymDenotation)(using Context): Unit =
+      throw AssertionError(s"$denot: an InProgress is completed through its root, not run")
+    override def completionRoot(symd: SymDenotation)(using Context): AnyRef = rootKey
+    override def decls: Scope = current match
+      case lt: LazyType => lt.decls
+      case _ => EmptyScope
 
   /** A subtrait of LazyTypes where completerTypeParams yields a List[TypeSymbol], which
    *  should be completed independently of the info.
@@ -3217,7 +3379,7 @@ object SymDenotations {
     def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base.isConcurrent)
   }
 
-  private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache {
+  private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
@@ -3246,8 +3408,12 @@ object SymDenotations {
      *  under the base's completion lock, so that the black hole `locked`
      *  has one owner, like a completion's `Touched`.
      */
-    protected inline def computing[T](using Context)(inline op: T): T =
-      if concurrent then ctx.base.completionLock.locked(CompletionLock.inheritedCache)(op)
+    protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: T): T =
+      if concurrent then
+        if ctx.base.independentReaders then
+          // the cache is its own root: its black hole `locked` has one owner
+          ctx.base.completionRoots.locked(self, CompletionLock.inheritedCache, () => CompletionRoots.backOff(clsd))(op)
+        else ctx.base.completionLock.locked(CompletionLock.inheritedCache)(op)
       else op
 
     def isValidAt(phase: Phase)(using Context) =
@@ -3292,7 +3458,7 @@ object SymDenotations {
       val cached = if c0 == null then null else c0(keepOnly)
       try
         if (cached != null) cached
-        else computing {
+        else computing(clsd) {
           val c1 = cache
           val cached1 = if c1 == null then null else c1(keepOnly) // computed meanwhile by the thread that held the lock?
           if cached1 != null then cached1
@@ -3338,7 +3504,7 @@ object SymDenotations {
       assert(isValid)
       CyclicReference.trace("compute the base classes of ", clsd.symbol):
         cache match
-          case null => computing {
+          case null => computing(clsd) {
             cache match
               case null =>
                 if (locked) throw CyclicReference(clsd)

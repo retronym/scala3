@@ -105,3 +105,4 @@ object CompletionLock:
   val cleanup: What = What("cleanup", null)
   val peek: What = What("wait for a completion (isCompleting)", null)
   val readAction: What = What("read action (serialised mode)", null)
+  val lazyRef: What = What("lazy reference", null)
