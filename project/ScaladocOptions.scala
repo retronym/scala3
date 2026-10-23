@@ -4,7 +4,7 @@ object ScaladocOptions {
         // The pattern is matched against the class file's path, which for scala-asm is
         // `scala-asm-*.jar(scala/tools/asm/...)`; the stdlib API docs don't include it.
         (if (includeExternalMappings) "(?!.*scala/tools/asm/).*scala/.*::scaladoc3::https://nightly.scala-lang.org/api/," else "") +
-        ".*java/.*::javadoc::https://docs.oracle.com/javase/8/docs/api/")
+        ".*java/.*::javadoc::https://docs.oracle.com/en/java/javase/17/docs/api/java.base/")
     Seq(
       "-skip-by-regex:.+\\.internal($|\\..+)",
       "-skip-by-regex:.+\\.impl($|\\..+)",
