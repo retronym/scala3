@@ -473,6 +473,9 @@ class InteractiveDriver(
      */
     private var pristine: untpd.Tree | Null = null
 
+    /** The syntax errors of `pristine`. */
+    private var pristineErrors: List[Diagnostic] = Nil
+
     /** A parse of `src` in a unit of its own, whose fresh names (`_$1`)
      *  are numbered as a fresh run's parse would number them.
      */
@@ -489,11 +492,16 @@ class InteractiveDriver(
      *  content. Returns false, with the session as it was, otherwise.
      */
     def adopt(now: SourceFile): Boolean =
+      given Context = run.runContext.fresh.setCompilationUnit(unit)
       val src = unit.source
       val oldText = src.textContent()
       val newText = now.textContent()
       val old = pristine match
-        case null => parse(SourceFile.virtual(src.path, oldText), new StoreReporter(null))
+        case null =>
+          val oldErrors = new StoreReporter(null)
+          val p = parse(SourceFile.virtual(src.path, oldText), oldErrors)
+          pristineErrors = oldErrors.removeBufferedMessages
+          p
         case p: untpd.Tree => p
       val r = BodyEdit.region(oldText, newText)
       src.replaceContent(newText)
@@ -503,10 +511,20 @@ class InteractiveDriver(
         src.replaceContent(oldText)
         myLastEdit = s"edit refused ($why)"
         false
-      given Context = run.runContext.fresh.setCompilationUnit(unit)
+      val errors = parseErrors.removeBufferedMessages
+      /** The syntax errors outside `now` are those outside `old`, moved: a
+       *  file that has one elsewhere still keeps its session.
+       */
+      def sameErrorsOutside(old: Span, now: Span, anchor: Span): Boolean =
+        def key(dia: Diagnostic, sp: Span) = (sp, dia.msg.message)
+        val before = pristineErrors.filterNot(e => old.contains(e.pos.span)).map(e => key(e, r.span(e.pos.span, anchor)))
+        val after = errors.filterNot(e => now.contains(e.pos.span)).map(e => key(e, e.pos.span))
+        before.sortBy(_.toString) == after.sortBy(_.toString)
       BodyEdit.classify(old, parsed, r) match
         case BodyEdit.Kind.Fresh(why) => refuse(why)
+        case BodyEdit.Kind.Layout if !sameErrorsOutside(NoSpan, NoSpan, r.regionSpan) => refuse("the syntax errors differ")
         case BodyEdit.Kind.Layout =>
+          pristineErrors = errors
           val shift = BodyEdit.Shift(r, r.regionSpan, src)
           shiftAll(shift, r, r.regionSpan)
           pristine = parsed
@@ -514,10 +532,11 @@ class InteractiveDriver(
           myLastEdit = s"layout edit, shifted ${shift.trees} trees ${shift.symbols} symbols"
           true
         case BodyEdit.Kind.Body(d, d1) =>
-          val errors = parseErrors.removeBufferedMessages
-          if errors.exists(e => !d1.span.contains(e.pos.span)) then refuse("a syntax error outside the edited body")
-          else bodyEdit(d, d1, parsed, r, errors) match
-            case null => true
+          if !sameErrorsOutside(d.span, d1.span, d.span) then refuse("the syntax errors outside the edited body differ")
+          else bodyEdit(d, d1, parsed, r, errors.filter(e => d1.span.contains(e.pos.span))) match
+            case null =>
+              pristineErrors = errors
+              true
             case why: String => refuse(why)
 
     /** The member-level typed definitions (statements of a package or a
