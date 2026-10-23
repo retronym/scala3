@@ -3,7 +3,7 @@ import dotty.tools.sbtplugin.Versions
 object ScaladocOptions {
   // The API docs of each stable release are published under its version, so link the docs
   // of a release to those rather than to nightly, which moves on. RCs aren't published there.
-  private def stdlibApiUrl: String =
+  def stdlibApiUrl: String =
     if (Versions.isRelease && !Versions.baseVersion.contains('-')) s"https://scala-lang.org/api/${Versions.baseVersion}/"
     else "https://nightly.scala-lang.org/api/"
 
