@@ -141,7 +141,7 @@ The Java toy gets a `dotc-concurrent` kernel and a deterministic scheduler that 
 
 ## 8. Plan
 
-- [ ] **0. Measure.** Queueing delay in a Metals request trace on the compiler's own sources, with the session; the share of a reader's time inside completers versus body typing (JFR), which says whether a coarse completion lock (step 3) leaves enough concurrency.
+- [x] **0. Measure.** Queueing delay in a Metals request trace on the compiler's own sources, with the session; the share of a reader's time inside completers versus body typing, which says whether a coarse completion lock (step 3) leaves enough concurrency. Done, §0 below.
 - [ ] **1. Model.** §7's four statements in Lean; the concurrent kernel and scheduler in the Java toy.
 - [ ] **2. A `Reader`.** Move kind A (per-request scratch) off `Run` and `ContextBase` into a thread-confined reader: the target, the skipped-statement bookkeeping, `completing`, the cancellation checker, the comparers and context pools. Still one reader at a time; batch unchanged.
 - [ ] **3. Several readers, one completion lock.** The read/write regime in `InteractiveDriver`; kinds C and D made safe; every completion and every resume under one reentrant lock, so concurrency is in body typing only (K2 started from global locks too). Soak and oracle suites with two readers.
@@ -155,3 +155,72 @@ The Java toy gets a `dotc-concurrent` kernel and a deterministic scheduler that 
 - Is a fresh typer state per completion semantics-preserving? A completer's type-ahead today can leave constraints in the namer's typer state; whether anything relies on that is to check.
 - What does a waiter do when the owner is cancelled by a *writer*? It is cancelled too; the barrier only needs to release, not hand over. Hand-over is for owners unwound by their own failure.
 - The checkpoint gap in implicit search (I11) bounds write latency; is a checkpoint there a prerequisite?
+
+## 0. Measured
+
+23 October 2026, on the branch at `cb68840779` (the session, with targeting) plus one instrumentation commit: `Scala3CompilerAccess` prints a `[dotc-queue]` line per request under `-Yinteractive-log` (the time it waited in `CompilerJobQueue`, the request that was running when it was submitted), and `QueueReplaySuite` (presentation-compiler tests) replays an editor trace against `ScalaPresentationCompiler` with its real job queue. Logs, profiles, summaries and the scripts are under `/Users/jzaugg-virtus/code/scratch/mr-measure/` (`replay/`, `profile/`, `scripts/`); the scripts are also beside the other replay scripts in `jvm-lang-models/packages/scala/probes/interrupt/metals-demo/` (uncommitted there).
+
+### The trace
+
+The request trace is the VS Code session of §7 of [interactive-session.md](interactive-session.md), recorded in `~/code/scratch/dotc-session-dotc/.metals/lsp.trace.json` (Metals 1.6.9, the compiler's own sources as a project, semantic highlighting off in the settings but asked for by VS Code anyway): 46 files opened, 18 edits, and per cursor stop what VS Code sends, a document highlight, a hover, inlay hints for the visible range, semantic tokens after a change, definitions on ⌘-hover, 18 completions, and 42 `$/cancelRequest`s. `trace_to_events.py` turns it into 814 presentation-compiler events with the file's text at each moment and offsets instead of positions; requests that do not reach the presentation compiler (document symbol, code lens, folding, code actions) and sources opened from jars are dropped. The trace has whole-second timestamps, so a replay sends the requests of one second either back to back (`burst`, the upper bound on queueing) or spread evenly over the second (`spread`, the lower bound), and caps the pauses between seconds at one second: the 12 hours of the trace, most of it idle, replay in about four minutes, denser than the real session.
+
+Three replays, each on JDK 21.0.12 with `-Yinteractive-log`:
+
+- `burst` and `spread`: headless, `QueueReplaySuite` in the test JVM, the files typed against the test classpath (class directories).
+- `jars`: the same, typed against the Metals project's classpath from its Bloop config (the published compiler and library jars), under async-profiler.
+- `metals`: the same events through Metals 1.6.9 over stdio (`replay_trace_lsp.py`, on a copy of the project at `~/code/scratch/dotc-session-replay`), the instrumented presentation compiler installed into `~/.ivy2/local` as `3.10.2-RC1-bin-SNAPSHOT`; Metals adds its own requests to the queue (the references and definition fallbacks over other files, semanticdb for jar sources) and its 20 s timeout cancels what starves.
+
+```bash
+sbt -java-home ~/.sdkman/candidates/java/17.0.20-tem --client "; scala3-presentation-compiler/Test/compile ; export scala3-presentation-compiler/Test/fullClasspath"
+java -Xss8m -Xmx4g -Dreplay.events=replay-events.json -Dreplay.spread=burst -Dreplay.idleCap=1000 [-Dreplay.classpath=metals-classpath.txt] [-agentpath:/opt/homebrew/lib/libasyncProfiler.dylib=start,event=cpu,interval=1ms,collapsed,file=replay-cpu.collapsed] -cp <test classpath> org.junit.runner.JUnitCore dotty.tools.pc.tests.completion.QueueReplaySuite
+python3 -I replay_trace_lsp.py java -cp "$(coursier fetch -p org.scalameta:metals_2.13:1.6.9)" scala.meta.metals.Main -- ~/code/scratch/dotc-session-replay replay-events.json metals-burst.json 1000 burst
+python3 -I analyze_queue.py <log>; python3 -I completer_share.py <collapsed>
+```
+
+### 1. Queueing delay
+
+Per request, the time between its submission to `CompilerJobQueue` and the start of its job (`wait`), the job's own time (the provider and the driver), and the driver's time from the request log. Hover, definition and completion are targeted (`runUpTo`); inlay hints, semantic tokens and references type the whole file (`run`), and document highlight completes the session (§7 of the session notes).
+
+| replay | requests | waited behind another | hover wait median / p90 / max | hovers waiting > 50 ms / > 200 ms | hover job median | hover driver median |
+|---|---|---|---|---|---|---|
+| burst (test classpath) | 617 | 426 | 6 / 142 / 9,207 ms | 31 / 10 of 128 | 7.9 ms | 0.1 ms |
+| spread | 658 | 113 | 0.1 / 198 / 9,798 ms | 20 / 14 of 142 | 8.5 ms | 0.1 ms |
+| jars | 607 | 436 | 7 / 533 / 4,096 ms | 35 / 19 of 126 | 8.1 ms | 0.1 ms |
+| metals | 753 | 521 | 7 / 218 / 2,979 ms | 54 / 21 of 174 | 8.0 ms | 0.1 ms |
+
+The hover itself costs nothing in the driver once the session holds the file (served, 0.1 ms) and about 8 ms in the provider around it; what the editor waits for is the queue. The queue is LIFO (the newest request runs first), so a request that arrives during a burst waits for the request that was running and for every newer one: in the Metals replay 54 of the 534 waiting requests saw ten or more newer requests run first, and the 20 s timeout cancelled the ones that starved (49 of 153 hovers answered by cancellation, most of them timeouts, in a replay denser than the real session).
+
+Where the waiting time went, summed over all waiting requests, by what the jobs that ran in between did in the driver (`whole-file` is a `run` that typed the file; `cached-whole-file` is a provider over an already typed file, inlay hints or semantic tokens, which costs no driver time but 100 to 150 ms of provider time per request; `completes-session` is document highlight typing the session's skipped statements; `targeted-*` are `runUpTo` requests):
+
+| ran in between | burst | spread | jars | metals |
+|---|---|---|---|---|
+| whole-file run | 50% | 50% | 38% | 46% |
+| provider over a cached whole-file run | 40% | 33% | 30% | 35% |
+| completes the session | 3% | 5% | 15% | 8% |
+| targeted, fresh or resumed | 1% | 7% | 7% | 6% |
+| targeted, served | 2% | 1% | 3% | 5% |
+
+So 89 to 93 percent of all queueing is behind whole-file work: the run that the first inlay-hint, semantic-token or document-highlight request after an open or an edit costs (median 360 ms on these files, 1.7 s cold on `TypeErasure.scala`, 6.2 s cold on `Types.scala`), and the providers that walk the whole typed tree afterwards. Targeted requests behind targeted requests are 3 to 12 percent of the waiting, and a targeted request's job is 6 to 8 ms, so a hover queued behind a hover waits a frame, not a keystroke.
+
+What a second reader would buy here is the ability to serve a hover beside the whole-file run or the inlay-hint walk of the same file. What cancel-the-older-reader buys is already in: the LIFO order, and the session's cancellation that unwinds a whole-file run at its next checkpoint (none of the cancellations in these replays hit a run mid-way, since Metals cancels on the client's `$/cancelRequest` and the timeout only).
+
+### 2. Completer share
+
+async-profiler, `event=cpu`, 1 ms, over the `jars` replay (the compiler's sources against the published jars, 116,181 samples) and over the `burst` replay (test classpath, 99,006 samples), and over `SessionOracleSuite` (cold JVM, one driver per test, mostly fresh runs and resumes: 28,165 samples). Stacks are split by the driver entry point, `runUpTo0` (a targeted reader) or `run0` (a whole-file run), and classified: `completer` if any frame is inside a completion (`completeFrom`, `lockAndComplete`, a Namer completer, a symbol loader, `TreeUnpickler`, `ClassfileParser`, a lazy annotation, `InheritedCache`), including the typing a completer does and the completions forced from typing; `typing` if `Typer.typed` is on the stack with no completion above or below it; `other` for parsing, indexing, the splice and the providers. Classpath IO (`stat`, `open`, directory listings, zip lookups, from the symbol loaders) is the part of the completer share that is file-system probing.
+
+| profile | root | completers | of which Namer / TASTy / loaders | of which classpath IO | body typing | other |
+|---|---|---|---|---|---|---|
+| jars replay | `runUpTo0` (3,501 samples) | 79% | 39% / 27% / 12% | 38% | 6% | 15% |
+| jars replay | `run0` (23,156) | 64% | 46% / 13% / 5% | 14% | 30% | 6% |
+| burst replay (class dirs) | `runUpTo0` (1,421) | 78% | 55% / 5% / 18% | 56% | 5% | 17% |
+| burst replay (class dirs) | `run0` (24,657) | 70% | 48% / 13% / 8% | 28% | 25% | 5% |
+| oracle suite (cold) | `runUpTo0` (2,392) | 65% | 34% / 12% / 19% | 38% | 20% | 16% |
+| oracle suite (cold) | `run0` (2,774) | 69% | 45% / 11% / 12% | 34% | 24% | 8% |
+
+Two things the numbers say. A targeted reader spends 3 to 4 percent of the driver's CPU in a replay (3,501 of 26,657 driver samples in the `jars` run): with targeting, the readers are not where the time is; the whole-file runs are. And of a reader's own time, four fifths is inside completers, a fifth of it (two fifths on class directories) in the file system under the symbol loaders, and body typing is 5 to 20 percent; even a whole-file run is 64 to 70 percent completers. A coarse completion lock (step 3) would serialise four fifths of a reader and two thirds of a background run: two readers over one file would mostly wait for each other's completions, and the gain from concurrency would be bounded by the fifth to the third that is body typing. Flame graphs: `/Users/jzaugg-virtus/code/scratch/mr-measure/profile/replay-jars-cpu.html`, `replay-burst-cpu.html`, `oracle-cpu.html`; the collapsed stacks are beside them, gzipped.
+
+### Verdict
+
+Queueing delay after targeting is real at the tail (a hover's p90 wait is 140 to 530 ms in a replay denser than the editor session, its median 6 ms) but it is not the delay a second reader of §1 would remove: nine tenths of it is behind whole-file work, the first `run` after an open or an edit and the providers that walk the whole typed tree (inlay hints, semantic tokens), and a targeted request behind a targeted request waits a few milliseconds. The readers that would run concurrently are four fifths completers, so steps 3 and 4 would spend their complexity to overlap the remaining fifth. The cheaper moves come first: a session that survives an edit (the future work of the session notes), which removes the per-edit whole-file run from the queue; range forms of inlay hints and semantic tokens on the Metals side, which turn the two biggest provider walks into targeted requests; and a priority or a cancellation for the whole-file askers when a targeted request is waiting, since LIFO already prefers the newest request and the session's cancellation already unwinds a run. Cancel-the-older-reader is enough for the targeted requests; what is left is not a concurrency problem but a scheduling one. Re-measure once the whole-file askers are gone; until then, step 2 (the `Reader`, which is hygiene either way) can proceed and steps 3 to 5 are not justified by this trace.
+
+Caveats: the trace has whole-second timestamps and its pauses were capped, so `burst` overstates and `spread` understates the real burstiness; the first request on each file in a replay is cold for that file, as in the editor; the profile is CPU samples on one thread, so file-system waits inside the loaders are undercounted; the class-directory classpath of the test JVM inflates classpath IO, which the `jars` run corrects. One finding on the side: on `Typer.scala`, 14 of the `burst` replay's jobs, 25 of `jars`' and 5 of the Metals replay's failed with `AssertionError: denotation module class Trees$ invalid in run 3. ValidFor: Period(4.1-5)` (a classpath denotation validated in a later run than the current one, reached from a whole-file run by the inlay-hint provider and then from hovers), after which Metals restarts the compiler; it did not occur in the VS Code session's log and is not investigated here.
