@@ -18,6 +18,7 @@ import com.typesafe.sbt.packager.rpm.RpmPlugin.autoImport.Rpm
 import sbt.Package.ManifestAttributes
 import sbt.PublishBinPlugin.autoImport._
 import dotty.tools.sbtplugin._
+import dotty.tools.sbtplugin.JavadocJarCheckPlugin.autoImport._
 import dotty.tools.sbtplugin.RepublishPlugin
 import dotty.tools.sbtplugin.RepublishPlugin.autoImport._
 import dotty.tools.sbtplugin.ScalaLibraryPlugin
@@ -337,6 +338,8 @@ object Build {
     // `-siteroot` defaults to `./docs`, which sbt resolves against the repo root, so without
     // this every javadoc JAR would bundle the repo's static site (blog, reference, PDFs).
     Compile / doc / scalacOptions ++= Seq("-siteroot", (baseDirectory.value / "docs").getPath),
+    javadocJarCheck := true,
+    javadocJarRules := JavadocJarRules(noInlinedSideMenu = true, selfLinkBases = Seq(ScaladocOptions.stdlibApiUrl)),
   )
 
   // Settings used when compiling dotty with a non-bootstrapped dotty
@@ -2802,6 +2805,7 @@ object Build {
     Compile / packageBin := (Compile / packageBin).map(validateJarIsEmpty).value,
     Compile / packageSrc := (Compile / packageSrc).map(validateJarIsEmpty).value,
     Compile / packageDoc := (Compile / packageDoc).map(validateJarIsEmpty).value,
+    javadocJarCheck := false,
   )
 }
 
