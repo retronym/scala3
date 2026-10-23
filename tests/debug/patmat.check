@@ -1,0 +1,23 @@
+// Once a case is being tested, stepping never goes back to the selector line
+break Test$ 8
+next 9
+next 10
+next 11
+
+break Test$ 15
+next 16
+next 17
+next 18
+
+// The switch is dispatched at the selector line, not the first case's line
+break Test$ 21
+next 25
+
+break Test$ 29
+next 32
+
+// A constant body on its own line keeps its line
+break Test$ 36
+next 37
+next 39
+next 40
