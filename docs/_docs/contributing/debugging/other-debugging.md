@@ -27,6 +27,18 @@ $ jdb -attach 5005 -sourcepath tests/debug/
 You can run `help` for commands that supported by JDB.
 
 ## Other tips
+### Instrumenting the compiler with a research plugin
+
+To insert an experimental phase without rebuilding the compiler, write a `ResearchPlugin` (see `tests/plugins/neg/divideZero-research`), compile it against the compiler, and pass its directory, which must contain a `plugin.properties` naming the class, to `-Xplugin`. Research plugins are only loaded by SNAPSHOT, NIGHTLY and nonbootstrapped compilers.
+
+```shell
+$ sbt --client buildQuick
+$ mkdir -p local/plugin local/out
+$ cp tests/plugins/neg/divideZero-research/{plugin_1.scala,plugin.properties} local/plugin/
+$ bin/scalacQ -d local/plugin local/plugin/plugin_1.scala
+$ bin/scalacQ -Xplugin:local/plugin -d local/out tests/plugins/neg/divideZero-research/Test_2.scala
+```
+
 ### Show for human readable output
 
 Many objects in the compiler have a `show` method available on them via implicit rich wrapper:

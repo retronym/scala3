@@ -87,6 +87,50 @@ any source file changes they invoke `sbt dist/pack` first.
 As an alternative, run the `buildQuick` task in sbt. It builds the compiler and writes its classpath to the `bin/.cp`
 file, which enables  the `scalacQ` and `scalaQ` scripts in the `bin/` folder.
 
+```bash
+$ sbt --client buildQuick
+$ mkdir -p local/out
+$ bin/scalacQ -d local/out local/Hello.scala
+$ bin/scalaQ -cp local/out hello
+```
+
+`scalacQ` fails with `'local/out' does not exist` unless the output directory exists. The scripts read `bin/.cp` but do not rebuild, so rerun `buildQuick` after each change to the compiler. Prefer `scalaQ` to the sbt `scala` task with `sbt --client`: the task runs the program inside the sbt server, and its output does not reach the client.
+
+## Build Configurations and Timings
+
+The build defines each compiler and library project twice:
+
+| Configuration | Aggregate project | Compiler project | Built with |
+|---|---|---|---|
+| nonbootstrapped | `scala3-nonbootstrapped` (the root project) | `scala3-compiler-nonbootstrapped` | the released reference compiler |
+| bootstrapped | `scala3-bootstrapped` | `scala3-compiler-bootstrapped` | the nonbootstrapped compiler |
+
+Iterate on the nonbootstrapped compiler; it is what `buildQuick`, `scalac`, `testCompilation` and `test` in the root project use. Build the bootstrapped compiler to check that the compiler still compiles itself, and to run the bootstrapped-only tests (see [Testing](testing.md#bootstrapped-only-tests)).
+
+The standard library and the bootstrapped compiler are compiled with the optimizer (`-opt -opt-inline:...`), which makes cold builds noticeably slower. Turn it off for local work with the `scala3Optimize` setting, either when the sbt server starts or in a running session:
+
+```bash
+$ SCALA3_OPTIMIZE=false sbt --client buildQuick    # or: sbt -Dscala3.optimize=false
+$ sbt --client "set ThisBuild / Build.scala3Optimize := false"
+```
+
+The environment variable and `-D` option are read when the sbt server starts, so `sbt --client shutdown` first if one is already running. Changing the setting changes `scalacOptions`, so the next build recompiles the affected projects from scratch. Keep the optimizer on for benchmarking and publishing.
+
+Measured on an Apple M5 Pro (18 cores, 48 GB, JDK 21), with the sbt server already running and dependencies already downloaded:
+
+| Step | Optimizer on | Optimizer off |
+|---|---|---|
+| Cold `scala3-compiler-nonbootstrapped/compile` (stdlib, tasty-core, compiler) | 61–77 s | 49 s |
+| Cold `scala3-compiler-bootstrapped/compile`, nonbootstrapped already built | 78 s | 45 s |
+| `buildQuick` after the above (REPL, directives parser) | | 3 s |
+| `buildQuick` after a method-body edit in `Typer.scala` | | 4 s |
+| `buildQuick` after adding a member to `object Types` (162 files recompiled) | | 18 s |
+| Compile and run a one-line file with `bin/scalacQ` + `bin/scalaQ` | | 1 s |
+
+### Interrupted builds
+
+While compiling, Zinc moves the class files it is about to replace into a `classes.bak` directory next to `classes`. If sbt is killed mid-compile, that directory is left behind and `classes` is incomplete; the next compile restores from it and recompiles, so no manual cleanup is normally needed. If errors that mention missing classes persist, clean the one project (`sbt --client scala3-compiler-nonbootstrapped/clean`) rather than the whole build, and remove the Vulpix output with `rm -rf out/`.
+
 ## Starting a REPL
 
 ```bash

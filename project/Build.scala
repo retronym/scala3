@@ -55,6 +55,11 @@ object Build {
   // Used to run binaries similar to ./bin/scala script
   val scala = inputKey[Unit]("run compiled binary using the correct classpath, or the user supplied classpath")
 
+  // Run the backend optimizer when compiling the standard library and the bootstrapped compiler.
+  // Disable for faster local builds with `SCALA3_OPTIMIZE=false`, `-Dscala3.optimize=false`
+  // or `set ThisBuild / Build.scala3Optimize := false`.
+  val scala3Optimize = settingKey[Boolean]("compile the standard library and the bootstrapped compiler with -opt")
+
   val buildQuick = taskKey[Unit]("compile the compiler and REPL, write classpath to bin/.cp for use by bin/scalacQ, bin/scalaQ and bin/replQ")
 
   // Settings used to configure the test language server
@@ -72,6 +77,8 @@ object Build {
     organization := dottyOrganization,
     organizationName := "LAMP/EPFL",
     organizationHomepage := Some(url("http://lamp.epfl.ch")),
+
+    scala3Optimize := sys.props.get("scala3.optimize").orElse(sys.env.get("SCALA3_OPTIMIZE")).forall(_ != "false"),
 
     // Note: bench/profiles/projects.yml should be updated accordingly.
     scalacOptions ++= Seq(
@@ -1008,8 +1015,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-non-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= (if (scala3Optimize.value) Seq("-opt", "-opt-inline:**,!java.**") else Nil),
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1098,8 +1105,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= (if (scala3Optimize.value) Seq("-opt", "-opt-inline:**,!java.**") else Nil),
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1626,7 +1633,7 @@ object Build {
       bootstrappedScalaInstanceSettings,
       // Optimize the compiler, but only inline its own code,
       // since it may be used with a different standard library than it was compiled with.
-      Compile / compile / scalacOptions ++= Seq("-opt", "-opt-inline:dotty.**"),
+      Compile / compile / scalacOptions ++= (if (scala3Optimize.value) Seq("-opt", "-opt-inline:dotty.**") else Nil),
       /* Add the sources of scalajs-ir.
        * To guarantee that dotty can bootstrap without depending on a version
        * of scalajs-ir built with a different Scala compiler, we add its
