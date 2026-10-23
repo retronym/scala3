@@ -66,10 +66,12 @@ jobs:
 
   test_windows_full:
     runs-on: [self-hosted, Windows]
-    if: "github.event_name == 'schedule' && github.repository == 'scala/scala3'
-         || github.event_name == 'push' && github.repository == 'scala/scala3'
+    # The runner is persistent: PRs can opt in only from branches of this
+    # repository, never from forks.
+    if: "github.event_name == 'push' && github.repository == 'scala/scala3'
          || (
            github.event_name == 'pull_request'
+           && github.event.pull_request.head.repo.full_name == github.repository
            && !contains(github.event.pull_request.body, '[skip ci]')
            && contains(github.event.pull_request.body, '[test_windows_full]')
          )"
@@ -83,6 +85,8 @@ jobs:
 
       - name: Git Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test
         run: sbt ";scala3-bootstrapped/compile ;scala3-compiler-bootstrapped/test"
