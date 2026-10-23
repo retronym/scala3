@@ -48,6 +48,22 @@ class Scala3CompilerAccess(
       access.compiler().withCancelChecker(isCancelled)(thunk(access))
     }
 
+  /** One job at a time on a driver. The queue alone does not ensure it: a
+   *  request that times out resets the job queue and drops the compiler, but
+   *  the old queue's executor is only shut down, so its backlog still runs on
+   *  the old queue's thread, and those jobs load the same new compiler as the
+   *  jobs on the new queue. A job stuck on a dropped compiler holds only that
+   *  compiler's lock, so the reset still gets the requests going again.
+   */
+  override def withSharedCompiler[T](
+      default: T
+  )(
+      thunk: CompilerWrapper[StoreReporter, CachingDriver] => T
+  )(implicit queryInfo: PcQueryContext): T =
+    super.withSharedCompiler(default) { access =>
+      access.compiler().synchronized(thunk(access))
+    }
+
   /** Handle the exception in order to make sure that we retry immediately.
    *  Otherwise, we will wait until the end of the timeout, which is 20s by
    *  default.
