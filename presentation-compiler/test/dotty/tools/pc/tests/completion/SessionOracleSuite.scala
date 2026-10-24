@@ -325,6 +325,55 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `two-readers-Contexts-seed-1` = oracle2("core/Contexts.scala", 1, 200)
   @Test def `two-readers-serialised-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300, independent = false)
   // edits inside bodies keep the run (docs §12)
+  /** Every identifier of `rel` hovered on a driver with `flags`, after a
+   *  first request, and again after an edit inside the body of `editIn` (a
+   *  space added), against a whole-file run without the flags; and the
+   *  whole-file diagnostics of the session against the whole-file run's.
+   *  Typed with the build's options (`-Yexplicit-nulls` and the rest), as
+   *  the build compiles the file.
+   */
+  private def everyIdentifier(rel: String, editIn: String, flags: List[String]): Unit =
+    val root = sourcesRoot.getOrElse(throw new AssertionError(s"compiler sources not found from ${Paths.get("").toAbsolutePath}"))
+    val real = dotty.tools.pc.xray.XrayServer.buildOptions ++ settings
+    val path = root.resolve(rel)
+    val uri = path.toUri
+    val before = Files.readString(path)
+    val at = before.indexOf(editIn)
+    assert(at >= 0, s"$editIn not in $rel")
+    // a space after the first `=` inside the body (the layout is unchanged)
+    val eq = before.indexOf(" = ", before.indexOf('\n', at)) + 3
+    val after = before.substring(0, eq) + " " + before.substring(eq)
+    val driver = new InteractiveDriver(real ++ flags, CachedLogicalPackage.none)
+    def errorsOf(ds: List[dotty.tools.dotc.reporting.Diagnostic]) =
+      ds.filter(_.level >= 2).map(d => s"${d.pos.line + 1}: ${d.msg.message.linesIterator.next()}").sorted
+    for (content, when) <- List(before -> "before the edit", after -> s"after an edit in $editIn") do
+      val source = SourceFile.virtual(uri, content)
+      val whole = new InteractiveDriver(real, CachedLogicalPackage.none)
+      val wholeErrors = errorsOf(whole.run(uri, source))
+      val idents = identifierEnds(source)(using whole.currentCtx)
+      var differ = List.empty[String]
+      var edit = ""
+      for (o, name) <- idents do
+        driver.runUpTo(uri, source, Span(o))
+        if edit.isEmpty then edit = driver.lastEdit(uri)
+        val obtained = describe(driver, uri, o)
+        val expected = describe(whole, uri, o)
+        if obtained != expected then differ ::= s"`$name` at $o: $obtained, whole-file $expected"
+      val sessionErrors = errorsOf(driver.readAll(uri, source)((_, _, ds) => ds))
+      if content eq after then assert(wholeErrors.isEmpty, s"the edit broke the file: $wholeErrors")
+      println(s"[every identifier $rel ${flags.mkString(" ")}] $when: ${idents.size} identifiers, ${differ.size} differ; ${sessionErrors.size} errors, whole-file ${wholeErrors.size}${if edit.nonEmpty then s" [$edit]" else ""}")
+      org.junit.Assert.assertEquals(s"$when: hovers that differ from the whole-file run", Nil, differ.reverse.take(5))
+      org.junit.Assert.assertEquals(s"$when: errors", wholeErrors.mkString("\n"), sessionErrors.mkString("\n"))
+
+  // I62: `val retractedVars` in `whileContext`, an inferred type completed in a
+  // typer state of its own (-Yinteractive-readers), published `Set[A | TermRef]`
+  @Test def `Nullables-every-identifier-readers` =
+    everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-readers"))
+  @Test def `Nullables-every-identifier-readers-body-edits` =
+    everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-readers", "-Yinteractive-body-edits"))
+  @Test def `Nullables-every-identifier-body-edits` =
+    everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-body-edits"))
+
   @Test def `ByteCodecs-body-edits` = oracle("core/classfile/ByteCodecs.scala", 1, 300, editEvery = 10)
   @Test def `Chars-body-edits` = oracle("util/Chars.scala", 1, 300, editEvery = 10)
   @Test def `Contexts-body-edits` = oracle("core/Contexts.scala", 1, 200, editEvery = 10)

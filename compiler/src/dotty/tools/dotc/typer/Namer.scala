@@ -1003,9 +1003,11 @@ class Namer { typer: Typer =>
           // completed later, would land in it after its flush (I59)
           ictx = saved.fresh.setTyperState(saved.typerState.fresh(reporter = saved.reporter))
           rebased()
+        var completedNormally = false
         try
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
+          completedNormally = true
         catch
           case ex: CompilationUnit.SuspendException =>
             val completer = SuspendCompleter()
@@ -1019,7 +1021,18 @@ class Namer { typer: Typer =>
             // namer's reporter as they were issued, where every reader of the
             // session finds them
             val ts = ictx.typerState
-            try ts.gc()(using ictx)
+            try
+              // what the completion left uninstantiated (a local val's inferred
+              // type `Set[A | TermRef]`, `A` from `Set.empty[A]`) would be
+              // interpolated later in the namer's typer state; no other state
+              // knows these variables' constraints, so they are instantiated
+              // here: those in the completed info as `fullyDefinedType` would,
+              // the rest from below (I62)
+              if completedNormally && !ts.ownedVars.isEmpty then
+                given Context = ictx
+                if denot.isCompleted then Inferencing.isFullyDefined(denot.info, ForceDegree.all)
+                ts.ownedVars.foreach(tv => if !tv.isInstantiated then tv.instantiate(fromBelow = true))
+              ts.gc()(using ictx)
             finally
               ictx = saved
               rebased()
