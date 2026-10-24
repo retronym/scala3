@@ -38,7 +38,9 @@ object WrappedSourceFile:
 
   private def lookupMagicHeader(sourceFile: SourceFile)(using Context): MagicHeaderInfo =
     val cache = ctx.base.magicHeaderCache
-    cache.lookup(sourceFile) match
+    // shared by the readers of a concurrent base: a lookup or an update races a grow
+    val concurrent = ctx.base.isConcurrent
+    (if concurrent then cache.synchronized(cache.lookup(sourceFile)) else cache.lookup(sourceFile)) match
       case null =>
         val magicHeader = ctx.settings.YmagicOffsetHeader.value
         val result =
@@ -59,7 +61,7 @@ object WrappedSourceFile:
                   report.warning(em"original source file not found: $name")
                   NoHeader
               case None => NoHeader
-        cache(sourceFile) = result
+        if concurrent then cache.synchronized { cache(sourceFile) = result } else cache(sourceFile) = result
         result
       case result => result
 
