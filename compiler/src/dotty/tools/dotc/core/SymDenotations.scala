@@ -279,6 +279,13 @@ object SymDenotations {
         awaitOthers()
       case _ => ownView
 
+    /** With independent readers, wait until no other reader is completing
+     *  this denotation: for a peek at its completer that decides what to do
+     *  from it (§4.1). A no-op otherwise.
+     */
+    final def awaitOtherReader()(using Context): Unit =
+      if ctx.base.isConcurrent && ctx.base.independentReaders then awaitOthers()
+
     /** The slow path of `Denotation.info`: the info is a lazy type. Complete
      *  it; the owner of a completion in progress sees its intermediate info,
      *  any other reader waits for it (`completeIndependently`).
@@ -981,6 +988,7 @@ object SymDenotations {
      */
     final def isSelfSym(using Context): Boolean =
       if !ctx.isBestEffort || exists then
+        owner.denot.awaitOtherReader() // I73
         owner.infoOrCompleter match {
           case ClassInfo(_, _, _, _, selfInfo) =>
             selfInfo == symbol ||
@@ -2284,7 +2292,13 @@ object SymDenotations {
           else {
             val di = initial
             if (this ne di) di.typeParams
-            else infoOrCompleter match {
+            else {
+              // another reader completing this class: wait, then look; from
+              // its `InProgress` the type parameters came out empty, and were
+              // cached ("Setting does not take type parameters", I73)
+              awaitOtherReader()
+              infoOrCompleter
+            } match {
               case info: TypeParamsCompleter => info.completerTypeParams(symbol)
               case _ => typeParamsFromDecls
             }
