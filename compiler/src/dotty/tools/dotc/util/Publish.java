@@ -13,6 +13,10 @@ import java.lang.invoke.VarHandle;
  *  load; on Apple silicon it is `ldar`, measured with perflab before it was
  *  kept (docs/_docs/internals/interactive-multi-reader.md, step 3).
  *
+ *  The same for the slots of an array (`ConcurrentWeakHashSet`,
+ *  `SyncEqHashMap`): an entry stored with release semantics is seen
+ *  complete by a reader that loads its slot with acquire semantics.
+ *
  *  A Java class, so that the handles are `static final` constants the JIT
  *  folds: a `VarHandle` held in a Scala object's field is not a constant and
  *  its calls would not be intrinsified.
@@ -33,6 +37,16 @@ public final class Publish {
     intField("dotty.tools.dotc.core.Symbols$Symbol", "checkedPeriod");
   private static final VarHandle NAMED_TYPE_CHECKED_PERIOD =
     intField("dotty.tools.dotc.core.Types$NamedType", "checkedPeriod");
+
+  private static final VarHandle SLOT = MethodHandles.arrayElementVarHandle(Object[].class);
+
+  public static Object slotAcquire(Object[] array, int i) {
+    return SLOT.getAcquire(array, i);
+  }
+
+  public static void setSlotRelease(Object[] array, int i, Object value) {
+    SLOT.setRelease(array, i, value);
+  }
 
   public static int symbolCheckedPeriod(Object symbol) {
     return (int) SYMBOL_CHECKED_PERIOD.getAcquire(symbol);

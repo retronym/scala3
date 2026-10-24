@@ -5,7 +5,7 @@ import Types.*, Contexts.*, util.Stats.*, Hashable.*, Names.*
 import config.Config
 import Symbols.Symbol
 import Decorators.*
-import util.{WeakHashSet, Stats}
+import util.{ConcurrentWeakHashSet, WeakHashSet, Stats}
 import WeakHashSet.Entry
 import scala.annotation.tailrec
 
@@ -14,14 +14,20 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
 /** `Uniques` for a `ContextBase` read by several threads (interactive mode,
- *  see `ContextState.concurrentReaders`): every operation under the set's
- *  monitor. Interning is on the hottest path of type creation, so the batch
- *  compiler keeps the unsynchronised set; this class is loaded only when an
- *  interactive base chooses it.
+ *  see `ContextState.concurrentReaders`): a hit is found without a lock
+ *  (`ConcurrentWeakHashSet`), every other operation is under the set's
+ *  monitor, and `put` looks again there before it inserts. Interning is on
+ *  the hottest path of type creation, so the batch compiler keeps the
+ *  unsynchronised set; this class is loaded only when an interactive base
+ *  chooses it.
  */
-class ConcurrentUniques extends Uniques:
-  override def put(elem: Type): Type = synchronized(super.put(elem))
-  override def lookup(elem: Type): Type | Null = synchronized(super.lookup(elem))
+class ConcurrentUniques extends Uniques, ConcurrentWeakHashSet[Type]:
+  override def put(elem: Type): Type =
+    val found = findPublished(elem.hash)(elem.equals(_))
+    if found != null then found else synchronized(super.put(elem))
+  override def lookup(elem: Type): Type | Null =
+    val found = findPublished(elem.hash)(elem.equals(_))
+    if found != null then found else synchronized(super.lookup(elem))
   override def -=(elem: Type): Unit = synchronized(super.-=(elem))
   override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
   override def size: Int = synchronized(super.size)
@@ -89,12 +95,22 @@ object Uniques:
 
   end NamedTypeUniques
 
-  /** `NamedTypeUniques` under its monitor (see `ConcurrentUniques`). */
-  final class ConcurrentNamedTypeUniques extends NamedTypeUniques:
+  /** `NamedTypeUniques` read without a lock (see `ConcurrentUniques`). */
+  final class ConcurrentNamedTypeUniques extends NamedTypeUniques, ConcurrentWeakHashSet[NamedType]:
     override def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
-      synchronized(super.enterIfNew(prefix, designator, isTerm))
-    override def put(elem: NamedType): NamedType = synchronized(super.put(elem))
-    override def lookup(elem: NamedType): NamedType | Null = synchronized(super.lookup(elem))
+      val h = doHash(null, designator, prefix)
+      val found =
+        if h == NotCached then null
+        else findPublished(h)(e => (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm))
+      if found != null then found
+      else if h == NotCached then super.enterIfNew(prefix, designator, isTerm)
+      else synchronized(super.enterIfNew(prefix, designator, isTerm))
+    override def put(elem: NamedType): NamedType =
+      val found = findPublished(elem.hash)(isEqual(elem, _))
+      if found != null then found else synchronized(super.put(elem))
+    override def lookup(elem: NamedType): NamedType | Null =
+      val found = findPublished(elem.hash)(isEqual(elem, _))
+      if found != null then found else synchronized(super.lookup(elem))
     override def -=(elem: NamedType): Unit = synchronized(super.-=(elem))
     override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
     override def size: Int = synchronized(super.size)
@@ -128,12 +144,22 @@ object Uniques:
       end if
   end AppliedUniques
 
-  /** `AppliedUniques` under its monitor (see `ConcurrentUniques`). */
-  final class ConcurrentAppliedUniques extends AppliedUniques:
+  /** `AppliedUniques` read without a lock (see `ConcurrentUniques`). */
+  final class ConcurrentAppliedUniques extends AppliedUniques, ConcurrentWeakHashSet[AppliedType]:
     override def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
-      synchronized(super.enterIfNew(tycon, args))
-    override def put(elem: AppliedType): AppliedType = synchronized(super.put(elem))
-    override def lookup(elem: AppliedType): AppliedType | Null = synchronized(super.lookup(elem))
+      val h = doHash(null, tycon, args)
+      val found =
+        if h == NotCached then null
+        else findPublished(h)(e => (e.tycon eq tycon) && e.args.eqElements(args))
+      if found != null then found
+      else if h == NotCached then super.enterIfNew(tycon, args)
+      else synchronized(super.enterIfNew(tycon, args))
+    override def put(elem: AppliedType): AppliedType =
+      val found = findPublished(elem.hash)(isEqual(elem, _))
+      if found != null then found else synchronized(super.put(elem))
+    override def lookup(elem: AppliedType): AppliedType | Null =
+      val found = findPublished(elem.hash)(isEqual(elem, _))
+      if found != null then found else synchronized(super.lookup(elem))
     override def -=(elem: AppliedType): Unit = synchronized(super.-=(elem))
     override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
     override def size: Int = synchronized(super.size)
