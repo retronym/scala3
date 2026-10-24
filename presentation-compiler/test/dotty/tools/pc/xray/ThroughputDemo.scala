@@ -31,7 +31,7 @@ object ThroughputDemo:
 
   @volatile private var state = "idle" // idle, warming, batch, running, done, cancelled, failed
   @volatile private var points: List[Point] = Nil
-  @volatile private var ns: List[Int] = List(1, 2, 4, 8)
+  @volatile private var ns: List[Int] = List(1, 2, 4, 6, 8)
   @volatile private var currentN = 0
   @volatile private var progress: AtomicIntegerArray | Null = null
   @volatile private var files = 0
@@ -100,7 +100,7 @@ object ThroughputDemo:
     val q = Option(ex.getRequestURI.getRawQuery).getOrElse("") + "&" + (if ex.getRequestMethod == "POST" then XrayServer.readBody(ex) else "")
     path match
       case "/throughput/run" =>
-        val requested = field(q, "ns").map(_.split(',').toList.flatMap(_.trim.toIntOption).filter(n => n >= 1 && n <= 64).distinct).filter(_.nonEmpty).getOrElse(List(1, 2, 4, 8))
+        val requested = field(q, "ns").map(_.split(',').toList.flatMap(_.trim.toIntOption).filter(n => n >= 1 && n <= 64).distinct).filter(_.nonEmpty).getOrElse(List(1, 2, 4, 6, 8))
         root match
           case Some(dir) => reply(ex, 200, "application/json", json(start(dir, requested)))
           case None => reply(ex, 400, "application/json", json(Map("error" -> "no source set")))

@@ -187,7 +187,7 @@
   #throughput { flex: 1; overflow: auto; } #throughput[hidden] { display: none; }
   #tpPanel { display: flex; gap: 16px; padding: 8px 12px; align-items: flex-start; } #tpPlot { flex: 0 0 440px; } #tpSide { flex: 1; min-width: 0; }
   #tpPlot svg { width: 100%; height: auto; display: block; } #tpPlot text { font-size: 10px; fill: var(--dim); }
-  #tpPlot .axis { stroke: var(--line); } #tpPlot .series { fill: none; stroke: #4c8bf5; stroke-width: 2; } #tpPlot .dot { fill: #4c8bf5; }
+  #tpPlot .axis { stroke: var(--dim); } #tpPlot .grid { stroke: var(--line); stroke-width: .5; } #tpPlot .series { fill: none; stroke: #4c8bf5; stroke-width: 2; } #tpPlot .dot { fill: #4c8bf5; }
   #tpPlot .ref { stroke: #f08c00; stroke-dasharray: 4 3; } #tpPlot .ideal { stroke: var(--dim); stroke-dasharray: 2 3; } #tpPlot .lab { fill: var(--fg); font-weight: 600; }
   #tpTable { border-collapse: collapse; width: 100%; font-size: 11.5px; } #tpTable td, #tpTable th { padding: 2px 5px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
   #tpTable th { color: var(--dim); font-weight: 500; } #tpTable .bad { color: var(--cancelu); font-weight: 600; } #tpTable .good { color: var(--newu); }
@@ -239,7 +239,7 @@
           <div class="row2"><a id="rpExport" href="/replay/report.md" download="replay-findings.md"><button class="ghost" data-icon="doc" tabindex="-1">Export markdown</button></a><button id="rpCopy" class="ghost" data-icon="doc">Copy markdown</button></div>
           <div id="tpBox">
             <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-readers</code>, the build's options), typed by N reader threads (round-robin, with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
-            <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,8"></label>
+            <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,6,8"></label>
               <label><input id="tpSpeedup" type="checkbox"> speed-up against N=1</label></div>
             <div class="row2"><button id="tpRun" class="primary" data-icon="play">Run throughput</button><button id="tpStop" class="ghost" data-icon="cancel">Stop</button></div>
             <div id="tpState" class="dim"></div>
@@ -1330,15 +1330,19 @@
     const ys = pts.map((p) => speed ? (base ? base / p.wallMs : 0) : p.wallMs / 1000);
     const batchS = st.batchMs > 0 ? st.batchMs / 1000 : null;
     let maxY = Math.max(...ys, speed ? maxN : (batchS || 0), speed ? 1 : 0.1);
-    maxY = maxY * 1.1;
-    const x = (n) => L + (Math.log2(n) / Math.log2(Math.max(maxN, 2))) * (W - L - R);
+    // true x/y: both axes linear from 0, round-number ticks on y
+    const span = maxY * 1.05, raw = span / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    maxY = Math.ceil(span / step) * step;
+    const x = (n) => L + (n / maxN) * (W - L - R);
     const y = (v) => H - B - (v / maxY) * (H - T - B);
-    let g = `<line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/>`;
-    st.ns.forEach((n) => { g += `<text x="${x(n)}" y="${H - B + 12}" text-anchor="middle">${n}</text>`; });
+    let g = '';
+    for (let v = 0; v <= maxY + step / 2; v += step) g += `<line class="grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/><text x="${L - 4}" y="${y(v) + 3}" text-anchor="end">${+v.toFixed(2)}</text>`;
+    g += `<line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/>`;
+    for (let n = 0; n <= maxN; n += maxN > 16 ? Math.ceil(maxN / 16) : 1) g += `<line class="axis" x1="${x(n)}" y1="${H - B}" x2="${x(n)}" y2="${H - B + 3}"/><text x="${x(n)}" y="${H - B + 13}" text-anchor="middle"${st.ns.includes(n) ? ' class="lab"' : ''}>${n}</text>`;
     g += `<text x="${(L + W - R) / 2}" y="${H - 3}" text-anchor="middle">reader threads</text>`;
-    for (let i = 0; i <= 4; i++) { const v = maxY * i / 4; g += `<text x="${L - 4}" y="${y(v) + 3}" text-anchor="end">${v.toFixed(speed ? 1 : 1)}</text>`; }
     g += `<text x="4" y="${T - 4}">${speed ? 'speed-up ×' : 'wall s'}</text>`;
-    if (speed) g += `<line class="ideal" x1="${x(1)}" y1="${y(1)}" x2="${x(maxN)}" y2="${y(maxN)}"><title>linear</title></line>`;
+    if (speed) g += `<line class="ideal" x1="${x(0)}" y1="${y(0)}" x2="${x(Math.min(maxN, maxY))}" y2="${y(Math.min(maxN, maxY))}"><title>linear speed-up</title></line>`;
     else if (batchS) g += `<line class="ref" x1="${L}" y1="${y(batchS)}" x2="${W - R}" y2="${y(batchS)}"/><text x="${W - R}" y="${y(batchS) - 3}" text-anchor="end" style="fill:#f08c00">batch typer ${batchS.toFixed(1)} s</text>`;
     if (pts.length) g += `<polyline class="series" points="${pts.map((p, i) => `${x(p.n)},${y(ys[i])}`).join(' ')}"/>`;
     pts.forEach((p, i) => { g += `<circle class="dot" cx="${x(p.n)}" cy="${y(ys[i])}" r="3.5"><title>N=${p.n}: wall ${(p.wallMs / 1000).toFixed(2)} s, worker CPU ${(p.workerCpuMs / 1000).toFixed(1)} s, root waits ${p.rootWaits}, ${p.differ} files differ</title></circle><text class="lab" x="${x(p.n)}" y="${y(ys[i]) - 7}" text-anchor="middle">${speed ? ys[i].toFixed(1) + '×' : ys[i].toFixed(2)}</text>`; });
