@@ -1000,7 +1000,12 @@ class Namer { typer: Typer =>
         // statement is typed later by a resume or a pass). Complete in the
         // nearest ancestor state that can still take constraints, as a resume
         // does (`liveContext`); in place, a commit into the committed state
-        // failed (I65).
+        // failed (I65). Not in the ancestor state itself, which may be the
+        // run's, shared by every reader: in a child of it, committed into it
+        // under the completion lock when the completion ends, as a resumed
+        // statement is (typing in the shared state unlocked raced with the
+        // commits of other readers, I70).
+        var commitInto: TyperState | Null = null
         if ctx.mode.is(Mode.Interactive) && ictx.typerState.hasBeenCommitted then
           def live(ts: TyperState | Null): TyperState | Null =
             if ts == null then null
@@ -1008,7 +1013,8 @@ class Namer { typer: Typer =>
             else live(ts.previousState)
           live(ictx.typerState.previousState) match
             case ts: TyperState =>
-              ictx = ictx.freshOver(ictx.outer).setTyperState(ts)
+              ictx = ictx.freshOver(ictx.outer).setTyperState(ts.fresh())
+              commitInto = ts
               rebased()
             case null =>
         val saved = ictx
@@ -1040,6 +1046,11 @@ class Namer { typer: Typer =>
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
           completedNormally = true
+          commitInto match
+            case target: TyperState if !own =>
+              val c = ictx
+              ctx.base.completionLock.locked(CompletionLock.commit)(c.typerState.commit()(using c.fresh.setTyperState(target)))
+            case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
             val completer = SuspendCompleter()
@@ -2279,7 +2290,7 @@ class Namer { typer: Typer =>
       && infoDontForceAnnots.abstractTypeMembers.nonEmpty
   end needsTracked
 
-  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = owner.infoOrCompleter match
+  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = { owner.denot.awaitOtherReader(); owner.infoOrCompleter } match // I73
     case info: ClassInfo =>
       info.decls.lookupAll(sym.name).filter(d => d.is(ParamAccessor)).toList
     case _ => List(sym)
@@ -2291,6 +2302,7 @@ class Namer { typer: Typer =>
    */
   def setTrackedConstrParam(param: ValDef)(using Context): Unit =
     val sym = symbolOfTree(param)
+    sym.maybeOwner.maybeOwner.denot.awaitOtherReader() // I73
     sym.maybeOwner.maybeOwner.infoOrCompleter match
       case info: ClassInfo if needsTracked(sym, param, sym.maybeOwner.maybeOwner) =>
         typr.println(i"set tracked $param, $sym: ${sym.info} containing ${sym.info.memberNames(abstractTypeNameFilter).toList}")
