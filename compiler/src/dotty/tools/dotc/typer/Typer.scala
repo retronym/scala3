@@ -1625,11 +1625,16 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // completes lazily if a later statement refers to it. A block typed for
     // another reason is typed whole, and so is one inside an inline method
     // (its body is kept whole for its callers) or one typed speculatively
-    // (see `Reader.targetingTyperState`).
+    // (see `Reader.targetingTyperState`). Under explicit nulls a block is
+    // typed whole as well: flow facts pass from one statement to the next
+    // (`if x eq null then x = new T` before `x.m`, `if x == null then return`
+    // before `x.length`), and a statement typed without the ones before it,
+    // or resumed in the context it was skipped in, misses them (I64).
     val reader = ctx.reader
     if reader.typingTarget.exists && blockSpan.touches(reader.typingTarget)
        && (ctx.typerState eq reader.targetingTyperState)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
+       && !ctx.explicitNulls
     then reader.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 

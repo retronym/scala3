@@ -325,7 +325,7 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `two-readers-Contexts-seed-1` = oracle2("core/Contexts.scala", 1, 200)
   @Test def `two-readers-serialised-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300, independent = false)
   // edits inside bodies keep the run (docs §12)
-  /** Every identifier of `rel` hovered on a driver with `flags`, after a
+  /** Every identifier of `rel`, last to first, hovered on a driver with `flags`, after a
    *  first request, and again after an edit inside the body of `editIn` (a
    *  space added), against a whole-file run without the flags; and the
    *  whole-file diagnostics of the session against the whole-file run's.
@@ -353,7 +353,9 @@ class SessionOracleSuite extends BasePCSuite:
       val idents = identifierEnds(source)(using whole.currentCtx)
       var differ = List.empty[String]
       var edit = ""
-      for (o, name) <- idents do
+      // last to first: a statement asked for before the ones above it (as a
+      // pass that starts at the visible lines does), I64
+      for (o, name) <- idents.reverse do
         driver.runUpTo(uri, source, Span(o))
         if edit.isEmpty then edit = driver.lastEdit(uri)
         val obtained = describe(driver, uri, o)
@@ -371,6 +373,13 @@ class SessionOracleSuite extends BasePCSuite:
     everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-readers"))
   @Test def `Nullables-every-identifier-readers-body-edits` =
     everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-readers", "-Yinteractive-body-edits"))
+  // I64: under -Yexplicit-nulls a block statement typed without the one
+  // before it (`if (rfb eq null) rfb = new StringBuilder()`) missed its flow
+  // fact: "value append is not a member of StringBuilder | Null"
+  @Test def `xml-Utility-every-identifier` =
+    everyIdentifier("parsing/xml/Utility.scala", "def parseAttributeValue", Nil)
+  @Test def `ClassfileParser-every-identifier-readers` =
+    everyIdentifier("core/classfile/ClassfileParser.scala", "def normalizeConstructorInfo", List("-Yinteractive-readers"))
   @Test def `Nullables-every-identifier-body-edits` =
     everyIdentifier("typer/Nullables.scala", "def whileContext", List("-Yinteractive-body-edits"))
 
