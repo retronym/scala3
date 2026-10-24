@@ -180,12 +180,14 @@ object Throughput:
     val failure = new java.util.concurrent.atomic.AtomicReference[Throwable]()
     val ts = (0 until k).map { t =>
       val th = new Thread((() => {
+        val current = new java.util.concurrent.atomic.AtomicReference[String]("")
         start.await()
         val c0 = threads.getCurrentThreadCpuTime
         try
           var next = queues(t).pollFirst()
           while next != null do
             val f = next
+            current.set(f.rel)
             driver.withCancelChecker(() => false) {
               readersSeen.add(driver.readerOfThisThread)
               driver.readUpTo(f.uri, f.source, Span(f.visible.start))((_, _, _) => ())
@@ -201,7 +203,8 @@ object Throughput:
               val longest = queues.maxBy(_.size)
               next = longest.pollLast()
               if next != null then steals.incrementAndGet()
-        catch case ex: (Exception | StackOverflowError | AssertionError) => failure.compareAndSet(null, ex)
+        catch case ex: (Exception | StackOverflowError | AssertionError) =>
+          failure.compareAndSet(null, new RuntimeException(s"$what k=$k on ${current.get}: $ex", ex))
         finally cpu.addAndGet(threads.getCurrentThreadCpuTime - c0)
       }): Runnable, s"tp-reader-$t")
       th.setDaemon(true); th.start(); th
