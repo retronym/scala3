@@ -2399,8 +2399,12 @@ object SymDenotations {
     override def appliedRef(using Context): Type = classInfo.appliedRef
 
     private def baseData(implicit onBehalf: BaseData, ctx: Context): (List[ClassSymbol], BaseClassSet) = {
-      if (!baseDataCache.isValid) baseDataCache = BaseData.newCache()
-      baseDataCache(this)
+      // read once: another reader's `invalidateBaseDataCache` may replace it meanwhile
+      var cache = baseDataCache
+      if !cache.isValid then
+        cache = BaseData.newCache()
+        baseDataCache = cache
+      cache(this)
     }
 
     /** The base classes of this class in linearization order,

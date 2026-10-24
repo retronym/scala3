@@ -209,9 +209,11 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
    *  Lines are numbered from 0
    */
   def offsetToLine(offset: Int): Int = {
-    lastLine = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
-    if (offset >= length) lastLine -= 1 // compensate for the sentinel
-    lastLine
+    // the result in a local: `lastLine` is only a hint, shared by the readers of a file
+    var line = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
+    lastLine = line
+    if (offset >= length) line -= 1 // compensate for the sentinel
+    line
   }
 
   /** The index of the first character of the line containing position `offset` */

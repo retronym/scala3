@@ -215,17 +215,20 @@ class ImportInfo(symf: Context ?=> Symbol,
    *  means that preceding imports are not considered and the feature is not imported.
    */
   def featureImported(feature: TermName)(using Context): Boolean =
-    if !featureCache.contains(feature) then
-      featureCache = featureCache.updated(feature,
-        mentionsFeature(feature) match
+    // the cache read once and the computed value returned: readers of a file
+    // share its import infos, and another reader's update can drop this one's (I80)
+    featureCache(feature) match
+      case null =>
+        val result: Boolean = mentionsFeature(feature) match
           case Some(bv) => bv
           case None =>
             var c = ctx.outer
             while c.importInfo eq ctx.importInfo do c = c.outer
             val cinfo = c.importInfo
             (cinfo != null) && cinfo.featureImported(feature)(using c)
-      )
-    featureCache(feature).nn
+        featureCache = featureCache.updated(feature, result)
+        result
+      case cached => cached.booleanValue
 
   def toText(printer: Printer): Text = printer.toText(this)
 }
