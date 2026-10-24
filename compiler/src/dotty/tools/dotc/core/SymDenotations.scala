@@ -2955,23 +2955,42 @@ object SymDenotations {
     private var packageObjsRunId: RunId = NoRunId
     private var ambiguityWarningIssued: Boolean = false
 
+    // with independent readers, the package objects of a run as one value:
+    // another reader that met `packageObjsCache` while it was the cycle
+    // breaker `Nil` saw no package objects ("Not found: type List", I79)
+    @volatile private var sharedPackageObjs: (RunId, List[ClassDenotation]) | Null = null
+
     /** The package objects in this class */
-    def packageObjs(using Context): List[ClassDenotation] = {
-      if (packageObjsRunId != ctx.runId) {
-        packageObjsRunId = ctx.runId
-        packageObjsCache = Nil // break cycle in case we are looking for package object itself
-        packageObjsCache = {
-          val pkgObjBuf = new mutable.ListBuffer[ClassDenotation]
-          for (sym <- info.decls) { // don't use filter, since that loads classes with `$`s in their name
-            val denot = sym.lastKnownDenotation  // don't use `sym.denot`, as this brings forward classes too early
-            if (denot.isType && denot.name.isPackageObjectName)
-              pkgObjBuf += sym.asClass.classDenot
+    def packageObjs(using Context): List[ClassDenotation] =
+      if ctx.base.independentReaders then
+        val c = sharedPackageObjs
+        if c != null && c._1 == ctx.runId then c._2
+        else if ctx.base.completionRoots.ownedHere(this) then Nil // break cycle in case we are looking for package object itself
+        else
+          ctx.base.completionRoots.locked(this, CompletionLock.packageObjects, () => CompletionRoots.backOff(this)) {
+            val c1 = sharedPackageObjs
+            if c1 != null && c1._1 == ctx.runId then c1._2
+            else
+              val objs = computePackageObjs
+              sharedPackageObjs = (ctx.runId, objs)
+              objs
           }
-          pkgObjBuf.toList
+      else
+        if (packageObjsRunId != ctx.runId) {
+          packageObjsRunId = ctx.runId
+          packageObjsCache = Nil // break cycle in case we are looking for package object itself
+          packageObjsCache = computePackageObjs
         }
+        packageObjsCache
+
+    private def computePackageObjs(using Context): List[ClassDenotation] =
+      val pkgObjBuf = new mutable.ListBuffer[ClassDenotation]
+      for (sym <- info.decls) { // don't use filter, since that loads classes with `$`s in their name
+        val denot = sym.lastKnownDenotation  // don't use `sym.denot`, as this brings forward classes too early
+        if (denot.isType && denot.name.isPackageObjectName)
+          pkgObjBuf += sym.asClass.classDenot
       }
-      packageObjsCache
-    }
+      pkgObjBuf.toList
 
     /** The package object (as a term symbol) in this package that might contain
      *  `sym` as a member.
@@ -3099,7 +3118,7 @@ object SymDenotations {
         if (entry.sym == sym) return false
         mscope.unlink(entry)
       }
-      if (sym.name.isPackageObjectName) packageObjsRunId = NoRunId
+      if (sym.name.isPackageObjectName) { packageObjsRunId = NoRunId; sharedPackageObjs = null }
       true
     }
 

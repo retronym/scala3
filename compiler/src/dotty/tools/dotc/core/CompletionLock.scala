@@ -109,3 +109,5 @@ object CompletionLock:
   val peek: What = What("wait for a completion (isCompleting)", null)
   val readAction: What = What("read action (serialised mode)", null)
   val lazyRef: What = What("lazy reference", null)
+  val lazyAnnotation: What = What("lazy annotation", null)
+  val packageObjects: What = What("package objects", null)
