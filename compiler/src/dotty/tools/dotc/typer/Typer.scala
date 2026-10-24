@@ -1124,8 +1124,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         case qual @ Ident(name) => tryAlternatively(tryQual(qual))(tryQualFallback(qual, name))
         case qual               => tryQual(qual)
       else
-        val qual = typedExpr(tree.qualifier, shallowSelectionProto(tree.name, pt, this, tree.nameSpan))
-        typedSelectWithAdapt(tree, pt, qual).withSpan(tree.span).computeNullable()
+        typedSelectOnTermRest(tree, pt, typedExpr(tree.qualifier, shallowSelectionProto(tree.name, pt, this, tree.nameSpan)))
 
     def javaSelection(qual: Tree)(using Context) =
       qual match
@@ -1157,18 +1156,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         errorTree(tree, em"cannot convert to type selection") // will never be printed due to fallback
     }
 
-    def warnUnnecessaryNN(tree: Tree): Unit = {
-      if ctx.explicitNulls then {
-        val symbol = tree.symbol
-        if symbol.exists && symbol.owner == defn.ScalaPredefModuleClass && symbol.name == nme.nn then
-          tree match
-          case Apply(_, args) =>
-            if(args.head.tpe.isNotNull) then report.warning(UnnecessaryNN("qualifier is already not null", args.head.sourcePos), tree)
-            if pt.admitsNull then report.warning(UnnecessaryNN("expected type admits null", args.head.sourcePos), tree)
-          case _ =>
-      }
-    }
-
     val tree1 = if (tree.qualifier.isType) {
       val qual1 = typedType(tree.qualifier, shallowSelectionProto(tree.name, pt, this, tree.nameSpan))
       assignType(cpy.Select(tree)(qual1, tree.name), qual1)
@@ -1180,8 +1167,24 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     else
       typeSelectOnTerm
 
-    warnUnnecessaryNN(tree1)
+    warnUnnecessaryNN(tree1, pt)
     tree1
+  }
+
+  /** The rest of `typedSelect` for a term qualifier that has been typed to `qual` */
+  def typedSelectOnTermRest(tree: untpd.Select, pt: Type, qual: Tree)(using Context): Tree =
+    typedSelectWithAdapt(tree, pt, qual).withSpan(tree.span).computeNullable()
+
+  private def warnUnnecessaryNN(tree: Tree, pt: Type)(using Context): Unit = {
+    if ctx.explicitNulls then {
+      val symbol = tree.symbol
+      if symbol.exists && symbol.owner == defn.ScalaPredefModuleClass && symbol.name == nme.nn then
+        tree match
+        case Apply(_, args) =>
+          if(args.head.tpe.isNotNull) then report.warning(UnnecessaryNN("qualifier is already not null", args.head.sourcePos), tree)
+          if pt.admitsNull then report.warning(UnnecessaryNN("expected type admits null", args.head.sourcePos), tree)
+        case _ =>
+    }
   }
 
   def typedThis(tree: untpd.This)(using Context): Tree = {
@@ -3852,29 +3855,36 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    */
   def typedInfixOp(tree: untpd.InfixOp, pt: Type)(using Context): Tree = {
     val untpd.InfixOp(l, op, r) = tree
+    if (ctx.mode.is(Mode.Type) || ctx.mode.is(Mode.Pattern)) {
+      val result =
+        if (ctx.mode.is(Mode.Type))
+          typedAppliedTypeTree(
+            if op.name == tpnme.throws && Feature.enabled(Feature.saferExceptions)
+            then desugar.throws(l, op, r)
+            else cpy.AppliedTypeTree(tree)(op, l :: r :: Nil))
+        else
+          typedUnApply(cpy.Apply(tree)(op, l :: r :: Nil), pt)
+      checkValidInfix(tree, stripBlock(result).symbol)
+      result
+    }
+    else typedInfixOpRest(tree, typedApply(desugar.binop(l, op, r).withAttachmentsFrom(tree), pt))
+  }
+
+  /** The rest of `typedInfixOp` for a term operation, given its typed application `app` */
+  def typedInfixOpRest(tree: untpd.InfixOp, app: Tree)(using Context): Tree = {
     val result =
-      if (ctx.mode.is(Mode.Type))
-        typedAppliedTypeTree(
-          if op.name == tpnme.throws && Feature.enabled(Feature.saferExceptions)
-          then desugar.throws(l, op, r)
-          else cpy.AppliedTypeTree(tree)(op, l :: r :: Nil))
-      else if (ctx.mode.is(Mode.Pattern))
-        typedUnApply(cpy.Apply(tree)(op, l :: r :: Nil), pt)
-      else {
-        val app = typedApply(desugar.binop(l, op, r).withAttachmentsFrom(tree), pt)
-        if op.name.isRightAssocOperatorName && !ctx.mode.is(Mode.QuotedExprPattern) then
-          val defs = new mutable.ListBuffer[Tree]
-          def lift(app: Tree): Tree = (app: @unchecked) match
-            case Apply(fn, args) =>
-              if (app.tpe.isError) app
-              else tpd.cpy.Apply(app)(fn, LiftImpure.liftArgs(defs, fn.tpe, args))
-            case Assign(lhs, rhs) =>
-              tpd.cpy.Assign(app)(lhs, lift(rhs))
-            case Block(stats, expr) =>
-              tpd.cpy.Block(app)(stats, lift(expr))
-          wrapDefs(defs, lift(app))
-        else app
-      }
+      if tree.op.name.isRightAssocOperatorName && !ctx.mode.is(Mode.QuotedExprPattern) then
+        val defs = new mutable.ListBuffer[Tree]
+        def lift(app: Tree): Tree = (app: @unchecked) match
+          case Apply(fn, args) =>
+            if (app.tpe.isError) app
+            else tpd.cpy.Apply(app)(fn, LiftImpure.liftArgs(defs, fn.tpe, args))
+          case Assign(lhs, rhs) =>
+            tpd.cpy.Assign(app)(lhs, lift(rhs))
+          case Block(stats, expr) =>
+            tpd.cpy.Block(app)(stats, lift(expr))
+        wrapDefs(defs, lift(app))
+      else app
     // issue 10383: we stripBlock because e.g. default arguments desugar to blocks during typing,
     // and the block itself doesn't have a symbol (because a Block isn't a ProxyTree),
     // but the last expression in the block does have the right symbol
@@ -4067,22 +4077,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           case _ => typedUnadapted(desugar(tree, pt), pt, locked)
         }
 
-        def handleTypeError(ex: TypeError): Tree = ex match
-          case ex: CyclicReference
-          if ctx.reporter.errorsReported
-              && xtree.span.isZeroExtent
-              && ex.isVal =>
-            // Don't report a "recursive val ... needs type" if errors were reported
-            // previously and the span of the offending tree is empty. In this case,
-            // it's most likely that this is desugared code, and the error message would
-            // be redundant and confusing.
-            xtree.withType(ErrorType(ex.toMessage))
-          case _ =>
-            // Use focussed sourcePos since tree might be a large definition
-            // and a large error span would hide all errors in interior.
-            // TODO: Not clear that hiding is what we want, actually
-            errorTree(xtree, ex, xtree.srcPos.focus)
-
         try
           val ifpt = defn.asContextFunctionType(pt)
           val result =
@@ -4106,15 +4100,34 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               case xtree: untpd.NameTree => typedNamed(xtree, pt)
               case xtree => typedUnnamed(xtree)
 
-          val unsimplifiedType = result.tpe
-          simplify(result, pt, locked)
-          result.tpe.stripTypeVar match
-            case e: ErrorType if !unsimplifiedType.isErroneous => errorTree(xtree, e.msg, xtree.srcPos)
-            case _ => result
+          simplifyUnadapted(xtree, result, pt, locked)
         catch case ex: TypeError =>
-          handleTypeError(ex)
+          handleTypeError(xtree, ex)
      }
   }
+
+  private def simplifyUnadapted(xtree: untpd.Tree, result: Tree, pt: Type, locked: TypeVars)(using Context): Tree =
+    val unsimplifiedType = result.tpe
+    simplify(result, pt, locked)
+    result.tpe.stripTypeVar match
+      case e: ErrorType if !unsimplifiedType.isErroneous => errorTree(xtree, e.msg, xtree.srcPos)
+      case _ => result
+
+  private def handleTypeError(xtree: untpd.Tree, ex: TypeError)(using Context): Tree = ex match
+    case ex: CyclicReference
+    if ctx.reporter.errorsReported
+        && xtree.span.isZeroExtent
+        && ex.isVal =>
+      // Don't report a "recursive val ... needs type" if errors were reported
+      // previously and the span of the offending tree is empty. In this case,
+      // it's most likely that this is desugared code, and the error message would
+      // be redundant and confusing.
+      xtree.withType(ErrorType(ex.toMessage))
+    case _ =>
+      // Use focussed sourcePos since tree might be a large definition
+      // and a large error span would hide all errors in interior.
+      // TODO: Not clear that hiding is what we want, actually
+      errorTree(xtree, ex, xtree.srcPos.focus)
 
   /** Interpolate and simplify the type of the given tree. */
   protected def simplify(tree: Tree, pt: Type, locked: TypeVars)(using Context): tree.type =
@@ -4176,7 +4189,13 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
   }
 
   /** Typecheck and adapt tree, returning a typed tree. Parameters as for `typedUnadapted` */
-  def typed(tree: untpd.Tree, pt: Type, locked: TypeVars)(using Context): Tree = {
+  def typed(tree: untpd.Tree, pt: Type, locked: TypeVars)(using Context): Tree =
+    if ctx.base.recursiveDepth >= ctx.base.spineThreshold && isSpineCandidate(tree) then
+      typedSpine(tree, pt, locked)
+    else
+      typedRecursive(tree, pt, locked)
+
+  private def typedRecursive(tree: untpd.Tree, pt: Type, locked: TypeVars)(using Context): Tree = {
     trace(i"typing $tree, pt = $pt", typr, show = true) {
       record(s"typed $getClass")
       record("typed total")
@@ -4192,6 +4211,111 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
   def typed(tree: untpd.Tree, pt: Type = WildcardType)(using Context): Tree =
     typed(tree, pt, ctx.typerState.ownedVars)
+
+  // Spine loop
+  //
+  // Left-nested chains of infix operations, selections and applications
+  // (`a + b + c`, `x :: y :: Nil`, `sb.append(a).append(b)`) make typing recurse
+  // once per link. Beyond a depth of `-Yspine-threshold`, such a chain is typed
+  // by a loop instead. Each link is split into what runs before its spine child
+  // (the qualifier or function part) is typed, which also computes the child's
+  // prototype, and what runs after (`SpineFrame.finish`). The loop runs the
+  // before-parts on the way down and the after-parts on the way up, in the same
+  // order as recursion would, so only native stack use changes.
+
+  /** A link `xtree` whose spine `child` is still to be typed against `childPt` under `childCtx` */
+  private final class SpineFrame(
+      val xtree: untpd.Tree, val pt: Type, val locked: TypeVars, val ctx: Context,
+      val child: untpd.Tree, val childPt: Type, val childCtx: Context,
+      val finish: Tree => Tree)
+
+  private def isSpineCandidate(tree: untpd.Tree): Boolean = tree match
+    case _: untpd.Select | _: untpd.Apply | _: untpd.InfixOp => getClass eq classOf[Typer]
+    case _ => false
+
+  private def isSpineApply(tree: untpd.Apply)(using Context): Boolean =
+    ctx.mode.isExpr && !untpd.isOpAssign(tree) && tree.fun.isInstanceOf[untpd.Select]
+
+  /** The frame for typing `tree` as a link of a spine, or null if it has to be typed by recursion.
+   *  Follows the path `typed` takes through `typedUnadapted` to `typedSelect`, `typedApply` or `typedInfixOp`.
+   */
+  private def spineFrame(tree: untpd.Tree, pt: Type, locked: TypeVars)(using Context): SpineFrame | Null =
+    if tree.source != ctx.source && tree.source.exists
+       || ctx.run.nn.isCancelled
+       || tree.hasAttachment(TypedAhead)
+       || defn.asContextFunctionType(pt).exists
+    then null
+    else
+      // as in `typedExpr`
+      val exprCtx = withoutMode(Mode.PatternOrTypeBits)(ctx)
+      def applyFrame(app: untpd.Apply, xtree: untpd.Tree, finish: Tree => Tree) =
+        val proto = realApplyProto(app, pt)
+        SpineFrame(xtree, pt, locked, ctx, app.fun, proto, exprCtx, fun1 =>
+          val app1 = realApplyRest(app, pt, proto, fun1)
+          checkCanEqualApp(app1)
+          finish(typedApplyFinish(app1)))
+      tree match
+        case tree: untpd.Select if !tree.qualifier.isType && !ctx.isJava =>
+          if ctx.phase.isTyper then assertPositioned(tree)
+          record("typedSelect")
+          SpineFrame(tree, pt, locked, ctx,
+            tree.qualifier, shallowSelectionProto(tree.name, pt, this, tree.nameSpan), exprCtx, qual =>
+              val tree1 = typedSelectOnTermRest(tree, pt, qual)
+              warnUnnecessaryNN(tree1, pt)
+              tree1)
+        case tree: untpd.Apply if isSpineApply(tree) =>
+          if ctx.phase.isTyper then assertPositioned(tree)
+          applyFrame(tree, tree, identity)
+        case tree @ untpd.InfixOp(l, op, r) if ctx.mode.isExpr =>
+          val app = desugar.binop(l, op, r).withAttachmentsFrom(tree)
+          if isSpineApply(app) then
+            if ctx.phase.isTyper then assertPositioned(tree)
+            applyFrame(app, tree, typedInfixOpRest(tree, _))
+          else null
+        case _ => null
+
+  /** Type the spine starting at `tree0` with a loop, mirroring `typed` on each link:
+   *  a TypeError inside a link turns it into an error tree, and a TypeError from adapting
+   *  a link is handled by its parent.
+   */
+  private def typedSpine(tree0: untpd.Tree, pt0: Type, locked0: TypeVars)(using Context): Tree =
+    val frames = mutable.ArrayBuffer[SpineFrame]()
+    var result: Tree | Null = null
+    var error: TypeError | Null = null
+    def adaptTo(tree: Tree, pt: Type, locked: TypeVars)(using Context): Unit =
+      try result = adapt(tree, pt, locked)
+      catch case ex: TypeError => error = ex
+
+    var tree = tree0; var pt = pt0; var locked = locked0; var c = ctx
+    var descending = true
+    while descending do
+      try
+        spineFrame(tree, pt, locked)(using c) match
+          case null =>
+            descending = false
+            try result = typedRecursive(tree, pt, locked)(using c)
+            catch case ex: TypeError => error = ex
+          case f: SpineFrame =>
+            frames += f
+            tree = f.child; pt = f.childPt; c = f.childCtx; locked = c.typerState.ownedVars
+      catch case ex: TypeError =>
+        descending = false
+        adaptTo(handleTypeError(tree, ex)(using c), pt, locked)(using c)
+
+    while frames.nonEmpty do
+      val f = frames.remove(frames.length - 1)
+      given Context = f.ctx
+      val unadapted =
+        try
+          error match
+            case ex: TypeError => throw ex
+            case null => simplifyUnadapted(f.xtree, f.finish(result.nn), f.pt, f.locked)
+        catch case ex: TypeError => handleTypeError(f.xtree, ex)
+      error = null
+      adaptTo(unadapted, f.pt, f.locked)
+    error match
+      case ex: TypeError => throw ex
+      case null => result.nn
 
   def typedTrees(trees: List[untpd.Tree])(using Context): List[Tree] =
     trees.mapconserve(typed(_))

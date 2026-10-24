@@ -1,0 +1,14 @@
+differential threshold=0    spine=same worklist=same  (20000 trees, 15775 with errors)
+differential threshold=1    spine=same worklist=same  (20000 trees, 15775 with errors)
+differential threshold=2    spine=same worklist=same  (20000 trees, 15775 with errors)
+differential threshold=5    spine=same worklist=same  (20000 trees, 15775 with errors)
+differential threshold=1000 spine=same worklist=same  (20000 trees, 15775 with errors)
+
+n = 100000, 512 KiB stack
+input                      baseline                          spine                             worklist                          
+left chain  a+b+c+...      StackOverflowError                ok IntT 200001 nodes 8ms          ok IntT 200001 nodes 6ms          
+right chain a+(b+(c+..))   StackOverflowError                StackOverflowError                ok IntT 200001 nodes 8ms          
+else-if ladder             StackOverflowError                ok IntT 500003 nodes 17ms         ok IntT 500003 nodes 18ms         
+let chain                  StackOverflowError                ok IntT 399999 nodes 43ms         ok IntT 399999 nodes 95ms         
+nested call args           StackOverflowError                StackOverflowError                ok IntT 200001 nodes 8ms          
+left chain, error mid      StackOverflowError                ok IntT 200001 nodes 1err 4ms     ok IntT 200001 nodes 1err 4ms     
