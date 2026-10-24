@@ -242,8 +242,9 @@
           <div id="rpModes"></div>
           <div class="row2"><a id="rpExport" href="/replay/report.md" download="replay-findings.md"><button class="ghost" data-icon="doc" tabindex="-1">Export markdown</button></a><button id="rpCopy" class="ghost" data-icon="doc">Copy markdown</button></div>
           <div id="tpBox">
-            <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-readers</code>, the build's options), typed by N reader threads (round-robin, with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
+            <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-readers</code>, the build's options), typed by N reader threads (the largest files first, or round-robin; with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
             <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,6,8"></label>
+              <label title="big: the largest files first, each to the least loaded thread; rr: round-robin in path order. Both steal the last file of the longest list when a thread runs out">order <select id="tpPolicy"><option value="big">largest first</option><option value="rr">round-robin</option></select></label>
               <label><input id="tpSpeedup" type="checkbox" checked> speed-up against N=1</label></div>
             <div class="row2"><button id="tpRun" class="primary" data-icon="play">Run throughput</button><button id="tpStop" class="ghost" data-icon="cancel">Stop</button></div>
             <div id="tpState" class="dim"></div>
@@ -1403,14 +1404,14 @@
     } finally { tp.polling = false; }
   }
   $('tpRun').onclick = async () => {
-    const st = await (await fetch('/throughput/run?ns=' + encodeURIComponent($('tpNs').value), { method: 'POST' })).json();
+    const st = await (await fetch('/throughput/run?ns=' + encodeURIComponent($('tpNs').value) + '&policy=' + $('tpPolicy').value, { method: 'POST' })).json();
     setLogCollapsed(false); panelTab('throughput');
     tpRender(st); tpPoll();
   };
   $('tpStop').onclick = () => fetch('/throughput/stop', { method: 'POST' });
   $('tpSpeedup').onchange = () => { if (tp.last) tpPlot(tp.last); };
   // a run already going (or finished) when the page loads: the plot survives a reload
-  fetch('/throughput/status').then((r) => r.json()).then((st) => { if (st.ns) $('tpNs').value = st.ns.join(','); tpRender(st); if (['warming', 'batch', 'running'].includes(st.state)) tpPoll(); }).catch(() => {});
+  fetch('/throughput/status').then((r) => r.json()).then((st) => { if (st.ns) $('tpNs').value = st.ns.join(','); if (st.policy) $('tpPolicy').value = st.policy; tpRender(st); if (['warming', 'batch', 'running'].includes(st.state)) tpPoll(); }).catch(() => {});
 
   gotoObject(10);
   scheduleBackground(); // the first file too

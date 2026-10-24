@@ -106,6 +106,13 @@ object Throughput:
     policy match
       case "rr" | "warm" =>
         files.zipWithIndex.foreach((f, i) => groups(i % k) += f)
+      case "big" =>
+        // the largest files first, each to the least loaded reader: every
+        // reader starts on a big file, and a steal (the last of the longest
+        // list) takes a small one, so the tail is short
+        for f <- files.sortBy(-_.size) do
+          val g = leastLoaded
+          groups(g) += f; load(g) += f.size
       case "pkg" =>
         val byPkg = files.groupBy(f => if f.rel.contains('/') then f.rel.takeWhile(_ != '/') else "dotc")
         for (_, fs) <- byPkg.toList.sortBy(-_._2.map(_.size).sum) do
