@@ -6451,7 +6451,20 @@ object Types extends TypeUtils {
           LazyRef { refCtx =>
             given Context = refCtx
             val ref1 = tp.ref
-            if refCtx.runId == mapCtx.runId then this(ref1)
+            if refCtx.base.isConcurrent then
+              // Several readers of the new run may force refs of this map at
+              // once: a swap undone in a `finally` would hand a reader still
+              // mapping the old run's context (finding I84). Runs do not
+              // overlap (a run is a write action), so the map moves to the new
+              // run for good; the monitor publishes the new context.
+              this.synchronized {
+                if refCtx.runId != mapCtx.runId then
+                  mapCtx = mapCtx.fresh
+                    .setPeriod(Period(refCtx.runId, mapCtx.phaseId))
+                    .setRun(refCtx.run)
+              }
+              this(ref1)
+            else if refCtx.runId == mapCtx.runId then this(ref1)
             else // splice in new run into map context
               val saved = mapCtx
               mapCtx = mapCtx.fresh
