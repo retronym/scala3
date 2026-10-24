@@ -142,6 +142,26 @@ class CompletionConcurrentSuite extends BasePCSuite:
         s"round $i: two readers answered $answer, which no single-reader order gives (${orders.mkString(" | ")})")
     println(s"[concurrent cycle] 30 rounds, answers: ${seen.map((k, v) => s"$k x$v").mkString(", ")}; ${backoffSummary()}")
 
+  // ---- I63: a self type, one reader ----
+
+  @Test def `a-self-type-is-not-a-cycle` =
+    // A Namer completion with independent readers ran in a child of its
+    // creation context (`fresh`), which for a class owner reads as the
+    // class's inner scope, where the self type is visible: typing the self
+    // type looked `Base` up through `this`, back into the self symbol
+    // ("Cyclic reference involving val self"), with one reader.
+    val code =
+      """|package p
+         |trait Base[T] { def x: T }
+         |trait Info[T] { self: Base[T] =>
+         |  def y: T = x
+         |  def z = List(y)
+         |}
+         |""".stripMargin
+    val uri = URI.create("file:///SelfType.scala")
+    val errors = newDriver().run(uri, SourceFile.virtual(uri, code)).filter(_.level >= 2).map(_.msg.message)
+    assert(errors.isEmpty, s"a self type with -Yinteractive-readers: ${errors.mkString("; ")}")
+
   // ---- §4.1: peeks ----
 
   private def peekCode(n: Int) =

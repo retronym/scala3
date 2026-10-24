@@ -1001,7 +1001,12 @@ class Namer { typer: Typer =>
           // would be captured, with this state, by the completers of the
           // members it indexes, and their diagnostics, issued when they are
           // completed later, would land in it after its flush (I59)
-          ictx = saved.fresh.setTyperState(saved.typerState.fresh(reporter = saved.reporter))
+          // a copy of the creation context at its own level (`freshOver` its
+          // outer), not a child of it (`fresh`): for a class owner a child
+          // with the same owner reads as the class's inner scope, where the
+          // self type is visible, and typing the self type itself then looked
+          // names up through `this`, back into the self symbol (I63)
+          ictx = saved.freshOver(saved.outer).setTyperState(saved.typerState.fresh(reporter = saved.reporter))
           rebased()
         var completedNormally = false
         try
