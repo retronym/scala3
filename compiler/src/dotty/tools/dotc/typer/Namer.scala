@@ -1105,7 +1105,7 @@ class Namer { typer: Typer =>
               val ann =
                 if cls.is(JavaDefined) then Checking.checkNamedArgumentForJavaAnnotation(annotTree, cls.asClass)
                 else annotTree
-              val ann1 = Annotation.deferred(cls)(typedAheadExpr(ann)(using annotCtx))
+              val ann1 = Annotation.deferred(cls)(inPrivateState(annotCtx)(typedAheadExpr(ann)))
               sym.addAnnotation(ann1)
               ann
       case _ =>
@@ -1118,7 +1118,7 @@ class Namer { typer: Typer =>
             throw
               if sym.isCompleted then Inlines.MissingInlineInfo()
               else CyclicReference(sym)
-          val mdef = typedAheadExpr(original).asInstanceOf[tpd.DefDef]
+          val mdef = inPrivateState(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
           PrepareInlineable.wrapRHS(original, mdef.tpt, mdef.rhs)
         PrepareInlineable.registerInlineInfo(sym, rhsToInline)(using localContext(sym))
       case _ =>
@@ -1364,6 +1364,20 @@ class Namer { typer: Typer =>
       sym.info
     end typeSig
   }
+
+  /** Run `op` (typing that is forced lazily, later, by whichever reader gets
+   *  there: an annotation's argument, an inline method's body) in the context
+   *  it captured. With independent readers that context's typer state may be
+   *  the run's root, which no reader commits into: `op` runs in a private
+   *  child of it, settled when it ends (I76).
+   */
+  private def inPrivateState[T](c0: Context)(op: Context ?=> T): T =
+    if c0.mode.is(Mode.Interactive) && c0.base.isConcurrent && c0.base.independentReaders then
+      val c1 = c0.fresh.setNewTyperState()
+      val result = op(using c1)
+      c1.typerState.settle(c0)(using c1)
+      result
+    else op(using c0)
 
   class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx0: Context)
   extends Completer(original)(ictx0), CompleterWithCleanup {
