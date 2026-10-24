@@ -40,6 +40,18 @@ private class InteractiveContextBase(sourcePackage: CachedLogicalPackage) extend
   override def reader: Reader = threadReader.get.nn
 
   def bindReader(reader: Reader): Unit = threadReader.set(reader)
+
+  /** Forget this thread's state on this base: its reader and its implicit
+   *  search state. A thread's `ThreadLocal` map holds each value strongly and
+   *  the values reach this base, which owns the keys, so a thread that outlives
+   *  the driver (a pool thread of the presentation compiler) would keep the
+   *  whole symbol table alive.
+   */
+  def unbindThread(): Unit =
+    threadReader.remove()
+    initialCtx.searchHistory match
+      case root: typer.SearchRoot => root.clearThread()
+      case _ =>
 }
 
 // Assumes the context does not change; only use if this is true!
@@ -239,8 +251,10 @@ class InteractiveDriver(
    */
   private val myScopeDepth: ThreadLocal[Integer] = ThreadLocal.withInitial(() => Integer.valueOf(0))
 
-  /** The reader of the last request that started, for the x-ray's status
-   *  thread; not used by the compiler.
+  /** The reader of the last request that typed (not of a scope that only
+   *  reads), for the x-ray's status thread and for the tests that read a
+   *  request's bookkeeping afterwards from another job; not used by the
+   *  compiler.
    */
   @volatile private var myLastReader: Reader = base.reader
   def readerOfLastRequest: Reader = myLastReader
@@ -259,15 +273,16 @@ class InteractiveDriver(
   private def bindReader(check: () => Boolean): Reader =
     val r = base.newReader(check)
     base.bindReader(r)
-    myLastReader = r
     r
 
   /** Run `body` with `check` as the cancellation test polled by the typer
    *  (see `Reader.checkCancelledTyping`), on a fresh reader bound to this
    *  thread. A run started inside `body` is aborted with
-   *  `CompilationUnit.CancelledCompilation` once `check` returns true. The
-   *  reader of an outermost scope stays bound after `body`, so that what the
-   *  request computed can be read under `currentCtx`.
+   *  `CompilationUnit.CancelledCompilation` once `check` returns true. An
+   *  outermost scope unbinds the thread from the base when it ends, so that no
+   *  per-thread state survives a request on a thread that lives on (see
+   *  `InteractiveContextBase.unbindThread`); what the request computed is read
+   *  inside the scope, or under `currentCtx` and `readerOfLastRequest`.
    */
   def withCancelChecker[T](check: () => Boolean)(body: => T): T =
     val previous = base.reader
@@ -276,12 +291,18 @@ class InteractiveDriver(
     myScopeDepth.set(depth + 1)
     try body
     finally
-      myScopeDepth.set(depth)
-      if depth > 0 then base.bindReader(previous)
+      if depth > 0 then
+        myScopeDepth.set(depth)
+        base.bindReader(previous)
+      else
+        myScopeDepth.remove()
+        base.unbindThread()
 
   /** The reader of the request that starts: the scope's, or a fresh one. */
   private def requestReader(): Reader =
-    if myScopeDepth.get.nn.intValue == 0 then bindReader(Reader.neverCancelled) else base.reader
+    val r = if myScopeDepth.get.nn.intValue == 0 then bindReader(Reader.neverCancelled) else base.reader
+    myLastReader = r
+    r
 
   private val compiler: Compiler = new InteractiveCompiler
 

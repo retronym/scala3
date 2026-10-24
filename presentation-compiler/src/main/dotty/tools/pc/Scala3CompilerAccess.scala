@@ -72,7 +72,10 @@ class Scala3CompilerAccess(
   )(
       thunk: CompilerWrapper[StoreReporter, CachingDriver] => T
   )(implicit queryInfo: PcQueryContext): CompletableFuture[T] =
-    super.withNonInterruptableCompiler(default, token)(queued(thunk))
+    // a scope too, so that the job leaves no per-thread state on the base
+    super.withNonInterruptableCompiler(default, token)(queued { access =>
+      access.compiler().withCancelChecker(() => false)(thunk(access))
+    })
 
   /** Interruptable requests abort their compilation when the token is
    *  cancelled: the driver polls the token from the typer (see

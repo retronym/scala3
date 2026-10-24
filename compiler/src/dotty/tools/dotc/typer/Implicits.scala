@@ -2016,6 +2016,9 @@ final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
   private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
   private def state: State = if local == null then shared else local.get.nn
 
+  /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */
+  def clearThread(): Unit = if local != null then local.remove()
+
   /** How many expressions were constructed so far in the current toplevel implicit search?
    */
   def nestedSearches: Int = state.nestedSearches
