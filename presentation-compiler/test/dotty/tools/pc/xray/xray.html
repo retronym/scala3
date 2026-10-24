@@ -124,7 +124,7 @@
   ul.compl { margin: 2px 0 8px; padding-left: 18px; max-height: 110px; overflow: auto; }
   pre.hljs { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); font-size: 11px; max-height: 160px; overflow: auto; }
   /* ---- bottom panel: request log and demo transcript as tabs */
-  #logsec { height: 220px; flex: none; border-top: 0; }
+  #logsec { height: 220px; flex: none; border-top: 0; } body.tpWide #logsec { height: 440px !important; }
   #logsec .ph { background: var(--panel); gap: 2px; padding-left: 8px; }
   #logsec .ptab { border: 0; background: transparent; color: var(--dim); padding: 4px 10px; border-radius: var(--r); font-weight: 500; }
   #logsec .ptab.on { color: var(--fg); background: var(--hover); } #logsec .ptab:disabled { opacity: .4; }
@@ -432,7 +432,7 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput'].forEach((n) => { $(n).hidden = name !== n; }); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput'].forEach((n) => { $(n).hidden = name !== n; }); document.body.classList.toggle('tpWide', name === 'throughput'); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
   const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
