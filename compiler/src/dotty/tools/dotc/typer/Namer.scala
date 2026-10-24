@@ -993,8 +993,35 @@ class Namer { typer: Typer =>
         report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
+        // Interactive: the creation context's typer state may have been
+        // committed since the completer was made (a definition typed ahead
+        // under a nested state, from another file's typing, which then
+        // committed it: its locals keep completers in that state, and the
+        // statement is typed later by a resume or a pass). Complete in the
+        // nearest ancestor state that can still take constraints, as a resume
+        // does (`liveContext`); in place, a commit into the committed state
+        // failed (I65).
+        if ctx.mode.is(Mode.Interactive) && ictx.typerState.hasBeenCommitted then
+          def live(ts: TyperState | Null): TyperState | Null =
+            if ts == null then null
+            else if ts.isCommittable && !ts.hasBeenCommitted then ts
+            else live(ts.previousState)
+          live(ictx.typerState.previousState) match
+            case ts: TyperState =>
+              ictx = ictx.freshOver(ictx.outer).setTyperState(ts)
+              rebased()
+            case null =>
         val saved = ictx
+        // A typer state of its own for what several readers share: members and
+        // top-level definitions. A local is completed only by the reader typing
+        // its enclosing statement, in that statement's typer state, as in the
+        // serialised mode: its inferred type may hold a variable that the
+        // statement's later typing constrains (`val lazyStats = readLater(end,
+        // rdr => ...)`, whose `T` comes from the closure's body); completed in
+        // a state of its own, the variable was dropped with it and later
+        // instantiated to `Nothing` (I66; I62's `val retractedVars` too).
         val own = ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders
+          && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
         if own then
           // a typer state of its own, reporting to the creation context's
           // reporter directly: a buffer flushed when the completion ends

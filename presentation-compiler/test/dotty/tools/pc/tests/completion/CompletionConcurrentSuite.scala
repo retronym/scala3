@@ -162,6 +162,30 @@ class CompletionConcurrentSuite extends BasePCSuite:
     val errors = newDriver().run(uri, SourceFile.virtual(uri, code)).filter(_.level >= 2).map(_.msg.message)
     assert(errors.isEmpty, s"a self type with -Yinteractive-readers: ${errors.mkString("; ")}")
 
+  // ---- I66: a local's type variable, constrained after its completion ----
+
+  @Test def `a-local-type-variable-is-constrained-by-the-statement` =
+    // With independent readers a local val was completed in a typer state of
+    // its own; `T` of `readLater`, which the closure's body constrains after
+    // the completion, was dropped with that state and later instantiated to
+    // `Nothing` ("Found: (strict : Nothing)"). Locals now complete in the
+    // statement's state, as in the serialised mode.
+    val code =
+      """|object L:
+         |  class Lazy[T](f: Int => T) { def complete: T = f(0) }
+         |  def readLater[T <: AnyRef](op: Int => String ?=> T): Lazy[T] = Lazy(i => op(i)(using ""))
+         |  def g: Int =
+         |    val lazyStats = readLater(rdr => {
+         |      val stats = List(rdr.toString)
+         |      stats ++ stats
+         |    })
+         |    val strict = lazyStats.complete
+         |    strict.length
+         |""".stripMargin
+    val uri = URI.create("file:///LocalTypeVar.scala")
+    val errors = newDriver().run(uri, SourceFile.virtual(uri, code)).filter(_.level >= 2).map(_.msg.message)
+    assert(errors.isEmpty, s"a local's type variable with -Yinteractive-readers: ${errors.mkString("; ")}")
+
   // ---- §4.1: peeks ----
 
   private def peekCode(n: Int) =
