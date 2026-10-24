@@ -216,6 +216,10 @@ object SymDenotations {
       val key = completer.completionRoot(this)
       val roots = ctx.base.completionRoots
       roots.acquire(key, CompletionLock.What(CompletionLock.completionKind(completer), symbol), () => cyclicWait())
+      // inside a Namer completion, this reader never backs off from a cycle (I74)
+      val namer = CompletionLock.completionKind(completer) == CompletionLock.namerKind
+      val reader = ctx.reader
+      if namer then reader.namerCompletionDepth += 1
       try
         // as it is now: completed meanwhile, or another info (I44)
         ownView match
@@ -230,7 +234,9 @@ object SymDenotations {
                 try lockAndComplete0(current, interactive = true)
                 finally if myInfo eq ip then myInfo = ip.current
           case _ =>
-      finally roots.release(key)
+      finally
+        if namer then reader.namerCompletionDepth -= 1
+        roots.release(key)
 
     /** A wait for a root would close a wait-for cycle between readers. The
      *  roots are coarser than the facts they protect (a file, every
@@ -243,7 +249,9 @@ object SymDenotations {
      *  `CyclicReference` here, which made a false cycle out of a lock order).
      */
     private def cyclicWait()(using Context): Nothing =
-      CompletionRoots.backOff(symbol)
+      // a cycle between Namer completions on several readers: the single-reader answer (I74)
+      ctx.reader.cyclesRaised += 1
+      throw CyclicReference(this)(using ctx.withOwner(symbol))
 
     /** Make `myInfo` an `InProgress` owned by this thread for the duration of
      *  a completion of another denotation of the same root (a symbol

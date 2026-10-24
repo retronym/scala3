@@ -36,6 +36,7 @@ final class CompletionRoots(base: Contexts.ContextState):
   def acquire(key: AnyRef, what: CompletionLock.What, cycle: () => Nothing): Unit =
     val me = base.reader
     var waitedSince = 0L
+    var cycleSince = 0L
     var seen: Claim | Null = null
     while true do
       val c = claims.get(key)
@@ -53,7 +54,29 @@ final class CompletionRoots(base: Contexts.ContextState):
         if waitedSince == 0L then
           waitedSince = System.nanoTime()
           seen = c
-        if closesCycle(me, c) then cycle()
+        cycleChain(me, c) match
+          case null => cycleSince = 0L
+          case chain =>
+            val parties = chain.map(_.owner)
+            if me.namerCompletionDepth == 0 then
+              // body typing: this reader backs off, its request restarts
+              me.waitCyclesBackedOff += 1
+              throw CompilationUnit.CancelledCompilation()
+            else if parties.exists(_.namerCompletionDepth == 0) then
+              () // a reader in the cycle that is not inside a Namer completion backs off at its next look: wait
+            else if chain.exists(_.what.kind != CompletionLock.namerKind) then
+              // a coarse root (a TASTy file, a bring-forward, an inherited
+              // cache): its owner finishes; wait, bounded
+              if cycleSince == 0L then cycleSince = System.nanoTime()
+              else if System.nanoTime() - cycleSince > CompletionRoots.coarseCycleWaitNanos then
+                me.waitCyclesBackedOff += 1
+                throw CompilationUnit.CancelledCompilation()
+            else if parties.forall(p => System.identityHashCode(p.thread) <= System.identityHashCode(me.thread)) then
+              // every party inside a Namer completion, every root a symbol:
+              // a cycle between signatures, reported where a single reader
+              // reports it, by one reader of the cycle (a fixed order of
+              // the threads picks it)
+              cycle()
         me.waitingOn = c
         try c.done.await(5, TimeUnit.MILLISECONDS)
         finally me.waitingOn = null
@@ -77,24 +100,30 @@ final class CompletionRoots(base: Contexts.ContextState):
     val c = claims.get(key)
     c != null && (c.owner eq base.reader)
 
-  /** Would waiting on `c` close a cycle: do the owners, followed through
-   *  what each waits on, lead back to `me`?
+  /** The claims of a wait-for cycle that waiting on `c` would close: `c`,
+   *  then what its owner waits on, and so on, back to a claim of `me`; null
+   *  if the owners do not lead back to `me`.
    */
-  private def closesCycle(me: Reader, c: Claim): Boolean =
-    var o: Reader | Null = c.owner
+  private def cycleChain(me: Reader, c: Claim): List[Claim] | Null =
+    var claim: Claim | Null = c
+    var chain: List[Claim] = Nil
     var steps = 0
-    while o != null && steps < 1000 do
-      if o eq me then return true
-      val w = o.waitingOn
-      o = if w == null then null else w.owner
+    while claim != null && steps < 1000 do
+      chain = claim :: chain
+      if claim.owner eq me then return chain
+      claim = claim.owner.waitingOn
       steps += 1
-    false
+    null
 
   /** The claims held now, for tools (the x-ray). */
   def holdersNow: String =
     claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
 
 object CompletionRoots:
+  /** How long a reader inside a Namer completion waits on a wait-for cycle
+   *  through a coarse root before it backs off after all (I74). */
+  val coarseCycleWaitNanos: Long = 10_000_000_000L
+
   /** Back off from a wait that would close a wait-for cycle (see
    *  `SymDenotation.cyclicWait`): unwind as a pre-empted reader does.
    */

@@ -132,7 +132,7 @@ object Throughput:
 
   final case class Cell(what: String, k: Int, wallMs: Double, indexMs: Double, warmMs: Double, workerCpuMs: Double, processCpuMs: Double,
       rootWaitMs: Double, rootWaits: Int, waitsByKind: Map[String, (Int, Double)], statementWaitMs: Double, backoffs: Int,
-      steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int], failure: String = "")
+      steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int], failure: String = "", cyclesRaised: Int = 0)
 
   private val showErrors = sys.props.getOrElse("tp.showErrors", "0").toInt
   private val threads = ManagementFactory.getThreadMXBean
@@ -230,7 +230,7 @@ object Throughput:
     val differ = files.count(f => !Option(diags.get(f.uri)).contains(reference.getOrElse(f.uri, Nil)))
     Cell(what, k, (t1 - t0) / 1e6, (tIndex - t0) / 1e6, (tWarm - tIndex) / 1e6, cpu.get / 1e6, (cpu1 - cpu0) / 1e6,
       rs.map(_.lockWaitNanos).sum / 1e6, rs.map(_.lockWaitCount).sum, byKind, rs.map(_.statementWaitNanos).sum / 1e6,
-      rs.map(_.waitCyclesBackedOff).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList)
+      rs.map(_.waitCyclesBackedOff).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList, cyclesRaised = rs.map(_.cyclesRaised).sum)
 
   /** The whole set in one run with nothing skipped, one reader: the
    *  reference diagnostics, and a baseline. */
@@ -276,7 +276,7 @@ object Throughput:
         try
           val c = measure(p, k, assign(p, k, files, graph), readers = true, warm = p == "warm", files, reference)
           divergent += c.diagnosticsDiffer
-          println(f"[tp] loop $i $p k=$k: wall ${c.wallMs}%.0f ms, ${c.diagnosticsDiffer} files differ, backoffs ${c.backoffs}, root waits ${c.rootWaits}")
+          println(f"[tp] loop $i $p k=$k: wall ${c.wallMs}%.0f ms, ${c.diagnosticsDiffer} files differ, backoffs ${c.backoffs}, cycles raised ${c.cyclesRaised}, root waits ${c.rootWaits}")
         catch case ex: RuntimeException =>
           failed += 1
           // a backed-off Namer completion left an `UnwoundCompletion`: the run is tainted (I53's rule), see §8
