@@ -161,7 +161,20 @@ class Compiler {
   // Setting the initial runId to InitialRunId - 1 makes the scala2-library-bootstrap fail to compile,
   // when the underlying issue is fixed, please update dotc.profiler.RealProfiler.chromeTrace logic
   private var runId: Periods.RunId = Periods.InitialRunId
+  /** Test hook: pretend `id` runs have already been made. */
+  private[dotty] def setLastRunIdForTesting(id: Periods.RunId): Unit = runId = id
+
+  /** True if `nextRunId` can still hand out an id that fits the run id bits of a `Period`. */
+  def hasMoreRunIds: Boolean = runId < Periods.MaxPossibleRunId
+
+  /** The next run id. Run ids are never recycled: denotations and cached types stamped with an
+   *  old id would read as current in a later run. Past `MaxPossibleRunId` the id would spill
+   *  into the phase bits of a `Period`, so fail instead; a long-lived client needs a new `ContextBase`
+   *  (see `InteractiveDriver`).
+   */
   def nextRunId: Periods.RunId = {
+    if !hasMoreRunIds then
+      throw new AssertionError(s"run id overflow: more than ${Periods.MaxPossibleRunId} runs on one ContextBase")
     runId += 1; runId
   }
 
