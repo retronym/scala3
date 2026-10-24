@@ -132,7 +132,7 @@ class SessionOracleSuite extends BasePCSuite:
     var source = SourceFile.virtual(uri, content)
     val t0 = System.nanoTime()
     var whole = newDriver()
-    whole.run(uri, source)
+    var wholeDiagnostics = SessionDiagnostics.of(whole.run(uri, source))
     var idents = identifierEnds(source)(using whole.currentCtx)
     var expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
     var tWhole = (System.nanoTime() - t0) / 1e6
@@ -145,6 +145,14 @@ class SessionOracleSuite extends BasePCSuite:
     val asked = mutable.ArrayBuffer.empty[Int]
     var fresh = 0; var runId = -1; var cancelled = 0
     def line(o: Int) = content.substring(content.lastIndexOf('\n', o - 1) + 1, content.indexOf('\n', o) max o).trim.take(100)
+    var diagnosticChecks = 0
+    /** With body edits, the diagnostics of the completed session are exactly
+     *  the whole-file run's (§12); `diags` are those of a whole-file request.
+     */
+    def checkDiagnostics(step: Int, diags: List[dotty.tools.dotc.reporting.Diagnostic]): Unit =
+      if editEvery > 0 then
+        diagnosticChecks += 1
+        org.junit.Assert.assertEquals(s"[oracle $rel seed=$seed step $step] the diagnostics of the completed session\n${log.takeRight(8).mkString("\n")}", wholeDiagnostics, SessionDiagnostics.of(diags))
     def check(step: Int, what: String, o: Int, name: String): Unit =
       driver.runUpTo(uri, source, Span(o))
       val id = driver.runIdOf(uri)
@@ -165,12 +173,14 @@ class SessionOracleSuite extends BasePCSuite:
     try
       for step <- 1 to requests do
         if editEvery > 0 && step % editEvery == 0 then
+          // the content an earlier edit reached, completed before it is left
+          checkDiagnostics(step, driver.run(uri, source))
           bodyEdit(whole, uri, content, rng).foreach { now =>
             val t1 = System.nanoTime()
             content = now
             source = SourceFile.virtual(uri, content)
             whole = newDriver()
-            whole.run(uri, source)
+            wholeDiagnostics = SessionDiagnostics.of(whole.run(uri, source))
             idents = identifierEnds(source)(using whole.currentCtx)
             expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
             tWhole += (System.nanoTime() - t1) / 1e6
@@ -182,7 +192,7 @@ class SessionOracleSuite extends BasePCSuite:
         if step % 40 == 0 then
           // what document highlight does between hovers: a whole-file run,
           // which completes the session; the answers after it must still match
-          driver.runUpTo(uri, source, Span(o)); driver.run(uri, source)
+          driver.runUpTo(uri, source, Span(o)); checkDiagnostics(step, driver.run(uri, source))
           log += s"$step run (whole file) run=${driver.runIdOf(uri)} fully=${driver.isFullyTyped(uri)}"
           // the completed tree must hold every statement: identifiers never asked before
           for _ <- 1 to 5 do
@@ -203,7 +213,8 @@ class SessionOracleSuite extends BasePCSuite:
         for _ <- 1 to recheck if asked.size > 1 do
           val p = asked(rng.nextInt(asked.size))
           check(step, "recheck", p, idents.find(_._1 == p).map(_._2).getOrElse("?"))
-      println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms${if editEvery > 0 then edits.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") else ""}")
+      if editEvery > 0 then checkDiagnostics(requests + 1, driver.run(uri, source))
+      println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms${if editEvery > 0 then edits.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") + s"; diagnostics checked $diagnosticChecks times" else ""}")
       if editEvery > 0 then
         org.junit.Assert.assertTrue(s"[oracle $rel seed=$seed] some body edits keep the run: $edits", edits.keys.exists(_.startsWith("body edit")))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
@@ -344,12 +355,15 @@ class SessionOracleSuite extends BasePCSuite:
     val eq = before.indexOf(" = ", before.indexOf('\n', at)) + 3
     val after = before.substring(0, eq) + " " + before.substring(eq)
     val driver = new InteractiveDriver(real ++ flags, CachedLogicalPackage.none)
+    // exact with body edits (§12); errors by line otherwise, as before
     def errorsOf(ds: List[dotty.tools.dotc.reporting.Diagnostic]) =
-      ds.filter(_.level >= 2).map(d => s"${d.pos.line + 1}: ${d.msg.message.linesIterator.next()}").sorted
+      if flags.contains("-Yinteractive-body-edits") then SessionDiagnostics.of(ds).linesIterator.toList
+      else ds.filter(_.level >= 2).map(d => s"${d.pos.line + 1}: ${d.msg.message.linesIterator.next()}").sorted
     for (content, when) <- List(before -> "before the edit", after -> s"after an edit in $editIn") do
       val source = SourceFile.virtual(uri, content)
       val whole = new InteractiveDriver(real, CachedLogicalPackage.none)
-      val wholeErrors = errorsOf(whole.run(uri, source))
+      val wholeDiags = whole.run(uri, source)
+      val wholeErrors = errorsOf(wholeDiags)
       val idents = identifierEnds(source)(using whole.currentCtx)
       var differ = List.empty[String]
       var edit = ""
@@ -362,7 +376,7 @@ class SessionOracleSuite extends BasePCSuite:
         val expected = describe(whole, uri, o)
         if obtained != expected then differ ::= s"`$name` at $o: $obtained, whole-file $expected"
       val sessionErrors = errorsOf(driver.readAll(uri, source)((_, _, ds) => ds))
-      if content eq after then assert(wholeErrors.isEmpty, s"the edit broke the file: $wholeErrors")
+      if content eq after then assert(!wholeDiags.exists(_.level >= 2), s"the edit broke the file: $wholeErrors")
       println(s"[every identifier $rel ${flags.mkString(" ")}] $when: ${idents.size} identifiers, ${differ.size} differ; ${sessionErrors.size} errors, whole-file ${wholeErrors.size}${if edit.nonEmpty then s" [$edit]" else ""}")
       org.junit.Assert.assertEquals(s"$when: hovers that differ from the whole-file run", Nil, differ.reverse.take(5))
       org.junit.Assert.assertEquals(s"$when: errors", wholeErrors.mkString("\n"), sessionErrors.mkString("\n"))

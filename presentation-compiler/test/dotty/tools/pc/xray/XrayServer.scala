@@ -256,6 +256,15 @@ object XrayServer:
         "typingSpans" -> typingNow.map(sp => Map("start" -> sp.start, "end" -> sp.end)),
         "completionOwner" -> owner)
 
+  /** The diagnostics of the file in `ds` for the page, those still stale marked. */
+  private def problemsOf(uri: URI, source: SourceFile, ds: List[dotty.tools.dotc.reporting.Diagnostic]): List[Map[String, Any]] =
+    val stale = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[dotty.tools.dotc.reporting.Diagnostic, java.lang.Boolean])
+    driver.staleDiagnostics(uri).foreach(stale.add)
+    ds.filter { d => val f = d.pos.source.file; d.pos.exists && f != null && f.path == source.file.path }.map(d => Map(
+      "start" -> d.pos.start, "end" -> d.pos.end,
+      "level" -> (if d.level >= dotty.tools.dotc.interfaces.Diagnostic.ERROR then "error" else if d.level >= dotty.tools.dotc.interfaces.Diagnostic.WARNING then "warning" else "info"),
+      "message" -> d.msg.message, "stale" -> stale.contains(d)))
+
   /** The diagnostics of a whole-file run of `code` in a fresh driver of its
    *  own: the count the background pass must match (cached by content).
    */
@@ -647,8 +656,10 @@ object XrayServer:
     var hover: Map[String, Any] | Null = null
     var diagnostics = 0
     var diagnosticText: List[String] = Nil
+    var union: List[dotty.tools.dotc.reporting.Diagnostic] = Nil
     def keep(ds: List[dotty.tools.dotc.reporting.Diagnostic]): Int =
       diagnosticText = ds.take(8).map(d => s"${d.pos.line + 1}: ${d.msg.message.take(160)}")
+      union = ds
       ds.size
     try
       driver.withCancelChecker(checker) {
@@ -742,6 +753,9 @@ object XrayServer:
       "ms" -> math.round(ms * 10) / 10.0,
       "touched" -> touched, "touchedBefore" -> touchedBefore, "completed" -> completed, "scopeSize" -> total,
       "diagnostics" -> diagnostics, "diagnosticText" -> diagnosticText,
+      // the session's diagnostic set (the union of its stores, §12), for the
+      // Problems tab and the gutter; an edited definition's old ones are stale
+      "problems" -> problemsOf(uri, source, union),
       "completions" -> completions.map(c => c.label + (if c.description.nonEmpty then " " + c.description else "")).take(50),
       "hover" -> hover,
       // what the request did with an edit (-Yinteractive-body-edits): kept the run, or why not

@@ -186,11 +186,13 @@ class CompletionSoakSuite extends BasePCSuite:
     val variants = List("a", "b").map(tag => points(file(tag))) ++ edits.map(e => points(e(file("a"))))
     for (v, i) <- variants.zipWithIndex.drop(2) do
       org.junit.Assert.assertTrue(s"edit $i changes the file", v._1 != variants.head._1)
-    // The oracle: a fresh driver, the whole file typed, the completions at every point
+    // The oracle: a fresh driver, the whole file typed, the completions at
+    // every point, and the diagnostics
+    val oracleDiagnostics = mutable.ArrayBuffer.empty[String]
     val oracle = variants.map { (content, offsets) =>
       val d = newDriver()
       val source = SourceFile.virtual(uri, content)
-      d.run(uri, source)
+      oracleDiagnostics += SessionDiagnostics.of(d.run(uri, source))
       offsets.map(o => o -> labels(d, source, o)).toMap
     }
     val driver = newDriver(bodyEdits = edits.nonEmpty)
@@ -245,11 +247,27 @@ class CompletionSoakSuite extends BasePCSuite:
       org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] completions at $offset after $what (variant $variant)\n${log.takeRight(if edits.nonEmpty then 40 else 8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
       val t = touched(driver)
       org.junit.Assert.assertTrue(s"[$name seed=$seed step $step] symbols still Touched after $what: ${t.mkString(", ")}", t.isEmpty)
+    var diagnosticChecks = 0
+    /** With body edits: the session completed (a whole-file run), its
+     *  diagnostics exactly the oracle's for the content (§12).
+     */
+    def checkDiagnostics(step: Int): Unit =
+      if edits.nonEmpty then
+        val (content, _) = variants(variant)
+        val obtained = SessionDiagnostics.of(driver.run(uri, SourceFile.virtual(uri, content)))
+        diagnosticChecks += 1
+        if oracleDiagnostics(variant) != obtained then
+          val (e, o) = (oracleDiagnostics(variant).linesIterator.toList, obtained.linesIterator.toList)
+          println(s"[soak $name seed=$seed step $step] diagnostics differ: missing ${e.diff(o).mkString(" // ")}; extra ${o.diff(e).mkString(" // ")}")
+          println(driver.diagnosticsByProvenance(uri).map((p, d) => s"  $p ${d.pos.span} ${d.msg.message.take(60)}").mkString("\n"))
+        org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] the diagnostics of the completed session (variant $variant)\n${log.takeRight(12).mkString("\n")}", oracleDiagnostics(variant), obtained)
     for step <- 1 to steps do
       val (content, offsets) = variants(variant)
       val offset = offsets(rng.nextInt(offsets.size))
       rng.nextInt(10) match
         case 0 =>
+          // the content an earlier edit reached, before it is left
+          checkDiagnostics(step)
           // one edit at a time: from `a` to any variant, from any other back to `a`
           variant = if variants.size == 2 then 1 - variant else if variant == 0 then 1 + rng.nextInt(variants.size - 1) else 0
           val now = variants(variant)._2
@@ -272,7 +290,8 @@ class CompletionSoakSuite extends BasePCSuite:
           check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))
         case _ =>
           check(step, "complete", offset)
-    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points${if edits.nonEmpty then adopted.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") else ""}")
+    checkDiagnostics(steps + 1)
+    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points${if edits.nonEmpty then adopted.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") + s"; diagnostics of the completed session checked $diagnosticChecks times" else ""}")
     if edits.nonEmpty then
       org.junit.Assert.assertTrue(s"[$name seed=$seed] some body edits keep the run: $adopted", adopted.keys.exists(_.startsWith("body edit")))
     // A small file is mostly served from what is typed, so few attempts find typing to land in
