@@ -48,6 +48,50 @@ sbt --mem 8192 -batch "scala3-presentation-compiler/Test/runMain dotty.tools.pc.
 
 Then open <http://127.0.0.1:8791/> (`-Dxray.port=...` to change; `-Dxray.page=<path>` if the page is not found relative to the working directory; `-Dxray.latch=<file>` enables latched requests, the sbt route sets neither, so for the latch run the server directly: `sbt "export scala3-presentation-compiler/Test/fullClasspath"`, then `java -Dxray.latch=/tmp/xray-latch -cp <that classpath> dotty.tools.pc.xray.XrayServer` from the worktree root). The first build is about 2.5 minutes; the server warms the driver up on a 5-object file before listening. `Ctrl/⌘-Space` in the editor is "Complete at cursor". The page is read from disk on every request, so it can be edited without a rebuild.
 
+## How to demo the replay
+
+The replay plays a Metals editing session recorded from an `lsp.trace.json` (by `trace_to_events.py` on `claude/mr-measure-37f089`, the format `QueueReplaySuite` reads) against a fresh driver once per mode, with the trace's own timing, and tabulates what each mode did per request kind. Start the server on the presentation compiler's test classpath with the events file, from the worktree root. First the classpath:
+
+```bash
+sbt --client "export scala3-presentation-compiler/Test/fullClasspath" | grep '^/' | tail -1 > out/pc-test-classpath.txt
+```
+
+Then the server:
+
+```bash
+java -Xms20g -Xmx20g -XX:+UseParallelGC -XX:-UseAdaptiveSizePolicy -Xmn10g -XX:+AlwaysPreTouch -Xss16m -Dxray.port=8801 -Dxray.latch=/tmp/xray-latch-8801 -Dxray.replay.events=/Users/jzaugg-virtus/code/scratch/mr-measure/replay-events.json -Dxray.replay.bodyEditEvents=local/body-edit-scenario.json -cp "$(cat out/pc-test-classpath.txt)" dotty.tools.pc.xray.XrayServer
+```
+
+The heap and the collector are the perflab campaigns' (a fixed heap with a large young generation and the parallel collector, pre-touched; sized here for a 48 GB machine), so that the throughput demo's numbers are comparable with them: each N of the demo types every file of the source set in a fresh driver. The page shows the flags the server runs with.
+
+**Throughput.** In the Replay view, *Run throughput* types every file of the source set in one fresh run (`openAll`, every statement skipped, `-Yinteractive-readers`, the build's options) with N reader threads for each N in the list (1,2,4,6,8 by default), after one single-reader warm-up, and plots the speed-up against N=1 (or the wall time, with the batch typer's time on the same files as a reference line) in the *Throughput* tab of the bottom panel. Per N: wall, worker CPU, root waits, the files whose errors differ from N=1's (should be 0), backoffs, raised cycles, and the wall split into the open (serial), typing (until the first thread runs out of files) and the tail; and a timeline with one lane per thread: the open, each file typed (hover for its name), idle at the end.
+
+Open <http://127.0.0.1:8801/>, pick the Replay view (the circular arrow in the activity bar), choose a window of the trace, and press *Run all modes*. The view says which files and how many events and requests the window replays. While a mode runs, the editor shows the replayed file with the request in flight marked, the mode's card shows its progress, and the *Replay findings* tab fills in, per mode and request kind:
+
+- count, cancellations and errors;
+- latency (from when the request was due to its answer) median, p90 and max, and the time it queued behind the request before it in its lane;
+- time waiting on the completion lock (step 3) or on a completion root another reader holds (step 4), and on a statement another reader was typing; in the baseline, the wait for the other lane's run (`CachingDriver` has one compiler);
+- trees typed, runs started and how many of them on the whole file;
+- for the whole-file kinds, whether the diagnostics equal those of a whole-file run of the same content in a fresh driver;
+- answers that differ from the baseline's answer to the same event, with the first few (fresh-name numbers such as `contextual$3` are left out of the comparison: they follow the order of typing, which targeting changes).
+
+Each mode's card has *Run* to replay that mode again; *Export markdown* downloads the table (`/replay/report.md`), *Copy markdown* copies it.
+
+The modes:
+
+| mode | flags | what it is |
+|---|---|---|
+| baseline | `-Yno-targeted-requests` | Metals today: `CachingDriver` over the driver, so the whole file is typed once per edit or file switch and same-content requests are served from it (the replay applies the same rule; the hand-driven driver is a `CachingDriver`) |
+| default | none | targeting, the session, several readers serialised by the completion lock (step 3) |
+| readers | `-Yinteractive-readers` | independent readers (step 4) |
+| noCache | `-Yno-targeted-requests` | the plain driver without the cache: every request types the whole file; not what Metals does, and not part of *Run all modes* |
+
+Hover, definition and completion call `readUpTo`, as the providers' `runUpTo` does; document highlight, inlay hints and semantic tokens call `readAll`, as `run` does. The replay does not go through Metals' job queue, which serialises every request: *lanes* 1 is that one queue, 2 (the default) gives the cursor requests a lane of their own beside the whole-file ones, as a presentation compiler with several readers would. didClose drops the file's text only.
+
+On the `demo/integration` branch (this branch with `claude/body-edit` merged; local, not pushed), a fourth mode, `bodyEdits` (`-Yinteractive-body-edits`), and a second scenario: the seeded edit-then-hover session `BodyEditScenarioSuite` writes to `local/body-edit-scenario.json` (Types.scala, 10 edits inside bodies of methods with a declared result type, each followed by a hover elsewhere, a hover inside the edited body and a document highlight, and 2 controls that must take a fresh run: a signature edit and an edit inside a method whose result type is inferred). Start the server with `-Dxray.replay.bodyEditEvents=local/body-edit-scenario.json` as well. The findings add groups for the requests after an edit, and a column with how many of the first requests after an edit found the session's run kept or took a fresh run, against what the scenario expects. The editor's tab strip shows the same for the request in flight, and for requests driven by hand: *run kept* with what the edit did (`body edit of foldOver (typed), shifted …`), or *fresh run*.
+
+Freeform: the selector next to the reset button sets the flags of the driver you drive by hand and resets it; the hovers, the background pass and the latch work as before, and the strip at the left of the status bar shows the latency of each request (the replay's too, coloured by mode).
+
 ## What the numbers were (60 objects, warm JVM)
 
 | request | typed | `typedTreeCount` | ms |

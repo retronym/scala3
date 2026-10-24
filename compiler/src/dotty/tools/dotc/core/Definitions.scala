@@ -2109,16 +2109,20 @@ class Definitions {
   // ----- primitive value class machinery ------------------------------------------
 
   class PerRun[T](generate: Context ?=> T) {
-    private var current: RunId = NoRunId
-    private var cached: T = uninitialized
+    // the run id and the value in one immutable object, so that a reader on
+    // another thread (interactive mode) sees the pair or nothing
+    private var cached: PerRun.Cached[T] | Null = null
     def apply()(using Context): T = {
-      if (current != ctx.runId) {
-        cached = generate
-        current = ctx.runId
-      }
-      cached
+      val c = cached
+      if c != null && c.runId == ctx.runId then c.value
+      else
+        val c1 = PerRun.Cached(ctx.runId, generate)
+        cached = c1
+        c1.value
     }
   }
+  object PerRun:
+    final class Cached[T](val runId: RunId, val value: T)
 
   @tu lazy val ScalaNumericValueTypeList: List[TypeRef] = List(
     ByteType, ShortType, CharType, IntType, LongType, FloatType, DoubleType)

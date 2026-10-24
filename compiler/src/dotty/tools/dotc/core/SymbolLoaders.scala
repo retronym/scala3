@@ -413,7 +413,27 @@ abstract class SymbolLoader extends LazyType { self =>
     ctx.profiler.onCompletion(sym, associatedFileName)(body)
   }
 
+  /** A loader's root is its file (the class and module it loads, and the
+   *  TASTy members unpickled from it, `TreeUnpickler`), or the loader.
+   */
+  override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
+    val f = symd.symbol.associatedFile
+    if f == null then this else f
+
+  /** Independent readers: the other root of this load (the linked class or
+   *  module class, and the module val) is hidden from other readers while
+   *  the loader runs, as the root itself is (`SymDenotation.completeIndependently`).
+   */
+  private def hideOtherRoots(root: SymDenotation)(using Context): List[SymDenotation] =
+    if !(ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders) || root.isRoot then Nil
+    else
+      val key = completionRoot(root)
+      val linked = root.scalacLinkedClass
+      val candidates = List(linked, if root.is(ModuleClass) then root.sourceModule else linked.sourceModule)
+      candidates.filter(_.exists).map(_.denot).distinct.filter(d => (d ne root) && (d.infoOrCompleter eq this) && d.hideWhileCompleting(key))
+
   override def complete(root: SymDenotation)(using Context): Unit = profileCompletion(root) {
+    val hidden = hideOtherRoots(root)
     def loadingMessage(ex: IOException): Message = {
       if (ctx.debug) ex.printStackTrace()
       val msg = ex.getMessage()
@@ -468,6 +488,7 @@ abstract class SymbolLoader extends LazyType { self =>
       postProcess(root, other)
       if (!root.isRoot)
         postProcess(other, root.symbol)
+      hidden.foreach(_.publishCompletion())
     }
   }
 

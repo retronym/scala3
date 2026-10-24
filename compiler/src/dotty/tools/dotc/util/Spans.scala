@@ -92,6 +92,12 @@ object Spans {
       )
     }
 
+    /** Do the closed ranges of this span and that span share an offset? For
+     *  a zero-extent `that` this is `contains`.
+     */
+    def touches(that: Span): Boolean =
+      exists && that.exists && start <= that.end && that.start <= end
+
     /** Is this span synthetic? */
     def isSynthetic: Boolean = pointDelta == SyntheticPointDelta
 

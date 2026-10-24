@@ -90,6 +90,20 @@ object Typer {
   /** Tree adaptation lost fidelity; this attachment preserves the original tree. */
   val AdaptedTree = new Property.StickyKey[tpd.Tree]
 
+  /** In interactive mode, where the driver keeps a session that survives an
+   *  edit inside a body (`-Yinteractive-body-edits`): the context and
+   *  statement owner each definition of a package or template was typed in,
+   *  by symbol, so that it can be re-indexed and typed again in the same
+   *  context after an edit. A context property of the session's run.
+   */
+  val RecordedDefContexts = new Property.Key[java.util.IdentityHashMap[Symbol, (Context, Symbol)]]
+
+  /** In interactive mode, while the driver re-indexes a definition after an
+   *  edit inside its body: the existing symbol the Namer refines instead of
+   *  creating one, by name and the span of the name, or `NoSymbol`.
+   */
+  val RefinedSymbols = new Property.Key[(Name, Span) => Symbol]
+
   /** An attachment on a Select node with an `apply` field indicating that the `apply`
    *  was inserted by the Typer.
    */
@@ -198,14 +212,19 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    *  Note: It would be more proper to move importedFromRoot into typedIdent.
    *  We should check that this has no performance degradation, however.
    */
-  private var unimported: Set[Symbol] = Set()
+  // (`Reader.unimported`: per request, since one typer serves every
+  // concurrent request of a run in interactive mode)
+  private def unimported(using Context): Set[Symbol] = ctx.reader.unimported
+  private def unimported_=(syms: Set[Symbol])(using Context): Unit = ctx.reader.unimported = syms
 
   /** Temporary data item for single call to typed ident:
    *  This symbol would be found under Scala2 mode, but is not
    *  in dotty (because dotty conforms to spec section 2
    *  wrt to package member resolution but scalac doe not).
+   *  (`Reader.foundUnderScala2`, likewise.)
    */
-  private var foundUnderScala2: Type = NoType
+  private def foundUnderScala2(using Context): Type = ctx.reader.foundUnderScala2
+  private def foundUnderScala2_=(tp: Type)(using Context): Unit = ctx.reader.foundUnderScala2 = tp
 
   // Overridden in derived typers
   def newLikeThis(nestingLevel: Int): Typer = new Typer(nestingLevel)
@@ -565,7 +584,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               previous // no more conflicts possible in this case
             else if (isPossibleImport(NamedImport) && curImport != null && (curImport ne outer.importInfo)) {
               def updateUnimported() =
-                if (curImport.unimported ne NoSymbol) unimported += curImport.unimported
+                if (curImport.unimported ne NoSymbol) unimported = unimported + curImport.unimported
               val namedImp = namedImportRef(curImport)
               if (namedImp.exists)
                 checkImportAlternatives(namedImp, NamedImport, ctx)(using outer)
@@ -1601,17 +1620,22 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
   def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
-    // Targeted typing applies to the statements of a block that contains the
+    // Targeted typing applies to the statements of a block that touches the
     // target (see `Targeting`): a skipped one's symbol, indexed just above,
     // completes lazily if a later statement refers to it. A block typed for
     // another reason is typed whole, and so is one inside an inline method
     // (its body is kept whole for its callers) or one typed speculatively
-    // (see `Run.targetingTyperState`).
-    val run = ctx.run
-    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
-       && (ctx.typerState eq run.targetingTyperState)
+    // (see `Reader.targetingTyperState`). Under explicit nulls a block is
+    // typed whole as well: flow facts pass from one statement to the next
+    // (`if x eq null then x = new T` before `x.m`, `if x == null then return`
+    // before `x.length`), and a statement typed without the ones before it,
+    // or resumed in the context it was skipped in, misses them (I64).
+    val reader = ctx.reader
+    if reader.typingTarget.exists && blockSpan.touches(reader.typingTarget)
+       && (ctx.typerState eq reader.targetingTyperState)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
-    then run.targetNextStats(ctx.owner, inBlock = true)
+       && !ctx.explicitNulls
+    then reader.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
@@ -3090,6 +3114,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     def isInner(owner: Symbol) = owner == sym || sym.is(Param) && owner == sym.owner
     val outer = ctx.outersIterator.dropWhile(c => isInner(c.owner)).next()
     def local: FreshContext = outer.fresh.setOwner(newLocalDummy(sym.owner))
+    sym.owner.denot.awaitOtherReader() // I73
     val ctx0 = sym.owner.infoOrCompleter match
       case completer: Namer#Completer
       if sym.is(Param) && completer.completerTypeParams(sym).nonEmpty =>
@@ -3567,12 +3592,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
-      // only a class that contains the target is typed along the path to it,
+      // only a class that touches the target is typed along the path to it,
       // and not one typed speculatively (a local class in a closure argument)
-      val run = ctx.run.nn
-      if run.typingTarget.exists && cdef.span.contains(run.typingTarget)
-         && (run.targetingTyperState == null || (ctx.typerState eq run.targetingTyperState))
-      then run.targetNextStats(dummy)
+      val reader = ctx.reader
+      if cdef.span.touches(reader.typingTarget)
+         && (reader.targetingTyperState == null || (ctx.typerState eq reader.targetingTyperState))
+      then reader.targetNextStats(dummy)
       val body1 =
         implementDeferredGivens(
           addParentRefinements(
@@ -3758,7 +3783,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               case _ =>
           // a package clause is never skipped as a statement, so one that does not
           // contain the target is targeted too: all of its statements are skipped
-          if ctx.run.nn.typingTarget.exists then ctx.run.nn.targetNextStats(pkg.moduleClass)
+          if ctx.reader.typingTarget.exists then ctx.reader.targetNextStats(pkg.moduleClass)
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)
             stats1 = stats1 ++ typedBlockStats(MainProxies.proxies(stats1))._1
@@ -3950,7 +3975,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       NoSymbol
   }
 
-  protected def localTyper(sym: Symbol): Typer = nestedTyper.remove(sym).get
+  protected def localTyper(sym: Symbol)(using Context): Typer = nestedTyper.remove(sym).get
 
   def typedUnadapted(initTree: untpd.Tree, pt: Type = WildcardType)(using Context): Tree =
     typedUnadapted(initTree, pt, ctx.typerState.ownedVars)
@@ -4170,11 +4195,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       record("typed total")
       if ctx.phase.isTyper then
         assertPositioned(tree)
-      val run = ctx.run.nn
-      run.checkCancelledTyping()
+      ctx.reader.checkCancelledTyping()
       if tree.source != ctx.source && tree.source.exists then
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
-      else if run.isCancelled then
+      else if ctx.run.nn.isCancelled then
         tree.withType(WildcardType)
       else adapt(typedUnadapted(tree, pt, locked), pt, locked)
     }
@@ -4213,7 +4237,18 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           case none =>
             val newCtx = if (ctx.owner.isTerm && adaptCreationContext(mdef)) ctx
               else ctx.withNotNullInfos(initialNotNullInfos)
-            typed(mdef)(using newCtx) match {
+            val recordedDefs = if ctx.owner.isTerm then None else ctx.property(RecordedDefContexts)
+            // under the same flag: what typing a member reports is the
+            // member statement's (`Provenance`)
+            val typedMdef = recordedDefs match
+              case Some(_) => mdef.getAttachment(SymOfTree) match
+                case Some(sym) => ctx.reader.withProvenance(reporting.Provenance.Stat(sym))(typed(mdef)(using newCtx))
+                case None => typed(mdef)(using newCtx)
+              case None => typed(mdef)(using newCtx)
+            recordedDefs match
+              case Some(recorded) if typedMdef.isInstanceOf[ValOrDefDef] => recorded.put(typedMdef.symbol, (ctx, exprOwner))
+              case _ =>
+            typedMdef match {
               case mdef1: DefDef
               if mdef1.symbol.is(Inline, butNot = Deferred) && !Inlines.bodyToInline(mdef1.symbol).isEmpty =>
                 buf ++= inlineExpansion(mdef1)
@@ -4269,7 +4304,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // We have to check the Completer of symbol befor typedValDef,
     // otherwise the symbol is already completed using creation context.
     mdef.getAttachment(SymOfTree) match {
-      case Some(sym) => sym.infoOrCompleter match {
+      case Some(sym) => { sym.denot.awaitOtherReader(); sym.infoOrCompleter } match { // I73
         case completer: Namer#Completer =>
           if completer.creationContext.notNullInfos ne ctx.notNullInfos then
             // The RHS of a val def should know about not null facts established

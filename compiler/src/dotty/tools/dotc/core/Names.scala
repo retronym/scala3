@@ -445,21 +445,24 @@ object Names {
   /** The term name represented by the empty string */
   val EmptyTermName: SimpleName = new SimpleName("")
 
-  /** Hashtable for finding term names quickly. */
-  @sharable // because it's only mutated in enterIfNew which is synchronized
-  private val nameTable: mutable.HashMap[String, SimpleName] = new mutable.HashMap[String, SimpleName](initialCapacity = 0x10000, loadFactor = 2.0)
-  nameTable("") = EmptyTermName
+  /** Hashtable for finding term names quickly. A concurrent map, so that a
+   *  hit takes no lock: one lock around every lookup serialised the scanners
+   *  of files parsed in parallel (`ParserPhase.parseInParallel`, several
+   *  readers over one run).
+   */
+  @sharable // a concurrent map
+  private val nameTable = new java.util.concurrent.ConcurrentHashMap[String, SimpleName](0x10000)
+  nameTable.put("", EmptyTermName)
 
-  private def enterIfNew(str: String): SimpleName = synchronized {
+  private def enterIfNew(str: String): SimpleName =
     Stats.record("NameTable.get")
-    nameTable.get(str) match
-      case Some(n) => n
-      case None =>
-        Stats.record("NameTable.add")
-        val res = SimpleName(str)
-        nameTable(str) = res
-        res
-  }
+    val n = nameTable.get(str)
+    if n != null then n
+    else
+      Stats.record("NameTable.add")
+      val res = SimpleName(str)
+      val prev = nameTable.putIfAbsent(str, res)
+      if prev != null then prev else res
 
   /** Create a term name from the UTF8 encoded bytes in bs[offset..offset+len-1].
    */

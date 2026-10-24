@@ -38,7 +38,9 @@ object WrappedSourceFile:
 
   private def lookupMagicHeader(sourceFile: SourceFile)(using Context): MagicHeaderInfo =
     val cache = ctx.base.magicHeaderCache
-    cache.lookup(sourceFile) match
+    // shared by the readers of a concurrent base: a lookup or an update races a grow
+    val concurrent = ctx.base.isConcurrent
+    (if concurrent then cache.synchronized(cache.lookup(sourceFile)) else cache.lookup(sourceFile)) match
       case null =>
         val magicHeader = ctx.settings.YmagicOffsetHeader.value
         val result =
@@ -59,7 +61,7 @@ object WrappedSourceFile:
                   report.warning(em"original source file not found: $name")
                   NoHeader
               case None => NoHeader
-        cache(sourceFile) = result
+        if concurrent then cache.synchronized { cache(sourceFile) = result } else cache(sourceFile) = result
         result
       case result => result
 
@@ -84,6 +86,17 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
         try new String(file.toByteArray, codec.charSet)
         catch case _: FileSystemException => ""
       )
+
+  /** Replace the content, in place. Only for the interactive session's edit
+   *  inside a body (docs/_docs/internals/interactive-session.md §12), which
+   *  keeps every tree, context and unit of the file and shifts their spans:
+   *  they keep referring to this object, which now holds the new content.
+   */
+  private[dotc] def replaceContent(content: String): Unit =
+    myContent = content
+    cachedCharArrayContent = null
+    lineIndicesCache = null.asInstanceOf[Array[Int]]
+    lastLine = 0
 
   override def name: String =
     if file eq null then "" else file.name
@@ -198,9 +211,11 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
    *  Lines are numbered from 0
    */
   def offsetToLine(offset: Int): Int = {
-    lastLine = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
-    if (offset >= length) lastLine -= 1 // compensate for the sentinel
-    lastLine
+    // the result in a local: `lastLine` is only a hint, shared by the readers of a file
+    var line = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
+    lastLine = line
+    if (offset >= length) line -= 1 // compensate for the sentinel
+    line
   }
 
   /** The index of the first character of the line containing position `offset` */

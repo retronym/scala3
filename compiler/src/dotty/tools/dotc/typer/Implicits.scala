@@ -274,14 +274,18 @@ object Implicits:
    */
   class OfTypeImplicits(tp: Type, override val companionRefs: TermRefSet)(initctx: Context) extends ImplicitRefs(initctx) {
     implicits.println(i"implicit scope of type $tp = ${companionRefs.showAsList}%, %")
-    @threadUnsafe lazy val refs: List[ImplicitRef] = {
+    // Not `@threadUnsafe`: an implicit scope is cached for the run
+    // (`implicitScopeCache`) and read by every reader in interactive mode; an
+    // unsafely published list (its cells' `next` is a var) could be seen cut
+    // short by another thread.
+    lazy val refs: List[ImplicitRef] = {
       val buf = new mutable.ListBuffer[TermRef]
       for (companion <- companionRefs) buf ++= companion.implicitMembers
       buf.toList
     }
 
     /** The candidates that are eligible for expected type `tp` */
-    @threadUnsafe lazy val eligible: List[Candidate] =
+    lazy val eligible: List[Candidate] =
       trace(i"eligible($tp), companions = ${companionRefs.showAsList}%, %", implicitsDetailed, show = true) {
         if (refs.nonEmpty && monitored) record(s"check eligible refs in tpe", refs.length)
         filterMatching(tp)
@@ -305,7 +309,10 @@ object Implicits:
       val refs: List[ImplicitRef],
       val outerImplicits: ContextualImplicits | Null,
       val importInfo: ImportInfo | Null)(initctx: Context) extends ImplicitRefs(initctx) {
-    private val eligibleCache = EqHashMap[Type, List[Candidate]]()
+    private val eligibleCache =
+      // `NoContext.implicits` is made while `NoContext` is constructed, before any base exists
+      val base: ContextBase | Null = irefCtx.base
+      if base == null then EqHashMap[Type, List[Candidate]]() else base.newEqHashMap[Type, List[Candidate]]()
 
     /** The level increases if current context has a different owner or scope than
      *  the context of the next-outer ImplicitRefs. This is however disabled under
@@ -632,7 +639,7 @@ import Implicits.*
 trait ImplicitRunInfo:
   self: Run =>
 
-  private val implicitScopeCache = util.EqHashMap[Type, OfTypeImplicits]()
+  private lazy val implicitScopeCache = runContext.base.newEqHashMap[Type, OfTypeImplicits]()
 
   private def isExcluded(sym: Symbol) =
     if migrateTo3 then false else sym.is(Package) || sym.isPackageObject
@@ -1992,17 +1999,34 @@ end OpenSearch
 /**
  * The state corresponding to the outermost context of an implicit searcch.
  */
-final class SearchRoot extends SearchHistory:
+final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
   val root = this
   val byname = false
   def openSearchPairs = Nil
 
+  // The root of the initial context is shared by every top-level search of a
+  // run: with several readers (`perThread`, an interactive base read by
+  // several threads) its state is per thread, so that two readers' searches
+  // do not count each other's expressions or see each other's dictionary
+  // (finding I55).
+  private final class State:
+    var nestedSearches: Int = 0
+    var dictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  private val shared = State()
+  private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
+  private def state: State = if local == null then shared else local.get.nn
+
+  /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */
+  def clearThread(): Unit = if local != null then local.remove()
+
   /** How many expressions were constructed so far in the current toplevel implicit search?
    */
-  var nestedSearches: Int = 0
+  def nestedSearches: Int = state.nestedSearches
+  def nestedSearches_=(n: Int): Unit = state.nestedSearches = n
 
   /** The dictionary of recursive implicit types and corresponding terms for this search. */
-  var myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  def myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = state.dictionary
+  def myImplicitDictionary_=(d: mutable.Map[Type, (TermRef, tpd.Tree)] | Null): Unit = state.dictionary = d
   private def implicitDictionary =
     initialize(myImplicitDictionary, myImplicitDictionary = _,  mutable.Map.empty[Type, (TermRef, tpd.Tree)])
 

@@ -399,16 +399,22 @@ object Scopes {
      *  Does _not_ include the elements of inherited scopes.
      */
     override final def toList(using Context): List[Symbol] = {
-      if (elemsCache == null) {
+      // built in a local and published once: with several readers another
+      // one may enter a symbol (and null the cache) while this one builds it
+      // (I77, a null `elemsCache` in a package's member names)
+      val known = elemsCache
+      if (known != null) known
+      else {
         ensureComplete()
-        elemsCache = Nil
+        var elems: List[Symbol] = Nil
         var e = lastEntry
         while ((e != null) && e.owner == this) {
-          elemsCache = e.sym :: elemsCache.nn
+          elems = e.sym :: elems
           e = e.prev
         }
+        elemsCache = elems
+        elems
       }
-      elemsCache.nn
     }
 
     override def implicitDecls(using Context): List[TermRef] = {
