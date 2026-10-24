@@ -131,6 +131,13 @@ object Throughput:
 
   // ---- one measurement
 
+  /** When a cell's open started and ended, and each file's typing: (reader,
+   *  file, start, end), in `System.nanoTime` (the x-ray's per-thread timeline). */
+  final class Timeline:
+    @volatile var start: Long = 0L
+    @volatile var opened: Long = 0L
+    val files = new java.util.concurrent.ConcurrentLinkedQueue[(Int, String, Long, Long)]()
+
   final case class Cell(what: String, k: Int, wallMs: Double, indexMs: Double, warmMs: Double, workerCpuMs: Double, processCpuMs: Double,
       rootWaitMs: Double, rootWaits: Int, waitsByKind: Map[String, (Int, Double)], statementWaitMs: Double, backoffs: Int,
       steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int], failure: String = "", cyclesRaised: Int = 0)
@@ -160,12 +167,13 @@ object Throughput:
    *  file's errors (the x-ray's throughput demo). */
   def measure(what: String, k: Int, lists: Array[List[FileJob]], readers: Boolean, warm: Boolean, files: List[FileJob], reference: Map[URI, List[String]],
       cancelled: () => Boolean = () => false, onProgress: (Int, Int) => Unit = (_, _) => (),
-      diagnosticsOut: java.util.Map[URI, List[String]] | Null = null): Cell =
+      diagnosticsOut: java.util.Map[URI, List[String]] | Null = null, timeline: Timeline | Null = null): Cell =
     val driver = freshDriver(readers)
     val cpu0 = os.getProcessCpuTime
     val t0 = System.nanoTime()
     driver.openAll(files.map(f => f.uri -> f.source))
     val tIndex = System.nanoTime()
+    if timeline != null then { timeline.start = t0; timeline.opened = tIndex }
     if warm then
       // one reader types every file's imports: the roots the set imports
       for f <- files do
@@ -196,6 +204,7 @@ object Throughput:
           while next != null do
             val f = next
             current.set(f.rel)
+            val fileStart = System.nanoTime()
             driver.withCancelChecker(cancelled) {
               readersSeen.add(driver.readerOfThisThread)
               driver.readUpTo(f.uri, f.source, Span(f.visible.start))((_, _, _) => ())
@@ -214,6 +223,7 @@ object Throughput:
                 missing.take(showErrors).foreach(e => println(s"[tp]   - $e"))
             }
             onProgress(t, done.incrementAndGet(t))
+            if timeline != null then timeline.files.add((t, f.rel, fileStart, System.nanoTime()))
             next = queues(t).pollFirst()
             if next == null then
               // steal the last file of the longest list left
