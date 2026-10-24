@@ -193,10 +193,18 @@ object XrayServer:
 
   /** Reset the typer state: a fresh driver (a new symbol table, run ids from
    *  1), warmed up like the first one. */
+  /** A driver for `mode`: `CachingDriver` (Metals' own, with its
+   *  same-content cache) for a mode that says so, the plain driver otherwise.
+   */
+  private[xray] def newDriver(mode: Replay.Mode): InteractiveDriver =
+    val flags = baseSettings ++ mode.flags
+    if mode.cache then dotty.tools.pc.CachingDriver(flags, () => java.util.List.of[java.nio.file.Path](), null, scala.meta.pc.SourcePathMode.DISABLED)
+    else new InteractiveDriver(flags, CachedLogicalPackage.none)
+
   private[xray] def resetDriver(mode: Replay.Mode = freeformMode): Map[String, Any] = lock.synchronized {
     val t0 = System.nanoTime()
     freeformMode = mode
-    driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
+    driver = newDriver(mode)
     driver.run(generatedUri, SourceFile.virtual(generatedUri, generatedSource("warmup", 5)))
     backgroundState = Map("state" -> "idle")
     Map("warmupMs" -> (System.nanoTime() - t0) / 1000000, "mode" -> mode.key, "flags" -> mode.flags.mkString(" "))

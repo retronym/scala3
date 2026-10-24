@@ -50,13 +50,19 @@ import dotty.tools.dotc.util.Spans.Span
 object Replay:
 
   /** A configuration of the driver the replay compares. */
-  final case class Mode(key: String, title: String, flags: List[String])
+  /** A configuration of the driver the replay compares. `cache`: requests go
+   *  through `CachingDriver`'s rule (no run when the file and content are
+   *  those of the last run), as in Metals. `inRunAll`: part of "Run all
+   *  modes".
+   */
+  final case class Mode(key: String, title: String, flags: List[String], cache: Boolean = false, inRunAll: Boolean = true)
 
   val modes: List[Mode] = List(
-    Mode("baseline", "-Yno-targeted-requests (baseline: every request types the whole file)", List("-Yno-targeted-requests")),
+    Mode("baseline", "-Yno-targeted-requests + CachingDriver (Metals today): the whole file typed once per edit or file switch, same-content requests served from it", List("-Yno-targeted-requests"), cache = true),
     Mode("default", "default: targeting, the session, several readers serialised (step 3)", Nil),
     Mode("readers", "-Yinteractive-readers: independent readers (step 4)", List("-Yinteractive-readers")),
-    Mode("bodyEdits", "-Yinteractive-body-edits: the session survives an edit inside a body (§12)", List("-Yinteractive-body-edits")))
+    Mode("bodyEdits", "-Yinteractive-body-edits: the session survives an edit inside a body (§12)", List("-Yinteractive-body-edits")),
+    Mode("noCache", "-Yno-targeted-requests without CachingDriver: every request types the whole file (not what Metals does)", List("-Yno-targeted-requests"), inRunAll = false))
 
   def modeNamed(key: String): Mode = modes.find(_.key == key).get
 
@@ -309,7 +315,7 @@ object Replay:
     mr.state = "preparing: a fresh driver"
     XrayServer.resetDriver(mr.mode)
     val driver = XrayServer.driver
-    val baselineCache = if mr.mode.key == "baseline" then Some(new BaselineCache) else None
+    val baselineCache = if mr.mode.cache then Some(new BaselineCache) else None
     val lanes = Vector.fill(math.max(1, mr.spec.lanes))(Executors.newSingleThreadExecutor(r => { val t = new Thread(r, "xray-replay-lane"); t.setDaemon(true); t }))
     val cancels = new ConcurrentHashMap[String, AtomicBoolean]()
     val futures = mutable.ListBuffer.empty[Future[?]]
@@ -549,7 +555,7 @@ object Replay:
     path match
       case "/replay/describe" => reply(ex, 200, "application/json", json(describe(spec)))
       case "/replay/run" =>
-        val keys = field(q, "modes").map(_.split(',').toList.filter(k => modes.exists(_.key == k))).filter(_.nonEmpty).getOrElse(modes.map(_.key))
+        val keys = field(q, "modes").map(_.split(',').toList.filter(k => modes.exists(_.key == k))).filter(_.nonEmpty).getOrElse(modes.filter(_.inRunAll).map(_.key))
         reply(ex, 200, "application/json", json(start(keys, spec)))
       case "/replay/stop" => stop(); reply(ex, 200, "application/json", json(Map("stopping" -> true)))
       case "/replay/status" => reply(ex, 200, "application/json", json(status(field(q, "since").map(_.toInt).getOrElse(0))))

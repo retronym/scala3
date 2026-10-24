@@ -77,9 +77,10 @@ The modes:
 
 | mode | flags | what it is |
 |---|---|---|
-| baseline | `-Yno-targeted-requests` | every request types the whole file, with `CachingDriver`'s cache (no run when the file and content are those of the last run) |
+| baseline | `-Yno-targeted-requests` | Metals today: `CachingDriver` over the driver, so the whole file is typed once per edit or file switch and same-content requests are served from it (the replay applies the same rule; the hand-driven driver is a `CachingDriver`) |
 | default | none | targeting, the session, several readers serialised by the completion lock (step 3) |
 | readers | `-Yinteractive-readers` | independent readers (step 4) |
+| noCache | `-Yno-targeted-requests` | the plain driver without the cache: every request types the whole file; not what Metals does, and not part of *Run all modes* |
 
 Hover, definition and completion call `readUpTo`, as the providers' `runUpTo` does; document highlight, inlay hints and semantic tokens call `readAll`, as `run` does. The replay does not go through Metals' job queue, which serialises every request: *lanes* 1 is that one queue, 2 (the default) gives the cursor requests a lane of their own beside the whole-file ones, as a presentation compiler with several readers would. didClose drops the file's text only.
 
