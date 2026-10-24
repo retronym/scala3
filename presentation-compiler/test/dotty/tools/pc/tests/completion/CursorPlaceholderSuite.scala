@@ -20,9 +20,9 @@ import org.junit.Test
  *  does not). Stock takes a fresh driver for it, so
  *  the commonest member completion paid a cold compiler and a run of its own
  *  on every request. With targeted requests it goes through the session
- *  (I82): an edit inside a body that the session keeps its run across
- *  (`-Yinteractive-body-edits`), or else a targeted run on the warm driver;
- *  and the real content is restored once the completions are built.
+ *  (I82) when the session keeps its run across an edit inside a body
+ *  (`-Yinteractive-body-edits`), and the real content is restored once the
+ *  completions are built; without body edits the stock fresh driver stays.
  */
 abstract class CursorPlaceholderBase extends BaseCompletionSuite:
 
@@ -92,7 +92,7 @@ class CursorPlaceholderSuite extends CursorPlaceholderBase:
 
 class CursorPlaceholderNoBodyEditsSuite extends CursorPlaceholderBase:
 
-  @Test def `an-empty-prefix-is-a-targeted-run-on-the-warm-driver` =
+  @Test def `without-body-edits-the-session-is-left-alone` =
     val query = source(200)
     val (code, offset) = params(query)
     withDriver(_.runUpTo(uri, dotty.tools.dotc.util.SourceFile.virtual(uri, code), dotty.tools.dotc.util.Spans.Span(offset)))
@@ -102,7 +102,6 @@ class CursorPlaceholderNoBodyEditsSuite extends CursorPlaceholderBase:
     assert(items.exists(_.startsWith("xs")), s"the scope's names: ${items.take(10)}")
     val (run1, typed1, on1, _) = state(code)
     println(s"[cursor-placeholder] no body edits: ${ms}ms, run $run0 -> $run1, typed $typed0 -> $typed1")
-    // the placeholder went through this driver (a fresh driver leaves its run alone)
-    assert(run1 != run0, "the placeholder and the restore are runs of the session's driver")
-    assert(on1, "the real content is restored")
-    assert(typed1 > 0 && typed1 < 800, s"a targeted run, never a whole-file one: typed $typed1")
+    // the stock path: a fresh driver for the placeholder, this driver's run untouched
+    assertEquals(run0, run1, "the session is left alone")
+    assert(on1 && typed1 == typed0)

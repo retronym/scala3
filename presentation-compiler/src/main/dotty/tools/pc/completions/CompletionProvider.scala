@@ -70,14 +70,16 @@ class CompletionProvider(
      *  happening.
      */
 
-    // With targeted requests the placeholder goes through the session (I82):
-    // inside a body it is an edit the session keeps its run across
-    // (-Yinteractive-body-edits), and otherwise a targeted run on a warm
-    // driver, either way far cheaper than a fresh driver's cold run. The real
+    // With body edits (-Yinteractive-body-edits) the placeholder goes through
+    // the session (I82): inside a body it is an edit the session keeps its
+    // run across, far cheaper than a fresh driver's cold run. The real
     // content is restored once the completions are built, so that the
     // session, its background pass and its diagnostics never stay on the
-    // placeholder.
-    val placeholderInSession = wasCursorApplied && cachingDriver.targetedRequests
+    // placeholder. Without body edits the stock fresh driver stays: through
+    // the session the placeholder would be two runs (it and the restore), and
+    // a previous content's top-level symbols then reach the completion as
+    // stale ones (CompletionMatchSuite.stale2).
+    val placeholderInSession = wasCursorApplied && cachingDriver.bodyEdits
     val driver = if wasCursorApplied && !placeholderInSession then cachingDriver.freshDriver() else cachingDriver
     // Only the statements up to the one containing the offset are typed
     driver.runUpTo(uri, sourceFile, Span(params.offset()))
