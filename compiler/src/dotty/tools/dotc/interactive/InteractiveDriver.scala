@@ -610,7 +610,7 @@ class InteractiveDriver(
               currentlyTyping = sk.stat.span
               val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
               synchronized {
-                completionLocked(ctx1.typerState.commit()(using ctx0))
+                endStatementState(ctx1, ctx0)
                 spliceAll(List((sk, stats)))(using sk.ctx)
                 collectSkipped()
                 typing.remove(sk)
@@ -699,7 +699,7 @@ class InteractiveDriver(
             reader.targetingTyperState = ctx1.typerState
             val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
             synchronized {
-              completionLocked(ctx1.typerState.commit()(using ctx0))
+              endStatementState(ctx1, ctx0)
               collectSkipped()
             }
             typed += ((sk, stats))
@@ -1398,6 +1398,17 @@ class InteractiveDriver(
    */
   def asWriter[T](body: => T): T = writing(body)
 
+  /** The end of a statement's typing (a resume or a pass): its typer state is
+   *  committed into the one it was skipped in, under the completion lock; with
+   *  independent readers it is private, settled (its type variables
+   *  instantiated, its messages issued) and dropped, and the run's root state
+   *  stays read-only (I76: constraints shared through the root state, a
+   *  conversion's `A` met bound to another reader's type).
+   */
+  private def endStatementState(ctx1: Context, ctx0: Context): Unit =
+    if independentReaders then ctx1.typerState.settle(ctx0)(using ctx1)
+    else completionLocked(ctx1.typerState.commit()(using ctx0))
+
   /** Several files in one run, a session for each (the throughput
    *  experiment of the multi-reader notes): every top-level statement of
    *  every file is skipped (with `typeAll`, none is), and each file gets a
@@ -1452,6 +1463,8 @@ class InteractiveDriver(
         uri -> s
       }
       myCtx = myCtx.fresh.setPhase(myInitCtx.base.typerPhase)
+      // from here on, readers settle their own typer states (I76)
+      if independentReaders then myCtx.typerState.readOnlyRoot = true
       myOtherSessions = sessions.toMap
       sessions.map((u, s) => u -> s.currentDiagnostics).toMap
     catch case ex: (CompilationUnit.CancelledCompilation | FatalError) =>
@@ -1529,6 +1542,8 @@ class InteractiveDriver(
       myOpenedTrees.synchronized { myOpenedTrees(uri) = topLevelTrees(t, source) }
       myCompilationUnits.synchronized { myCompilationUnits(uri) = unit }
       myCtx = myCtx.fresh.setPhase(myInitCtx.base.typerPhase)
+      // from here on, readers settle their own typer states (I76)
+      if independentReaders then myCtx.typerState.readOnlyRoot = true
 
       val diagnostics = reporter.removeBufferedMessages
       // A whole-file run leaves a session too, with nothing skipped: the

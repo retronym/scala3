@@ -1049,7 +1049,11 @@ class Namer { typer: Typer =>
           commitInto match
             case target: TyperState if !own =>
               val c = ictx
-              ctx.base.completionLock.locked(CompletionLock.commit)(c.typerState.commit()(using c.fresh.setTyperState(target)))
+              if ctx.base.isConcurrent && ctx.base.independentReaders then
+                // independent readers: private, settled and dropped (I76)
+                c.typerState.settle(c.fresh.setTyperState(target))(using c)
+              else
+                ctx.base.completionLock.locked(CompletionLock.commit)(c.typerState.commit()(using c.fresh.setTyperState(target)))
             case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
