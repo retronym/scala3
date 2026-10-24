@@ -2286,24 +2286,48 @@ object SymDenotations {
 
     /** The type parameters of this class */
     override final def typeParams(using Context): List[TypeSymbol] = {
-      if (myTypeParams == null)
-        myTypeParams =
-          if (ctx.erasedTypes || is(Module)) Nil // fast return for modules to avoid scanning package decls
-          else {
-            val di = initial
-            if (this ne di) di.typeParams
-            else {
-              // another reader completing this class: wait, then look; from
-              // its `InProgress` the type parameters came out empty, and were
-              // cached ("Setting does not take type parameters", I73)
-              awaitOtherReader()
-              infoOrCompleter
-            } match {
-              case info: TypeParamsCompleter => info.completerTypeParams(symbol)
-              case _ => typeParamsFromDecls
-            }
+      def compute: List[TypeSymbol] =
+        if (ctx.erasedTypes || is(Module)) Nil // fast return for modules to avoid scanning package decls
+        else {
+          val di = initial
+          if (this ne di) di.typeParams
+          else infoOrCompleter match {
+            case info: TypeParamsCompleter => info.completerTypeParams(symbol)
+            case _ => typeParamsFromDecls
           }
-      myTypeParams.nn
+        }
+      // With independent readers the cache is shared, and a completion in
+      // progress fills it from its intermediate view (empty before the type
+      // parameters are indexed), which `info_=` resets only when it ends: the
+      // owner of the completion computes without caching, any other reader
+      // waits for it first; and a result is kept only if no completion
+      // started or ended while it was computed (I75: "Setting does not take
+      // type parameters" from a computation that began before another
+      // reader's completion and read its intermediate state; I73 for the
+      // peek). The field is read once: `info_=` may null it between a check
+      // and a read.
+      if !(ctx.base.isConcurrent && ctx.base.independentReaders) then
+        val known = myTypeParams
+        if known != null then known
+        else
+          val computed = compute
+          myTypeParams = computed
+          computed
+      else
+        var result: List[TypeSymbol] | Null = null
+        while result == null do
+          myInfo match
+            case ip: InProgress if ip.ownedHere => result = compute
+            case _: InProgress => awaitOtherReader()
+            case before =>
+              val known = myTypeParams
+              if known != null then result = known
+              else
+                val computed = compute
+                if myInfo eq before then
+                  myTypeParams = computed
+                  result = computed
+        result
     }
 
     override protected[dotc] final def info_=(tp: Type): Unit = {
