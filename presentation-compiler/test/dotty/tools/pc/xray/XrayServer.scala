@@ -347,8 +347,10 @@ object XrayServer:
         if (t.source eq source) && t.span.exists && !t.span.isSynthetic then
           t match
             case t: tpd.Ident if t.symbol.exists && !t.name.isEmpty => add(t.span.start, t.span.end, t.symbol)
-            case t: tpd.Select if t.symbol.exists && t.span.point >= 0 => add(t.span.point, t.span.point + t.name.toString.length, t.symbol)
-            case t: tpd.MemberDef if t.symbol.exists && !t.symbol.is(Synthetic) =>
+            // a constructor has no name in the source (`<init>`; the primary
+            // one's name span is its parameter list's opening)
+            case t: tpd.Select if t.symbol.exists && t.span.point >= 0 && !t.symbol.isConstructor => add(t.span.point, t.span.point + t.name.toString.length, t.symbol)
+            case t: tpd.MemberDef if t.symbol.exists && !t.symbol.is(Synthetic) && !t.symbol.isConstructor =>
               val p = t.nameSpan; add(p.start, p.end, t.symbol)
             case _ =>
         traverseChildren(t)
@@ -440,7 +442,7 @@ object XrayServer:
             t match
               case t: tpd.Ident if same(t.symbol) => out += Map("start" -> t.span.start, "end" -> t.span.end, "write" -> false)
               case t: tpd.Select if same(t.symbol) && t.span.point >= 0 => out += Map("start" -> t.span.point, "end" -> (t.span.point + t.name.toString.length), "write" -> false)
-              case t: tpd.MemberDef if same(t.symbol) => val p = t.nameSpan; out += Map("start" -> p.start, "end" -> p.end, "write" -> true)
+              case t: tpd.MemberDef if same(t.symbol) && !t.symbol.isConstructor => val p = t.nameSpan; out += Map("start" -> p.start, "end" -> p.end, "write" -> true)
               case _ =>
           traverseChildren(t)
       tr.traverse(tree)

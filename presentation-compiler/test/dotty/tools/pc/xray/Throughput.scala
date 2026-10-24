@@ -132,7 +132,7 @@ object Throughput:
 
   final case class Cell(what: String, k: Int, wallMs: Double, indexMs: Double, warmMs: Double, workerCpuMs: Double, processCpuMs: Double,
       rootWaitMs: Double, rootWaits: Int, waitsByKind: Map[String, (Int, Double)], statementWaitMs: Double, backoffs: Int,
-      steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int])
+      steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int], failure: String = "")
 
   private val showErrors = sys.props.getOrElse("tp.showErrors", "0").toInt
   private val threads = ManagementFactory.getThreadMXBean
@@ -266,15 +266,22 @@ object Throughput:
       report(round, batch(files))
       report(round, measure("serialised, round-robin", 1, assign("rr", 1, files, graph), readers = false, warm = false, files, reference).copy(what = "serialised rr"))
       for k <- ks; p <- policies do
-        report(round, measure(p, k, assign(p, k, files, graph), readers = true, warm = p == "warm", files, reference))
+        // a reader that fails ends the cell, not the campaign: recorded, and counted in the table
+        val c =
+          try measure(p, k, assign(p, k, files, graph), readers = true, warm = p == "warm", files, reference)
+          catch case ex: RuntimeException =>
+            Cell(p, k, Double.NaN, Double.NaN, 0, Double.NaN, Double.NaN, 0, 0, Map.empty, 0, 0, 0, 0, 0, Nil, ex.getMessage.take(300))
+        if c.failure.nonEmpty then println(s"[tp] round $round $p k=$k FAILED: ${c.failure}")
+        report(round, c)
     // medians over the measured rounds
     val measured = results.filter(_._1 >= 1).map(_._2).toList
-    println("\n| run | k | wall s | index s | worker CPU s | process CPU s | root waits (n / s) | backoffs | steals | files differ |")
-    println("|---|---|---|---|---|---|---|---|---|---|")
-    def med(xs: Seq[Double]) = xs.sorted.apply(xs.size / 2)
-    for ((what, k), cs) <- measured.groupBy(c => (c.what, c.k)).toList.sortBy((wk, _) => (wk._2, wk._1)) do
+    println("\n| run | k | wall s | index s | worker CPU s | process CPU s | root waits (n / s) | backoffs | steals | files differ (max) | failed |")
+    println("|---|---|---|---|---|---|---|---|---|---|---|")
+    def med(xs: Seq[Double]) = if xs.isEmpty then Double.NaN else xs.sorted.apply(xs.size / 2)
+    for ((what, k), all) <- measured.groupBy(c => (c.what, c.k)).toList.sortBy((wk, _) => (wk._2, wk._1)) do
+      val cs = all.filter(_.failure.isEmpty)
       println(f"| $what | $k | ${med(cs.map(_.wallMs)) / 1e3}%.1f | ${med(cs.map(_.indexMs)) / 1e3}%.1f | ${med(cs.map(_.workerCpuMs)) / 1e3}%.1f | ${med(cs.map(_.processCpuMs)) / 1e3}%.1f | " +
-        f"${med(cs.map(_.rootWaits.toDouble)).toInt} / ${med(cs.map(_.rootWaitMs)) / 1e3}%.1f | ${med(cs.map(_.backoffs.toDouble)).toInt} | ${med(cs.map(_.steals.toDouble)).toInt} | ${cs.map(_.diagnosticsDiffer).max} |")
+        f"${med(cs.map(_.rootWaits.toDouble)).toInt} / ${med(cs.map(_.rootWaitMs)) / 1e3}%.1f | ${med(cs.map(_.backoffs.toDouble)).toInt} | ${med(cs.map(_.steals.toDouble)).toInt} | ${cs.map(_.diagnosticsDiffer).maxOption.getOrElse(0)} | ${all.size - cs.size} of ${all.size} |")
     sys.props.get("tp.out").foreach { out =>
       val json = measured.map(c => s"""{"what":"${c.what}","k":${c.k},"wallMs":${c.wallMs},"indexMs":${c.indexMs},"warmMs":${c.warmMs},"workerCpuMs":${c.workerCpuMs},"processCpuMs":${c.processCpuMs},"rootWaitMs":${c.rootWaitMs},"rootWaits":${c.rootWaits},"statementWaitMs":${c.statementWaitMs},"backoffs":${c.backoffs},"steals":${c.steals},"diagnostics":${c.diagnostics},"differ":${c.diagnosticsDiffer},"byKind":{${c.waitsByKind.map((k, v) => s""""$k":[${v._1},${v._2}]""").mkString(",")}}}""").mkString("[\n", ",\n", "\n]")
       Files.writeString(Paths.get(out), json)
