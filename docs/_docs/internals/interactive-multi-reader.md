@@ -645,3 +645,53 @@ A `MutableScope` that a loader `enter`s into while another reader does `lookupEn
 The same reorder applies to `NamedType`'s triple (`lastDenotation`, `lastSymbol`, then `checkedPeriod`), where the invariants in the source already say which field implies which; packing the three into one immutable `CachedDenot(denot, sym, period)` and publishing the reference is the alternative when the A/B shows the ordered stores cost on the batch path.
 
 What the ten leave out, deliberately: diagnostics stored with the fact (§4.3), which is the stage 3 reporter change and larger than a sketch; a fresh typer state per completion, which is §9's open question; and non-destructive attachments (I8), which stage 3 lists first and 10.4 depends on.
+
+## 11. Checkpoint, 24 October 2026
+
+### Where the PoC stands
+
+Built on retronym/scala3#84, base `track-i/dotc-session`, all behind flags, batch compilation unchanged in behaviour and within the noise of a cross-build A/B:
+
+- The `Reader` (step 2) and several readers under one completion lock (step 3), the default in interactive mode.
+- Independent readers behind `-Yinteractive-readers` (step 4): an owner and barrier per completion root, `InProgress` seen through only by its owner, a typer state and reporter per completion, peeks that wait, wait-for cycles handled by victim selection then backoff or `CyclicReference`.
+- Edits inside a body keep the run behind `-Yinteractive-body-edits`; diagnostics invalidated by provenance (§12 Diagnostics, I69).
+- Range targets for inlay hints and semantic tokens.
+- The x-ray: background pass, replay per mode with a computed findings table, the edit scenario, the build's compiler options, one server per build.
+- Numbers: hovers ~1 ms beside a background pass with the pass's diagnostics equal to a whole-file run's; the whole-file run after a keystroke in `Types.scala` 382 → 6 ms; all 484 `dotc` sources typed in 2.1 s with 8 readers against the batch typer's 4.1 s, root waits a few milliseconds in total; the three modes tie on the recorded editor window because the whole-file askers dominate it.
+- Suites: the presentation-compiler suite and the session suites in both reader modes pass; 81 findings (I34–I81 on this branch, continuing Track I's series), each with its mechanism and a test.
+
+Open: I68's residue (at k=8, 7 files in 20 rounds × 484 diverge, in 2 rounds, all from the 3 cycles raised on `Setting`'s hierarchy, and the Shown soak diverges only in the 3 of 30 rounds where a body-typing reader backed off, what that backoff leaves for the other readers being undiagnosed; the cycles: a wait-for chain through Namer roots that is a lock order, not a dependency cycle, so the victim rule needs to tell the two apart, probably by checking whether the waited-on completion's rule actually asks for the waiter's symbol); I74 (a Namer completion cannot be re-run after an unwind, so the backing-off reader must never be inside one: the long-term fix is re-runnable completions, which is I8's non-destructive attachments); the step 3 vs step 4 perflab campaign, paused at 4 of 8 rounds within 1–4%; `testCompilation` not run on the provenance branch.
+
+### Lessons
+
+1. Measure the queue before building the concurrency. Nine tenths of Metals' queueing was behind whole-file work, not behind other targeted requests; concurrency alone would not have shortened it, and the measurement set the order of everything after it.
+2. The barrier is the whole correctness argument. The Lean model said it (`run_agree`: owners and a barrier, no ranking, no fairness) and the implementation confirmed it: every divergence found since was a place where a reader saw state that was not published, not a scheduling problem.
+3. Every peek is a race. The design counted thirteen `isCompleting` sites; the race hunt found seven more shapes of the same thing (`typeParams` caching an empty list, `ensureCompletions` skipping a constructor, a `LazyRef` in progress taken for a cycle). The rule that held: "in progress on another reader" is never a state to act on, only to wait for.
+4. A shared typer state is a channel between readers. Committing a statement's or a completion's constraints into the run's state let one reader's binding reach another's typing (I52, I62, I70). The `Shown` mismatches, first put down to this, were not: I76 made the state private and they stayed; they were I78, a cache on a shared denotation (`asSeenFrom`) kept in three fields. The fix each time was the same: a private state, every variable instantiated at the end, the state dropped.
+5. The serialised premise does not exist in dotc. "Concurrency in body typing only" assumed bodies and completions were separable; typing a body forces completions, and 65–79% of a reader's time is inside them. Step 3 was a correct stepping stone and a wrong ship point (hovers 141 ms median behind the lock).
+6. Roots coarser than facts turn lock orders into cycles. A file-level TASTy root or a bring-forward in a wait-for chain is usually not a dependency cycle; raising `CyclicReference` there made false errors (I54), backing off made I74. The residue on `Setting` is the same tension one level down, between Namer roots.
+7. The batch compiler is kept fast by paying at construction and along existing seams: a `protected def` answered once per `ContextBase`, one virtual `reader`, the in-progress state as a lazy type on the slow path already there. The one per-access cost (release/acquire on `checkedPeriod`) is the one that still needs a paired A/B.
+8. The editor's cost is the whole-file askers, so targeting and readers pay off only once inlay hints and semantic tokens become range requests and the whole-file work becomes a background pass; for keystrokes, the win is keeping the run across a body edit.
+9. The race hunt that worked: a loop of the k=8 whole-set run with a per-file diff of diagnostics against a single-reader run, the claim/owner log around each divergence, one shape at a time, each shape then added to a suite; plus a soak that hammers one pattern from every reader (`ShownSoak`: conversions to `Shown` written as interpolations, views, summons and longhand, ten of seventeen files divergent a round against about one in the 484-file loop) and two review sweeps for the known shapes; together they found eleven instances (I78–I81), the sweeps seven of them before the loop would have.
+10. Demo honesty costs a day and is worth it: the baseline must go through `CachingDriver`, the driver must use the build's compiler options, and a server that outlives its build misleads (I58, the `Shown` warnings, the 8799 wedge).
+
+### Next steps
+
+- Close I68: distinguish a lock-order chain from a dependency cycle at Namer roots (does the waited-on completion's rule ask for the waiter's symbol?), then 20 clean rounds at k=8.
+- Re-runnable Namer completions (I8, non-destructive attachments): removes I74's design limit and is stage 3's first step.
+- A pool of background annotators over a session per open file: the throughput numbers justify it; the pool's unit is a statement, visible range first, results versioned by content, delivery per statement.
+- Metals: range requests for semantic tokens and inlay hints, a presentation-compiler diagnostics source for the Problems panel, a reader pool in `CompilerAccess` with whole-file requests as writers, and the queue-reset fix (I50).
+- Perflab: the step 3 costs behind a `-Y` switch so paired in-fork variants can resolve below 2%; finish step 3 vs step 4.
+- Stage 3: facts that outlive a run (completers as functions of node and owner, re-validation by trace), for snapshot readers across an edit and finer invalidation.
+- The same inventory applied to Scala 2 runtime reflection: one composite scratch object behind a single override, then per-root barriers in place of the GIL (in progress on a branch of scala/scala).
+
+### Upstreamable to the stock compiler and Metals now
+
+Independent of any of the experiment's flags, each with a test on this branch:
+
+- I50: after a request timeout, mtags' queue reset leaves the old executor's backlog running beside the new queue on one driver (`denotation ... invalid in run`); the PC side holds the driver's monitor per job, the mtags side needs an issue.
+- I15, withdrawn: the only `freshDriver()` in the completion provider is taken when the cursor placeholder was inserted into the text, which the cache could not serve anyway; the fresh driver keeps the real content's run cached. Not a bug.
+- I10: the 16-bit run id is unguarded; a long-lived driver overflows it into the phase bits.
+- I11 and the stock cancellation: `InteractiveDriver`'s `isCancelled` consumes the interrupt bit and nothing in the typer polls it, so Metals' cancel token cancels the future and never the work; the sticky flag and the typer checkpoints are separable from targeting.
+- I49, after a stock reproduction: a scaladoc comment cooked under a discarded typer state is cached without its warning.
+- The `Reader` refactor itself (kind A out of `ContextBase` and `Run`) is hygiene the batch compiler could take with a paired A/B, since it names every piece of per-request state in one place.
