@@ -463,6 +463,7 @@ private sealed trait XSettings:
   val XkindProjector: Setting[String] = ChoiceSetting(AdvancedSetting, "Xkind-projector", "[underscores, enable, disable]", "Allow `*` as type lambda placeholder to be compatible with kind projector. When invoked as -Xkind-projector:underscores will repurpose `_` to be a type parameter placeholder, this will disable usage of underscore as a wildcard.", List("disable", "", "underscores"), "disable", legacyArgs = true)
 
   val XmaxFuel: Setting[Int] = IntSetting(AdvancedSetting, "Xmax-fuel", "Max fuel for recursive operations before abandoning.", 550)
+  val YspineThreshold: Setting[Int] = IntSetting(ForkSetting, "Yspine-threshold", "Recursion depth beyond which chains of selections and applications are typed by a loop instead of by recursion; -1 disables.", 128)
 
   /** Documentation related settings */
   val XdropComments: Setting[Boolean] = BooleanSetting(AdvancedSetting, "Xdrop-docs", "Drop documentation when scanning source files.", aliases = List("-Xdrop-comments"))

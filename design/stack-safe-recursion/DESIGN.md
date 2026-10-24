@@ -246,6 +246,51 @@ Continuations for deep stacks:
 
 Worklists in type inference: GHC's constraint solver (OutsideIn(X)) and rustc's obligation fulfilment (`ObligationForest`) use worklists for *constraints*, not for traversing trees. They are relevant to completer chains, not to how deeply trees nest.
 
+## Spine spike (Typer only)
+
+Branch commit "Spike: spine loop in Typer". It covers `Select` qualifiers, `Apply` function parts, and term `InfixOp`s (which desugar to `Apply(Select(l, op), r)`).
+
+Refactoring, with behaviour unchanged at the recursive call sites:
+- `realApply` is split into `realApplyProto` (pre) and `realApplyRest`/`typedApplyFinish` (post).
+- `typedSelect`'s term case is split at `typedSelectOnTermRest`, and `typedInfixOp` at `typedInfixOpRest`.
+- `handleTypeError` and the simplification tail of `typedUnadapted` are extracted.
+
+The loop:
+- `typed` switches to `typedSpine` once `ctx.base.recursiveDepth >= -Yspine-threshold` (default 128; -1 disables). This only happens for `Select`/`Apply`/`InfixOp` nodes and only in the frontend `Typer` class itself, not in subclasses.
+- `spineFrame` follows the path `typed` → `typedUnadapted` → `typedSelect`/`typedApply`/`typedInfixOp` and builds a frame. It returns `null` wherever that path would do something the frame doesn't model: a source switch, cancellation, `TypedAhead`, a context-function `pt`, pattern or type mode, op-assignment, a function part that isn't a `Select`, or Java.
+- On the way up, the loop mirrors `typed`'s exception structure. A `TypeError` inside a link turns that link into an error tree. A `TypeError` from adapting a link is handled by its parent.
+
+Results, `-Xss2m`, nonbootstrapped compiler ([`spine-spike/run.sh`](spine-spike/run.sh)), with `-Ystop-after:typer`:
+
+| input (n terms) | 200 | 400 | 1000 | 3000 | 10000 |
+|---|---|---|---|---|---|
+| `x + 0 + 1 + ...` before | ok | FUEL | FUEL | FUEL | SOE (parser `checkPos`) |
+| `x + 0 + 1 + ...` spine | ok | ok | ok | ok | SOE (parser `checkPos`) |
+| `0 :: 1 :: ... :: Nil` before | ok | FUEL | FUEL | SOE (parser `checkPos`) | SOE |
+| `0 :: 1 :: ... :: Nil` spine | ok | ok | ok | SOE (parser `checkPos`) | SOE |
+| `sb.append(0).append(1)...` before | ok | FUEL | FUEL | parser gives up | parser gives up |
+| `sb.append(0).append(1)...` spine | ok | ok | ok | parser gives up | parser gives up |
+
+FUEL is `RecursionOverflow` at the default `-Xmax-fuel` of 550. Each link of a chain costs 2 fuel, so today chains of about 275 terms fail. In the spine runs, every input that gets through the parser also gets through the typer.
+
+What overflows next:
+- **Parser:** `Positioned.checkPos` runs on every unit, because `Config.checkPositions` is an `inline val true`. Long `else if` ladders and `.append` chains hit a parser limit at about 1200 links and report spurious syntax errors.
+- **Error reporting:** `SyntaxHighlighting`'s tree traversal overflows while rendering an error that points into a long chain.
+- **After the typer:** with the full pipeline, the first failure is now PostTyper's `TreeMap` recursion (`PostTyperTransformer.transform`/`transformSelect`), at about 400 terms with a 2 MiB stack. It used to be masked by the typer's fuel limit. Pickling, the MegaPhases, Erasure and the backend come after it.
+
+Equivalence check: `testCompilation` with the default threshold forced to 0, so that every `Select`/`Apply`/`InfixOp` in the suite goes through the loop. 88 of 89 suites pass. The two failures are neg tests that check *where* `RecursionOverflow` fires:
+- `tests/neg/26888.scala` sets `-Xmax-fuel:50`, and its error moves from `f10` to `f12`;
+- the reported position and the list of operations in `tests/neg/i10605b.check` shift by one frame.
+
+Both are expected: loop links consume no fuel and record no "typing" operation. Both pass at the default threshold.
+
+Not done in the spike:
+- `If.elsep` and `Block.expr` spines;
+- `Erasure.Typer`, `ReTyper` and `InlineTyper`;
+- the phases after the typer;
+- a perf A/B. The fast path only adds a field load and a compare in `typed`, but that hasn't been measured.
+- Loop links also bypass `trace` and `Stats.record("typed …")`.
+
 ## Recommendation
 
 Implement **A for the frontend Typer, MegaPhase, TASTy and the backend**, for the few spine kinds the frame histogram identifies. Use **D as the catch-all past the threshold** for everything A doesn't cover. Use the explicit-stack form of B only for the generic traversals (`TreeMap`, `TreeAccumulator`, `TypeMap`), where the code is already uniform. Don't CPS-convert Typer: the toy shows B covers more, but in dotc that coverage would be paid for by rewriting `Applications` and the speculation machinery into continuations. Park C, and revisit it only if D proves unacceptable (cancellation, the cost of each hop, tooling).
@@ -254,8 +299,8 @@ Implement **A for the frontend Typer, MegaPhase, TASTy and the backend**, for th
 
 1. TODO: Frame histogram. Take stress inputs (operator chains, `::` lists, `else if` ladders, nested calls, `val` chains, deep `given` derivations), compile them with a small `-Xss`, and histogram the frames on the overflowing stacks. The result is the set of recurring cycles, plus how much of the depth A could absorb.
 2. TODO: The two-limit split in `handleRecursive`, D behind a flag, and a threshold-0 mode for the differential runs.
-3. TODO: A for the `Select`/`Apply` fun spine and for `If.elsep` in the frontend Typer, with `testCompilation` in threshold-0 mode diffed against a normal run.
-4. TODO: The same for MegaPhase, `TreeUnpickler` and `TreePickler`, `Erasure.Typer`, and `genLoad`.
+3. DONE (spike): A for `Select`/`Apply`-fun/`InfixOp` in the frontend Typer, with `testCompilation` at threshold 0 (see Spine spike). TODO: `If.elsep`, `Block.expr`, and a diff of TASTy/bytecode at threshold 0 against a normal run, beyond pass/fail.
+4. TODO: PostTyper (`TreeMap`), then the same for MegaPhase, `TreeUnpickler` and `TreePickler`, `Erasure.Typer`, and `genLoad`. Also the parser's `checkPos` and its limit on chain depth, and `SyntaxHighlighting`.
 5. TODO: Perf A/B on the compiler benchmarks: the feature on, off, and forced to threshold 0.
 
 Future work: a user-facing `@stackSafe` annotation (option C) for user code.
