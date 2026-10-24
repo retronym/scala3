@@ -153,8 +153,31 @@ object XrayServer:
   /** The whole test JVM's classpath, so that the compiler's own sources
    *  resolve against its classes (the generated file sees it too).
    */
+  /** The options the build compiles the compiler with (`thisBuildSettings`
+   *  in project/Build.scala, `scalacOptions`), so that the compiler's own
+   *  sources are typed as the build types them and a whole-file run's
+   *  diagnostics are the build's: without `-language:implicitConversions` and
+   *  `-Yexplicit-nulls` the x-ray reported warnings and errors the build never
+   *  does. All but `-Werror` (a warning stays a warning in the editor). Keep
+   *  in step with Build.scala.
+   */
+  val buildOptions: List[String] = List(
+    "-feature", "-deprecation", "-unchecked",
+    "-Wconf:msg=package scala contains object and package with same name:i",
+    "-Wconf:src=scaladoc-testcases/.*:s",
+    "-Wconf:src=presentation-compiler-testcases/.*:s",
+    "-Wconf:msg=The RHS of reassignment must be transitively initialized:i",
+    "-Wconf:msg=Could not verify that the method argument is transitively initialized:i",
+    "-Wconf:msg=may cause initialization errors:i",
+    "-Wconf:cat=deprecation&origin=scala\\.collection\\.Iterable\\.stringPrefix:s",
+    "-encoding", "UTF8",
+    "-language:implicitConversions",
+    "--java-output-version:17",
+    "-Yexplicit-nulls",
+    "-Wsafe-init")
+
   private[xray] val baseSettings =
-    List("-color:never", "-Ximport-suggestion-timeout", "0",
+    buildOptions ++ List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", sys.props.getOrElse("java.class.path", BuildInfo.ideTestsDependencyClasspath.map(_.toPath.toString).mkString(File.pathSeparator)))
     // `-Dxray.readers=independent`: `-Yinteractive-readers` (step 4); otherwise serialised (step 3)
 
@@ -798,6 +821,21 @@ object XrayServer:
     val out = ex.getResponseBody
     out.write(bytes); out.close()
 
+  /** The git tip of the checkout the server runs from, and whether it has
+   *  local changes, for the page's title bar: a screenshot names its binary.
+   */
+  private lazy val gitTip: String =
+    try
+      def git(args: String*) =
+        val p = new ProcessBuilder(("git" +: args)*).redirectErrorStream(true).start()
+        val out = new String(p.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+        p.waitFor(); out
+      val tip = git("rev-parse", "--short=10", "HEAD")
+      val branch = git("rev-parse", "--abbrev-ref", "HEAD")
+      val dirty = git("status", "--porcelain", "--untracked-files=no").nonEmpty
+      s"$branch @ $tip${if dirty then " + local changes" else ""}"
+    catch case scala.util.control.NonFatal(_) => "unknown build"
+
   private val httpThreads = new java.util.concurrent.atomic.AtomicInteger
   /** The HTTP requests being handled: what, on which thread, since when. */
   private val inFlightRequests = new java.util.concurrent.ConcurrentHashMap[Object, (String, Thread, Long)]()
@@ -810,6 +848,7 @@ object XrayServer:
     val port = sys.props.get("xray.port").map(_.toInt).getOrElse(8791)
     val page = findPage()
     println(s"[xray] page: $page")
+    println(s"[xray] build: $gitTip")
     println(s"[xray] latch file: ${latchFile.map(_.getPath).getOrElse("none (-Dxray.latch not set: latched requests disabled)")}")
     releaseLatch()
     println(s"[xray] warming up the driver on other content")
@@ -893,7 +932,7 @@ object XrayServer:
         val mode = field(body, "mode").flatMap(k => Replay.modes.find(_.key == k)).getOrElse(freeformMode)
         reply(ex, 200, "application/json", json(resetDriver(mode)))
       case "/modes" =>
-        reply(ex, 200, "application/json", json(Map("freeform" -> freeformMode.key,
+        reply(ex, 200, "application/json", json(Map("freeform" -> freeformMode.key, "build" -> gitTip,
           "modes" -> Replay.modes.map(m => Map("key" -> m.key, "title" -> m.title, "flags" -> m.flags.mkString(" "))))))
       case p if p.startsWith("/replay") =>
         Replay.route(ex, p)

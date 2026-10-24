@@ -1190,6 +1190,8 @@
     const ms = await (await fetch('/modes')).json();
     $('freeMode').innerHTML = ms.modes.map((m) => `<option value="${esc(m.key)}" title="${esc(m.title)}">${esc(m.key)}${m.flags ? ': ' + esc(m.flags) : ''}</option>`).join('');
     $('freeMode').value = ms.freeform;
+    // the build the server runs, in the title bar and the tab title
+    if (ms.build) { $('busy').insertAdjacentHTML('beforebegin', `<span class="dim mono" style="white-space:nowrap" title="the git tip of the server's checkout">${esc(ms.build)}</span>`); document.title = `x-ray · ${ms.build}`; }
   } catch (e) { /* an older server */ }
   $('freeMode').onchange = () => resetTyper();
   // ---- the replay
