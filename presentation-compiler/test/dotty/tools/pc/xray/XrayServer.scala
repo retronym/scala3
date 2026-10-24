@@ -45,7 +45,7 @@ object XrayServer:
    *  A snapshot rather than the live checkout, so that the files do not move
    *  under the page and the patch's own edits are not what is shown.
    */
-  private val sourcesRoot: Option[Path] =
+  private[xray] val sourcesRoot: Option[Path] =
     sys.props.get("xray.sources").map(Paths.get(_)).filter(Files.isDirectory(_)).orElse(
       Iterator.iterate(Paths.get("").toAbsolutePath)(_.getParent).takeWhile(_ != null)
         .map(_.resolve("out/xray-sources/compiler/src/dotty/tools/dotc")).find(Files.isDirectory(_))).orElse(
@@ -848,7 +848,7 @@ object XrayServer:
   /** The git tip of the checkout the server runs from, and whether it has
    *  local changes, for the page's title bar: a screenshot names its binary.
    */
-  private lazy val gitTip: String =
+  private[xray] lazy val gitTip: String =
     try
       def git(args: String*) =
         val p = new ProcessBuilder(("git" +: args)*).redirectErrorStream(true).start()
@@ -960,6 +960,8 @@ object XrayServer:
           "modes" -> Replay.modes.map(m => Map("key" -> m.key, "title" -> m.title, "flags" -> m.flags.mkString(" "))))))
       case p if p.startsWith("/replay") =>
         Replay.route(ex, p)
+      case p if p.startsWith("/throughput") =>
+        ThroughputDemo.route(ex, p, sourcesRoot)
       case "/background" if ex.getRequestMethod == "POST" =>
         val body = readBody(ex)
         reply(ex, 202, "application/json", json(startBackground(field(body, "code").getOrElse(""), field(body, "file").getOrElse(""),

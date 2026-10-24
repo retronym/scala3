@@ -58,7 +58,7 @@ object Throughput:
       val from = lines.take(first).map(_.length + 1).sum
       Span(from, from + lines.slice(first, first + 60).map(_.length + 1).sum)
 
-  private def loadFiles(): List[FileJob] =
+  private[xray] def loadFiles(root: Path = root): List[FileJob] =
     val s = Files.walk(root)
     val rels = try s.iterator().asScala.filter(_.toString.endsWith(".scala")).map(p => root.relativize(p).toString).toList.sorted finally s.close()
     val limited = sys.props.get("tp.limit").map(n => rels.take(n.toInt)).getOrElse(rels)
@@ -99,7 +99,7 @@ object Throughput:
       out(k) = out.getOrElse(k, 0) + n
     out.toMap
 
-  private def assign(policy: String, k: Int, files: List[FileJob], graph: => Map[(Int, Int), Int]): Array[List[FileJob]] =
+  private[xray] def assign(policy: String, k: Int, files: List[FileJob], graph: => Map[(Int, Int), Int]): Array[List[FileJob]] =
     val groups = Array.fill(k)(mutable.ListBuffer.empty[FileJob])
     val load = Array.fill(k)(0L)
     def leastLoaded = load.indices.minBy(load(_))
@@ -155,7 +155,12 @@ object Throughput:
   private def errorsOf(ds: List[dotty.tools.dotc.reporting.Diagnostic]): List[String] =
     ds.filter(_.level >= 2).map(d => s"${d.pos.line + 1}: ${d.msg.message.linesIterator.nextOption().getOrElse("").take(200)}").sorted
 
-  def measure(what: String, k: Int, lists: Array[List[FileJob]], readers: Boolean, warm: Boolean, files: List[FileJob], reference: Map[URI, List[String]]): Cell =
+  /** `cancelled` is each reader's cancellation checker, `onProgress(t, n)` is
+   *  told that reader `t` has typed `n` files, and `diagnosticsOut` gets each
+   *  file's errors (the x-ray's throughput demo). */
+  def measure(what: String, k: Int, lists: Array[List[FileJob]], readers: Boolean, warm: Boolean, files: List[FileJob], reference: Map[URI, List[String]],
+      cancelled: () => Boolean = () => false, onProgress: (Int, Int) => Unit = (_, _) => (),
+      diagnosticsOut: java.util.Map[URI, List[String]] | Null = null): Cell =
     val driver = freshDriver(readers)
     val cpu0 = os.getProcessCpuTime
     val t0 = System.nanoTime()
@@ -191,7 +196,7 @@ object Throughput:
           while next != null do
             val f = next
             current.set(f.rel)
-            driver.withCancelChecker(() => false) {
+            driver.withCancelChecker(cancelled) {
               readersSeen.add(driver.readerOfThisThread)
               driver.readUpTo(f.uri, f.source, Span(f.visible.start))((_, _, _) => ())
               val ds = driver.readAll(f.uri, f.source, f.visible)((_, _, ds) => ds)
@@ -208,7 +213,7 @@ object Throughput:
                 }
                 missing.take(showErrors).foreach(e => println(s"[tp]   - $e"))
             }
-            done.incrementAndGet(t)
+            onProgress(t, done.incrementAndGet(t))
             next = queues(t).pollFirst()
             if next == null then
               // steal the last file of the longest list left
@@ -229,6 +234,7 @@ object Throughput:
     val rs = readersSeen.asScala.toList
     val byKind = rs.flatMap(_.lockWaits.asScala).groupBy(w => kindOf(w.root)).view.mapValues(ws => (ws.size, ws.map(_.nanos).sum / 1e6)).toMap
     val differ = files.count(f => !Option(diags.get(f.uri)).contains(reference.getOrElse(f.uri, Nil)))
+    if diagnosticsOut != null then diagnosticsOut.putAll(diags)
     Cell(what, k, (t1 - t0) / 1e6, (tIndex - t0) / 1e6, (tWarm - tIndex) / 1e6, cpu.get / 1e6, (cpu1 - cpu0) / 1e6,
       rs.map(_.lockWaitNanos).sum / 1e6, rs.map(_.lockWaitCount).sum, byKind, rs.map(_.statementWaitNanos).sum / 1e6,
       rs.map(_.waitCyclesBackedOff).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList, cyclesRaised = rs.map(_.cyclesRaised).sum)
@@ -246,7 +252,7 @@ object Throughput:
       0, 0, Map.empty, 0, 0, 0, ref.values.map(_.size).sum, 0, List(files.size)), ref)
 
   /** The batch compiler on the same files, up to the typer. */
-  def batch(files: List[FileJob]): Cell =
+  def batch(files: List[FileJob], root: Path = root): Cell =
     System.gc()
     val tmp = Files.createTempDirectory("tp-batch")
     val paths = files.map(f => root.resolve(f.rel).toString)
