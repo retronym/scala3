@@ -47,7 +47,8 @@ import dotty.tools.dotc.util.Spans.Span
  */
 object Throughput:
 
-  private val root = Paths.get("compiler/src/dotty/tools/dotc")
+  // `tp.root`: another source set, e.g. a soak (`ShownSoak`)
+  private val root = Paths.get(sys.props.getOrElse("tp.root", "compiler/src/dotty/tools/dotc"))
   private val settings = XrayServer.baseSettings
 
   final case class FileJob(rel: String, uri: URI, source: SourceFile, size: Int):
