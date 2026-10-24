@@ -1036,6 +1036,13 @@ class Namer { typer: Typer =>
           ictx = saved.freshOver(saved.outer).setTyperState(saved.typerState.fresh(reporter = saved.reporter))
           rebased()
         var completedNormally = false
+        // under `-Yinteractive-body-edits`, what completing a member reports
+        // is the completion's (`Provenance`); a local's is its statement's
+        val reader = ctx.reader
+        val savedProvenance = reader.provenance
+        if ctx.mode.is(Mode.Interactive) && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+            && ctx.property(Typer.RecordedDefContexts).isDefined then
+          reader.provenance = reporting.Provenance.Completion(denot.symbol)
         try
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
@@ -1046,6 +1053,7 @@ class Namer { typer: Typer =>
             denot.info = completer
             completer.complete(denot)
         finally
+          reader.provenance = savedProvenance
           if own then
             // the completion's result is published fully defined: its type
             // variables made permanent (not committed into the namer's state,
