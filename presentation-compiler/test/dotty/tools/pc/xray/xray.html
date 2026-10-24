@@ -240,7 +240,7 @@
           <div id="tpBox">
             <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-readers</code>, the build's options), typed by N reader threads (round-robin, with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
             <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,6,8"></label>
-              <label><input id="tpSpeedup" type="checkbox"> speed-up against N=1</label></div>
+              <label><input id="tpSpeedup" type="checkbox" checked> speed-up against N=1</label></div>
             <div class="row2"><button id="tpRun" class="primary" data-icon="play">Run throughput</button><button id="tpStop" class="ghost" data-icon="cancel">Stop</button></div>
             <div id="tpState" class="dim"></div>
             <p class="dim">The plot, the points and each thread's progress are in the panel below (<b>Throughput</b>).</p>
