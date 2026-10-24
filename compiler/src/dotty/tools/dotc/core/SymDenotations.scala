@@ -100,6 +100,13 @@ object SymDenotations {
       if ctorStable then primaryConstructor.setFlag(StableRealizable)
 
     def isCurrent(fs: FlagSet)(using Context): Boolean =
+      // A completed denotation, the common case, is decided on `myInfo`
+      // alone, as in batch compilation; only a lazy info is looked at
+      // through `ownView`.
+      val i = myInfo
+      !i.isInstanceOf[LazyType] || isCurrentLazy(fs)
+
+    private def isCurrentLazy(fs: FlagSet): Boolean =
       def knownFlags(info: Type): FlagSet = info match
         case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
         case _ => AfterLoadFlags
