@@ -86,8 +86,8 @@ object Diagnostic:
     msg: Message,
     pos: SourcePosition
   ) extends Diagnostic(msg, pos, WARNING) {
-    def toError: Error = Error(msg, pos).tap(e => if isVerbose then e.setVerbose())
-    def toInfo: Info = Info(msg, pos).tap(e => if isVerbose then e.setVerbose())
+    def toError: Error = Error(msg, pos).tap(e => if isVerbose then e.setVerbose()).tap(_.provenance = provenance)
+    def toInfo: Info = Info(msg, pos).tap(e => if isVerbose then e.setVerbose()).tap(_.provenance = provenance)
     def isSummarizedConditional(using Context): Boolean = false
   }
 
@@ -147,6 +147,12 @@ class Diagnostic(
 ) extends interfaces.Diagnostic:
   private var verbose: Boolean = false
   def isVerbose: Boolean = verbose
+
+  /** In interactive mode: the fact being computed where the diagnostic was
+   *  first issued (`Reader.provenance`), which a buffering reporter, flushed
+   *  later, keeps with it.
+   */
+  var provenance: Provenance | Null = null
   def setVerbose(): this.type =
     verbose = true
     this

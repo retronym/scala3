@@ -378,25 +378,15 @@ class InteractiveDriver(
    *  mutate only the session, its unit and its run.
    */
   private class Session(val uri: URI, val source: SourceFile, val run: Run,
-      val reporter: StoreReporter & UniqueMessagePositions, val unit: CompilationUnit,
+      val reporter: SessionReporter, val unit: CompilationUnit,
       recorded: java.util.IdentityHashMap[Symbol, (Context, Symbol)] | Null,
-      shared: SharedMessages | Null = null):
-    /** The reader of the request in progress on the session. */
-
-    /** The messages the run has buffered for this session's file: all of
-     *  them, or, with several sessions on one run (`openAll`), this file's.
-     */
-    private def takeMessages()(using Context): List[Diagnostic] = shared match
-      case null => reporter.removeBufferedMessages
-      case m: SharedMessages => m.take(unit.source)
-
+      shared: Boolean = false, takesNopos: Boolean = true):
     private def reader: Reader = base.reader
 
     // The session's bookkeeping is read and written under the session's
     // monitor; the typing of a claimed statement happens outside it.
 
     private var skipped: List[Run.SkippedStat] = Nil
-    private var diagnostics: List[Diagnostic] = Nil
 
     /** The skipped statements a reader is typing right now (`claim`). */
     // with the thread of the reader that claimed each: a claim whose owner
@@ -415,12 +405,16 @@ class InteractiveDriver(
      */
     @volatile var poisoned: Boolean = false
 
-    def setInitial(skipped: List[Run.SkippedStat], diagnostics: List[Diagnostic]): Unit = synchronized {
+    def setInitial(skipped: List[Run.SkippedStat]): Unit = synchronized {
       this.skipped = skipped
-      this.diagnostics = diagnostics
     }
 
-    def currentDiagnostics: List[Diagnostic] = synchronized(diagnostics)
+    /** The union of the diagnostic stores of the run's reporter (§12,
+     *  "Diagnostics"): all of them, or, with several sessions on one run
+     *  (`openAll`), this file's.
+     */
+    def currentDiagnostics: List[Diagnostic] =
+      if shared then reporter.of(unit.source, takesNopos) else reporter.all
     def skippedNow: List[Run.SkippedStat] = synchronized(skipped)
     def hasSkipped: Boolean = synchronized(skipped.nonEmpty)
     def hasPendingAbandons: Boolean = synchronized(pendingAbandons.nonEmpty)
@@ -545,7 +539,14 @@ class InteractiveDriver(
      *  (`Reader.cancelledCompletions`), so the writer is that reader's thread.
      */
     private def abandon(sk: Run.SkippedStat): Unit =
-      takeMessages()(using sk.ctx)
+      // what the aborted typing and the unwound completions reported goes:
+      // the statement is replaced and typed again (a block statement's are
+      // its member's, and stay)
+      if !sk.inBlock then
+        given Context = sk.ctx
+        val keys = mutable.Set.empty[reporting.Provenance]
+        ctx.typer.foreachIndexedDef(sk.stat)((_, sym) => keys ++= List(reporting.Provenance.Stat(sym), reporting.Provenance.Completion(sym)))
+        reporter.drop(unit.source, keys.toSet)
       if !replacePoisoned(sk) || !replaceUnwound(sk.stat.span)(using sk.ctx) then poisoned = true
 
     private def deferAbandon(sk: Run.SkippedStat): Unit = synchronized {
@@ -633,6 +634,7 @@ class InteractiveDriver(
               val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
               synchronized {
                 endStatementState(ctx1, ctx0)
+                retyped(sk, stats)(using ctx1)
                 spliceAll(List((sk, stats)))(using sk.ctx)
                 collectSkipped()
                 typing.remove(sk)
@@ -651,6 +653,15 @@ class InteractiveDriver(
               // any other exception: the claim is not left behind
               if !released then releaseFailed(sk)
         true
+
+    /** The member statement `sk` is typed (as `stats`): the stale
+     *  diagnostics of its definitions go, its own replace them (§12).
+     */
+    private def retyped(sk: Run.SkippedStat, stats: List[Tree])(using Context): Unit =
+      if !sk.inBlock then stats.foreach {
+        case t: MemberDef if t.symbol.exists => reporter.retyped(reporting.Provenance.Stat(t.symbol))
+        case _ =>
+      }
 
     private def lineOf(sp: Span): String =
       if !sp.exists then "-" else s"line ${source.offsetToLine(sp.start) + 1} (${sp.end - sp.start} chars)"
@@ -722,6 +733,7 @@ class InteractiveDriver(
             val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
             synchronized {
               endStatementState(ctx1, ctx0)
+              retyped(sk, stats)(using ctx1)
               collectSkipped()
             }
             typed += ((sk, stats))
@@ -736,7 +748,7 @@ class InteractiveDriver(
         synchronized {
           assert(!skipped.exists(_.stat.span.touches(target)), s"target $target is still skipped in $uri after the resume of ${batch.map(_._1.stat.span).mkString(", ")}")
         }
-        diagnostics
+        currentDiagnostics
       finally
         reader.clearTargeting()
         val entries = typed.result()
@@ -858,7 +870,6 @@ class InteractiveDriver(
         // with the statements of the unwound completers replaced
         if !replaceUnwound(NoSpan) then poisoned = true
         throw ex
-      finally synchronized { diagnostics = diagnostics ++ takeMessages() }
 
     /** Insert the typed `stats` into the statements of their owner in the
      *  unit's typed tree (the package for a package class, the template for
@@ -916,7 +927,6 @@ class InteractiveDriver(
       }.mkString(s"spliced ${entries.size - dropped.size} of ${entries.size} typed statements; dropped: ", "; ", ""))
       install(t)
       entries.foreach(_._2.foreach(cleanup(_, errorOutCompleters = false)))
-      diagnostics = diagnostics ++ takeMessages()
 
     /** `t` is the unit's new typed tree. */
     private def install(t: Tree)(using Context): Unit =
@@ -972,7 +982,7 @@ class InteractiveDriver(
       val parsed = parse(src, parseErrors)
       val t1 = System.nanoTime()
       var tCompared = t1
-      def took = f"; parse ${(t1 - t0) / 1e6}%.1f ms, compare ${(tCompared - t1) / 1e6}%.1f ms, shift ${shiftNanos / 1e6}%.1f ms, the rest ${(System.nanoTime() - tCompared) / 1e6 - shiftNanos / 1e6}%.1f ms"
+      def took = f"; parse ${(t1 - t0) / 1e6}%.1f ms, compare ${(tCompared - t1) / 1e6}%.1f ms, shift ${shiftNanos / 1e6}%.1f ms (diagnostics ${diagnosticsNanos / 1e6}%.2f ms), the rest ${(System.nanoTime() - tCompared) / 1e6 - shiftNanos / 1e6}%.1f ms"
       def refuse(why: String): Boolean =
         src.replaceContent(oldText)
         myLastEdit = s"edit refused ($why)"
@@ -992,16 +1002,16 @@ class InteractiveDriver(
         case BodyEdit.Kind.Fresh(why) => refuse(why)
         case BodyEdit.Kind.Layout if !sameErrorsOutside(NoSpan, NoSpan, r.regionSpan) => refuse("the syntax errors differ")
         case BodyEdit.Kind.Layout =>
-          pristineErrors = errors
           val shift = BodyEdit.Shift(r, r.regionSpan, src)
-          shiftAll(shift, r, r.regionSpan)
+          shiftAll(shift, r, r.regionSpan, immutable.Set.empty, immutable.Set.empty, errors)
+          pristineErrors = errors
           pristine = parsed
           unit.untpdTree = parsed
           myLastEdit = s"layout edit, shifted ${shift.trees} trees ${shift.symbols} symbols$took"
           true
         case BodyEdit.Kind.Body(d, d1) =>
           if !sameErrorsOutside(d.span, d1.span, d.span) then refuse("the syntax errors outside the edited body differ")
-          else bodyEdit(d, d1, parsed, r, errors.filter(e => d1.span.contains(e.pos.span))) match
+          else bodyEdit(d, d1, parsed, r, errors) match
             case null =>
               pristineErrors = errors
               myLastEdit += took
@@ -1078,9 +1088,11 @@ class InteractiveDriver(
           install(mapper.transform(unit.tpdTree))
         // the statement, or what the old body's blocks skipped: they go with it
         skipped = skipped.filterNot(sk => d.span.contains(sk.stat.span))
-        diagnostics = diagnostics.filterNot(dia => (dia.pos.source eq src) && d.span.contains(dia.pos.span))
+        // what D's statements and completions reported goes with them, wherever
+        // it is positioned; its statements' is stale until D' is typed (§12)
+        val stats = olds.map(reporting.Provenance.Stat(_)).toSet[reporting.Provenance]
         val shift = BodyEdit.Shift(r, d.span, src)
-        shiftAll(shift, r, d.span)
+        shiftAll(shift, r, d.span, stats ++ olds.map(reporting.Provenance.Completion(_)), stats, parseErrors)
         // the old symbols are refined by the re-index: unlinked first, so that
         // the Namer finds no conflict, and entered again by it
         olds.foreach { sym =>
@@ -1096,12 +1108,15 @@ class InteractiveDriver(
           else olds.find(sym => sym.name == name && sym.span.point == span.point && !refined(sym)) match
             case Some(sym) => refined += sym; sym
             case None => NoSymbol
-        try ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine))
+        // what the re-index reports is D's
+        val dsym = olds.find(_.name == d.name).getOrElse(NoSymbol)
+        try
+          if dsym.exists then reader.withProvenance(reporting.Provenance.Stat(dsym))(ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine)))
+          else ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine))
         finally active = false
         skipped = Run.SkippedStat(stat, ctx0, owner) :: skipped
         pristine = parsed
         unit.untpdTree = parsed
-        diagnostics = diagnostics ++ parseErrors
         val news = cls.unforcedDecls.toList.filter(ofD(_, d1.span))
         if refined.size != olds.size || news.size != olds.size then
           poisoned = true
@@ -1118,11 +1133,16 @@ class InteractiveDriver(
         null
       finally if !done then poisoned = true
 
-    /** The time the last shift took, for the log. */
+    /** The time the last shift took, for the log, and of it the diagnostics' and suppressions'. */
     private var shiftNanos = 0L
+    private var diagnosticsNanos = 0L
 
-    /** Shift everything the session keeps of its source (§12). */
-    private def shiftAll(shift: BodyEdit.Shift, r: BodyEdit.Region, anchor: Span)(using Context): Unit =
+    /** Shift everything the session keeps of its source (§12), with the
+     *  diagnostics and suppressions of `dropped` dropped (those of `toStale`
+     *  kept stale) and `parseErrors` the syntax errors of the new parse.
+     */
+    private def shiftAll(shift: BodyEdit.Shift, r: BodyEdit.Region, anchor: Span, dropped: immutable.Set[reporting.Provenance],
+        toStale: immutable.Set[reporting.Provenance], parseErrors: List[Diagnostic])(using Context): Unit =
       val t0 = System.nanoTime()
       val src = unit.source
       shift.tree(unit.tpdTree)
@@ -1132,22 +1152,20 @@ class InteractiveDriver(
         case p: PackageDef => p.symbol.moduleClass.asClass.unforcedDecls.foreach(shift.symbol)
         case _ =>
       }
-      diagnostics = diagnostics.map { dia =>
-        if !(dia.pos.source eq src) then dia
+      val t1 = System.nanoTime()
+      reporter.edit(src, dropped, toStale, pristineErrors, parseErrors, r.touches, r.span(_, anchor))
+      run.suppressions.editSuppressions(src) { sup =>
+        if sup.provenance != null && dropped.contains(sup.provenance.nn) then null
         else
-          val pos = dia.pos.withSpan(r.span(dia.pos.span, anchor))
-          dia match
-            case e: Diagnostic.Error => Diagnostic.Error(e.msg, pos)
-            case w: Diagnostic.Warning => Diagnostic.Warning(w.msg, pos)
-            case i: Diagnostic.Info => Diagnostic.Info(i.msg, pos)
-            case _ => Diagnostic(dia.msg, pos, dia.level)
+          val sp = r.span(Span(sup.start, sup.end), anchor)
+          sup.moved(sup.annotPos.withSpan(r.span(sup.annotPos.span, anchor)), sp.start, sp.end)
       }
+      diagnosticsNanos = System.nanoTime() - t1
       ctx.property(Comments.ContextDoc).foreach { docs =>
         docs.docstrings.iterator.toList.foreach { (sym, c) =>
           if definesHere(sym) then docs.addDocstring(sym, Some(c.copy(span = r.span(c.span, anchor))))
         }
       }
-      reporter.forgetPositions(src)
       shiftNanos = System.nanoTime() - t0
   end Session
 
@@ -1169,19 +1187,6 @@ class InteractiveDriver(
 
   private def isCurrent(s: Session): Boolean =
     (mySession eq s) || myOtherSessions.get(s.uri).exists(_ eq s)
-
-  /** The messages of a run shared by several sessions, handed to each
-   *  session by the file they are on.
-   */
-  private final class SharedMessages(reporter: StoreReporter):
-    private val bySource = mutable.HashMap.empty[String, mutable.ListBuffer[Diagnostic]]
-    private def key(src: SourceFile | Null): String =
-      if src == null || !src.exists then "" else src.path
-    def take(source: SourceFile)(using Context): List[Diagnostic] = synchronized {
-      reporter.removeBufferedMessages.foreach(d => bySource.getOrElseUpdate(key(d.pos.source), mutable.ListBuffer.empty) += d)
-      // messages without a position go to whoever asks first
-      (bySource.remove(key(source)).toList ++ bySource.remove("").toList).flatten
-    }
 
   /** An edit carried over to the session (§12) changes what every reader of
    *  the session reads: a write action, before the request's read.
@@ -1249,6 +1254,20 @@ class InteractiveDriver(
   def isFullyTyped(uri: URI): Boolean = sessionOf(uri) match
     case s: Session => !s.hasSkipped
     case null => false
+
+  /** For the x-ray: the diagnostics of the session on `uri` that are stale,
+   *  an edited definition's old ones, published until it is typed again (§12).
+   */
+  def staleDiagnostics(uri: URI): List[Diagnostic] = sessionOf(uri) match
+    case s: Session => s.reporter.staleDiagnostics
+    case null => Nil
+
+  /** For the x-ray and the tests: the session's diagnostics, each with the
+   *  fact that reported it (§12, "Diagnostics").
+   */
+  def diagnosticsByProvenance(uri: URI): List[(String, Diagnostic)] = sessionOf(uri) match
+    case s: Session => s.reporter.byProvenance
+    case null => Nil
 
   /** What the last request on `uri` did with an edit (§12), or "". */
   def lastEdit(uri: URI): String = if sessionOf(uri) == null then "" else myLastEdit
@@ -1447,11 +1466,7 @@ class InteractiveDriver(
     val previousCtx = myCtx
     mySession = null
     myOtherSessions = Map.empty
-    val reporter =
-      new StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages:
-        override def report(dia: Diagnostic)(using Context): Unit = synchronized(super.report(dia))
-        override def removeBufferedMessages(using Context): List[Diagnostic] = synchronized(super.removeBufferedMessages)
-        override def pendingMessages(using Context): List[Diagnostic] = synchronized(super.pendingMessages)
+    val reporter = SessionReporter()
     myCancelled = false
     val reader = base.reader
     try
@@ -1471,16 +1486,16 @@ class InteractiveDriver(
           reader.skippedStats.toList
         finally reader.clearTargeting()
       if myCancelled || reader.cancelChecker() then throw CompilationUnit.CancelledCompilation()
-      val shared = SharedMessages(reporter)
-      val sessions = ctx.run.nn.units.map { unit =>
+      val sessions = ctx.run.nn.units.zipWithIndex.map { (unit, i) =>
         val uri = files.collectFirst { case (u, src) if src eq unit.source => u }.getOrElse(URI.create("file:///" + unit.source.path).nn)
         val own = skipped.filter(_.ctx.source eq unit.source)
         val t = unit.tpdTree
         cleanup(t, errorOutCompleters = own.isEmpty)
         myOpenedTrees.synchronized { myOpenedTrees(uri) = topLevelTrees(t, unit.source) }
         myCompilationUnits.synchronized { myCompilationUnits(uri) = unit }
-        val s = Session(uri, unit.source, run, reporter, unit, null, shared)
-        s.setInitial(own, shared.take(unit.source))
+        // the diagnostics without a position go to the first file's
+        val s = Session(uri, unit.source, run, reporter, unit, null, shared = true, takesNopos = i == 0)
+        s.setInitial(own)
         uri -> s
       }
       myCtx = myCtx.fresh.setPhase(myInitCtx.base.typerPhase)
@@ -1523,11 +1538,7 @@ class InteractiveDriver(
     try {
       // the session's reporter is written by every reader (a completer
       // reports through its creation context): one report at a time
-      val reporter =
-        new StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages:
-          override def report(dia: Diagnostic)(using Context): Unit = synchronized(super.report(dia))
-          override def removeBufferedMessages(using Context): List[Diagnostic] = synchronized(super.removeBufferedMessages)
-          override def pendingMessages(using Context): List[Diagnostic] = synchronized(super.pendingMessages)
+      val reporter = SessionReporter()
 
       myCancelled = false
       val reader = base.reader
@@ -1552,7 +1563,7 @@ class InteractiveDriver(
       // A cancellation noticed before the typer skips the units instead of
       // unwinding (see `Run.didEnterUnit`); discard that run too.
       if myCancelled || reader.cancelChecker() then throw CompilationUnit.CancelledCompilation()
-      run.printSummary()
+      reader.withProvenance(reporting.Provenance.Summary)(run.printSummary())
       val ctxRun = ctx.run.nn
       val unit = if ctxRun.units.nonEmpty then ctxRun.units.head else ctxRun.suspendedUnits.head
       val t = unit.tpdTree
@@ -1564,14 +1575,14 @@ class InteractiveDriver(
       // from here on, readers settle their own typer states (I76)
       if independentReaders then myCtx.typerState.readOnlyRoot = true
 
-      val diagnostics = reporter.removeBufferedMessages
+      val diagnostics = reporter.runResult
       // A whole-file run leaves a session too, with nothing skipped: the
       // requests after it on the same content are served from it, instead
       // of each running again (I58). Without targeting no request reads a
       // session.
       if target.exists || targetedRequests then
         val s = Session(uri, source, run, reporter, unit, recorded)
-        s.setInitial(skipped, diagnostics)
+        s.setInitial(skipped)
         mySession = s
       diagnostics
     } catch {
