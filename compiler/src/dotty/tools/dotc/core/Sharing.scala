@@ -66,6 +66,16 @@ object Sharing:
    */
   private[core] inline def completing[K]: Holds[K] = held.asInstanceOf[Holds[K]]
 
+  /** Evidence that the code it is given to holds the monitor of `lock: K` (with concurrent readers; on a batch base
+   *  it runs alone), as `Holds` is of a claim: state a monitor guards is reached only through methods that take one.
+   *  Made by `serialised`, `locking` and `unlocked`; a claim's evidence is not a monitor's, nor the reverse.
+   */
+  sealed abstract class Monitor[K]
+  private object monitorHeld extends Monitor[Any]
+
+  /** Evidence of `lock`'s monitor without it, for an access that races on purpose; `why` says why it is safe. */
+  inline def unlocked[K](inline why: String): Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
+
   /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
    *  holding the claim on `key` when they are parallel, where a wait that would close a wait-for cycle backs off
    *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
@@ -90,8 +100,14 @@ object Sharing:
     if c0.base.parallel then interactive.SharingImpl.privately(c0, c => op(using c)) else op(using c0)
 
   /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
-  inline def serialised[T](lock: AnyRef)(inline op: T)(using Context): T =
+  inline def serialised[K <: AnyRef, T](lock: K)(inline op: Monitor[K] ?=> T)(using Context): T =
+    given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
     if ctx.base.concurrent then lock.synchronized(op) else op
+
+  /** `op` holding `lock`'s monitor on every base, with the evidence of it. */
+  inline def locking[K <: AnyRef, T](lock: K)(inline op: Monitor[K] ?=> T): T =
+    given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
+    lock.synchronized(op)
 
   /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: with parallel
    *  readers settled and dropped (I76), with serialised readers committed under the completion lock. */

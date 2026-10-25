@@ -16,7 +16,7 @@ final case class Rule(id: String, sets: String, doc: String)
 
 object Rules:
   val kind: List[Rule] = List(
-    Rule("@scratch, @lazyFact, @cache, @interned, @treeState", "A, B, C, D, E", "an annotation in `scala.annotation.internal` on the field: takes precedence over every rule below (`kindSource: annotated`); the rules' answer is kept as `inferredKind`"),
+    Rule("@scratch, @lazyFact, @cache, @interned, @treeState", "A, B, C, D, E", "an annotation in `scala.annotation.internal` on the field, or else on its class: takes precedence over every rule below (`kindSource: annotated`); the rules' answer is kept as `inferredKind`"),
     Rule("A.reader", "A", "a field of `dotc.Reader`, the thread-confined per-request state (step 2)"),
     Rule("A.traversal", "A", "a field of a `TypeMap`, `TypeAccumulator`, `VariantTraversal`, tree map/accumulator/traverser, `TypeComparer` or `ConstraintHandling`: one traversal's or one reader's scratch (comparers are per reader, `Reader.comparers`; §8 I91 `TypeMap.variance`)"),
     Rule("B.denotation", "B", "`myFlags`, `myInfo`, `myAnnotations`, `myParamss`, `myPrivateWithin`, `myCompanion`, `myDecls`, `mySourceModule`, `myModuleClass` of a `SymDenotation`: the denotation's own state, written by its completion (§8 I91 'not caches')"),
@@ -44,7 +44,7 @@ object Rules:
   )
 
   val protection: List[Rule] = List(
-    Rule("@guardedBy, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, synchronized, thread-confined, Caching, Publish, volatile, packed-volatile, benign-race", "an annotation on the field: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")` or another lock (synchronized); `@confined`; `@publishedBy(\"Caching\" | \"Publish\" | \"volatile\" | \"packed\")`; `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
+    Rule("@guardedBy, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, synchronized, thread-confined, Caching, Publish, volatile, packed-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@confined`; `@publishedBy(\"Caching\" | \"Publish\" | \"volatile\" | \"packed\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
     Rule("@sharable, @unshared", "static-safe (@sharable), single-threaded (@unshared)", "the markers of `-Ycheck-reentrant` on the field or its owner (reentrancy across compiler instances, not sharing within one base), when no annotation above is present"),
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
@@ -84,7 +84,7 @@ case class FieldInfo(
     annotations: List[String], isVar: Boolean, isPrivate: Boolean, mutableCollection: Option[String],
     typeClasses: List[String], isVolatile: Boolean, packedType: Boolean, threadLocal: Boolean,
     concurrentType: Boolean, initOnBase: Boolean, nullInit: Boolean,
-    annotArgs: Map[String, String], ownerMarkers: List[String])
+    annotArgs: Map[String, String], ownerMarkers: List[String], ownerArgs: Map[String, String])
 
 case class ClassInfo(name: String, simple: String, pkg: String, file: String, line: Int, bases: List[String],
     isModule: Boolean, fieldsAllVals: Boolean)
@@ -168,7 +168,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           Some("Caching" -> Set("stamp", "value", "setStamp", "setValue"))
         case ("dotty.tools.dotc.core.Sharing", "exclusive") => Some("completion-lock" -> Set("op"))
         case ("dotty.tools.dotc.core.Sharing", "claimed") => Some("root-claim" -> Set("op"))
-        case ("dotty.tools.dotc.core.Sharing", "serialised") => Some("synchronized" -> Set("op"))
+        case ("dotty.tools.dotc.core.Sharing", "serialised" | "locking") => Some("synchronized" -> Set("op"))
         case ("dotty.tools.dotc.interactive.SharingImpl", "exclusive") => Some("completion-lock" -> Set("op"))
         case ("dotty.tools.dotc.interactive.SharingImpl", "claimed") => Some("root-claim" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionLock", "locked") => Some("completion-lock" -> Set("op"))
@@ -279,6 +279,10 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
         val ownerSyms = owner :: (if owner.flags.is(Flags.Module) && owner.companionModule.exists then List(owner.companionModule) else Nil)
         val ownerMarkers = ownerSyms.flatMap(_.annotations.map(annotName))
           .filter(n => n == "internal.sharable" || n == "internal.unshared").distinct
+        // the state-map vocabulary on the owning class applies to each of its fields that does not say otherwise
+        val vocabulary = Set("internal.scratch", "internal.lazyFact", "internal.cache", "internal.interned", "internal.treeState",
+          "internal.guardedBy", "internal.confined", "internal.publishedBy", "internal.benignRace", "internal.featureArea")
+        val ownerArgs = owner.annotations.filter(a => vocabulary(annotName(a))).map(a => annotName(a) -> annotArg(a)).toMap
         val tcs = classesOf(tpe).map(s => norm(s.fullName)).distinct
         val topCls = classesOf(tpe).filterNot(_.fullName == "scala.Null").headOption
         val packed = topCls.exists { c =>
@@ -304,7 +308,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           annots.contains("volatile"), packed,
           bases.exists(_.startsWith("java.lang.ThreadLocal")),
           bases.exists(b => concurrentPrefixes.exists(b.startsWith)) || bases.exists(_.startsWith("java.util.concurrent")),
-          initOnBase, vd.rhs.exists { case Literal(NullConstant()) => true case _ => false }, annotArgs, ownerMarkers)
+          initOnBase, vd.rhs.exists { case Literal(NullConstant()) => true case _ => false }, annotArgs, ownerMarkers, ownerArgs)
 
     object Walker extends TreeTraverser:
       def withProt(p: String)(op: => Unit): Unit =
@@ -333,8 +337,14 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           val savedInit = initDepth
           if dd.name == "<init>" then initDepth += 1
           // a method that takes the evidence of a claim (`Sharing.Holds`) runs inside `Sharing.exclusive`
-          val holds = dd.termParamss.exists(_.params.exists(_.tpt.tpe.dealias.typeSymbol.fullName.replace("$", "") == "dotty.tools.dotc.core.Sharing.Holds"))
-          try if holds then withProt("completion-lock")(super.traverseTree(tree)(owner)) else super.traverseTree(tree)(owner)
+          def takes(cls: String) = dd.termParamss.exists(_.params.exists(_.tpt.tpe.dealias.typeSymbol.fullName.replace("$", "") == cls))
+          val evidence =
+            if takes("dotty.tools.dotc.core.Sharing.Holds") then Some("completion-lock")
+            else if takes("dotty.tools.dotc.core.Sharing.Monitor") then Some("synchronized")
+            else None
+          try evidence match
+            case Some(p) => withProt(p)(super.traverseTree(tree)(owner))
+            case None => super.traverseTree(tree)(owner)
           finally { methodStack = methodStack.tail; initDepth = savedInit }
         case Assign(lhs, rhs) =>
           record(lhs.symbol, write = true, reset = isReset(rhs), lhs.pos)
@@ -607,25 +617,37 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     "internal.interned" -> "D", "internal.treeState" -> "E")
 
   // the kind and protection a field's annotations declare, which take precedence over the rules
+  private val protAnnots = Set("internal.guardedBy", "internal.confined", "internal.publishedBy", "internal.benignRace")
+
+  // a field's own annotation, else its class's: (args, "" or " on the class")
+  private def kindArgs(f: FieldInfo) =
+    if kindAnnots.keys.exists(f.annotArgs.contains) then (f.annotArgs, "") else (f.ownerArgs, " (class)")
+  private def protArgs(f: FieldInfo) =
+    if protAnnots.exists(f.annotArgs.contains) then (f.annotArgs, "") else (f.ownerArgs ++ f.annotArgs, " (class)")
+
   private def annotatedKind(f: FieldInfo): Option[(String, String)] =
-    kindAnnots.collectFirst { case (a, k) if f.annotArgs.contains(a) => (k, "@" + a.stripPrefix("internal.")) }
+    val (a, where) = kindArgs(f)
+    kindAnnots.collectFirst { case (n, k) if a.contains(n) => (k, "@" + n.stripPrefix("internal.") + where) }
 
   private def annotatedProt(f: FieldInfo): Option[(String, String)] =
-    val a = f.annotArgs
+    val (a, where) = protArgs(f)
+    def on(r: String) = r + (if protAnnots.exists(a.contains) && !protAnnots.exists(f.annotArgs.contains) then where else "")
     a.get("internal.guardedBy").map { lock =>
       val p = lock match
         case "completionLock" => "completion-lock"
         case "rootClaim" => "root-claim"
+        case "writer" => "writer-action"
         case _ => "synchronized"
-      (p, s"@guardedBy(\"$lock\")")
-    }.orElse(a.get("internal.confined").map(_ => ("thread-confined", "@confined")))
+      (p, on(s"@guardedBy(\"$lock\")"))
+    }.orElse(a.get("internal.confined").map(_ => ("thread-confined", on("@confined"))))
      .orElse(a.get("internal.publishedBy").map { how =>
        val p = how match
          case "packed" => "packed-volatile"
+         case "init" => "init-only"
          case other => other
-       (p, s"@publishedBy(\"$how\")")
+       (p, on(s"@publishedBy(\"$how\")"))
      })
-     .orElse(a.get("internal.benignRace").map(_ => ("benign-race", "@benignRace")))
+     .orElse(a.get("internal.benignRace").map(_ => ("benign-race", on("@benignRace"))))
      .orElse {
        // the markers of `-Ycheck-reentrant` (`CheckReentrant`), on the field or its owner: reentrancy across compiler
        // instances, not sharing within one base
@@ -662,7 +684,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     val summary = acc.groupBy(accessProt).view.mapValues(_.size).toMap
     val edges = f.typeClasses.filter(t => t != f.owner && c.classes.contains(t)).distinct
     val sites = acc.filter(a => accessProt(a) == "none").map(a => s"${a.file}:${a.line} ${if a.write then "write" else "read"} in ${a.method}").distinct.take(40).toList
-    val features = (featuresOf(f) ++ f.annotArgs.get("internal.featureArea").toList).distinct
+    val features = (featuresOf(f) ++ (f.ownerArgs ++ f.annotArgs).get("internal.featureArea").toList).distinct
     Placed(f, k, kr, p, pr, ev, features, if k == "C" then "cache" else "semantic", reach, summary, edges, sites,
       ks, ps, ik, ikr, ip, ipr, disagreement)
   }
