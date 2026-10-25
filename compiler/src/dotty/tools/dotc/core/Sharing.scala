@@ -12,6 +12,10 @@ import Contexts.*
  *  - `Sharing.Serialised`: coarse-grained. Several request threads and one completion lock (`completionLock`)
  *    that read actions also take, so one reader types at a time (K2's global resolve lock; step 3 of
  *    docs/_docs/internals/interactive-multi-reader.md).
+ *  - `Sharing.Parallel`: fine-grained. A claim per completion root (`completionRoots`) and read actions in
+ *    parallel: a completion's intermediate state is seen only by its reader, and others wait for it (IntelliJ's
+ *    parallel read actions, K2's per-declaration locks; `-Yinteractive-parallel`, step 4).
+ *
  *  A concurrent sharing is only ever made by the interactive driver's base.
  *
  *  Every operation that takes code to run is an `inline def` of the companion whose batch branch is that code as it was before
@@ -49,13 +53,26 @@ object Sharing:
   inline def exclusive[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
     if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
 
+  /** `op` holding the claim on `key` when readers are parallel, as is otherwise (serialised readers need no
+   *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
+   *  another reader must wait for rather than take for a cycle. */
+  inline def claimed[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+    if ctx.base.parallel then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
+
+  /** `op` in `c0`, or, when readers are parallel, in a private child of `c0`'s typer state, settled when it ends
+   *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by
+   *  one of them (I62, I66, I70, I76). */
+  inline def privately[T](c0: Context)(inline op: Context ?=> T): T =
+    if c0.base.parallel then interactive.SharingImpl.privately(c0, c => op(using c)) else op(using c0)
+
   /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
   inline def serialised[T](lock: AnyRef)(inline op: T)(using Context): T =
     if ctx.base.concurrent then lock.synchronized(op) else op
 
-  /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: committed under
-   *  the completion lock. */
+  /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: with parallel
+   *  readers settled and dropped (I76), with serialised readers committed under the completion lock. */
   def endState(c1: Context, into: Context): Unit = interactive.SharingImpl.endState(c1, into)
 
   val Batch: Sharing = new Sharing(concurrent = false, parallel = false)
   val Serialised: Sharing = new Sharing(concurrent = true, parallel = false)
+  val Parallel: Sharing = new Sharing(concurrent = true, parallel = true)

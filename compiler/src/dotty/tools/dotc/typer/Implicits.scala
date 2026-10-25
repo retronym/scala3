@@ -1999,17 +1999,34 @@ end OpenSearch
 /**
  * The state corresponding to the outermost context of an implicit searcch.
  */
-final class SearchRoot extends SearchHistory:
+final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
   val root = this
   val byname = false
   def openSearchPairs = Nil
 
+  // The root of the initial context is shared by every top-level search of a
+  // run: with several readers (`perThread`, an interactive base read by
+  // several threads) its state is per thread, so that two readers' searches
+  // do not count each other's expressions or see each other's dictionary
+  // (finding I55).
+  private final class State:
+    var nestedSearches: Int = 0
+    var dictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  private val shared = State()
+  private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
+  private def state: State = if local == null then shared else local.get.nn
+
+  /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */
+  def clearThread(): Unit = if local != null then local.remove()
+
   /** How many expressions were constructed so far in the current toplevel implicit search?
    */
-  var nestedSearches: Int = 0
+  def nestedSearches: Int = state.nestedSearches
+  def nestedSearches_=(n: Int): Unit = state.nestedSearches = n
 
   /** The dictionary of recursive implicit types and corresponding terms for this search. */
-  var myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  def myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = state.dictionary
+  def myImplicitDictionary_=(d: mutable.Map[Type, (TermRef, tpd.Tree)] | Null): Unit = state.dictionary = d
   private def implicitDictionary =
     initialize(myImplicitDictionary, myImplicitDictionary = _,  mutable.Map.empty[Type, (TermRef, tpd.Tree)])
 

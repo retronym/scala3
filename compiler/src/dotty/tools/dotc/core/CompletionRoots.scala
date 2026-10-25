@@ -1,0 +1,137 @@
+package dotty.tools
+package dotc
+package core
+
+import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
+
+import scala.jdk.CollectionConverters.*
+
+/** Owners of completion roots, with parallel readers (`-Yinteractive-parallel`,
+ *  step 4 of `docs/_docs/internals/interactive-multi-reader.md`, §3.1).
+ *
+ *  A completion claims its root before it runs: the symbol loader of a class
+ *  and its module, the unpickler of a TASTy file, or the symbol. The claim
+ *  is the reader's: reentrant on that reader, and every other reader that
+ *  needs the root waits until the owner releases it, then looks at the
+ *  symbol again (completed, or left completable by an owner that unwound).
+ *  This replaces step 3's one completion lock, so that completions of
+ *  different roots run concurrently.
+ *
+ *  A wait that would close a cycle in the wait-for graph (each waiting
+ *  reader records the claim it waits on, `Reader.waitingOn`; following the
+ *  owners from the claim leads back to the waiter) is a dependency cycle:
+ *  the reader that would close it gets a `CyclicReference` (§4.2), and its
+ *  completions unwind and release their roots, so that the other reader's
+ *  wait ends. The check runs at every slice of a wait, since another
+ *  reader's wait may start after this one's.
+ */
+final class CompletionRoots(base: Contexts.ContextState):
+  import CompletionRoots.Claim
+
+  private val claims = new ConcurrentHashMap[AnyRef, Claim]()
+
+  /** Claim `key` for this thread's reader, to do `what`; wait while another
+   *  reader holds it. `cycle` reports a wait-for cycle (it throws).
+   */
+  def acquire(key: AnyRef, what: CompletionLock.What, cycle: () => Nothing): Unit =
+    val me = base.reader
+    var waitedSince = 0L
+    var cycleSince = 0L
+    var seen: Claim | Null = null
+    while true do
+      val c = claims.get(key)
+      if c == null then
+        val mine = Claim(me, what, Thread.currentThread.nn.getName.nn)
+        if claims.putIfAbsent(key, mine) == null then
+          if waitedSince != 0L then
+            val s = seen.nn
+            me.recordLockWait(System.nanoTime() - waitedSince, s.what.render, "", s.ownerName)
+          return
+      else if c.owner eq me then
+        c.holds += 1
+        return
+      else
+        if waitedSince == 0L then
+          waitedSince = System.nanoTime()
+          seen = c
+        cycleChain(me, c) match
+          case null => cycleSince = 0L
+          case chain =>
+            val parties = chain.map(_.owner)
+            if me.namerCompletionDepth == 0 then
+              // body typing: this reader backs off, its request restarts
+              me.waitCyclesBackedOff += 1
+              throw CompilationUnit.CancelledCompilation()
+            else if parties.exists(_.namerCompletionDepth == 0) then
+              () // a reader in the cycle that is not inside a Namer completion backs off at its next look: wait
+            else if chain.exists(_.what.kind != CompletionLock.namerKind) then
+              // a coarse root (a TASTy file, a bring-forward, an inherited
+              // cache): its owner finishes; wait, bounded
+              if cycleSince == 0L then cycleSince = System.nanoTime()
+              else if System.nanoTime() - cycleSince > CompletionRoots.coarseCycleWaitNanos then
+                me.waitCyclesBackedOff += 1
+                throw CompilationUnit.CancelledCompilation()
+            else if parties.forall(p => System.identityHashCode(p.thread) <= System.identityHashCode(me.thread)) then
+              // every party inside a Namer completion, every root a symbol:
+              // a cycle between signatures, reported where a single reader
+              // reports it, by one reader of the cycle (a fixed order of
+              // the threads picks it)
+              cycle()
+        me.waitingOn = c
+        try c.done.await(5, TimeUnit.MILLISECONDS)
+        finally me.waitingOn = null
+    end while
+
+  /** Release a claim made by `acquire` on this thread. */
+  def release(key: AnyRef): Unit =
+    val c = claims.get(key).nn
+    c.holds -= 1
+    if c.holds == 0 then
+      claims.remove(key)
+      c.done.countDown()
+
+  /** Run `op` holding the claim on `key`. */
+  inline def locked[T](key: AnyRef, what: CompletionLock.What, cycle: () => Nothing)(inline op: T): T =
+    acquire(key, what, cycle)
+    try op finally release(key)
+
+  /** Does this reader hold the claim on `key`? */
+  def ownedHere(key: AnyRef): Boolean =
+    val c = claims.get(key)
+    c != null && (c.owner eq base.reader)
+
+  /** The claims of a wait-for cycle that waiting on `c` would close: `c`,
+   *  then what its owner waits on, and so on, back to a claim of `me`; null
+   *  if the owners do not lead back to `me`.
+   */
+  private def cycleChain(me: Reader, c: Claim): List[Claim] | Null =
+    var claim: Claim | Null = c
+    var chain: List[Claim] = Nil
+    var steps = 0
+    while claim != null && steps < 1000 do
+      chain = claim :: chain
+      if claim.owner eq me then return chain
+      claim = claim.owner.waitingOn
+      steps += 1
+    null
+
+  /** The claims held now, for tools (the x-ray). */
+  def holdersNow: String =
+    claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
+
+object CompletionRoots:
+  /** How long a reader inside a Namer completion waits on a wait-for cycle
+   *  through a coarse root before it backs off after all (I74). */
+  val coarseCycleWaitNanos: Long = 10_000_000_000L
+
+  /** Back off from a wait that would close a wait-for cycle (see
+   *  `SymDenotation.cyclicWait`): unwind as a pre-empted reader does.
+   */
+  def backOff(subject: AnyRef)(using Contexts.Context): Nothing =
+    Contexts.ctx.reader.waitCyclesBackedOff += 1
+    throw CompilationUnit.CancelledCompilation()
+
+  /** A reader's claim on a root, released when its holds come back to 0. */
+  final class Claim(val owner: Reader, val what: CompletionLock.What, val ownerName: String):
+    @volatile var holds: Int = 1
+    val done: CountDownLatch = new CountDownLatch(1)

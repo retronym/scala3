@@ -251,13 +251,17 @@ class CompletionSoakSuite extends BasePCSuite:
    *  `Touched` check is at the end, once both threads are done (while the
    *  other thread completes a symbol, `Touched` is legitimately set).
    */
-  private def soak2(name: String, file: String => String, seed: Int, steps: Int): Unit =
+  private def soak2(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean = true): Unit =
     val mask = dotty.tools.dotc.Run.typerCheckpointMask
     dotty.tools.dotc.Run.typerCheckpointMask = 15
-    try soak20(name, file, seed, steps)
+    try soak20(name, file, seed, steps, parallel)
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
-  private def soak20(name: String, file: String => String, seed: Int, steps: Int): Unit =
+  /** `parallel`: with `-Yinteractive-parallel` (step 4: completions with
+   *  owners, readers outside the lock); without, readers serialised with
+   *  completions (step 3).
+   */
+  private def soak20(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean): Unit =
     val variants = List("a", "b").map(tag => points(file(tag)))
     val oracle = variants.map { (content, offsets) =>
       val d = newDriver()
@@ -265,7 +269,7 @@ class CompletionSoakSuite extends BasePCSuite:
       d.run(uri, source)
       offsets.map(o => o -> labels(d, source, o)).toMap
     }
-    val driver = newDriver()
+    val driver = new InteractiveDriver(if parallel then settings :+ "-Yinteractive-parallel" else settings, CachedLogicalPackage.none)
     @volatile var variant = 0 // the content both readers work on; an edit switches it
     val failure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
     val counts = new java.util.concurrent.ConcurrentHashMap[String, Int]()
@@ -279,7 +283,14 @@ class CompletionSoakSuite extends BasePCSuite:
         val source = SourceFile.virtual(uri, content)
         val obtained = driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => labels(ctx, unit, source, offset))
         val expected = oracle(v)(offset)
-        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)}"
+        val r = driver.readerOfThisThread
+        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)} tainted=${driver.isTainted(uri)} backoffs=${r.waitCyclesBackedOff} cycles=${r.cyclesPrevented.size} unwound=${r.cancelledCompletions.size}"
+        if expected != obtained then
+          println(s"[soak2 $name seed=$seed reader $thread step $step] at $offset expected ${expected.take(5)} obtained ${obtained.take(5)}; tree: " +
+            (try driver.compilationUnits.get(uri).map { unit =>
+              given Context = driver.currentCtx.fresh.setCompilationUnit(unit)
+              dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(offset)).take(3).map(t => s"${t.getClass.getSimpleName} ${t.show.take(60).replace('\n', ' ')} : ${if t.hasType then t.tpe.show.take(80) else "<untyped>"}").mkString(" <- ")
+            }.getOrElse("<no unit>") catch case scala.util.control.NonFatal(e) => s"<not shown: $e>"))
         count(what)
         org.junit.Assert.assertEquals(s"[$name seed=$seed reader $thread step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
       for step <- 1 to steps if failure.get == null do
@@ -342,3 +353,5 @@ class CompletionSoakSuite extends BasePCSuite:
   @Test def `two-readers-objects-seed-2` = soak2("objects", objectsFile(_), 2, 300)
   @Test def `two-readers-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300)
   @Test def `two-readers-shapes-seed-2` = soak2("shapes", shapesFile, 2, 300)
+  @Test def `two-readers-serialised-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300, parallel = false)
+  @Test def `two-readers-serialised-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300, parallel = false)

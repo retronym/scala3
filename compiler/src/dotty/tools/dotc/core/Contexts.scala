@@ -837,7 +837,7 @@ object Contexts {
           .updated(notNullInfosLoc, Nil)
           .updated(compilationUnitLoc, NoCompilationUnit)
           .updated(profilerLoc, Profiler.NoOp)
-      c._searchHistory = new SearchRoot
+      c._searchHistory = new SearchRoot(perThread = base.concurrent)
       c._gadtState = GadtState(GadtConstraint.empty)
       c._inlineTraitState = InlineTraitState()
       c
@@ -1066,19 +1066,12 @@ object Contexts {
       super.fresh().setTyperState(ts)
 
   /** The essential mutable state of a context base, collected into a common class */
-  class ContextState(final val sharing: Sharing) {
-
-    /** Is this base read by several threads at once (an interactive base
-     *  serving concurrent requests, see `Reader` and
-     *  `docs/_docs/internals/interactive-multi-reader.md`)? Decided once, at
-     *  construction, by the subclass: the interners, the caches that are maps
-     *  and the symbol id counter below get concurrent implementations, and
-     *  completions take `completionLock`. Batch compilation answers false and
-     *  keeps the unsynchronised ones; the concurrent classes are then never
-     *  loaded.
-     */
-    protected def concurrentReaders: Boolean = false
-    final val isConcurrent: Boolean = concurrentReaders
+  class ContextState(
+    /** How this base is shared between threads, chosen when it is made: `Sharing.Batch` but for the interactive
+     *  driver's (see `Sharing` and docs/_docs/internals/interactive-multi-reader.md). It picks the interners, the
+     *  caches that are maps and the symbol id counter below, and whether completions take `completionLock`
+     *  (serialised readers) or claim `completionRoots` (parallel readers). */
+    final val sharing: Sharing) {
 
     /** `sharing.concurrent` and `sharing.parallel`, copied to the base: a hot test reads one field of it. */
     final val concurrent: Boolean = sharing.concurrent
@@ -1093,6 +1086,11 @@ object Contexts {
      *  used in batch compilation.
      */
     val completionLock: CompletionLock = CompletionLock(this)
+
+    /** The owners of completion roots with parallel readers (see
+     *  `Sharing.Parallel`, `CompletionRoots`).
+     */
+    val completionRoots: CompletionRoots = CompletionRoots(this)
 
     // Symbols state
 
