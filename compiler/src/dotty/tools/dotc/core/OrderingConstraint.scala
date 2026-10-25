@@ -887,7 +887,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
         i += 1
     }
 
-  private var myUninstVars: mutable.ArrayBuffer[TypeVar] | Null = null
+  @volatile private var myUninstVars: mutable.ArrayBuffer[TypeVar] | Null = null
 
   /** The uninstantiated typevars of this constraint */
   def uninstVars: collection.Seq[TypeVar] =
@@ -895,7 +895,6 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
       case uv: mutable.ArrayBuffer[TypeVar] if !uv.exists(_.isPermanentlyInstantiated) => uv
       case _ =>
         val res = new mutable.ArrayBuffer[TypeVar]
-        myUninstVars = res
         boundsMap.foreachBinding { (poly, entries) =>
           for (i <- 0 until paramCount(entries))
             typeVar(entries, i) match {
@@ -903,6 +902,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
               case _ =>
             }
         }
+        myUninstVars = res // published when filled: another reader may be reading it
         res
 
 // ---------- Checking -----------------------------------------------
