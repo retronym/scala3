@@ -16,6 +16,7 @@ final case class Rule(id: String, sets: String, doc: String)
 
 object Rules:
   val kind: List[Rule] = List(
+    Rule("@scratch, @lazyFact, @cache, @interned, @treeState", "A, B, C, D, E", "an annotation in `scala.annotation.internal` on the field: takes precedence over every rule below (`kindSource: annotated`); the rules' answer is kept as `inferredKind`"),
     Rule("A.reader", "A", "a field of `dotc.Reader`, the thread-confined per-request state (step 2)"),
     Rule("A.traversal", "A", "a field of a `TypeMap`, `TypeAccumulator`, `VariantTraversal`, tree map/accumulator/traverser, `TypeComparer` or `ConstraintHandling`: one traversal's or one reader's scratch (comparers are per reader, `Reader.comparers`; §8 I91 `TypeMap.variance`)"),
     Rule("B.denotation", "B", "`myFlags`, `myInfo`, `myAnnotations`, `myParamss`, `myPrivateWithin`, `myCompanion`, `myDecls`, `mySourceModule`, `myModuleClass` of a `SymDenotation`: the denotation's own state, written by its completion (§8 I91 'not caches')"),
@@ -43,6 +44,8 @@ object Rules:
   )
 
   val protection: List[Rule] = List(
+    Rule("@guardedBy, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, synchronized, thread-confined, Caching, Publish, volatile, packed-volatile, benign-race", "an annotation on the field: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")` or another lock (synchronized); `@confined`; `@publishedBy(\"Caching\" | \"Publish\" | \"volatile\" | \"packed\")`; `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
+    Rule("@sharable, @unshared", "static-safe (@sharable), single-threaded (@unshared)", "the markers of `-Ycheck-reentrant` on the field or its owner (reentrancy across compiler instances, not sharing within one base), when no annotation above is present"),
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
@@ -80,7 +83,8 @@ case class FieldInfo(
     key: String, owner: String, name: String, tpe: String, file: String, line: Int, offset: Int,
     annotations: List[String], isVar: Boolean, isPrivate: Boolean, mutableCollection: Option[String],
     typeClasses: List[String], isVolatile: Boolean, packedType: Boolean, threadLocal: Boolean,
-    concurrentType: Boolean, initOnBase: Boolean, nullInit: Boolean)
+    concurrentType: Boolean, initOnBase: Boolean, nullInit: Boolean,
+    annotArgs: Map[String, String], ownerMarkers: List[String])
 
 case class ClassInfo(name: String, simple: String, pkg: String, file: String, line: Int, bases: List[String],
     isModule: Boolean, fieldsAllVals: Boolean)
@@ -264,7 +268,17 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       if (isVar || coll.isDefined) && !sym.flags.is(Flags.Lazy) && !sym.flags.is(Flags.Module)
         && !sym.flags.is(Flags.Synthetic) && !sym.name.startsWith("$") then
         val key = norm(owner.fullName) + "#" + sym.name
-        val annots = sym.annotations.map(a => a.tpe.typeSymbol.fullName.replace("$", "").stripPrefix("dotty.tools.dotc.").stripPrefix("scala.annotation.").stripPrefix("scala."))
+        def annotName(a: Term) = a.tpe.typeSymbol.fullName.replace("$", "").stripPrefix("dotty.tools.dotc.").stripPrefix("scala.annotation.").stripPrefix("scala.")
+        // the string argument of an annotation, as `@guardedBy("this")`
+        def annotArg(a: Term): String = a match
+          case Apply(_, List(Literal(StringConstant(s)))) => s
+          case Apply(_, List(NamedArg(_, Literal(StringConstant(s))))) => s
+          case _ => ""
+        val annots = sym.annotations.map(annotName)
+        val annotArgs = sym.annotations.map(a => annotName(a) -> annotArg(a)).toMap
+        val ownerSyms = owner :: (if owner.flags.is(Flags.Module) && owner.companionModule.exists then List(owner.companionModule) else Nil)
+        val ownerMarkers = ownerSyms.flatMap(_.annotations.map(annotName))
+          .filter(n => n == "internal.sharable" || n == "internal.unshared").distinct
         val tcs = classesOf(tpe).map(s => norm(s.fullName)).distinct
         val topCls = classesOf(tpe).filterNot(_.fullName == "scala.Null").headOption
         val packed = topCls.exists { c =>
@@ -290,7 +304,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           annots.contains("volatile"), packed,
           bases.exists(_.startsWith("java.lang.ThreadLocal")),
           bases.exists(b => concurrentPrefixes.exists(b.startsWith)) || bases.exists(_.startsWith("java.util.concurrent")),
-          initOnBase, vd.rhs.exists { case Literal(NullConstant()) => true case _ => false })
+          initOnBase, vd.rhs.exists { case Literal(NullConstant()) => true case _ => false }, annotArgs, ownerMarkers)
 
     object Walker extends TreeTraverser:
       def withProt(p: String)(op: => Unit): Unit =
@@ -343,7 +357,10 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
             publishingMethods += currentMethod
           protectedCall(fsym) match
             case Some((prot, names)) =>
-              traverseTree(fn)(owner)
+              fn match
+                // the monitor of `x.synchronized(...)`: reading `x` to lock it is the lock, not an access outside it
+                case Select(q, "synchronized") => withProt(prot)(traverseTree(q)(owner))
+                case _ => traverseTree(fn)(owner)
               val paramss = fsym.paramSymss.filterNot(_.exists(_.isTypeParam))
               argss.zipWithIndex.foreach { (args, i) =>
                 val ps = paramss.lift(i).getOrElse(Nil)
@@ -440,7 +457,9 @@ object StateMap:
 
 final case class Placed(f: FieldInfo, kind: String, kindRule: String, protection: String, protRule: String,
     evidence: String, features: List[String], role: String, reach: String, accessSummary: Map[String, Int],
-    edges: List[String], unprotectedSites: List[String])
+    edges: List[String], unprotectedSites: List[String],
+    kindSource: String, protectionSource: String, inferredKind: String, inferredKindRule: String,
+    inferredProtection: String, inferredProtectionRule: String, disagreement: Option[String])
 
 class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path):
   import StateMap.*
@@ -582,15 +601,68 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     if p == "core" || p.startsWith("core.") then b += "core"
     b.result().distinct
 
+  private val kindAnnots = Map("internal.scratch" -> "A", "internal.lazyFact" -> "B", "internal.cache" -> "C",
+    "internal.interned" -> "D", "internal.treeState" -> "E")
+
+  // the kind and protection a field's annotations declare, which take precedence over the rules
+  private def annotatedKind(f: FieldInfo): Option[(String, String)] =
+    kindAnnots.collectFirst { case (a, k) if f.annotArgs.contains(a) => (k, "@" + a.stripPrefix("internal.")) }
+
+  private def annotatedProt(f: FieldInfo): Option[(String, String)] =
+    val a = f.annotArgs
+    a.get("internal.guardedBy").map { lock =>
+      val p = lock match
+        case "completionLock" => "completion-lock"
+        case "rootClaim" => "root-claim"
+        case _ => "synchronized"
+      (p, s"@guardedBy(\"$lock\")")
+    }.orElse(a.get("internal.confined").map(_ => ("thread-confined", "@confined")))
+     .orElse(a.get("internal.publishedBy").map { how =>
+       val p = how match
+         case "packed" => "packed-volatile"
+         case other => other
+       (p, s"@publishedBy(\"$how\")")
+     })
+     .orElse(a.get("internal.benignRace").map(_ => ("benign-race", "@benignRace")))
+     .orElse {
+       // the markers of `-Ycheck-reentrant` (`CheckReentrant`), on the field or its owner: reentrancy across compiler
+       // instances, not sharing within one base
+       val ms = (a.keys.toList ++ f.ownerMarkers).filter(n => n == "internal.sharable" || n == "internal.unshared")
+       if ms.contains("internal.sharable") then Some(("static-safe (@sharable)", "@sharable"))
+       else if ms.contains("internal.unshared") then Some(("single-threaded (@unshared)", "@unshared"))
+       else None
+     }
+
   val placed: List[Placed] = c.fields.values.toList.filterNot(excluded).map { f =>
-    val (k, kr) = kindOf(f)
+    val (ik, ikr) = kindOf(f)
     val reach = reachOf(f)
-    val (p, pr, ev) = protOf(f, kr, reach)
+    val (ip, ipr, iev) = protOf(f, ikr, reach)
+    val (k, kr, ks) = annotatedKind(f).map((k, r) => (k, r, "annotated")).getOrElse((ik, ikr, "inferred"))
+    val (p, pr, ev, ps) = annotatedProt(f).map((p, r) => (p, r, "annotation", "annotated")).getOrElse((ip, ipr, iev, "inferred"))
+    val marker = pr == "@sharable" || pr == "@unshared"
+    // an annotation against the rules: `disagrees` when the rules place the field otherwise (`partial:P` for an
+    // annotated P: some accesses lack it), `unverified` when they find no protection to compare with (a lock held
+    // further up the stack, confinement), `agrees` otherwise
+    val kindCheck =
+      if ks != "annotated" then None
+      else if ik == "unclassified" then Some(s"kind unverified: no rule places it")
+      else if ik != k then Some(s"kind disagrees: rules say $ik ($ikr)")
+      else Some("kind agrees")
+    val protCheck =
+      if ps != "annotated" || marker then None
+      else if p == "benign-race" && ip == "none" then Some("protection agrees: rules find none")
+      else if ip == "none" || ip == "unknown" then Some(s"protection unverified: rules find $ip")
+      else if ip != p then Some(s"protection disagrees: rules say $ip ($ipr)")
+      else Some("protection agrees")
+    val checks = List(kindCheck, protCheck).flatten
+    val disagreement = Option.when(checks.nonEmpty)(checks.mkString("; "))
     val acc = relevant(f)
     val summary = acc.groupBy(accessProt).view.mapValues(_.size).toMap
     val edges = f.typeClasses.filter(t => t != f.owner && c.classes.contains(t)).distinct
     val sites = acc.filter(a => accessProt(a) == "none").map(a => s"${a.file}:${a.line} ${if a.write then "write" else "read"} in ${a.method}").distinct.take(40).toList
-    Placed(f, k, kr, p, pr, ev, featuresOf(f), if k == "C" then "cache" else "semantic", reach, summary, edges, sites)
+    val features = (featuresOf(f) ++ f.annotArgs.get("internal.featureArea").toList).distinct
+    Placed(f, k, kr, p, pr, ev, features, if k == "C" then "cache" else "semantic", reach, summary, edges, sites,
+      ks, ps, ik, ikr, ip, ipr, disagreement)
   }
 
   def summary: String =
@@ -605,6 +677,11 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
       sb ++= s"| $pr | ${row.map(n => if n == 0 then "" else n.toString).mkString(" | ")} | ${row.sum} |\n"
     val tot = kinds.map(k => placed.count(_.kind == k))
     sb ++= s"| total | ${tot.mkString(" | ")} | ${tot.sum} |\n"
+    val ann = placed.filter(p => p.kindSource == "annotated" || p.f.annotArgs.contains("internal.featureArea")
+      || (p.protectionSource == "annotated" && p.protRule != "@sharable" && p.protRule != "@unshared"))
+    sb ++= s"\nannotated: ${ann.size} fields; @sharable/@unshared: ${placed.count(p => p.protRule == "@sharable" || p.protRule == "@unshared")}\n"
+    for p <- ann do
+      sb ++= s"  ${p.f.owner}#${p.f.name}: ${p.kind} (${p.kindSource}), ${p.protection} (${p.protectionSource})${p.disagreement.map(d => s": $d").getOrElse("")}${p.f.annotArgs.get("internal.featureArea").map(a => s", feature $a").getOrElse("")}\n"
     val un = placed.filter(_.kind == "unclassified")
     val (unPost, unTyper) = un.partition(_.reach == "post-typer")
     sb ++= s"\nunclassified: ${un.size} (${unTyper.size} reachable from typer, ${unPost.size} post-typer)\n"
@@ -614,15 +691,16 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
 
   def validate(rows: List[List[String]], sites: List[StateMap.CachingSite]): List[String] =
     val out = List.newBuilder[String]
-    def show(p: Placed) = s"${p.f.owner}#${p.f.name} is ${p.kind}/${p.protection} (${p.kindRule}, ${p.protRule})"
+    // the rules' placement: annotations are checked by `annotationCheck`, not here
+    def show(p: Placed) = s"${p.f.owner}#${p.f.name} is ${p.inferredKind}/${p.inferredProtection} (${p.inferredKindRule}, ${p.inferredProtectionRule})"
     for row <- rows do
       val List(keyRe, kind, prot, source) = row.padTo(4, "")
       val re = keyRe.r
       val hits = placed.filter(p => re.matches(p.f.key))
       if hits.isEmpty then out += s"MISSING  $source: no field matches /$keyRe/"
       for p <- hits do
-        val kindOk = kind == "*" || kind == p.kind
-        val protOk = prot == "*" || prot.r.matches(p.protection)
+        val kindOk = kind == "*" || kind == p.inferredKind
+        val protOk = prot == "*" || prot.r.matches(p.inferredProtection)
         if !kindOk || !protOk then out += s"MISMATCH $source: ${show(p)}; §8 says ${kind}/${prot}"
     // the Caching call sites, by text, against the fields the rules put under Caching
     val stamped = sites.filter(_.helper != "peek")
@@ -632,9 +710,9 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     for (file, name) <- siteFields.toList.sorted do
       byFileName.get((file, name)) match
         case None => out += s"MISMATCH Caching site field $file `$name` is not in the model"
-        case Some(p) if p.protection != "Caching" => out += s"MISMATCH Caching site field ${show(p)}"
+        case Some(p) if p.inferredProtection != "Caching" => out += s"MISMATCH Caching site field ${show(p)}"
         case _ =>
-    for p <- placed if p.protection.contains("Caching") && !siteFields((p.f.file, p.f.name)) do
+    for p <- placed if p.inferredProtection.contains("Caching") && !siteFields((p.f.file, p.f.name)) do
       out += s"MISMATCH ${show(p)} but is in no Caching call's stamp or value"
     out.result()
 
@@ -653,7 +731,11 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
         "features" -> jarr(p.features.map(jstr)), "role" -> jstr(p.role), "reach" -> jstr(p.reach),
         "accesses" -> jobj(p.accessSummary.toList.sorted.map((k, v) => k -> v.toString)*),
         "edges" -> jarr(p.edges.map(jstr)),
-        "unprotectedSites" -> jarr(p.unprotectedSites.map(jstr)))
+        "unprotectedSites" -> jarr(p.unprotectedSites.map(jstr)),
+        "kindSource" -> jstr(p.kindSource), "protectionSource" -> jstr(p.protectionSource),
+        "inferredKind" -> jstr(p.inferredKind), "inferredKindRule" -> jstr(p.inferredKindRule),
+        "inferredProtection" -> jstr(p.inferredProtection), "inferredProtectionRule" -> jstr(p.inferredProtectionRule),
+        "annotationCheck" -> p.disagreement.map(jstr).getOrElse("null"))
     }
     val owners = placed.map(_.f.owner).toSet ++ placed.flatMap(_.edges)
     val classesJson = c.classes.values.filter(ci => owners(ci.name)).toList.map { ci =>

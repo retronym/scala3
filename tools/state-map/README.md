@@ -6,6 +6,7 @@ A model of the mutable state of dotc's classes, extracted from their TASTy, and 
 - `expected.tsv`: what §8's I91 table and I92–I96 say of each cache. The extractor reports each field the rules place differently, and checks the `Caching` call sites found in the source text (as `StampedCachesTest` finds them) against the fields it puts under `Caching`.
 - `index.html`: the diagram, reading `state-map.data.js` (the same JSON as a script, so that the page works from `file://`). It loads elkjs from jsDelivr for the layout and draws plain SVG.
 - `run.sh`: compiles the compiler with sbt and runs the extractor.
+- `library/src/scala/annotation/internal/{scratch,lazyFact,cache,interned,treeState,guardedBy,confined,publishedBy,benignRace,featureArea}.scala`: the annotations (below).
 
 ```bash
 JAVA_HOME=~/.sdkman/candidates/java/21.0.12+1.1-tem tools/state-map/run.sh
@@ -15,9 +16,9 @@ The extractor is a scala-cli script beside the sources rather than an sbt projec
 
 ## Rules
 
-Each field's kind, protection and reach are set by the first rule that matches, listed in this order in the JSON's header with the same text. Rules read the TASTy (owner, base classes, declared type, annotations, the trees around each access), never a guess: a field no kind rule matches is `unclassified`, and one with no access outside initialisation is `unknown`. `evidence` says what a protection rests on: `lexical` (the accesses), `annotation`, `type`, `owner`, or `asserted` (a lock held further up the stack, which the access does not show; taken from §8).
+An annotation on the field (below) takes precedence over every rule; otherwise each field's kind, protection and reach are set by the first rule that matches, listed in this order in the JSON's header with the same text. Rules read the TASTy (owner, base classes, declared type, annotations, the trees around each access), never a guess: a field no kind rule matches is `unclassified`, and one with no access outside initialisation is `unknown`. `evidence` says what a protection rests on: `lexical` (the accesses), `annotation`, `type`, `owner`, or `asserted` (a lock held further up the stack, which the access does not show; taken from §8).
 
-Kind:
+Kind (after the annotations `@scratch`, `@lazyFact`, `@cache`, `@interned`, `@treeState`):
 
 - `A.reader`: a field of `dotc.Reader`.
 - `A.traversal`: a field of a `TypeMap`, `TypeAccumulator`, `VariantTraversal`, tree map or accumulator, `TypeComparer` or `ConstraintHandling`: one traversal's or one reader's.
@@ -44,7 +45,7 @@ Kind:
 - `E.session`: a field of `InteractiveDriver.Session`.
 - `E.unit`: `CompilationUnit.tpdTree`, `untpdTree`.
 
-Protection:
+Protection (after the annotations `@guardedBy`, `@confined`, `@publishedBy`, `@benignRace`, then the `-Ycheck-reentrant` markers `@sharable` → static-safe and `@unshared` → single-threaded, on the field or its owner):
 
 - `P.thread-local` → thread-confined: declared `ThreadLocal`.
 - `P.confined-owner` → thread-confined: kind A.
@@ -54,13 +55,38 @@ Protection:
 - `P.concurrent-type` → concurrent: a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `ConcurrentWeakHashSet`, `SyncEqHashMap`.
 - `P.on-base` → concurrent: initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`.
 - `P.asserted-completion` → completion-lock: kinds `B.denotation`, `B.completer`, `B.unpickler`, written under `lockAndComplete` or `Sharing.exclusive` further up the stack.
-- `P.access`: by the accesses outside initialisation and resets. Each access is, innermost first: in a `Caching` stamp, value or setter argument → Caching; in `synchronized` or `Sharing.serialised` → synchronized; in the `op` of `Sharing.exclusive`, `SharingImpl.exclusive`, `CompletionLock.locked` → completion-lock; in the `op` of `Sharing.claimed`, `SharingImpl.claimed`, `CompletionRoots.locked` → root-claim (an inline method that passes its parameter to one of these protects that parameter too); in a method that calls `util.Publish` → Publish; in the else branch of `if x.concurrent`, `if x.parallel` or `if Config.c && x.concurrent` → batch; in a private or local method, the one protection all its calls have; else none. The field is that one protection, `batch-only`, `partial:P` (some accesses P, some none), `mixed:P,Q`, or `unknown`.
+- `P.access`: by the accesses outside initialisation and resets. Each access is, innermost first: in a `Caching` stamp, value or setter argument → Caching; in `synchronized` (or its receiver, `x` of `x.synchronized`) or `Sharing.serialised` → synchronized; in the `op` of `Sharing.exclusive`, `SharingImpl.exclusive`, `CompletionLock.locked` → completion-lock; in the `op` of `Sharing.claimed`, `SharingImpl.claimed`, `CompletionRoots.locked` → root-claim (an inline method that passes its parameter to one of these protects that parameter too); in a method that calls `util.Publish` → Publish; in the else branch of `if x.concurrent`, `if x.parallel` or `if Config.c && x.concurrent` → batch; in a private or local method, the one protection all its calls have; else none. The field is that one protection, `batch-only`, `partial:P` (some accesses P, some none), `mixed:P,Q`, or `unknown`.
 
 Reach: `post-typer` for owners in `cc`, `backend`, `transform` (but `SetRootTree`, `CookComments`), and phases other than the interactive compiler's; `typer` otherwise.
 
 Not modelled: the internals of the mutable collection classes in `util` (modelled where a collection is held), synthetic fields, and `lazy val`s.
 
 Features, by package and class name: `cc`, `match-types`, `inline-macros`, `explicit-nulls`, `tasty-classfile`, `scala2`, `interactive`, `core`. `role` is `cache` for kind C and `semantic` otherwise.
+
+## Annotations
+
+Naming conventions and types carry the rules a long way, but not all of it: a field of a `ContextPool` is per-reader only because the pools moved to `Reader`, `BaseDataImpl.valid` is written only under `Sharing.exclusive` further up the stack, and `LambdaParam.myVariance` races by design. These are facts about the design, so they belong on the field. Ten annotations in `scala.annotation.internal`, beside `@sharable` and `@unshared`, say them. TASTy keeps them, so the extractor reads them at no cost to the compiler at run time.
+
+| annotation | says |
+|---|---|
+| `@scratch` | kind A: per-request scratch |
+| `@lazyFact` | kind B: a lazy fact with a black hole |
+| `@cache` | kind C: derivable, dropping it costs only time |
+| `@interned` | kind D: an interning table or counter |
+| `@treeState` | kind E: a tree's or a session's tree state |
+| `@guardedBy("completionLock" \| "rootClaim" \| "this" \| "<field>")` | every access holds that lock: the completion lock (`Sharing.exclusive`), a root's claim (`Sharing.claimed`), or a monitor |
+| `@confined` | one thread reaches the owner |
+| `@publishedBy("Caching" \| "Publish" \| "volatile" \| "packed")` | writes are published by the `Caching` helpers, `util.Publish`, one volatile value, or an immutable value packed into a volatile field |
+| `@benignRace("why")` | readers may race on it: any writer stores the same or an equal value |
+| `@featureArea("cc")` | a feature area the package and class name do not show; features stay inferred otherwise |
+
+In the JSON, `kindSource` and `protectionSource` are `annotated` or `inferred`; the rules' own answer is kept as `inferredKind` and `inferredProtection`, and `annotationCheck` compares the two: `agrees`, `disagrees` (for an annotated P the rules find `partial:P`, so some access lacks it), or `unverified` (the rules find no protection to compare with, as for a lock held further up the stack). The diagram marks an annotated field with `@` and a disagreement with `≠`, and its `source` chips select annotated, marker-only and inferred fields. The validation against §8 checks the rules' answer, not the annotations.
+
+`@sharable` and `@unshared` are a different axis: they tell `-Ycheck-reentrant` (`transform/CheckReentrant.scala`) that a var reachable from a static object is safe across compiler instances, which says nothing about readers sharing one `ContextBase`. Nothing in the build or CI passes `-Ycheck-reentrant` today; running it in CI is a cheap side win, and its traversal (vars reachable from static owners, cut at annotated paths) is a starting point for the checker below.
+
+Prior art: JCIP's `@GuardedBy`, `@ThreadSafe` and `@Immutable` (`net.jcip.annotations`), checked lexically by Error Prone's `GuardedByChecker`, with `@LazyInit` for benign races; IntelliJ's `@RequiresReadLock`, `@RequiresWriteLock` and `@RequiresEdt` (`com.intellij.util.concurrency.annotations`), checked by instrumentation in tests.
+
+A checker, later: the extractor's access classification is most of it. Each `@guardedBy(l)` field fails when an access is neither lexically under `l` nor in a method every call of which is (as `P.access` does now); for a lock held further up the stack (the completion lock around a completer) it needs a method annotation in the manner of `@RequiresReadLock`, `@requiresLock("completionLock")`, checked at the method's call sites the same way, or a runtime assertion under `-Yinteractive-parallel` (`completionLock.isHeldByCurrentThread`) as IntelliJ instruments its tests. `@publishedBy("Caching")` fails on a stray use, as `StampedCachesTest` does; `@confined` fails when the owner is reachable from a shared kind, `CheckReentrant`'s reachability over types instead of static roots. Run over TASTy in a test, it turns `annotationCheck: disagrees` into a failure.
 
 ## The diagram
 
