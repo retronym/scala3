@@ -1,0 +1,1421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dotc session x-ray</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<style>
+  /* palette and editor theme borrowed from greffier's viewer (retronym/greffier, viewer/index.html) */
+  :root { --bg:#f3f4f6; --panel:#fff; --fg:#1f2328; --dim:#6b7280; --line:#e2e5ea; --acc:#1c7ed6; --accsoft:#e7f1fc; --hover:#f0f2f5; --new:#d9f2d9; --newu:#2f9e44; --cur:#e8590c; --code:#f3f4f6;
+          --typed:#dbe9f8; --typednow:#d9f0dd; --untyped:#eceef2; --cancel:#fbe3e3; --cancelu:#d23b3b; --warn:#fdf0c7; --warnu:#8a5a00;
+          --r:6px; --font: 12.5px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --panel:#1b1f26; --fg:#e4e7ec; --dim:#8f98a6; --line:#2a303a; --accsoft:#1d3350; --hover:#242a34; --new:#1d3a22; --code:#232830; --newu:#51cf66;
+          --typed:#1f3a56; --typednow:#1f4630; --untyped:#2a2f38; --cancel:#4a2222; --warn:#4a3b14; --warnu:#f0c354; } }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: var(--font); display: flex; flex-direction: column; }
+  code, pre, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  code { font-size: 11.5px; }
+  .dim { color: var(--dim); }
+  svg.i { width: 16px; height: 16px; flex: none; vertical-align: -3px; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; line-height: 18px; }
+  button:hover { background: var(--hover); border-color: var(--line); } button.primary { background: var(--acc); color: #fff; border-color: var(--acc); } button.primary:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.icon { padding: 4px 6px; } button.ghost { border-color: transparent; background: transparent; } button.ghost:hover { background: var(--hover); }
+  input[type=number] { width: 60px; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); }
+  /* ---- frame: title bar, activity bar + three columns, bottom panel, status bar */
+  #titlebar { display: flex; align-items: center; gap: 12px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+  #titlebar h1 { font-size: 13px; font-weight: 600; margin: 0; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+  #titlebar .tagline { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #busy { color: var(--cur); font-weight: 600; white-space: nowrap; }
+  #shell { flex: 1; display: flex; min-height: 0; }
+  #activity { width: 44px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 6px; border-right: 1px solid var(--line); background: var(--panel); }
+  #activity button { width: 34px; height: 34px; padding: 0; justify-content: center; border: 0; border-radius: var(--r); background: transparent; color: var(--dim); }
+  #activity button:hover { background: var(--hover); color: var(--fg); } #activity button.on { color: var(--acc); background: var(--accsoft); }
+  #activity .sp { flex: 1; }
+  main { flex: 1; display: grid; grid-template-columns: 230px 5px minmax(360px, 1.2fr) 5px minmax(320px, 1fr); min-height: 0; min-width: 0; }
+  body.sidebarHidden #explorer, body.sidebarHidden .gutter[data-i="0"] { display: none; }
+  body.narrow #xraysec, body.narrow .gutter[data-i="1"] { display: none; }
+  .gutter { cursor: col-resize; background: var(--line); touch-action: none; }
+  .gutter.h { cursor: row-resize; height: 5px; flex: none; }
+  .gutter:hover, .gutter.active { background: var(--acc); }
+  body.logCollapsed #logsec, body.logCollapsed .gutter[data-i="2"] { display: none; }
+  section { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
+  section > h2, .ph { font-size: 12px; font-weight: 600; color: var(--fg); margin: 0; padding: 0 12px; height: 34px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); flex: none; }
+  .ph .sp { flex: 1; }
+  #xraysec { border-left: 0; }
+  /* ---- sidebar views */
+  #explorer .view { flex: 1; overflow: auto; min-height: 0; } #explorer .view[hidden] { display: none; }
+  #tree { padding: 6px 8px; font-size: 12px; }
+  #tree .row { display: flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: var(--fg); }
+  #tree .row:hover { background: var(--hover); } #tree .row svg { color: var(--dim); }
+  #tree .dir > .name svg.chev { transition: transform .1s; } #tree .dir.open > .name svg.chev { transform: rotate(90deg); }
+  #tree .dir > .kids { display: none; padding-left: 14px; } #tree .dir.open > .kids { display: block; }
+  #tree .file.sel { background: var(--accsoft); color: var(--acc); } #tree .file.sel svg { color: var(--acc); }
+  #tree .snap { padding: 4px 6px 2px; }
+  #demos { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #demos p { margin: 0 4px 6px; }
+  #demos button.card { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; }
+  #demos button.card svg { margin-top: 1px; color: var(--acc); } #demos button.card b { display: block; font-weight: 600; } #demos button.card small { color: var(--dim); font-size: 11.5px; line-height: 1.35; display: block; }
+  /* ---- editor column: tab strip, command bar, notices, transcript, editor */
+  #tabs { display: flex; align-items: center; height: 34px; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; padding-right: 6px; }
+  #tabs .tab { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 14px; background: var(--panel); border-right: 1px solid var(--line); border-top: 2px solid var(--acc); font-size: 12.5px; }
+  #tabs .tab svg { color: var(--dim); }
+  #tabs .sp { flex: 1; } #nav { display: flex; align-items: center; gap: 2px; } #navpos { margin: 0 6px; font-size: 11px; }
+  .cmdbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+  .cmdbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+  .cmdbar .sp { flex: 1; }
+  #advanced { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 6px 8px 2px; border-top: 1px dashed var(--line); margin-top: 2px; }
+  #advanced[hidden] { display: none; } #advanced label { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); }
+  #advToggle[aria-expanded="true"] { background: var(--hover); }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; padding: 0 4px; }
+  .toggle input { appearance: none; width: 28px; height: 16px; border-radius: 8px; background: var(--line); position: relative; margin: 0; cursor: pointer; transition: background .15s; }
+  .toggle input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .toggle input:checked { background: var(--acc); } .toggle input:checked::after { left: 14px; }
+  #latch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; background: var(--warn); color: var(--fg); border-bottom: 1px solid var(--line); flex: none; }
+  #latch[hidden] { display: none; }
+  #ed { flex: 1; min-height: 0; }
+  #ed .CodeMirror { height: 100%; background: #0f1520; color: #d4deef; font: 12px/17px ui-monospace, Menlo, monospace; }
+  #ed .CodeMirror-gutters { background: #0f1520; border-right: 1px solid #222e43; } #ed .CodeMirror-linenumber { color: #4a586f; }
+  #ed .CodeMirror-cursor { border-left: 2px solid #fff; } #ed .CodeMirror-selected { background: #254065 !important; }
+  #ed .cm-keyword { color: #c792ea; } #ed .cm-def { color: #82aaff; } #ed .cm-string { color: #c3e88d; } #ed .cm-number { color: #f78c6c; } #ed .cm-comment { color: #637088; }
+  #ed .cm-type, #ed .cm-variable-3 { color: #82aaff; } #ed .cm-atom, #ed .cm-builtin { color: #f78c6c; }
+  .line-typed { background: rgba(28,126,214,.18); } .line-typednow { background: rgba(47,158,68,.25); } .line-cancel { background: rgba(224,49,49,.25); }
+  /* the background pass: semantic highlighting from the typed tree, diagnostics in the gutter */
+  #ed .sem-class, #ed .sem-trait { color: #ffcb6b; } #ed .sem-object { color: #f78c6c; } #ed .sem-type { color: #c3e88d; font-style: italic; }
+  #ed .sem-method { color: #82aaff; } #ed .sem-val { color: #d4deef; } #ed .sem-var { color: #ff8a80; text-decoration: underline dotted; } #ed .sem-param { color: #b2ccd6; } #ed .sem-package { color: #637088; }
+  #ed .sem-error { text-decoration: underline wavy #e03131; text-decoration-skip-ink: none; } #ed .sem-warning { text-decoration: underline wavy #e8a317; text-decoration-skip-ink: none; }
+  #ed .xray-diag { width: 10px; } .diag-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin: 5px 0 0 1px; }
+  .diag-dot.error { background: #e03131; } .diag-dot.warning { background: #e8a317; } .diag-dot.info { background: #4a90e2; }
+  .diag-dot.stale { opacity: 0.45; } #ed .sem-stale { text-decoration-style: dotted; opacity: 0.8; } #problems .row.stale { opacity: 0.6; }
+  /* go to file (Ctrl/Cmd-K): a quick-open over the snapshot's files */
+  #quick { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); width: min(640px, 90vw); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.5); z-index: 50; }
+  #quick[hidden] { display: none; } #quick input { width: 100%; box-sizing: border-box; padding: 10px 12px; font: 13px ui-monospace, Menlo, monospace; background: var(--code); color: var(--fg); border: 0; border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; outline: none; }
+  #quick .items { max-height: 50vh; overflow: auto; } #quick .item { padding: 5px 12px; cursor: pointer; display: flex; gap: 10px; align-items: baseline; } #quick .item .path { color: var(--dim); font-size: 11px; margin-left: auto; }
+  #quick .item.on, #quick .item:hover { background: var(--hover); } #quick .item b { font-weight: 600; color: var(--acc); } #quick .hint { padding: 4px 12px 8px; color: var(--dim); font-size: 11px; }
+  #bgProgress { display: inline-block; width: 90px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; overflow: hidden; } #bgProgress[hidden] { display: none; } #bgProgress i { display: block; height: 100%; background: var(--acc); width: 0; transition: width .15s; }
+  .line-bg { background: rgba(28,126,214,.10); }
+  #bgState { display: inline-flex; align-items: center; gap: 6px; } #bgState .spin { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--dim); border-top-color: var(--acc); animation: spin .8s linear infinite; }
+  #bgState .spin[hidden] { display: none; } @keyframes spin { to { transform: rotate(360deg); } }
+  /* ---- the inspector */
+  .pad { padding: 10px 12px; overflow: auto; }
+  #xray { flex: 1; overflow: auto; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--dim); } .empty svg { width: 28px; height: 28px; color: var(--line); margin-bottom: 6px; }
+  .empty h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--fg); } .empty p { margin: 0; }
+  .outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 0 0 10px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+  .o-served { background: var(--typed); } .o-resumed { background: var(--typednow); } .o-fresh, .o-full { background: var(--warn); color: var(--warnu); }
+  .o-cancelled-resume, .o-cancelled-fresh, .o-error { background: var(--cancel); color: var(--cancelu); }
+  .same { color: var(--newu); font-weight: 600; } .changed { color: var(--cur); font-weight: 600; }
+  .req { margin: 0 0 10px; padding: 6px 10px; background: var(--code); border-radius: var(--r); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 0 0 12px; }
+  .tile { padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
+  .tile .v { font-size: 15px; font-weight: 600; line-height: 1.25; } .tile .l { color: var(--dim); font-size: 11px; margin-top: 1px; } .tile .d { color: var(--dim); font-size: 11px; margin-top: 3px; line-height: 1.35; }
+  .tile.wide { grid-column: 1 / -1; }
+  h4.sec { font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+  #stats { display: flex; flex-wrap: wrap; gap: 3px; margin: 6px 0 4px; }
+  .st { font-size: 11px; padding: 2px 7px; border-radius: 4px; background: var(--untyped); border: 1px solid transparent; cursor: pointer; }
+  .st.typed { background: var(--typed); } .st.partial { border-style: dashed; border-color: var(--dim); } .st sup { font-size: 9px; color: var(--dim); } .st.typed-now { background: var(--typednow); } .st.cursor { border-color: var(--cur); } .st.aborted { background: var(--cancel); color: var(--cancelu); }
+  .legend { font-size: 11px; } .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin: 0 3px 0 8px; }
+  ul.compl { margin: 2px 0 8px; padding-left: 18px; max-height: 110px; overflow: auto; }
+  pre.hljs { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); font-size: 11px; max-height: 160px; overflow: auto; }
+  /* ---- bottom panel: request log and demo transcript as tabs */
+  #logsec { height: 220px; flex: none; border-top: 0; } body.tpWide #logsec { height: 440px !important; }
+  #logsec .ph { background: var(--panel); gap: 2px; padding-left: 8px; }
+  #logsec .ptab { border: 0; background: transparent; color: var(--dim); padding: 4px 10px; border-radius: var(--r); font-weight: 500; }
+  #logsec .ptab.on { color: var(--fg); background: var(--hover); } #logsec .ptab:disabled { opacity: .4; }
+  #log { flex: 1; overflow: auto; font-size: 12px; } #log[hidden] { display: none; }
+  #log table { border-collapse: collapse; width: 100%; } #log td, #log th { padding: 4px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: nowrap; }
+  #log th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+  #log tr.cancelled td { color: var(--cancelu); } #log tr:first-child td { font-weight: 600; }
+  #log .none { padding: 16px; }
+  #story { flex: 1; overflow: auto; padding: 8px 14px; } #story[hidden] { display: none; }
+  #story h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; } #story ol { margin: 0; padding-left: 22px; } #story li { margin: 0 0 6px; padding-left: 2px; }
+  #story .do { font-weight: 500; } #story .exp { color: var(--dim); } #story .res { margin-top: 1px; }
+  #story .ok { color: var(--newu); font-weight: 600; } #story .no { color: var(--cancelu); font-weight: 600; }
+  footer#status { display: flex; gap: 16px; align-items: center; padding: 0 12px; border-top: 1px solid var(--line); background: var(--panel); font-size: 11px; white-space: nowrap; overflow: hidden; height: 24px; flex: none; }
+  footer#status > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; } footer#status #stLast { flex: 1; } footer#status button { padding: 0 6px; font-size: 11px; line-height: 16px; }
+  footer#status #hoverState { max-width: 40%; }
+  /* ---- popups */
+  #popup { position: fixed; z-index: 10; max-width: 560px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25); padding: 8px 10px; font-size: 12px; pointer-events: none; }
+  #popup .t { font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; } #popup .x { color: var(--dim); margin-top: 4px; }
+  #popup.pending { border-color: var(--cur); } #popup.cancelled { border-color: var(--cancelu); }
+  #menu { position: fixed; z-index: 11; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25); padding: 4px; font-size: 12px; }
+  #menu div { padding: 4px 10px; border-radius: 4px; cursor: pointer; } #menu div:hover { background: var(--hover); }
+  .CodeMirror .cm-deflink { text-decoration: underline; cursor: pointer; }
+  .defhit { background: rgba(240,140,0,.35); }
+  /* ---- IDE bits: the lookup, kind badges, structure, breadcrumbs, problems, usages, the error stripe */
+  #lookup { position: fixed; z-index: 20; min-width: 260px; max-width: min(620px, 90vw); max-height: 230px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.4); font: 12px/18px ui-monospace, Menlo, monospace; padding: 2px 0; }
+  #lookup .row { display: flex; gap: 10px; padding: 1px 10px; cursor: pointer; white-space: nowrap; } #lookup .row b { font-weight: 600; } #lookup .row .dim { overflow: hidden; text-overflow: ellipsis; }
+  #lookup .row.on { background: var(--accsoft); } #lookup .row:hover { background: var(--hover); } #lookup .foot { padding: 2px 10px; color: var(--dim); font: 10.5px system-ui, sans-serif; border-top: 1px solid var(--line); }
+  .kb { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 3px; font: 600 9.5px/1 ui-monospace, Menlo, monospace; color: #0f1520; background: #9aa5b4; flex: none; }
+  .kb.k-class, .kb.k-trait, .kb.k-enum { background: #ffcb6b; } .kb.k-object { background: #f78c6c; } .kb.k-def { background: #82aaff; } .kb.k-type { background: #c3e88d; } .kb.k-var { background: #ff8a80; }
+  #quick .item .kb, #quick .item svg { align-self: center; } #quick .item svg { color: var(--dim); }
+  #struct { padding: 6px 8px; font-size: 12px; } #struct .row { display: flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #struct .row:hover { background: var(--hover); } #struct .row.cur { background: var(--accsoft); color: var(--acc); } #struct .row .dim { font-size: 11px; }
+  #crumbs { display: flex; align-items: center; gap: 2px; height: 22px; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--panel); font-size: 11.5px; white-space: nowrap; overflow: hidden; flex: none; }
+  #crumbs span.c { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; border-radius: 4px; cursor: pointer; } #crumbs span.c:hover { background: var(--hover); } #crumbs .gt { color: var(--dim); }
+  #problems { flex: 1; overflow: auto; font-size: 12px; } #problems .row { display: flex; gap: 8px; align-items: baseline; padding: 3px 12px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  #problems .row:hover { background: var(--hover); } #problems .row .diag-dot { margin: 0; flex: none; } #problems .row .msg { white-space: pre-wrap; word-break: break-word; flex: 1; } #problems .none { padding: 16px; }
+  #ed .use-read { background: rgba(130,170,255,.22); } #ed .use-write { background: rgba(247,140,108,.30); }
+  #ed { display: flex; position: relative; } #ed .CodeMirror { flex: 1; min-width: 0; }
+  #stripe { width: 9px; flex: none; position: relative; background: #0f1520; border-left: 1px solid #222e43; } #stripe i { position: absolute; left: 1px; right: 1px; height: 3px; border-radius: 1px; cursor: pointer; }
+  #stripe i.error { background: #e03131; } #stripe i.warning { background: #e8a317; } #stripe i.info { background: #4a90e2; } #stripe i:hover { transform: scaleY(1.8); }
+  #editBadge { margin-left: 10px; font-size: 11px; font-weight: 600; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity .3s; }
+  /* ---- the replay: a recorded Metals session per mode, and its findings */
+  #replayView { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+  #replayView p { margin: 0; } #replayView label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+  #replayView select, #freeMode { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); max-width: 100%; }
+  #replayView .row2 { display: flex; flex-wrap: wrap; gap: 6px; } #replayView input[type=number] { width: 64px; }
+  #rpDesc { background: var(--code); border-radius: var(--r); padding: 6px 8px; line-height: 1.4; }
+  .rpMode { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .rpMode .top { display: flex; align-items: center; gap: 6px; } .rpMode .top b { flex: 1; } .rpMode .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; } .rpMode .bar i { display: block; height: 100%; background: var(--acc); width: 0; }
+  .rpMode.running { border-color: var(--acc); } .rpMode .fl { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--dim); }
+  #replay { flex: 1; overflow: auto; font-size: 12px; } #replay[hidden] { display: none; }
+  #replay table { border-collapse: collapse; width: 100%; } #replay td, #replay th { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  #replay th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); } #replay td.l, #replay th.l { text-align: left; }
+  #replay tr.all td { font-weight: 600; border-top: 2px solid var(--line); } #replay .bad { color: var(--cancelu); font-weight: 600; } #replay .good { color: var(--newu); }
+  #replay h4 { margin: 10px 10px 4px; font-size: 12px; } #replay .none { padding: 16px; } #replay .ex { padding: 0 10px; font-size: 11.5px; } #replay .ex div { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+  #rpRows td { text-align: left; } .m-baseline { color: #e8a317; } .m-default { color: #4a90e2; } .m-readers { color: #2f9e44; }
+  /* ---- the throughput demo: N readers over every file of the source set */
+  #tpBox { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #tpBox input[type=text] { width: 90px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); }
+  #throughput { flex: 1; overflow: auto; } #throughput[hidden] { display: none; }
+  #tpPanel { display: flex; gap: 16px; padding: 8px 12px; align-items: flex-start; }
+  #tpTimeline { margin-top: 8px; } #tpTimeline svg { width: 100%; height: auto; display: block; } #tpTimeline text { font-size: 9px; fill: var(--dim); }
+  #tpTimeline .open { fill: var(--dim); opacity: .55; } #tpTimeline .f0 { fill: #4c8bf5; } #tpTimeline .f1 { fill: #2f6fd8; } #tpTimeline .idle { fill: var(--line); opacity: .6; }
+  #tpTimeline .pick { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; font-size: 11.5px; } #tpTimeline .pick button.on { outline: 1px solid #4c8bf5; }
+  #tpTable tr.sel td { background: rgba(76,139,245,.12); } #tpTable tbody tr { cursor: pointer; } #tpPlot { flex: 0 0 440px; } #tpSide { flex: 1; min-width: 0; }
+  #tpPlot svg { width: 100%; height: auto; display: block; } #tpPlot text { font-size: 10px; fill: var(--dim); }
+  #tpPlot .axis { stroke: var(--dim); } #tpPlot .grid { stroke: var(--line); stroke-width: .5; } #tpPlot .series { fill: none; stroke: #4c8bf5; stroke-width: 2; } #tpPlot .dot { fill: #4c8bf5; }
+  #tpPlot .ref { stroke: #f08c00; stroke-dasharray: 4 3; } #tpPlot .ideal { stroke: var(--dim); stroke-dasharray: 2 3; } #tpPlot .lab { fill: var(--fg); font-weight: 600; }
+  #tpTable { border-collapse: collapse; width: 100%; font-size: 11.5px; } #tpTable td, #tpTable th { padding: 2px 5px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  #tpTable th { color: var(--dim); font-weight: 500; } #tpTable .bad { color: var(--cancelu); font-weight: 600; } #tpTable .good { color: var(--newu); }
+  #tpProg .bar { height: 4px; background: var(--line); border-radius: 2px; margin: 2px 0; } #tpProg .bar i { display: block; height: 100%; background: #4c8bf5; border-radius: 2px; }
+  .replayHit { background: rgba(240,140,0,.45); outline: 1px solid #f08c00; } .line-replay { background: rgba(240,140,0,.12); }
+  #strip { display: inline-flex; align-items: flex-end; gap: 1px; height: 18px; width: 180px; flex: none; cursor: default; } #strip i { display: block; width: 2px; background: var(--acc); border-radius: 1px 1px 0 0; min-height: 1px; }
+  #strip i.cancelled { background: var(--cancelu); } #strip i.baseline { background: #e8a317; } #strip i.default { background: #4a90e2; } #strip i.readers { background: #2f9e44; }
+</style>
+</head>
+<body>
+<div id="titlebar">
+  <h1><span data-icon="logo"></span>dotc session x-ray</h1>
+  <span class="dim tagline" title="the patched InteractiveDriver: typing only the path to the cursor (runUpTo: of each statement list, the statement containing it), resumable runs, cancellation that unwinds. Every number on this page is read from the driver.">the patched <code>InteractiveDriver</code>: only the path to the cursor is typed, runs resume, cancellation unwinds. Every number on this page is read from the driver.</span>
+  <span id="busy"></span>
+</div>
+<div id="shell">
+  <nav id="activity">
+    <button class="chrome on" data-view="explorer" data-icon="files" title="Explorer"></button>
+    <button class="chrome" data-view="structure" data-icon="structure" title="Structure: the definitions of the open file"></button>
+    <button class="chrome" data-view="demos" data-icon="play" title="Demos"></button>
+    <button class="chrome" data-view="replay" data-icon="replay" title="Replay: a recorded Metals editing session, once per mode, and the findings"></button>
+    <span class="sp"></span>
+    <button class="chrome" id="actLog" data-icon="panel" title="Request log and demo transcript"></button>
+  </nav>
+  <main>
+    <section id="explorer">
+      <h2 id="sideTitle">Explorer</h2>
+      <div class="view" id="viewExplorer">
+        <div id="tree"><div class="row file sel" data-file="" data-icon="file">A.scala <span class="dim">(generated)</span></div><div id="treeroot" class="dim snap">no snapshot of the compiler sources found</div></div>
+      </div>
+      <div class="view" id="viewStructure" hidden><div id="struct" class="dim">loading…</div></div>
+      <div class="view" id="viewReplay" hidden>
+        <div id="replayView">
+          <p class="dim">A Metals editing session recorded from an <code>lsp.trace.json</code> (hovers while the cursor moves, definitions, completions, document highlights, inlay hints, semantic tokens, edits, cancellations), replayed with its own timing on a fresh driver per mode.</p>
+          <label>Window <select id="rpWindow">
+            <option value="bodyEdit:0-1000">Types.scala: 12 edits, 10 inside bodies (the body-edit scenario)</option>
+            <option value="0-175">TypeErasure.scala + TypeEval.scala (events 0–175)</option>
+            <option value="670-814">Typer.scala, typing: 15 edits (670–814)</option>
+            <option value="280-420">Scopes.scala (an edit) + TypeComparer.scala (280–420)</option>
+            <option value="420-560">Typer.scala + Phases.scala (420–560)</option>
+            <option value="0-60">short: the first 60 events</option>
+          </select></label>
+          <div class="row2"><label title="the requests of one trace second are spread over it at offsets drawn from this seed">seed <input id="rpSeed" type="number" value="1"></label>
+            <label title="pauses between the trace's seconds are capped at this">pause cap ms <input id="rpIdle" type="number" value="1000" step="100"></label>
+            <label title="1: one queue, as Metals' Scala3CompilerAccess serialises every request; 2: cursor requests (hover, definition, completion) get a lane of their own beside the whole-file ones">lanes <select id="rpLanes"><option value="2">2</option><option value="1">1</option></select></label></div>
+          <div id="rpDesc" class="dim">…</div>
+          <div class="row2"><button id="rpAll" class="primary" data-icon="play" title="baseline, default and -Yinteractive-readers in turn, each on a fresh driver">Run all modes</button><button id="rpStop" class="ghost" data-icon="cancel">Stop</button></div>
+          <div id="rpModes"></div>
+          <div class="row2"><a id="rpExport" href="/replay/report.md" download="replay-findings.md"><button class="ghost" data-icon="doc" tabindex="-1">Export markdown</button></a><button id="rpCopy" class="ghost" data-icon="doc">Copy markdown</button></div>
+          <div id="tpBox">
+            <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-readers</code>, the build's options), typed by N reader threads (the largest files first, or round-robin; with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
+            <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,6,8"></label>
+              <label title="big: the largest files first, each to the least loaded thread; rr: round-robin in path order. Both steal the last file of the longest list when a thread runs out">order <select id="tpPolicy"><option value="big">largest first</option><option value="rr">round-robin</option></select></label>
+              <label><input id="tpSpeedup" type="checkbox" checked> speed-up against N=1</label></div>
+            <div class="row2"><button id="tpRun" class="primary" data-icon="play">Run throughput</button><button id="tpStop" class="ghost" data-icon="cancel">Stop</button></div>
+            <div id="tpState" class="dim"></div>
+            <p class="dim">The plot, the points and each thread's progress are in the panel below (<b>Throughput</b>).</p>
+          </div>
+          <p class="dim">Freeform: pick a mode next to the reset button above the editor, reset, and drive by hand; the strip in the status bar shows the latency of each request.</p>
+        </div>
+      </div>
+      <div class="view" id="viewDemos" hidden>
+        <div id="demos">
+          <p class="dim">Each demo runs a short sequence of real requests and narrates what the driver reports, step by step.</p>
+          <button id="demoSession" class="card" data-icon="session" title="complete at object 10, then 40, then 10 again, then inside method20"><span><b>Session</b><small>One run serves several completions: fresh, resumed, served.</small></span></button>
+          <button id="demoCancel" class="card" data-icon="cancel" title="complete at the latch, cancel while the typer is blocked, then complete there again"><span><b>Cancel, deterministically</b><small>Block the typer at a macro, cancel it, then complete there again. About 20 s.</small></span></button>
+          <button id="demoEdit" class="card" data-icon="edit" title="type a character into object 0, then complete at object 10"><span><b>Edit</b><small>An edit starts a fresh run; only the path to the cursor is typed.</small></span></button>
+          <button id="demoFull" class="card" data-icon="doc" title="a targeted run, then driver.run on the same content: the session is completed in the same run, and the next request is served"><span><b>Whole file</b><small>driver.run completes the session instead of replacing it.</small></span></button>
+          <button id="clear" class="ghost" data-icon="trash" title="clear the demo transcript, the request log and the x-ray panel">Clear transcript and log</button>
+        </div>
+      </div>
+    </section>
+    <div class="gutter" data-i="0" title="drag to resize"></div>
+    <section id="edsec">
+      <div id="tabs">
+        <div class="tab"><span data-icon="file"></span><span id="fname">A.scala</span></div>
+        <span id="editBadge" class="pill" hidden title="what the last edit did to the session's run"></span>
+        <span class="sp"></span>
+        <span id="nav"><button id="back" class="icon ghost chrome" data-icon="left" title="back (Alt+←)" disabled></button><button id="fwd" class="icon ghost chrome" data-icon="right" title="forward (Alt+→)" disabled></button><span id="navpos" class="dim"></span></span>
+      </div>
+      <div id="crumbs"></div>
+      <div class="cmdbar">
+        <button id="complete" class="primary" data-icon="complete" title="runUpTo at the cursor, then Completion.completions (Ctrl/Cmd-Space)">Complete</button>
+        <button id="full" class="icon" data-icon="doc" title="Type whole file: driver.run (completes the session if one exists on this content)"></button>
+        <button id="reset" class="icon ghost" data-icon="trash" title="Reset the typer state: a fresh driver, nothing typed, run ids restart (Ctrl/Cmd-Shift-K)"></button>
+        <select id="freeMode" title="the flags of the driver you drive by hand: applied by the reset (Ctrl/Cmd-Shift-K)"></select>
+        <span class="sep"></span>
+        <label class="toggle" title="hovering an identifier sends a typeAt request (runUpTo at the offset, then the type of the tree there); moving to another identifier before the answer cancels it"><input type="checkbox" id="hoverMode" checked> Hover types</label>
+        <label class="toggle" title="after each request, a background reader completes the session (driver.readAll on another thread, concurrently with hovers) and paints what it found: semantic colours from the typed tree, diagnostics in the gutter"><input type="checkbox" id="bgMode" checked> Background pass</label>
+        <label class="toggle" title="resting the caret on an identifier for 400 ms asks /usages (a read action on the typed tree) and marks every typed reference to its symbol: definitions in a warmer shade"><input type="checkbox" id="usageMode" checked> Usages at caret</label>
+        <span class="sp"></span>
+        <button id="advToggle" class="ghost chrome" data-icon="sliders" aria-expanded="false" title="cancel-after, go to object, the latch">Advanced</button>
+        <div id="advanced" hidden>
+          <label>Cancel next request after <input id="cancelms" type="number" min="0" step="5" placeholder="off"> ms</label>
+          <label>Go to object <input id="goto" type="number" min="0" max="59" value="10"> <button id="go" title="place the cursor after this.meth in that object">Go</button></label>
+          <button id="latchGo" data-icon="latch" title="complete inside giant of object 59: the typer blocks at the Latch.await macro until you release or cancel">Complete at the latch</button>
+        </div>
+      </div>
+      <div id="popup" hidden></div>
+      <div id="menu" hidden><div data-act="definition">Go to definition <span class="dim">⌘/Ctrl-click</span></div><div data-act="typeAt">Type at the pointer</div><div data-act="complete">Complete at the pointer <span class="dim">(prefix up to it)</span></div></div>
+      <div id="latch" hidden><span data-icon="latch"></span><span><b>Typer blocked</b> at <code>tests.macros.Latch.await</code> inside <code>giant</code> of M59: <span id="latchTrees">0</span> trees typed so far, <span id="latchMs">0</span> ms</span>
+        <button id="release" class="primary" title="let it finish">Release</button> <button id="cancelNow" title="cancel this request">Cancel</button></div>
+      <div id="ed"></div>
+    </section>
+    <div class="gutter" data-i="1" title="drag to resize"></div>
+    <section id="xraysec">
+      <h2>X-ray of the last request</h2>
+      <div id="xray" class="pad"><div class="empty"><span data-icon="xray"></span><h3>Ready when you are</h3><p>Place the cursor inside a method and press Complete, or run a demo.</p></div></div>
+    </section>
+  </main>
+</div>
+<div class="gutter h" data-i="2" title="drag to resize"></div>
+<section id="logsec">
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th><th title="times the request backed off from a wait-for cycle and was retried (-Yinteractive-readers): a livelock shows here as a growing number">backoffs</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
+  <div id="story" hidden></div>
+  <div id="problems" hidden><div class="none dim">No diagnostics: every request and the background pass fill this list.</div></div>
+  <div id="throughput" hidden><div id="tpPanel"><div id="tpPlot"></div><div id="tpSide"><table id="tpTable"><thead><tr><th>N</th><th>wall s</th><th>speed-up</th><th>worker CPU s</th><th>root waits</th><th title="files whose errors differ from N=1's (N=1: from the single-reader whole-set run)">files differ</th><th>backoffs</th><th>cycles raised</th><th title="the open: parse, index and skip every statement, serial">open s</th><th title="from the end of the open until the first thread ran out of files">typing s</th><th title="from the first thread running out of files until the last one did">tail s</th></tr></thead><tbody></tbody></table><div id="tpProg"></div><div id="tpTimeline"></div></div></div></div>
+  <div id="replay" hidden><div class="none dim">Run the replay (the ▶︎ view in the activity bar): the findings per mode and request kind appear here, then the requests as they finish.</div><div id="rpFindings"></div><h4>Requests, newest first</h4><table><thead><tr><th class="l">#</th><th class="l">mode</th><th class="l">request</th><th>due ms</th><th>queued</th><th>latency</th><th>lock wait</th><th>stmt wait</th><th>trees</th><th class="l">how</th><th>diags</th><th class="l">answer</th></tr></thead><tbody id="rpRows"></tbody></table></div>
+</section>
+<div id="quick" hidden><input id="quickIn" placeholder="Go to file… (type to filter; Enter opens, Esc closes)" autocomplete="off"><div class="items" id="quickItems"></div><div class="hint" id="quickHint">Ctrl/Cmd-K · the snapshot's compiler sources and the generated A.scala</div></div>
+<div id="lookup" hidden></div>
+<footer id="status">
+  <span id="strip" title="latency of the last requests (by hand, the background pass's hovers, the replay): height on a log scale"></span>
+  <span id="stLast" class="mono dim" title="latest request log entry">no request yet</span>
+  <span><span id="stFile">A.scala</span> <span id="cur" class="mono">–</span></span>
+  <span id="stDef" class="mono dim" title="the innermost definition at the caret, and the symbol whose usages are marked"></span>
+  <span id="stSession" class="mono dim" title="session state from the last result"></span>
+  <span id="hoverState" class="dim"></span>
+  <span id="bgState" class="dim" title="the background reader: completes the session on another thread while hovers are served"><span class="spin" hidden></span><span id="bgProgress" hidden><i></i></span><span id="bgText">background: idle</span></span>
+  <button id="logShow" class="ghost chrome" data-icon="panel" hidden title="show the request log panel">Log</button>
+</footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/scala.min.js"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // ---- icons: a small inline set, 16px, currentColor
+  const svg = (body, cls) => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  const I = {
+    logo: svg('<circle cx="8" cy="8" r="6.25"/><path d="M5 8h6M8 5v6"/>'),
+    files: svg('<path d="M3.5 2.5h5l3 3v8h-8z"/><path d="M8.5 2.5v3h3"/><path d="M5.5 8.5h4M5.5 11h4"/>'),
+    play: svg('<path d="M4.5 3.2v9.6l8-4.8z"/>'),
+    panel: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 9.5h12"/>'),
+    file: svg('<path d="M4 1.75h5l3 3v9.5H4z"/><path d="M9 1.75v3h3"/>'),
+    folder: svg('<path d="M1.75 4.25a1 1 0 0 1 1-1h3.4l1.5 1.5h5.6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z"/>'),
+    chev: svg('<path d="M6 3.5 10.5 8 6 12.5"/>', 'chev'),
+    left: svg('<path d="M10 3 5 8l5 5"/>'),
+    right: svg('<path d="M6 3l5 5-5 5"/>'),
+    complete: svg('<path d="M3 3.5l9.5 4.5L3 12.5l1.8-4.5z"/>'),
+    doc: svg('<path d="M4 1.75h5l3 3v9.5H4z"/><path d="M9 1.75v3h3"/><path d="M6 8h4M6 10.5h4"/>'),
+    sliders: svg('<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.4" fill="var(--panel)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--panel)"/><circle cx="5" cy="11.5" r="1.4" fill="var(--panel)"/>'),
+    latch: svg('<path d="M4 2.5h8M4 13.5h8"/><path d="M5 2.5c0 4 6 4 6 8v3M11 2.5c0 4-6 4-6 8v3"/>'),
+    session: svg('<path d="M9 1.5 3.5 9h4L7 14.5 12.5 7h-4z"/>'),
+    cancel: svg('<circle cx="8" cy="8" r="6.25"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5"/>'),
+    edit: svg('<path d="M11 2.5l2.5 2.5-8 8H3v-2.5z"/><path d="M9.5 4l2.5 2.5"/>'),
+    trash: svg('<path d="M3 4.5h10M6.5 4.5v-2h3v2M4.5 4.5l.7 9h5.6l.7-9"/>'),
+    close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    xray: svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 5.5h6M5 8h4M5 10.5h2"/>'),
+    replay: svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/><path d="M2.5 2.5v3h3"/><path d="M7 5.5v5l3.5-2.5z"/>'),
+    structure: svg('<path d="M3 3h4M5 3v10M5 8h4M5 13h4"/><rect x="9" y="6.5" width="4" height="3" rx=".5"/><rect x="9" y="11.5" width="4" height="3" rx=".5"/>'),
+  };
+  document.querySelectorAll('[data-icon]').forEach((el) => el.insertAdjacentHTML('afterbegin', I[el.dataset.icon] || ''));
+  // ---- a request that takes too long is reported, not waited on silently: after 30 s the
+  // status bar says which request it is and where its thread is in the driver (/inflight)
+  {
+    const fetch0 = window.fetch.bind(window);
+    window.fetch = (url, opts) => {
+      const p = fetch0(url, opts);
+      if (String(url).startsWith('/inflight')) return p;
+      let done = false; p.finally(() => { done = true; stuck.delete(url); stuckReport(); }).catch(() => {});
+      setTimeout(async () => {
+        if (done) return;
+        try {
+          const r = await (await fetch0('/inflight')).json(), mine = r.requests.find((q) => q.request.includes(String(url).split('?')[0])) || r.requests[0];
+          stuck.set(url, mine ? `${mine.request}: ${mine.ms} ms, ${mine.state}${mine.where.length ? ' in ' + mine.where[0].replace(/\(.*\)/, '') : ''}` : String(url));
+          stuckReport(mine);
+        } catch (e) { stuck.set(url, String(url)); stuckReport(); }
+      }, 30000);
+      return p;
+    };
+  }
+  const stuck = new Map();
+  function stuckReport(detail) {
+    const el = document.getElementById('busy'); if (!el) return;
+    if (stuck.size) { el.textContent = `stuck: ${[...stuck.values()][0]}`; el.title = detail ? detail.where.join('\n') : ''; }
+    else if (el.textContent.startsWith('stuck:')) { el.textContent = ''; el.title = ''; }
+  }
+  const src = await (await fetch('/source')).json();
+  // the state of the IDE bits below (declared here: loadFile, which runs early from the URL, records into it)
+  const ide = { defs: [], defsFile: null, defsP: null, index: [], recent: [], structCur: -1, useMarks: [], useTok: null, useSym: '', useTimer: null, useSeq: 0, diags: [] };
+  const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, gutters: ['CodeMirror-linenumbers', 'xray-diag'], indentUnit: 2, tabSize: 2, indentWithTabs: false,
+    extraKeys: { Tab: (c) => c.replaceSelection('  ', 'end') }, configureMouse: () => ({ addNew: false }) });
+  cm.setSize(null, '100%');
+  $('ed').insertAdjacentHTML('beforeend', '<div id="stripe" title="the error stripe: diagnostics by relative line"></div>');
+  // ---- layout: the borders between the panels are drag handles; widths are kept in localStorage (xray.cols2), the log panel's height (xray.logh), it can be collapsed (xray.logCollapsed)
+  const store = { get: (k) => { try { return localStorage.getItem('xray.' + k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem('xray.' + k, v); } catch (e) { /* ignore */ } } };
+  const mainEl = document.querySelector('main'), panels = ['explorer', 'edsec', 'xraysec'].map($);
+  const GUT = 5;
+  let cols = null; // px widths of explorer and editor; the x-ray takes the rest
+  try { const c = JSON.parse(store.get('cols2') || 'null'); if (Array.isArray(c) && c.length === 2 && c.every((n) => n > 40)) cols = c; } catch (e) { /* ignore */ }
+  let logh = +store.get('logh') || 220;
+  function applyCols() {
+    // narrower than the three columns need: the x-ray column folds away (the editor keeps the room)
+    const narrow = window.innerWidth < (document.body.classList.contains('sidebarHidden') ? 700 : 940); document.body.classList.toggle('narrow', narrow);
+    if (narrow) { const sbw = cols ? Math.round(cols[0]) : 230; mainEl.style.gridTemplateColumns = document.body.classList.contains('sidebarHidden') ? 'minmax(0, 1fr)' : `${Math.min(sbw, Math.round(window.innerWidth / 3))}px ${GUT}px minmax(0, 1fr)`; $('logsec').style.height = `${Math.round(logh)}px`; cm.refresh(); return; }
+    const sb = !document.body.classList.contains('sidebarHidden');
+    const w = cols ? cols.map((n) => `${Math.round(n)}px`) : ['230px', 'minmax(360px, 1.2fr)'];
+    const rest = cols ? 'minmax(0, 1fr)' : 'minmax(320px, 1fr)';
+    mainEl.style.gridTemplateColumns = sb ? `${w[0]} ${GUT}px ${w[1]} ${GUT}px ${rest}` : `${w[1]} ${GUT}px ${rest}`;
+    $('logsec').style.height = `${Math.round(logh)}px`;
+    cm.refresh();
+  }
+  window.addEventListener('resize', () => applyCols());
+  document.querySelectorAll('.gutter').forEach((g) => {
+    g.addEventListener('pointerdown', (ev) => {
+      const i = +g.dataset.i, startX = ev.clientX, startY = ev.clientY;
+      const px = panels.map((p) => p.getBoundingClientRect().width);
+      if (!cols) cols = px.slice(0, 2);
+      const start = cols.slice(), min = [140, 300, 260], startH = logh;
+      try { g.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ } g.classList.add('active'); ev.preventDefault();
+      const onMove = (e) => {
+        if (i === 2) { logh = Math.min(Math.max(80, startH - (e.clientY - startY)), window.innerHeight - 260); applyCols(); return; }
+        let d = e.clientX - startX;
+        d = Math.max(min[i] - start[i], d); // left panel keeps its minimum
+        const right = i === 0 ? start[1] : px[2]; d = Math.min(right - min[i + 1], d); // and so does the right one
+        cols[i] = start[i] + d; if (i === 0) cols[1] = start[1] - d;
+        applyCols();
+      };
+      const onUp = () => { g.classList.remove('active'); g.removeEventListener('pointermove', onMove); g.removeEventListener('pointerup', onUp); g.removeEventListener('pointercancel', onUp); store.set('cols2', JSON.stringify(cols)); store.set('logh', String(Math.round(logh))); cm.refresh(); };
+      g.addEventListener('pointermove', onMove); g.addEventListener('pointerup', onUp); g.addEventListener('pointercancel', onUp);
+    });
+  });
+  function setLogCollapsed(on) { document.body.classList.toggle('logCollapsed', on); $('logShow').hidden = !on; $('actLog').classList.toggle('on', !on); store.set('logCollapsed', on ? '1' : '0'); applyCols(); }
+  $('logToggle').onclick = () => setLogCollapsed(true); $('logShow').onclick = () => setLogCollapsed(false);
+  $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
+  setLogCollapsed(store.get('logCollapsed') === '1');
+  // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput'].forEach((n) => { $(n).hidden = name !== n; }); document.body.classList.toggle('tpWide', name === 'throughput'); }
+  document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
+  // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
+  const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
+  let view = store.get('view') in views ? store.get('view') : 'explorer';
+  function showView(v, toggle) {
+    const hidden = document.body.classList.contains('sidebarHidden');
+    if (toggle && v === view && !hidden) { document.body.classList.add('sidebarHidden'); }
+    else { document.body.classList.remove('sidebarHidden'); view = v; store.set('view', v); }
+    const shown = !document.body.classList.contains('sidebarHidden');
+    document.querySelectorAll('#activity [data-view]').forEach((b) => b.classList.toggle('on', shown && b.dataset.view === view));
+    $('sideTitle').textContent = views[view]; Object.keys(views).forEach((k) => { $('view' + k[0].toUpperCase() + k.slice(1)).hidden = view !== k; });
+    store.set('sidebarHidden', shown ? '0' : '1'); applyCols();
+  }
+  document.querySelectorAll('#activity [data-view]').forEach((b) => b.onclick = () => showView(b.dataset.view, true));
+  showView(view, false); if (store.get('sidebarHidden') === '1') showView(view, true);
+  // the advanced controls fold away
+  function setAdvanced(on) { $('advanced').hidden = !on; $('advToggle').setAttribute('aria-expanded', on ? 'true' : 'false'); store.set('advanced', on ? '1' : '0'); cm.refresh(); }
+  $('advToggle').onclick = () => setAdvanced($('advanced').hidden);
+  setAdvanced(store.get('advanced') === '1');
+  // ---- navigation history: where the cursor was before a file load or a definition jump
+  const nav = { stack: [], at: -1, moving: false };
+  function navHere() { return { file: currentFile, pos: cm.getCursor() }; }
+  function navPush() {
+    if (nav.moving) return;
+    nav.stack = nav.stack.slice(0, nav.at + 1); nav.stack.push(navHere()); nav.at = nav.stack.length - 1; navUpdate();
+  }
+  function navUpdate() { $('back').disabled = nav.at <= 0; $('fwd').disabled = nav.at >= nav.stack.length - 1; $('navpos').textContent = nav.stack.length ? `${nav.at + 1}/${nav.stack.length}` : ''; }
+  async function navGo(delta) {
+    const target = nav.stack[nav.at + delta]; if (!target) return;
+    nav.stack[nav.at] = navHere();
+    nav.at += delta; nav.moving = true;
+    try { if (target.file !== currentFile) await loadFile(target.file); cm.setCursor(target.pos); cm.scrollIntoView(null, 160); cm.focus(); showCursor(); }
+    finally { nav.moving = false; navUpdate(); }
+  }
+  $('back').onclick = () => navGo(-1); $('fwd').onclick = () => navGo(1);
+  document.addEventListener('keydown', (ev) => { if (ev.altKey && ev.key === 'ArrowLeft') { ev.preventDefault(); navGo(-1); } else if (ev.altKey && ev.key === 'ArrowRight') { ev.preventDefault(); navGo(1); } });
+  // Real compiler sources: the server lists a snapshot of compiler/src/dotty/tools/dotc (the explorer panel)
+  let currentFile = '';
+  const emptyState = (title, text) => `<div class="empty">${I.xray}<h3>${esc(title)}</h3><p>${text}</p></div>`;
+  async function loadFile(file) {
+    if (!nav.moving && cm.getValue()) navPush();
+    currentFile = file;
+    document.querySelectorAll('#tree .file').forEach((el) => el.classList.toggle('sel', el.dataset.file === file));
+    const r = await (await fetch('/source?file=' + encodeURIComponent(file))).json();
+    cm.setValue(r.source); $('fname').textContent = $('stFile').textContent = file || 'A.scala';
+    lineMarks = []; if (!loadFile.keepXray) $('xray').innerHTML = file
+      ? emptyState(`${file.split('/').pop()} is open`, `${esc(file)} (${cm.lineCount()} lines). Place the cursor inside a method body and press Complete: only the path to the cursor is typed, against the compiler's own classes; the rest of the file stays untyped (grey).`)
+      : emptyState('The generated file is open', 'Place the cursor inside a method and press Complete, or run a demo.');
+    if (loadFile.at) { const at = loadFile.at; loadFile.at = null; cm.setCursor(at); cm.scrollIntoView(null, 120); cm.focus(); showCursor(); }
+    else if (file) gotoFirstMethodBody(); else gotoObject(10);
+    syncUrl(); fileLoaded(file);
+    // opening a file starts the background pass, no request needed; deferred, since a file
+    // loaded during start-up comes before the pass's state exists (the end of start-up schedules it then)
+    setTimeout(() => { try { scheduleBackground(); } catch (e) { /* start-up not finished */ } }, 0);
+  }
+  let allFiles = [];
+  try {
+    const fl = await (await fetch('/files')).json();
+    allFiles = fl.files;
+    if (fl.files.length) {
+      const root = {};
+      fl.files.forEach((f) => { const parts = f.split('/'); let n = root; parts.slice(0, -1).forEach((p) => { n = n[p] = n[p] || {}; }); (n.__files = n.__files || []).push(f); });
+      const render = (node, name) => {
+        const dirs = Object.keys(node).filter((k) => k !== '__files').sort();
+        const kids = dirs.map((d) => render(node[d], d)).join('') + (node.__files || []).map((f) => `<div class="row file" data-file="${esc(f)}" title="${esc(f)}">${I.file}${esc(f.split('/').pop())}</div>`).join('');
+        return name == null ? kids : `<div class="dir"><div class="row name">${I.chev}${I.folder}${esc(name)}</div><div class="kids">${kids}</div></div>`;
+      };
+      $('treeroot').className = ''; $('treeroot').innerHTML = `<div class="dim snap" title="a snapshot of compiler/src/dotty/tools/dotc">dotc at d168df2a76, snapshot</div>` + render(root, null);
+      $('treeroot').querySelectorAll('.dir > .name').forEach((el) => el.onclick = () => el.parentElement.classList.toggle('open'));
+    }
+  } catch (e) { /* no sources */ }
+  document.querySelectorAll('#tree .file').forEach((el) => el.onclick = () => loadFile(el.dataset.file));
+  function gotoFirstMethodBody() {
+    const text = cm.getValue(), m = text.search(/\n  def [a-zA-Z]+\(.*=\s*\n/);
+    if (m < 0) return;
+    const eol = text.indexOf('\n', m + 1), next = text.indexOf('\n', eol + 1);
+    cm.setCursor(cm.posFromIndex(next > 0 ? next : eol)); cm.focus(); cm.scrollIntoView(null, 120); showCursor();
+  }
+  let seq = 0, busy = false, last = null, lineMarks = [];
+  const sleep = (ms) => new Promise((f) => setTimeout(f, ms));
+  const offsetOf = () => cm.indexFromPos(cm.getCursor());
+  const showCursor = () => { const p = cm.getCursor(); $('cur').textContent = `${p.line + 1}:${p.ch + 1} (offset ${offsetOf()})`; };
+  cm.on('cursorActivity', showCursor); showCursor();
+  // ---- the open file and the cursor in the URL (?file=<path>&at=<line>:<col>), so that a place is bookmarkable
+  function syncUrl() {
+    const p = cm.getCursor(), q = new URLSearchParams();
+    if (currentFile) q.set('file', currentFile);
+    q.set('at', `${p.line + 1}:${p.ch + 1}`);
+    history.replaceState(null, '', location.pathname + '?' + q.toString());
+  }
+  let urlTimer = null;
+  cm.on('cursorActivity', () => { clearTimeout(urlTimer); urlTimer = setTimeout(syncUrl, 300); });
+  async function openFromUrl() {
+    const q = new URLSearchParams(location.search), file = q.get('file') || '', m = /^(\d+)(?::(\d+))?$/.exec(q.get('at') || '');
+    const at = m ? { line: Math.max(0, +m[1] - 1), ch: m[2] ? Math.max(0, +m[2] - 1) : 0 } : null;
+    const row = file ? document.querySelector(`#tree .file[data-file="${CSS.escape(file)}"]`) : null;
+    if (file && !row) return;
+    if (row) { for (let d = row.parentElement; d; d = d.parentElement) if (d.classList && d.classList.contains('dir')) d.classList.add('open'); }
+    if (at) loadFile.at = at;
+    if (file) { nav.moving = true; try { await loadFile(file); } finally { nav.moving = false; } if (row) row.scrollIntoView({ block: 'center' }); }
+    else if (at) { cm.setCursor(at); cm.scrollIntoView(null, 120); showCursor(); syncUrl(); }
+  }
+  await openFromUrl();
+
+  function gotoObject(i) {
+    const text = cm.getValue(), at = text.indexOf(`object M${i} {`);
+    if (at < 0) return false;
+    const m = text.indexOf('this.meth', at) + 'this.meth'.length;
+    cm.setCursor(cm.posFromIndex(m)); cm.focus(); reveal(); showCursor(); return true;
+  }
+  $('go').onclick = () => gotoObject(+$('goto').value);
+  function gotoGiant() {
+    // the last statement of giant: it depends on the whole chain, and the chain on the latch
+    const text = cm.getValue(), at = text.indexOf('val a199 ='), m = text.indexOf('.filter', at) + '.fil'.length;
+    cm.setCursor(cm.posFromIndex(m)); cm.focus(); reveal(); showCursor();
+  }
+
+  // while a request runs the action buttons are disabled; the frame's own buttons (.chrome) stay live
+  const setBusy = (on, text) => { busy = on; $('busy').textContent = on ? text : ''; document.querySelectorAll('button:not(.chrome)').forEach((b) => { if (b.id !== 'release' && b.id !== 'cancelNow') b.disabled = on; }); navUpdate(); };
+  function finish(r, code, cancelAfterMs) {
+    if (r && r.outcome !== 'error') scheduleBackground();
+    if (r && r.problems && code === cm.getValue()) paintDiagnostics(r.problems);
+    r.seq = ++seq; r.cancelRequested = cancelAfterMs; r.code = code;
+    render(r); logRow(r); last = r;
+    // a completion at the caret, on the text still in the editor, opens the lookup (not during a demo)
+    if (r.kind === 'complete' && (r.completions || []).length && code === cm.getValue() && r.offset === offsetOf() && !demoRunning()) lookupShow(r.completions);
+    return r;
+  }
+  async function send(kind, cancelAfterMs) {
+    for (let i = 0; i < 300 && busy; i++) await sleep(100); // a demo started while a request runs waits for it
+    if (busy) return null;
+    if (hover.inFlight) { await cancelInFlight(); for (let i = 0; i < 100 && hover.inFlight; i++) await sleep(30); } setBusy(true, `… ${kind === 'full' ? 'typing the whole file' : 'completing'}${cancelAfterMs >= 0 ? ` (cancel after ${cancelAfterMs} ms)` : ''}`);
+    const code = cm.getValue(), offset = offsetOf();
+    const body = new URLSearchParams({ kind, code, offset: String(offset), cancelAfterMs: String(cancelAfterMs), file: currentFile });
+    let r;
+    try { r = await (await fetch('/request', { method: 'POST', body })).json(); }
+    catch (e) { r = { outcome: 'error', error: String(e) }; }
+    setBusy(false);
+    return finish(r, code, cancelAfterMs);
+  }
+  // A latched request: the server runs it on its own thread, the typer blocks at the macro, the page polls until it is done.
+  let latchWaiters = [];
+  async function sendLatched() {
+    if (busy) return null; setBusy(true, '… completing (latched)');
+    const code = cm.getValue(), offset = offsetOf();
+    const body = new URLSearchParams({ kind: 'complete', code, offset: String(offset), cancelAfterMs: '-1', latch: '1', file: currentFile });
+    let st;
+    try { const resp = await fetch('/request', { method: 'POST', body }); if (resp.status === 409) { setBusy(false); return null; } st = await resp.json(); } catch (e) { setBusy(false); return finish({ outcome: 'error', error: String(e) }, code, -1); }
+    if (st.outcome) { setBusy(false); return finish(st, code, -1); }
+    $('latch').hidden = false;
+    while (true) {
+      await sleep(100);
+      try { st = await (await fetch('/status')).json(); } catch (e) { continue; }
+      $('latchTrees').textContent = st.treesSoFar; $('latchMs').textContent = st.elapsedMs;
+      if (st.latched) latchWaiters.splice(0).forEach((f) => f());
+      if (!st.inFlight && st.result) break;
+    }
+    $('latch').hidden = true; setBusy(false);
+    return finish(st.result, code, -1);
+  }
+  const whenLatched = () => new Promise((f) => latchWaiters.push(f));
+
+  // ---- hover mode: a typeAt request per identifier under the pointer, cancelled when the pointer moves on before the answer
+  const hover = { token: null, inFlight: null, timer: null, seq: 0 };
+  const wordAt = (pos) => { const line = cm.getLine(pos.line); let a = pos.ch, b = pos.ch; while (a > 0 && /[\w$]/.test(line[a - 1])) a--; while (b < line.length && /[\w$]/.test(line[b])) b++; return a < b && /[A-Za-z_$]/.test(line[a]) ? { line: pos.line, a, b, text: line.slice(a, b) } : null; };
+  const popupAt = (ev, cls, html) => { const p = $('popup'); p.className = cls; p.innerHTML = html; p.hidden = false; p.style.left = Math.min(ev.clientX + 14, window.innerWidth - 580) + 'px'; p.style.top = (ev.clientY + 16) + 'px'; };
+  const hidePopup = () => { $('popup').hidden = true; };
+  async function cancelInFlight() {
+    if (!hover.inFlight) return;
+    hover.inFlight.dropped = true;
+    try { await fetch('/cancel', { method: 'POST' }); } catch (e) { /* ignore */ }
+  }
+  async function hoverRequest(tok, ev) {
+    const mine = { seq: ++hover.seq, tok, dropped: false };
+    await cancelInFlight();
+    // the server runs one request at a time: wait for the cancelled one to unwind
+    for (let i = 0; i < 100 && hover.inFlight; i++) await sleep(30);
+    if (hover.token !== tok || mine.seq !== hover.seq) return;
+    hover.inFlight = mine;
+    const code = cm.getValue(), offset = cm.indexFromPos({ line: tok.line, ch: tok.b });
+    popupAt(ev, 'pending', `<div class="t">${esc(tok.text)}</div><div class="x">typeAt(${offset}) in flight…</div>`);
+    $('hoverState').textContent = `typeAt ${tok.text}…`;
+    const body = new URLSearchParams({ kind: 'typeAt', code, offset: String(offset), cancelAfterMs: '-1', async: '1', file: currentFile });
+    let st;
+    try { const resp = await fetch('/request', { method: 'POST', body }); if (resp.status === 409) { hover.inFlight = null; return; } st = await resp.json(); } catch (e) { hover.inFlight = null; return; }
+    if (st.outcome) { hover.inFlight = null; return; }
+    while (true) {
+      await sleep(40);
+      try { st = await (await fetch('/status')).json(); } catch (e) { continue; }
+      if (!st.inFlight && st.result) break;
+    }
+    hover.inFlight = null;
+    const r = finish(st.result, code, -1);
+    if (mine.dropped || hover.token !== tok) { $('hoverState').textContent = `${tok.text}: ${r.outcome.startsWith('cancelled') ? 'cancelled in the typer' : 'answer dropped (pointer moved)'}`; return; }
+    const h = r.hover || {};
+    const sum = `${r.outcome}, run ${r.runId}, ${r.typedTrees} trees, ${r.ms} ms`;
+    if (r.outcome.startsWith('cancelled')) popupAt(ev, 'cancelled', `<div class="t">${esc(tok.text)}</div><div class="x">cancelled: ${esc(r.where || '')} (${sum})</div>`);
+    else if (!h.found) popupAt(ev, '', `<div class="t">${esc(tok.text)}</div><div class="x">no typed tree here (${sum})</div>`);
+    else popupAt(ev, '', `<div class="t">${esc(h.symbol || h.tree)}${h.info ? ': ' + esc(h.info) : ''}</div><div class="t dim">type: ${esc(h.type)}</div><div class="x">${esc(h.tree)} [${h.start}, ${h.end})${h.enclosing ? ' in ' + esc(h.enclosing) : ''} · ${sum}</div>`);
+    $('hoverState').textContent = `${tok.text}: ${r.outcome} ${r.ms} ms`;
+  }
+  // a demo suppresses hover requests for a minute from its start: a pointer left over the editor
+  // would otherwise send typeAt requests between the demo's own, and the demo's latched request would meet a busy server
+  let demoStartedAt = 0;
+  const demoRunning = () => demoStartedAt && Date.now() - demoStartedAt < 60000;
+  cm.getWrapperElement().addEventListener('mousemove', (ev) => {
+    if (!$('hoverMode').checked || busy || (demoStartedAt && Date.now() - demoStartedAt < 60000)) return;
+    const pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }, 'window');
+    const tok = wordAt(pos);
+    const same = tok && hover.token && tok.line === hover.token.line && tok.a === hover.token.a;
+    if (same) return;
+    clearTimeout(hover.timer);
+    hover.token = tok;
+    if (!tok) { hidePopup(); if (hover.inFlight) cancelInFlight(); return; }
+    hover.timer = setTimeout(() => { if (hover.token === tok) hoverRequest(tok, ev); }, 150);
+  });
+  // ---- go to definition: cmd/ctrl-click, or the context menu
+  let defMark = null;
+  async function gotoDefinition(tok) {
+    if (!tok) return;
+    const code = cm.getValue(), offset = cm.indexFromPos({ line: tok.line, ch: tok.b });
+    if (hover.inFlight) { await cancelInFlight(); for (let i = 0; i < 100 && hover.inFlight; i++) await sleep(30); }
+    setBusy(true, `… definition of ${tok.text}`);
+    const body = new URLSearchParams({ kind: 'definition', code, offset: String(offset), cancelAfterMs: '-1', file: currentFile });
+    let r;
+    try { r = await (await fetch('/request', { method: 'POST', body })).json(); } catch (e) { r = { outcome: 'error', error: String(e) }; }
+    setBusy(false);
+    finish(r, code, -1);
+    const d = r.hover || {};
+    if (!d.found) { $('hoverState').textContent = `definition of ${tok.text}: ${d.reason || r.outcome}`; return; }
+    if (d.file === undefined || d.file === null) { $('hoverState').textContent = `definition of ${tok.text}: no file in the answer (${JSON.stringify(d).slice(0, 120)})`; return; }
+    navPush();
+    if (d.file !== currentFile) { loadFile.keepXray = true; nav.moving = true; try { await loadFile(d.file); } finally { loadFile.keepXray = false; nav.moving = false; } }
+    if (defMark) defMark.clear();
+    const from = cm.posFromIndex(d.start), to = cm.posFromIndex(d.end);
+    defMark = cm.markText(from, { line: from.line, ch: cm.getLine(from.line).length }, { className: 'defhit' });
+    cm.setCursor(from); cm.scrollIntoView({ from, to }, 160); cm.focus(); showCursor();
+    nav.moving = true; navPush(); nav.moving = false; nav.stack.push(navHere()); nav.at = nav.stack.length - 1; navUpdate();
+    $('hoverState').textContent = `${d.symbol} → ${d.file || 'this file'} [${d.start}, ${d.end}) · ${d.how}`;
+  }
+  // CodeMirror handles a modified mousedown itself (multiple cursors), so the jump is taken on mousedown in the capture phase, before it sees it
+  cm.getWrapperElement().addEventListener('mousedown', (ev) => {
+    if (!(ev.metaKey || ev.ctrlKey) || ev.button !== 0) return;
+    const pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }, 'window');
+    const tok = wordAt(pos); if (!tok) return;
+    ev.preventDefault(); ev.stopPropagation(); hidePopup(); clearDefLink(); gotoDefinition(tok);
+  }, true);
+  // while Cmd/Ctrl is held, the identifier under the pointer is underlined like a link (one mark at a time)
+  const deflink = { mark: null, tok: null, held: false, lastX: 0, lastY: 0 };
+  function clearDefLink() { if (deflink.mark) deflink.mark.clear(); deflink.mark = null; deflink.tok = null; }
+  function updateDefLink(x, y) {
+    if (!deflink.held) { clearDefLink(); return; }
+    const pos = cm.coordsChar({ left: x, top: y }, 'window'), tok = wordAt(pos);
+    if (tok && deflink.tok && tok.line === deflink.tok.line && tok.a === deflink.tok.a) return;
+    clearDefLink();
+    if (tok) { deflink.tok = tok; deflink.mark = cm.markText({ line: tok.line, ch: tok.a }, { line: tok.line, ch: tok.b }, { className: 'cm-deflink' }); }
+  }
+  const isMod = (ev) => ev.key === 'Meta' || ev.key === 'Control';
+  document.addEventListener('keydown', (ev) => { if (isMod(ev) && !deflink.held) { deflink.held = true; updateDefLink(deflink.lastX, deflink.lastY); } });
+  document.addEventListener('keyup', (ev) => { if (isMod(ev)) { deflink.held = false; clearDefLink(); } });
+  window.addEventListener('blur', () => { deflink.held = false; clearDefLink(); });
+  cm.getWrapperElement().addEventListener('mousemove', (ev) => { deflink.lastX = ev.clientX; deflink.lastY = ev.clientY; if (deflink.held !== (ev.metaKey || ev.ctrlKey)) deflink.held = ev.metaKey || ev.ctrlKey; updateDefLink(ev.clientX, ev.clientY); });
+  cm.getWrapperElement().addEventListener('mouseleave', clearDefLink);
+  cm.getWrapperElement().addEventListener('contextmenu', (ev) => {
+    const pos = cm.coordsChar({ left: ev.clientX, top: ev.clientY }, 'window');
+    const tok = wordAt(pos); if (!tok) return;
+    ev.preventDefault(); hidePopup();
+    const m = $('menu'); m.hidden = false; m.style.left = ev.clientX + 'px'; m.style.top = ev.clientY + 'px';
+    m.querySelectorAll('div').forEach((el) => el.onclick = () => {
+      m.hidden = true;
+      const act = el.dataset.act;
+      if (act === 'definition') { cm.setCursor({ line: tok.line, ch: tok.b }); gotoDefinition(tok); }
+      else if (act === 'typeAt') { cm.setCursor({ line: tok.line, ch: tok.b }); hover.token = tok; hoverRequest(tok, ev); }
+      else { cm.setCursor(pos); send('complete', -1); } // at the pointer: the prefix is the identifier up to it (a.foo|Bar completes foo…)
+    });
+  });
+  document.addEventListener('click', (ev) => { if (!$('menu').contains(ev.target)) $('menu').hidden = true; });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { $('menu').hidden = true; hidePopup(); } });
+  cm.getWrapperElement().addEventListener('mouseleave', () => { clearTimeout(hover.timer); hover.token = null; hidePopup(); if (hover.inFlight) cancelInFlight(); });
+  $('hoverMode').onchange = () => { if (!$('hoverMode').checked) { hidePopup(); hover.token = null; } };
+  $('latchGo').onclick = () => { gotoGiant(); sendLatched(); };
+  $('release').onclick = () => fetch('/release', { method: 'POST' });
+  $('cancelNow').onclick = () => fetch('/cancel', { method: 'POST' });
+  function cancelMs() { const v = $('cancelms').value; $('cancelms').value = ''; return v === '' ? -1 : +v; }
+  $('clear').onclick = () => {
+    $('story').innerHTML = ''; $('logbody').innerHTML = ''; $('log').querySelector('.none').hidden = false;
+    document.querySelector('#logsec .ptab[data-ptab="story"]').disabled = true; panelTab('log');
+    $('xray').innerHTML = emptyState('All clear', 'Place the cursor inside a method and press Complete, or run a demo.');
+    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    $('stLast').textContent = 'no request yet'; $('stSession').textContent = ''; $('hoverState').textContent = ''; cm.refresh();
+  };
+  $('complete').onclick = () => send('complete', cancelMs());
+  $('full').onclick = () => send('full', cancelMs());
+  cm.on('keydown', (c, e) => { if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); send('complete', cancelMs()); } });
+
+  // ---- the quick overlay, one list in four modes: go to file (Ctrl/Cmd-K), go to symbol (Ctrl/Cmd-Shift-O), recent files (Ctrl/Cmd-E), search everywhere (Shift Shift)
+  const quick = { items: [], sel: 0, mode: 'file' };
+  const QUICK = { file: ['Go to file…', 'Ctrl/Cmd-K · the snapshot\'s compiler sources and the generated A.scala'], symbol: ['Go to symbol…', 'Ctrl/Cmd-Shift-O · the definitions of this file, then the snapshot\'s top-level definitions'],
+    recent: ['Recent files…', 'Ctrl/Cmd-E · the last 10 files opened'], all: ['Search everywhere…', 'Shift Shift · files, then symbols'] };
+  function quickScore(q, f) {
+    const l = f.toLowerCase(), base = l.split('/').pop(); let i = 0, score = 0;
+    if (!q) return 1;
+    if (base.startsWith(q)) return 1000 + (100 - base.length);
+    if (base.includes(q)) return 500 + (100 - base.length);
+    for (const c of q) { const j = l.indexOf(c, i); if (j < 0) return 0; score += (j === i ? 3 : 1); i = j + 1; }
+    return score;
+  }
+  // an entry: the key it is filtered on, its row, and what Enter does
+  const fileEntry = (f) => ({ key: f || 'A.scala (generated)', html: `${I.file}<b>${esc(f ? f.split('/').pop() : 'A.scala')}</b><span class="path">${esc(f ? f.split('/').slice(0, -1).join('/') : 'generated')}</span>`, go: () => { if (f !== currentFile) loadFile(f); } });
+  const defEntry = (d) => ({ key: d.name, html: `<span style="width:${d.depth * 10}px;flex:none"></span>${kb(d.kind)}<b>${esc(d.name)}</b><span class="dim">${d.kind}</span><span class="path">${esc(currentFile || 'A.scala')}</span>`, go: () => jumpTo(d.point) });
+  const idxEntry = (x) => ({ key: x.name, html: `<span class="kb" title="top-level definition">#</span><b>${esc(x.name)}</b><span class="dim">${esc(x.fqn)}</span><span class="path">${esc(x.file)}</span>`, go: () => openSymbol(x) });
+  function quickEntries(q) {
+    const rank = (list, cap) => { const s = list.map((e, i) => ({ e, i, s: quickScore(q, e.key) })).filter((x) => x.s > 0); if (q) s.sort((a, b) => b.s - a.s || a.i - b.i); return s.slice(0, cap).map((x) => x.e); };
+    const files = (cap) => rank([''].concat(allFiles).map(fileEntry), cap);
+    const syms = () => rank(ide.defs.map(defEntry), 80).concat(rank(ide.index.filter((x) => x.file !== currentFile || !ide.defs.some((d) => d.name === x.name)).map(idxEntry), 40));
+    return quick.mode === 'file' ? files(40) : quick.mode === 'symbol' ? syms() : quick.mode === 'recent' ? rank(ide.recent.map(fileEntry), 10) : files(q ? 12 : 6).concat(syms());
+  }
+  function quickRender() {
+    quick.items = quickEntries($('quickIn').value.trim().toLowerCase()); quick.sel = Math.min(quick.sel, Math.max(0, quick.items.length - 1));
+    $('quickItems').innerHTML = quick.items.map((e, i) => `<div class="item${i === quick.sel ? ' on' : ''}" data-i="${i}">${e.html}</div>`).join('') || '<div class="item dim">no match</div>';
+    $('quickItems').querySelectorAll('.item[data-i]').forEach((el) => { el.onmousedown = (ev) => { ev.preventDefault(); quickOpen(+el.dataset.i); }; });
+    const on = $('quickItems').querySelector('.item.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+  function quickShow(mode) {
+    quick.mode = mode || 'file'; $('quickIn').placeholder = QUICK[quick.mode][0] + ' (type to filter; Enter opens, Esc closes)'; $('quickHint').textContent = QUICK[quick.mode][1];
+    $('quick').hidden = false; $('quickIn').value = ''; quick.sel = quick.mode === 'recent' && ide.recent.length > 1 ? 1 : 0; quickRender();
+    // focus after the key event is done: CodeMirror's hidden textarea otherwise takes it back
+    $('quickIn').focus(); setTimeout(() => { if (!$('quick').hidden) $('quickIn').focus(); }, 0); // recent: the previous file, as IntelliJ
+  }
+  function quickHide() { $('quick').hidden = true; cm.focus(); }
+  function quickOpen(i) { const e = quick.items[i]; quickHide(); if (e) e.go(); }
+  // one toggle per key press: a shortcut can arrive as more than one keydown (auto-repeat, synthetic key events)
+  let quickToggledAt = 0;
+  const quickToggle = (mode) => {
+    const now = Date.now(); if (now - quickToggledAt < 250) return; quickToggledAt = now;
+    if ($('quick').hidden || quick.mode !== mode) quickShow(mode); else quickHide();
+  };
+  $('quickIn').oninput = () => { quick.sel = 0; quickRender(); };
+  $('quickIn').onkeydown = (ev) => {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); quick.sel = Math.min(quick.sel + 1, quick.items.length - 1); quickRender(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); quick.sel = Math.max(quick.sel - 1, 0); quickRender(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); quickOpen(quick.sel); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); quickHide(); }
+  };
+  // the shortcuts, in the capture phase so that CodeMirror (Ctrl-E: end of line) and the browser (Cmd-Shift-O, Cmd-P) do not see them
+  let shiftUp = 0; const isShift = (ev) => ev.key === 'Shift' || ev.keyCode === 16 || /^Shift/.test(ev.code || '');
+  document.addEventListener('keydown', (ev) => {
+    const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase();
+    if (!isShift(ev)) shiftUp = 0;
+    if (ev.repeat && mod && ['k', 'o', 'e', 'p'].includes(k)) { ev.preventDefault(); ev.stopPropagation(); return; }
+    if (mod && !ev.shiftKey && k === 'k') { ev.preventDefault(); ev.stopPropagation(); quickToggle('file'); }
+    else if (mod && ev.shiftKey && k === 'o') { ev.preventDefault(); ev.stopPropagation(); quickToggle('symbol'); }
+    else if (mod && !ev.shiftKey && k === 'e') { ev.preventDefault(); ev.stopPropagation(); quickToggle('recent'); }
+    else if (mod && !ev.shiftKey && k === 'p') { ev.preventDefault(); ev.stopPropagation(); paramInfo(); }
+  }, true);
+  document.addEventListener('keyup', (ev) => {
+    if (!isShift(ev)) return;
+    const now = Date.now(); if (shiftUp && now - shiftUp < 400) { shiftUp = 0; quickToggle('all'); } else shiftUp = now;
+  });
+  document.addEventListener('mousedown', (ev) => { if (!$('quick').hidden && !$('quick').contains(ev.target)) quickHide(); });
+
+  // ---- reset the typer state: a fresh driver on the server (Ctrl/Cmd-Shift-K, or the button)
+  async function resetTyper() {
+    if (busy) return; setBusy(true, '… resetting the typer state (a fresh driver)');
+    let r;
+    try { r = await (await fetch('/reset', { method: 'POST', body: new URLSearchParams({ mode: $('freeMode').value }) })).json(); } catch (e) { r = { error: String(e) }; }
+    setBusy(false);
+    clearBackground();
+    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    $('xray').innerHTML = emptyState('Typer state reset', r.error ? r.error : `A fresh driver (${esc(r.mode)}: ${esc(r.flags || 'no flags')}): nothing typed, no session; warm-up ${r.warmupMs} ms. The next request starts run 1 of the new compiler.`);
+    $('stSession').textContent = 'reset: no session'; $('stLast').textContent = 'typer state reset';
+  }
+  $('reset').onclick = resetTyper;
+  document.addEventListener('keydown', (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && (ev.key === 'K' || ev.key === 'k')) { ev.preventDefault(); resetTyper(); } });
+
+  // ---- the background pass: another reader completes the session (driver.readAll) while the page keeps hovering,
+  // then paints semantic colours from the typed tree and diagnostics in the gutter
+  let semMarks = [], diagMarks = [], bgTimer = null, bgSeq = 0;
+  function clearBackground() {
+    semMarks.forEach((m) => m.clear()); semMarks = [];
+    paintDiagnostics([]);
+  }
+  function paintBackground(r) {
+    clearBackground();
+    (r.tokens || []).forEach((t) => {
+      const a = cm.posFromIndex(t.start), b = cm.posFromIndex(t.end);
+      semMarks.push(cm.markText(a, b, { className: 'sem-' + t.kind, title: t.info || t.kind }));
+    });
+    paintDiagnostics(r.diagnostics || []);
+  }
+  // the session's diagnostic set (the union of its stores): from the background pass, or from any request,
+  // whose answer carries it; an edited definition's old diagnostics are stale (dimmed) until it is typed again
+  function paintDiagnostics(diags) {
+    diagMarks.forEach((m) => m.clear()); diagMarks = [];
+    cm.clearGutter('xray-diag');
+    const byLine = new Map(), n = cm.getValue().length;
+    diags.forEach((d) => {
+      if (d.start > n) return;
+      const a = cm.posFromIndex(d.start), b = cm.posFromIndex(Math.min(n, Math.max(d.end, d.start + 1)));
+      diagMarks.push(cm.markText(a, b, { className: 'sem-' + d.level + (d.stale ? ' sem-stale' : ''), title: (d.stale ? '(stale until retyped) ' : '') + d.message }));
+      const l = byLine.get(a.line) || { level: d.level, messages: [], stale: true }; l.messages.push(d.message); if (d.level === 'error') l.level = 'error'; l.stale = l.stale && !!d.stale; byLine.set(a.line, l);
+    });
+    byLine.forEach((l, line) => { const el = document.createElement('span'); el.className = 'diag-dot ' + l.level + (l.stale ? ' stale' : ''); el.title = l.messages.join('\n'); cm.setGutterMarker(line, 'xray-diag', el); });
+    paintProblems(diags);
+  }
+  function scheduleBackground() {
+    if (!$('bgMode').checked) return;
+    clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 250);
+  }
+  async function backgroundPass() {
+    const mine = ++bgSeq, code = cm.getValue();
+    $('bgState').querySelector('.spin').hidden = false; $('bgText').textContent = 'background: completing the session (another reader)…';
+    // the visible lines first: the editor's viewport as an offset range
+    const vp = cm.getViewport(), visibleFrom = cm.indexFromPos({ line: vp.from, ch: 0 }), visibleTo = cm.indexFromPos({ line: Math.min(vp.to, cm.lineCount() - 1), ch: 0 });
+    const body = new URLSearchParams({ code, file: currentFile, visibleFrom: String(visibleFrom), visibleTo: String(visibleTo) });
+    let st;
+    try { const resp = await fetch('/background', { method: 'POST', body }); st = await resp.json(); } catch (e) { $('bgText').textContent = 'background: ' + e; return; }
+    let bgLines = [];
+    const paintProgress = (st) => {
+      const total = st.spansAtStart || 0, done = total - (st.spansRemaining || 0);
+      $('bgProgress').hidden = false; $('bgProgress').querySelector('i').style.width = (total ? Math.round(100 * done / total) : 100) + '%';
+      $('bgText').textContent = `background: ${total ? `${done} of ${total} statements` : `${st.typedTrees || 0} trees`} typed by the other reader` +
+        `${st.lockWaitCount ? `, waited ${st.lockWaitMs} ms on the lock` : ''}${st.backedOff ? `, backed off ${st.backedOff}×` : ''}${st.completionOwner ? ` · lock: ${st.completionOwner}` : ''}…`;
+      $('bgText').title = (st.typingSpans || []).map((sp) => `typing now: line ${cm.posFromIndex(sp.start).line + 1}`).join('\n');
+      (st.typedSpans || []).forEach((sp) => { const a = cm.posFromIndex(sp.start).line, b = cm.posFromIndex(sp.end).line; for (let l = a; l <= b; l++) if (!bgLines.includes(l)) { cm.addLineClass(l, 'background', 'line-bg'); bgLines.push(l); } });
+    };
+    while (st.state === 'running') {
+      if (mine === bgSeq) paintProgress(st);
+      await sleep(80);
+      try { st = await (await fetch('/background')).json(); } catch (e) { continue; }
+    }
+    bgLines.forEach((l) => cm.removeLineClass(l, 'background', 'line-bg')); bgLines = [];
+    $('bgProgress').hidden = true;
+    if (mine !== bgSeq) return; // a newer pass took over
+    $('bgState').querySelector('.spin').hidden = true;
+    if (st.state === 'error') { $('bgText').textContent = 'background: ' + st.error; return; }
+    if (st.code !== cm.getValue()) { scheduleBackground(); return; } // the text moved on: again
+    paintBackground(st);
+    const errs = (st.diagnostics || []).filter((d) => d.level === 'error').length, warns = (st.diagnostics || []).length - errs;
+    $('bgText').textContent = `background: ${st.outcome} in ${st.ms} ms (visible lines first, ${st.visibleFirstMs} ms) on run ${st.runId} (${st.tokens.length} tokens, ${errs} error${errs === 1 ? '' : 's'}, ${warns} warning${warns === 1 ? '' : 's'}` +
+      `${st.oracleDiagnosticCount !== undefined ? (st.diagnosticsMatch ? `; ${st.diagnosticCount} diagnostics = a whole-file run ✓` : `; ${st.diagnosticCount} diagnostics ≠ ${st.oracleDiagnosticCount} of a whole-file run ✗`) : ''}` +
+      `${st.foregroundDuring ? `; ${st.foregroundDuring} foreground request${st.foregroundDuring === 1 ? '' : 's'} served meanwhile` : ''}${st.lockWaitCount ? `; waited ${st.lockWaitMs} ms on the lock` : ''})`;
+  }
+  $('bgMode').onchange = () => { if ($('bgMode').checked) scheduleBackground(); else { clearBackground(); $('bgText').textContent = 'background: off'; } };
+  cm.on('change', () => { clearBackground(); $('bgText').textContent = 'background: edited, waiting for a request'; });
+
+  // ---- the lookup (IntelliJ's completion popup): the completions of the last request at the caret; typing filters by prefix, Up/Down move, Enter/Tab insert, Esc closes
+  const lk = { items: [], shown: [], sel: 0, from: null };
+  const lkOpen = () => !$('lookup').hidden;
+  function lookupShow(compl) {
+    const p = cm.getCursor(), line = cm.getLine(p.line); let a = p.ch; while (a > 0 && /[\w$]/.test(line[a - 1])) a--;
+    lk.from = { line: p.line, ch: a }; lk.sel = 0;
+    lk.items = compl.map((c) => { const i = c.indexOf(' '); return i < 0 ? { label: c, desc: '' } : { label: c.slice(0, i), desc: c.slice(i + 1) }; });
+    cm.focus(); lookupRender();
+  }
+  function lookupHide() { $('lookup').hidden = true; lk.from = null; }
+  function lookupRender() {
+    const p = cm.getCursor();
+    if (!lk.from || p.line !== lk.from.line || p.ch < lk.from.ch) { lookupHide(); return; }
+    const prefix = cm.getRange(lk.from, p), lc = prefix.toLowerCase();
+    if (/[^\w$]/.test(prefix)) { lookupHide(); return; } // typed past the identifier
+    // case-sensitive prefix matches first, then case-insensitive ones
+    lk.shown = lk.items.filter((x) => x.label.startsWith(prefix)).concat(lk.items.filter((x) => !x.label.startsWith(prefix) && x.label.toLowerCase().startsWith(lc)));
+    if (!lk.shown.length) { lookupHide(); return; }
+    lk.sel = Math.min(lk.sel, lk.shown.length - 1);
+    const el = $('lookup'), c = cm.cursorCoords(lk.from, 'window');
+    el.innerHTML = lk.shown.slice(0, 200).map((x, i) => `<div class="row${i === lk.sel ? ' on' : ''}" data-i="${i}"><b>${esc(x.label)}</b><span class="dim">${esc(x.desc)}</span></div>`).join('') + `<div class="foot">${lk.shown.length} of ${lk.items.length} · Enter inserts · Tab replaces · Esc closes</div>`;
+    el.hidden = false;
+    el.style.left = Math.max(4, Math.min(c.left - 4, window.innerWidth - el.offsetWidth - 8)) + 'px';
+    el.style.top = (c.bottom + el.offsetHeight + 4 > window.innerHeight ? c.top - el.offsetHeight - 2 : c.bottom + 2) + 'px'; // above the line when there is no room below
+    el.querySelectorAll('.row').forEach((r) => { r.onmousedown = (ev) => { ev.preventDefault(); lookupInsert(+r.dataset.i); }; });
+    const on = el.querySelector('.row.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+  // Enter inserts before the rest of the identifier, Tab replaces it (as IntelliJ)
+  function lookupInsert(i, replace) {
+    const x = lk.shown[i], from = lk.from, to = cm.getCursor(), line = cm.getLine(to.line); let b = to.ch;
+    if (replace) while (b < line.length && /[\w$]/.test(line[b])) b++;
+    lookupHide(); if (x) cm.replaceRange(x.label, from, { line: to.line, ch: b }); cm.focus();
+  }
+  cm.on('keydown', (c, e) => {
+    if (!lkOpen()) return;
+    const n = lk.shown.length;
+    if (e.key === 'ArrowDown') lk.sel = (lk.sel + 1) % n;
+    else if (e.key === 'ArrowUp') lk.sel = (lk.sel - 1 + n) % n;
+    else if (e.key === 'PageDown') lk.sel = Math.min(n - 1, lk.sel + 8);
+    else if (e.key === 'PageUp') lk.sel = Math.max(0, lk.sel - 8);
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); lookupInsert(lk.sel, e.key === 'Tab'); return; }
+    else if (e.key === 'Escape') { e.preventDefault(); lookupHide(); return; }
+    else return;
+    e.preventDefault(); lookupRender();
+  });
+  cm.on('cursorActivity', () => { if (lkOpen()) lookupRender(); });
+  cm.on('blur', lookupHide); cm.on('scroll', () => { if (lkOpen()) lookupRender(); });
+
+  // ---- definitions of the open file (GET /symbols: parsed by the server from the file on disk, so offsets drift after edits) and the snapshot's index
+  function kb(kind) { const L = { object: 'o', class: 'c', trait: 't', enum: 'e', type: 'T', def: 'm', val: 'v', var: 'v' }; return `<span class="kb k-${esc(kind)}" title="${esc(kind)}">${L[kind] || '?'}</span>`; }
+  async function refreshSymbols(file) {
+    const p = (async () => {
+      let r; try { r = await (await fetch(`/symbols?file=${encodeURIComponent(file)}${ide.index.length ? '' : '&index=1'}`)).json(); } catch (e) { return; }
+      if (file !== currentFile) return;
+      ide.defs = (r.definitions || []).filter((d) => d.end > d.start && !/^[<$]/.test(d.name)); ide.defsFile = file;
+      if (r.index && r.index.length) ide.index = r.index;
+      renderStructure(); caretUpdate();
+    })();
+    ide.defsP = p; return p;
+  }
+  function fileLoaded(file) {
+    // recent files: most recent first, at most 10, kept in localStorage
+    if (!ide.recentLoaded) { ide.recentLoaded = true; try { const r = JSON.parse(store.get('recent') || '[]'); if (Array.isArray(r)) ide.recent = r.filter((f) => typeof f === 'string' && (f === '' || allFiles.includes(f))); } catch (e) { /* ignore */ } }
+    ide.recent = [file].concat(ide.recent.filter((f) => f !== file)).slice(0, 10); store.set('recent', JSON.stringify(ide.recent));
+    refreshSymbols(file);
+  }
+  function jumpTo(off) { navPush(); cm.setCursor(cm.posFromIndex(off)); cm.scrollIntoView(null, 160); cm.focus(); showCursor(); }
+  async function openSymbol(x) {
+    if (x.file !== currentFile) { await loadFile(x.file); }
+    await ide.defsP;
+    const top = ide.defs.filter((d) => d.name === x.name).sort((a, b) => a.depth - b.depth || (a.kind === 'object') - (b.kind === 'object')), d = top[0]; // the class before its companion
+    if (d) { cm.setCursor(cm.posFromIndex(d.point)); cm.scrollIntoView(null, 160); cm.focus(); showCursor(); }
+  }
+  // the structure view: an indented tree of the definitions; the innermost one at the caret is highlighted
+  function renderStructure() {
+    $('struct').className = ide.defs.length ? '' : 'dim';
+    $('struct').innerHTML = ide.defs.map((d, i) => `<div class="row" data-i="${i}" style="padding-left:${6 + d.depth * 12}px" title="${esc(d.kind + ' ' + d.name)} [${d.start}, ${d.end})">${kb(d.kind)}<span>${esc(d.name)}</span></div>`).join('') || 'no definitions';
+    $('struct').querySelectorAll('.row').forEach((el) => el.onclick = () => jumpTo(ide.defs[+el.dataset.i].point));
+    ide.structCur = -1;
+  }
+  // the definitions containing the caret, outermost first: the breadcrumbs, the structure highlight and the status bar
+  function caretUpdate() {
+    const off = offsetOf(), path = [];
+    if (ide.defsFile === currentFile) ide.defs.forEach((d, i) => { if (d.start <= off && off <= d.end) path.push(i); });
+    path.sort((a, b) => ide.defs[a].depth - ide.defs[b].depth);
+    $('crumbs').innerHTML = `<span class="c" data-i="-1">${I.file}${esc(currentFile ? currentFile.split('/').pop() : 'A.scala')}</span>` + path.map((i) => `<span class="gt">›</span><span class="c" data-i="${i}">${kb(ide.defs[i].kind)}${esc(ide.defs[i].name)}</span>`).join('');
+    $('crumbs').querySelectorAll('.c').forEach((el) => el.onclick = () => { const i = +el.dataset.i; if (i < 0) quickShow('symbol'); else jumpTo(ide.defs[i].point); });
+    const inner = path.length ? path[path.length - 1] : -1;
+    if (inner !== ide.structCur) {
+      const rows = $('struct').querySelectorAll('.row');
+      if (rows[ide.structCur]) rows[ide.structCur].classList.remove('cur');
+      if (rows[inner]) { rows[inner].classList.add('cur'); if (!$('viewStructure').hidden) rows[inner].scrollIntoView({ block: 'nearest' }); }
+      ide.structCur = inner;
+    }
+    statusDef();
+  }
+  function statusDef() {
+    const d = ide.defs[ide.structCur];
+    $('stDef').textContent = (d ? `in ${d.kind} ${d.name}` : '') + (ide.useSym ? `${d ? ' · ' : ''}${ide.useSym} (${ide.useMarks.length} usage${ide.useMarks.length === 1 ? '' : 's'})` : '');
+  }
+  // the definitions come from the file on disk: an edit shifts the offsets after it, so that they keep matching the editor
+  cm.on('change', (c, ch) => {
+    if (ch.origin === 'setValue') return;
+    const at = cm.indexFromPos(ch.from), rem = ch.removed.join('\n').length, delta = ch.text.join('\n').length - rem, end = at + rem;
+    ide.defs.forEach((d) => { ['start', 'end', 'point'].forEach((k) => { if (d[k] >= end) d[k] += delta; else if (d[k] > at) d[k] = at; }); });
+  });
+  let caretTimer = 0; // coalesced: one update per burst of cursor moves
+  cm.on('cursorActivity', () => { if (!caretTimer) caretTimer = setTimeout(() => { caretTimer = 0; caretUpdate(); }, 16); });
+
+  // ---- the problems panel and the error stripe: the session's diagnostics (the last request's or the background pass's), as a list and by relative line at the editor's right edge
+  function paintProblems(diags) {
+    ide.diags = diags.slice().sort((a, b) => a.start - b.start);
+    const errs = diags.filter((d) => d.level === 'error').length;
+    $('probCount').textContent = diags.length ? `${diags.length}${errs ? ` · ${errs} error${errs === 1 ? '' : 's'}` : ''}` : '';
+    $('problems').innerHTML = ide.diags.map((d, i) => { const p = cm.posFromIndex(d.start); return `<div class="row${d.stale ? ' stale' : ''}" data-i="${i}" title="${d.stale ? 'stale: the edited definition is not typed again yet' : ''}"><span class="diag-dot ${esc(d.level)}${d.stale ? ' stale' : ''}"></span><span class="mono dim">${p.line + 1}:${p.ch + 1}</span><span class="msg">${esc(d.message)}</span></div>`; }).join('') || '<div class="none dim">No diagnostics: every request and the background pass fill this list.</div>';
+    const n = Math.max(1, cm.lineCount());
+    $('stripe').innerHTML = ide.diags.map((d, i) => `<i class="${esc(d.level)}" data-i="${i}" style="top:calc(${(100 * cm.posFromIndex(d.start).line / n).toFixed(3)}% - 1px)" title="${esc(d.message)}"></i>`).join('');
+    const go = (el) => el.onclick = () => { const d = ide.diags[+el.dataset.i]; navPush(); cm.setCursor(cm.posFromIndex(d.start)); cm.scrollIntoView(null, 120); cm.focus(); };
+    $('problems').querySelectorAll('.row').forEach(go); $('stripe').querySelectorAll('i').forEach(go);
+  }
+
+  // ---- usages at the caret: resting on an identifier for 400 ms asks /usages (a read action on the typed tree) and marks every typed reference
+  function clearUsages() { ide.useMarks.forEach((m) => m.clear()); ide.useMarks = []; ide.useTok = null; ide.useSym = ''; ide.useSeq++; }
+  const sameTok = (a, b) => a && b && a.line === b.line && a.a === b.a;
+  function usagesSchedule() {
+    clearTimeout(ide.useTimer);
+    const tok = wordAt(cm.getCursor());
+    if (sameTok(tok, ide.useTok)) return; // still on the marked identifier
+    if (ide.useMarks.length || ide.useSym) { clearUsages(); statusDef(); }
+    if (!tok || !$('usageMode').checked) return;
+    ide.useTimer = setTimeout(() => usagesAt(tok), 400);
+  }
+  async function usagesAt(tok) {
+    if (!sameTok(tok, wordAt(cm.getCursor()))) return;
+    if (busy || hover.inFlight || lkOpen() || demoRunning()) { ide.useTimer = setTimeout(() => usagesAt(tok), 400); return; } // later, when the compiler is free
+    const mine = ++ide.useSeq, code = cm.getValue(), offset = cm.indexFromPos({ line: tok.line, ch: tok.a });
+    let r; try { r = await (await fetch('/usages', { method: 'POST', body: new URLSearchParams({ code, offset: String(offset), file: currentFile }) })).json(); } catch (e) { return; }
+    if (mine !== ide.useSeq || code !== cm.getValue() || !sameTok(tok, wordAt(cm.getCursor()))) return; // the caret or the text moved on
+    ide.useTok = tok;
+    if (!r.found) { ide.useSym = ''; statusDef(); return; }
+    ide.useSym = r.symbol;
+    ide.useMarks = (r.usages || []).map((u) => cm.markText(cm.posFromIndex(u.start), cm.posFromIndex(u.end), { className: u.write ? 'use-write' : 'use-read' }));
+    statusDef();
+  }
+  cm.on('cursorActivity', usagesSchedule);
+  cm.on('change', () => { clearTimeout(ide.useTimer); if (ide.useMarks.length || ide.useSym) clearUsages(); });
+  $('usageMode').checked = store.get('usages') !== '0';
+  $('usageMode').onchange = () => { store.set('usages', $('usageMode').checked ? '1' : '0'); clearTimeout(ide.useTimer); clearUsages(); statusDef(); if ($('usageMode').checked) usagesSchedule(); };
+
+  // ---- parameter info (Ctrl/Cmd-P): the callee of the innermost unclosed '(' before the caret, through a typeAt request
+  async function paramInfo() {
+    if (busy || $('quick').hidden === false) return;
+    const text = cm.getValue(), off = offsetOf(); let depth = 0, i = off - 1;
+    for (; i >= 0 && off - i < 4000; i--) { const c = text[i]; if (c === ')') depth++; else if (c === '(') { if (depth === 0) break; depth--; } }
+    if (i < 0 || text[i] !== '(') { $('hoverState').textContent = 'parameter info: not inside an argument list'; return; }
+    let j = i; while (j > 0 && /\s/.test(text[j - 1])) j--;
+    if (text[j - 1] === ']') { let d = 0; for (j--; j >= 0; j--) { if (text[j] === ']') d++; else if (text[j] === '[' && --d === 0) break; } } // skip type arguments
+    let a = j; while (a > 0 && /[\w$]/.test(text[a - 1])) a--;
+    if (a === j) { $('hoverState').textContent = 'parameter info: no callee before the ('; return; }
+    const name = text.slice(a, j);
+    if (hover.inFlight) { await cancelInFlight(); for (let k = 0; k < 100 && hover.inFlight; k++) await sleep(30); }
+    setBusy(true, `… parameter info for ${name}`);
+    let r; try { r = await (await fetch('/request', { method: 'POST', body: new URLSearchParams({ kind: 'typeAt', code: text, offset: String(j), cancelAfterMs: '-1', file: currentFile }) })).json(); } catch (e) { r = { outcome: 'error', error: String(e) }; }
+    setBusy(false); finish(r, text, -1);
+    const h = r.hover || {}, c = cm.cursorCoords(cm.posFromIndex(i), 'window');
+    popupAt({ clientX: c.left - 14, clientY: c.top - 50 }, '', h.found ? `<div class="t">${esc(h.symbol || name)}: ${esc(h.info || h.type)}</div><div class="x">parameter info · typeAt(${j}) · ${esc(r.outcome)} ${r.ms} ms</div>` : `<div class="t">${esc(name)}</div><div class="x">no typed tree at the callee (${esc(r.outcome)})</div>`);
+    const p = $('popup'); p.style.left = Math.max(4, Math.min(c.left, window.innerWidth - p.offsetWidth - 8)) + 'px';
+    if (c.top - p.offsetHeight - 4 > 0) p.style.top = (c.top - p.offsetHeight - 4) + 'px'; // above the line, IntelliJ style
+    const at = cm.getCursor(); cm.focus();
+    const away = () => { if (cm.getCursor().line !== at.line) { hidePopup(); cm.off('cursorActivity', away); } }; cm.on('cursorActivity', away);
+  }
+
+  if (!ide.defsP) fileLoaded(currentFile); // the generated file, opened without loadFile
+  caretUpdate();
+
+  const OUT = { 'served': 'answered from what is typed: nothing typed', resumed: 'resumed the same run: the statement at the cursor was typed', fresh: 'fresh run (content changed or no session): only the path to the cursor typed',
+    full: 'whole file typed by driver.run: a session on this content is completed in the same run, else a new run with no session', 'cancelled-resume': 'CANCELLED while resuming: the run survives', 'cancelled-fresh': 'CANCELLED during a fresh run: discarded', error: 'error' };
+
+  function render(r) {
+    const x = $('xray');
+    if (r.outcome === 'error') { x.innerHTML = `<div class="outcome"><span class="pill o-error">error</span></div><pre class="hljs">${esc(r.error || '')}</pre>`; return; }
+    const runCls = r.runChanged ? 'changed' : 'same';
+    const stats = (r.statements || []).map((s, i) => {
+      const partial = s.state !== 'untyped' && (s.skippedMembers || []).length > 0;
+      const cls = ['st', s.state, i === r.cursorStatement ? 'cursor' : '', partial ? 'partial' : '', r.outcome === 'cancelled-resume' && s.state === 'untyped' && i === r.cursorStatement ? 'aborted' : ''].join(' ');
+      const tip = `${s.name} [${s.start}, ${s.end}) ${s.state}` + (partial ? `, members skipped: ${s.skippedMembers.map((m) => m.text).join(' | ')}` : '');
+      return `<span class="${cls}" data-i="${i}" title="${esc(tip)}">${esc(s.name.replace(/^object /, ''))}${partial ? '<sup>' + s.skippedMembers.length + '</sup>' : ''}</span>`;
+    }).join('');
+    const compl = (r.completions || []);
+    // the innermost enclosing definition at the cursor (cursorDef, from the server), else the whole top-level statement
+    let cursorTitle = 'Statement at the cursor', cursorSrc = r.cursorStatement >= 0 && r.statements[r.cursorStatement] ? r.code.slice(r.statements[r.cursorStatement].start, r.statements[r.cursorStatement].end) : '', cursorMore = 0;
+    if (r.cursorDef && typeof r.cursorDef.start === 'number') {
+      cursorTitle = `Definition at the cursor: ${r.cursorDef.name}`;
+      const lines = r.code.slice(r.cursorDef.start, r.cursorDef.end).split('\n');
+      cursorMore = Math.max(0, lines.length - 20); cursorSrc = lines.slice(0, 20).join('\n');
+    }
+    const tile = (v, l, d, cls) => `<div class="tile${cls ? ' ' + cls : ''}"><div class="v">${v}</div><div class="l">${l}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
+    x.innerHTML = `
+      <div class="outcome"><span class="pill o-${r.outcome}">${esc(r.outcome)}</span><span class="dim">${esc(OUT[r.outcome] || '')}</span>${r.where ? `<span class="dim" style="flex-basis:100%">where: ${esc(r.where)}</span>` : ''}</div>
+      <div class="req"><span class="dim">request</span> ${r.kind === 'full' ? 'driver.run (whole file)' : `${r.kind === 'typeAt' ? 'typeAt (hover): ' : r.kind === 'definition' ? 'definition: ' : ''}runUpTo(offset ${r.offset})`}${r.cancelAfterMs >= 0 ? `, cancel checker armed at ${r.cancelAfterMs} ms` : ''}${r.latch ? `, latched at the macro${r.cancelledByButton ? ', cancelled by the button' : ', released by the button'}` : ''}</div>
+      <div class="tiles">
+        ${tile(`<span class="${runCls}">${r.runId}</span>`, 'run id', `was ${r.runIdBefore}: ${r.runChanged ? 'NEW RUN' : 'same run'}; session run ${r.sessionRun === -1 ? 'none' : r.sessionRun}${r.tainted ? '; <b>tainted</b>: ' + r.cyclesPrevented + ' cyclic reference(s) prevented, the next request starts fresh' : ''}`)}
+        ${tile(`${r.prefixBefore === -1 ? '–' : r.prefixBefore} → ${r.prefix === -1 ? '–' : r.prefix}`, 'typed top-level', `typed trees of the outermost package (an object is its module val + class)${r.fullyTyped ? '; fully typed' : ''}`)}
+        ${tile(`${r.typedStatements} of ${r.statements.length}`, 'statements typed', `<b>${r.typedNow} by this request</b>; <b>${r.untypedSpans}</b> skipped statements and members in the session`)}
+        ${tile(r.typedTrees, 'typedTreeCount', `trees typed by this request (Run.typedTreeCount; checker polled ${r.polls}×)`)}
+        ${tile(`${r.ms} ms`, 'wall time')}
+        ${tile(r.touched, 'Touched', `symbol(s) of the file completing (<code>isCompleting</code>) in the file's packages after the request (before: ${r.touchedBefore}; ${r.completed} completed of ${r.scopeSize})`)}
+        ${tile(r.diagnostics, 'diagnostics')}
+      </div>
+      <h4 class="sec">Statements</h4>
+      <div class="legend dim"><span style="background:var(--untyped)"></span>untyped <span style="background:var(--typed)"></span>typed before <span style="background:var(--typednow)"></span>typed by this request <span style="border:1px solid var(--cur)"></span>cursor <span style="background:var(--cancel)"></span>aborted in; <sup>n</sup> = n members skipped (hover)</div>
+      <div id="stats">${stats}</div>
+      ${r.kind === 'definition' && r.hover ? `<h4 class="sec">Definition</h4><ul class="compl"><li class="mono">${r.hover.found ? esc(r.hover.symbol) + ' → ' + esc(r.hover.file || 'this file') + ' [' + r.hover.start + ', ' + r.hover.end + ')' : esc(r.hover.reason || 'not found')}</li>${r.hover.how ? `<li class="dim">${esc(r.hover.how)}</li>` : ''}</ul>` : ''}
+      ${r.kind === 'typeAt' && r.hover ? `<h4 class="sec">Type at the pointer</h4><ul class="compl">${r.hover.found ? `<li class="mono">${esc(r.hover.symbol || r.hover.tree)}${r.hover.info ? ': ' + esc(r.hover.info) : ''}</li><li class="mono dim">type: ${esc(r.hover.type)}</li>` : '<li class="dim">no typed tree at the offset</li>'}</ul>` : ''}
+      ${r.kind === 'complete' ? `<h4 class="sec">Completions at the cursor <span class="dim">(${compl.length})</span></h4><ul class="compl">${compl.map((c) => `<li class="mono">${esc(c)}</li>`).join('') || '<li class="dim">none</li>'}</ul>` : ''}
+      ${cursorSrc ? `<h4 class="sec">${esc(cursorTitle)}</h4><pre><code class="language-scala">${esc(cursorSrc)}</code></pre>${cursorMore ? `<div class="dim">… (${cursorMore} more line${cursorMore === 1 ? '' : 's'})</div>` : ''}` : ''}`;
+    x.querySelectorAll('pre code').forEach((el) => hljs.highlightElement(el));
+    x.querySelectorAll('.st').forEach((el) => el.onclick = () => { const s = r.statements[+el.dataset.i]; cm.setCursor(cm.posFromIndex(s.start)); cm.scrollIntoView(null, 120); cm.focus(); });
+    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    const firstUntyped = r.statements.findIndex((t) => t.state === 'untyped');
+    r.statements.forEach((s, i) => {
+      const cls = s.state === 'typed-now' ? 'line-typednow' : s.state === 'typed' ? 'line-typed' : (r.outcome === 'cancelled-resume' && i === r.cursorStatement ? 'line-cancel' : null);
+      if (!cls) return;
+      const from = cm.posFromIndex(s.start).line, to = cm.posFromIndex(s.end).line;
+      const skippedLines = new Set();
+      (s.skippedMembers || []).forEach((m) => { const a = cm.posFromIndex(m.start).line, b = cm.posFromIndex(m.end).line; for (let l = a; l <= b; l++) skippedLines.add(l); });
+      for (let l = from; l <= to; l++) { if (skippedLines.has(l)) continue; cm.addLineClass(l, 'background', cls); lineMarks.push({ line: l, cls }); }
+    });
+  }
+  function logRow(r) {
+    const tr = document.createElement('tr'); tr.className = r.outcome.startsWith('cancelled') ? 'cancelled' : '';
+    const req = r.kind === 'full' ? 'type whole file' : `${r.kind === 'typeAt' ? 'typeAt' : r.kind === 'definition' ? 'definition' : 'complete'} @${r.offset}` + (r.cursorStatement >= 0 ? ` (${r.statements[r.cursorStatement].name})` : '');
+    tr.innerHTML = `<td>${r.seq}</td><td>${esc(req)}${r.cancelAfterMs >= 0 ? ` <span class="dim">cancel ${r.cancelAfterMs} ms</span>` : ''}${r.latch ? ' <span class="dim">latched' + (r.cancelledByButton ? ', cancelled' : ', released') + '</span>' : ''}</td><td>${esc(r.outcome)}</td>
+      <td>${r.runId}${r.runChanged ? ' <span class="changed">new</span>' : ''}</td><td>${r.prefixBefore === -1 ? '–' : r.prefixBefore}→${r.prefix === -1 ? '–' : r.prefix}</td><td>${r.typedTrees}</td><td>${r.touched}</td><td>${r.ms}</td>
+      <td title="${esc((r.lockWaits || []).map((w) => `${w.ms} ms behind ${w.holder}: ${w.root}${w.current !== w.root ? ' / ' + w.current : ''}`).join('\n'))}">${r.lockWaitCount ? `${r.lockWaitMs} ms <span class="dim">×${r.lockWaitCount}${r.lockWaits && r.lockWaits[0] ? ' · ' + esc(r.lockWaits[0].root) : ''}</span>` : '<span class="dim">–</span>'}${r.concurrentWithBackground ? ' <span class="pill o-served" style="font-size:10px;padding:0 6px">beside bg</span>' : ''}</td><td>${r.backedOff ? `<span class="changed">${r.backedOff}</span>` : '<span class="dim">–</span>'}</td>`;
+    $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
+    stripAdd(r.ms, `#${r.seq} ${req}: ${r.ms} ms, ${r.outcome}`, r.outcome.startsWith('cancelled') ? 'cancelled' : '');
+    // a request on edited content: did the edit keep the run?
+    if (r.lastEdit && !r.lastEdit.startsWith('edit refused') && !r.lastEdit.startsWith('no edit')) editBadge('kept', r.lastEdit + ` · ${r.ms} ms`);
+    else if (r.runChanged && r.outcome === 'fresh') editBadge('fresh', (r.lastEdit || 'new content') + ` · run ${r.runId} · ${r.ms} ms`);
+    // the status bar: the same entry in one line, and the session state the result reports
+    $('stLast').textContent = `#${r.seq} ${req}${r.cancelAfterMs >= 0 ? ` (cancel ${r.cancelAfterMs} ms)` : ''}${r.latch ? (r.cancelledByButton ? ' (latched, cancelled)' : ' (latched, released)') : ''} · ${r.outcome}` +
+      (r.outcome === 'error' ? `: ${String(r.error || '').slice(0, 80)}` : ` · run ${r.runId}${r.runChanged ? ' (new)' : ''} · ${r.typedTrees} trees · ${r.ms} ms`);
+    if (r.outcome !== 'error') $('stSession').textContent = `run ${r.runId} · typed top-level ${r.prefix === -1 ? '–' : r.prefix} · skipped ${r.untypedSpans}${r.tainted ? ' · tainted' : ''}`;
+  }
+
+  function gotoMethod(i) {
+    const text = cm.getValue(), at = text.indexOf(`def method${i}(`), m = text.indexOf('.fil', at) + '.fil'.length;
+    cm.setCursor(cm.posFromIndex(m)); cm.focus(); reveal(); showCursor();
+  }
+  // ---- demos: a narrated sequence; each step says what is done, what the design predicts, and what the driver reported
+  const story = { steps: [] };
+  function storyStart(title) {
+    demoStartedAt = Date.now(); if (hover.inFlight) cancelInFlight(); hidePopup(); story.steps = [];
+    $('story').innerHTML = `<h3>${esc(title)}</h3><ol></ol>`;
+    document.querySelector('#logsec .ptab[data-ptab="story"]').disabled = false; setLogCollapsed(false); panelTab('story'); cm.refresh(); reveal();
+  }
+  // the editor shrank when the transcript appeared: scroll so the cursor sits in the upper third of what is left
+  const reveal = () => { const info = cm.getScrollInfo(), y = cm.charCoords(cm.getCursor(), 'local').top; cm.scrollTo(null, Math.max(0, y - info.clientHeight / 3)); };
+  function storyStep(doing, expect) { const li = document.createElement('li'); li.innerHTML = `<div class="do">${esc(doing)}</div><div class="exp">expect: ${esc(expect)}</div>`; $('story').querySelector('ol').append(li); li.scrollIntoView({ block: 'nearest' }); return li; }
+  function storyResult(li, ok, text) { li.insertAdjacentHTML('beforeend', `<div class="res"><span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'}</span> ${esc(text)}</div>`); li.scrollIntoView({ block: 'nearest' }); }
+  const typedOf = (r) => `${r.typedStatements}/${r.statements.length} statements typed, ${r.typedTrees} trees, ${r.ms} ms`;
+  const needsGenerated = () => { if (currentFile) { storyStart('The demos run on the generated file: pick "A.scala (generated)" in the Explorer first.'); return true; } return false; };
+  $('demoSession').onclick = async () => {
+    if (needsGenerated()) return;
+    storyStart('Demo: one run serves a session of requests');
+    let li = storyStep('Complete at `this.meth` in object 10', 'a fresh run; of 60 objects only M10 is typed, and in M10 only `val r`: method10 is skipped');
+    gotoObject(10); let r = await send('complete', -1);
+    storyResult(li, r.outcome === 'fresh' && r.typedStatements === 1, `${r.outcome}, run ${r.runId}, ${typedOf(r)}; skipped members in M10: ${(r.statements[r.cursorStatement].skippedMembers || []).length}`); await sleep(800);
+    li = storyStep('Complete in object 40', 'same run id, M40 typed in addition (a resume), nothing else');
+    gotoObject(40); const r2 = await send('complete', -1);
+    if (!r2) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, r2.outcome === 'resumed' && !r2.runChanged && r2.typedNow === 1, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}`); await sleep(800);
+    li = storyStep('Complete in object 10 again', 'answered from what is typed: nothing typed, a few trees for the completion itself');
+    gotoObject(10); const r3 = await send('complete', -1);
+    if (!r3) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, r3.outcome === 'served' && r3.typedNow === 0, `${r3.outcome}, ${typedOf(r3)}`); await sleep(800);
+    li = storyStep('Complete inside the body of method20', 'M20 was skipped: typed now, in the same run; its other members stay skipped');
+    gotoMethod(20); const r4 = await send('complete', -1);
+    if (!r4) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, r4.outcome === 'resumed' && !r4.runChanged, `${r4.outcome}, run ${r4.runId}, ${typedOf(r4)}, completions: ${(r4.completions || []).slice(0, 3).join(', ')}`);
+  };
+  let demoTag = 0;
+  $('demoCancel').onclick = async () => {
+    if (needsGenerated()) return;
+    storyStart('Demo: a cancellation lands exactly where we want it');
+    // fresh content (a new tag on line 1), so that giant is not already typed by an earlier run
+    cm.replaceRange(`// x-ray demo, cancel run ${++demoTag}`, { line: 0, ch: 0 }, { line: 0, ch: cm.getLine(0).length });
+    let li = storyStep('Complete in object 10 first', 'a fresh run (the content is new) that the next requests resume');
+    gotoObject(10); const r0 = await send('complete', -1);
+    if (!r0) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, r0.outcome === 'fresh', `${r0.outcome}, run ${r0.runId}`); await sleep(800);
+    li = storyStep('Complete at the last statement of `giant` in object 59, latched', 'the statement depends on the 199 before it and the first of those on the `tests.macros.Latch.await` macro, so the typer resumes into object 59, types the chain in order and blocks at the macro, with the rest of the file untouched');
+    gotoGiant(); const p = sendLatched(); if (!p) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    await whenLatched(); await sleep(1500);
+    storyResult(li, true, `blocked: ${$('latchTrees').textContent} trees typed so far`);
+    li = storyStep('Cancel the request', 'the latch opens, typing reaches the next checkpoint inside giant and unwinds; the run survives; object 59 is re-parsed and re-indexed, every symbol stays completable (Touched 0)');
+    await fetch('/cancel', { method: 'POST' }); const r = await p;
+    if (!r) { storyResult(li, false, 'no result'); return; }
+    storyResult(li, r.outcome === 'cancelled-resume' && r.touched === 0, `${r.outcome}; ${r.where}; run ${r.runId}, Touched ${r.touched}, ${r.typedTrees} trees typed before the abort`); await sleep(1200);
+    li = storyStep('Complete there again', 'the same run types the chain this time (the latch is not armed); a request anywhere else in giant would type only its own statement');
+    gotoGiant(); const r2 = await send('complete', -1);
+    if (!r2) { storyResult(li, false, 'no request was sent'); return; }
+    storyResult(li, r2.outcome === 'resumed' && !r2.runChanged, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}, completions: ${(r2.completions || []).slice(0, 2).join(', ')}`);
+  };
+  $('demoEdit').onclick = async () => {
+    if (needsGenerated()) return;
+    storyStart('Demo: an edit starts a fresh run');
+    let li = storyStep('Complete in object 10', 'whatever the session state, M10 is typed or already was');
+    gotoObject(10); const r0 = await send('complete', -1); storyResult(li, r0.outcome !== 'error', `${r0.outcome}, run ${r0.runId}`); await sleep(600);
+    li = storyStep('Type a comment into object 0, complete in object 10', 'the content changed: a new run id, and again only the path to the cursor is typed');
+    const text = cm.getValue(), at = text.indexOf('object M0 {') + 'object M0 {'.length;
+    cm.replaceRange(' // edited', cm.posFromIndex(at)); await sleep(600); gotoObject(10); const r = await send('complete', -1);
+    if (!r) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, r.outcome === 'fresh' && r.runChanged, `${r.outcome}, run ${r.runIdBefore} → ${r.runId}, ${typedOf(r)}`);
+  };
+  $('demoFull').onclick = async () => {
+    if (needsGenerated()) return;
+    storyStart('Demo: a whole-file run completes the session');
+    let li = storyStep('Complete in object 10', 'a targeted request: only the path to the cursor is typed, the other objects skipped');
+    gotoObject(10); const r0 = await send('complete', -1);
+    if (!r0) { storyResult(li, false, 'no request was sent (the page was busy)'); return; }
+    storyResult(li, ['fresh', 'resumed', 'served'].includes(r0.outcome) && !r0.fullyTyped, `${r0.outcome}, run ${r0.runId}, ${typedOf(r0)}`); await sleep(600);
+    li = storyStep('Type the whole file (driver.run)', 'what the editor asks for on every cursor move (document highlight): the session is completed in the same run, every skipped statement typed, nothing discarded');
+    const r = await send('full', -1); storyResult(li, r.outcome === 'full' && !r.runChanged && r.fullyTyped, `${r.outcome}, run ${r.runIdBefore} → ${r.runId}, fully typed: ${r.fullyTyped}, ${typedOf(r)}`); await sleep(600);
+    li = storyStep('Complete in object 40', 'served from the completed run: nothing typed');
+    gotoObject(40); const r2 = await send('complete', -1); storyResult(li, r2.outcome === 'served' && !r2.runChanged, `${r2.outcome}, run ${r2.runId}, ${typedOf(r2)}`);
+  };
+  // ---- what the last edit did: the session's run kept (an edit inside a body, -Yinteractive-body-edits) or a fresh run
+  function editBadge(how, detail, expect) {
+    const b = $('editBadge'); b.hidden = false;
+    b.className = 'pill ' + (how === 'kept' ? 'o-resumed' : 'o-fresh');
+    b.textContent = (how === 'kept' ? 'run kept' : 'fresh run') + (expect ? (expect === how ? ' ✓' : ' ✗ expected ' + (expect === 'kept' ? 'run kept' : 'a fresh run')) : '') + ' · ' + detail;
+    b.title = detail;
+  }
+  // ---- the latency strip: one bar per request, newest on the right, height on a log scale
+  function stripAdd(ms, title, cls) {
+    const i = document.createElement('i'); i.style.height = Math.min(18, 1 + 4 * Math.log10(1 + Math.max(0, ms))) + 'px'; i.title = title; if (cls) i.className = cls;
+    const st = $('strip'); st.append(i); while (st.children.length > 80) st.firstChild.remove();
+  }
+  // ---- freeform: the mode of the driver driven by hand
+  try {
+    const ms = await (await fetch('/modes')).json();
+    $('freeMode').innerHTML = ms.modes.map((m) => `<option value="${esc(m.key)}" title="${esc(m.title)}">${esc(m.key)}${m.flags ? ': ' + esc(m.flags) : ''}</option>`).join('');
+    $('freeMode').value = ms.freeform;
+    // the build the server runs, in the title bar and the tab title
+    if (ms.build) { $('busy').insertAdjacentHTML('beforebegin', `<span class="dim mono" style="white-space:nowrap" title="the git tip of the server's checkout">${esc(ms.build)}</span>`); document.title = `x-ray · ${ms.build}`; }
+  } catch (e) { /* an older server */ }
+  $('freeMode').onchange = () => resetTyper();
+  // ---- the replay
+  const rp = { since: 0, polling: false, file: null, mark: null, line: null, saved: null, modes: [] };
+  const rpParams = () => {
+    const v = $('rpWindow').value, source = v.includes(':') ? v.split(':')[0] : 'trace', [from, to] = (v.includes(':') ? v.split(':')[1] : v).split('-');
+    return new URLSearchParams({ source, from, to, seed: $('rpSeed').value, idleCap: $('rpIdle').value, lanes: $('rpLanes').value });
+  };
+  async function rpDescribe() {
+    try {
+      const d = await (await fetch('/replay/describe?' + rpParams())).json();
+      if (!d.eventsInTrace) { $('rpDesc').innerHTML = 'No events: start the server with <code>-Dxray.replay.events=&lt;replay-events.json&gt;</code>.'; return; }
+      $('rpDesc').innerHTML = `Replays events ${d.from}–${d.to} of <code title="${esc(d.eventsFile)}">${esc(d.eventsFile.split('/').pop())}</code> (${d.eventsInTrace} in the trace; trace seconds ${esc(d.traceSeconds)}): <b>${d.requests} requests</b> (${Object.entries(d.kinds).map(([k, n]) => `${n} ${k}`).join(', ')}), ${d.edits} edits${Object.keys(d.editsExpected || {}).filter((k) => k !== '?').length ? ` (${Object.entries(d.editsExpected).map(([k, n]) => `${n} must keep the run: ${k}`.replace('must keep the run: fresh', 'must take a fresh run').replace(': kept', '')).join(', ')})` : ''}, ${d.cancels} cancellations, over ${(d.durationMs / 1000).toFixed(1)} s.<br>Files: ${d.files.map((f) => `<code>${esc(f.file.split('/').pop())}</code> ${f.requests} requests, ${f.lines} lines`).join('; ')}.`;
+    } catch (e) { $('rpDesc').textContent = String(e); }
+  }
+  ['rpWindow', 'rpSeed', 'rpIdle', 'rpLanes'].forEach((id) => $(id).onchange = rpDescribe);
+  const fmt3 = (x) => `${x.median} / ${x.p90} / ${x.max}`;
+  function rpRenderModes(st) {
+    const byKey = Object.fromEntries((st.modes || []).map((m) => [m.mode, m]));
+    $('rpModes').innerHTML = rp.modes.map((m) => {
+      const r = byKey[m.key];
+      const pct = r && r.total ? Math.round(100 * r.done / r.total) : 0;
+      const line = !r ? 'not run' : r.state === 'running' ? `${r.done}/${r.total} requests, ${(r.elapsedMs / 1000).toFixed(1)} s${r.inFlight.length ? ' · now: ' + esc(r.inFlight.join(', ')) : ''}` : r.state === 'done' ? `done: ${r.total} requests in ${(r.wallMs / 1000).toFixed(1)} s` : esc(r.state + (r.error ? ': ' + r.error : ''));
+      return `<div class="rpMode${r && r.state === 'running' ? ' running' : ''}"><div class="top"><b class="m-${m.key}">${esc(m.key)}</b><button class="ghost" data-rerun="${esc(m.key)}" title="replay this mode again (a fresh driver)">${I.replay} Run</button></div><div class="fl">${esc(m.flags || 'no flags')}</div><div class="dim">${esc(m.title)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="dim">${line}</div></div>`;
+    }).join('');
+    $('rpModes').querySelectorAll('[data-rerun]').forEach((b) => b.onclick = () => rpRun([b.dataset.rerun]));
+  }
+  function rpRenderFindings(fs) {
+    if (!fs.length) return;
+    $('replay').querySelector('.none').hidden = true;
+    const rows = fs.map((f) => `<tr class="${f.kind === 'all' ? 'all' : ''}"><td class="l m-${f.mode}">${esc(f.mode)}</td><td class="l">${esc(f.kind)}</td><td>${f.count}</td><td>${f.cancelled || ''}</td><td>${f.errors ? `<span class="bad">${f.errors}</span>` : ''}</td>
+      <td>${fmt3(f.latency)}</td><td>${f.queued.median} / ${f.queued.p90}</td><td>${fmt3(f.lock)}</td><td>${f.statement.p90}</td><td>${f.treesMedian} <span class="dim">(${f.trees})</span></td><td>${f.runs} <span class="dim">(${f.wholeFileRuns})</span></td>
+      <td>${f.editsKept + f.editsFresh ? `${f.editsKept} / ${f.editsFresh} <span class="${f.editsAsExpected === f.editsExpected ? 'good' : 'bad'}">(${f.editsAsExpected} of ${f.editsExpected} as expected)</span>` : '–'}</td>
+      <td>${f.diagChecked ? `<span class="${f.diagMatch === f.diagChecked ? 'good' : 'bad'}" title="${esc(f.diagFirstMismatch)}">${f.diagMatch}/${f.diagChecked}</span>` : '–'}</td>
+      <td>${f.mode === 'baseline' ? '–' : `<span class="${f.differ ? 'bad' : 'good'}" title="${esc(f.differExamples.map((e) => `${e.where}\n  ${e.mode}\n  baseline: ${e.baseline}`).join('\n'))}">${f.differ}/${f.compared}</span>`}</td></tr>`).join('');
+    const ex = fs.filter((f) => f.kind !== 'all' && f.differ).flatMap((f) => f.differExamples.map((e) => `<div><b class="m-${f.mode}">${esc(f.mode)}</b> ${esc(e.where)}: <code>${esc(e.mode)}</code>; baseline <code>${esc(e.baseline)}</code></div>`)).join('');
+    $('rpFindings').innerHTML = `<table><thead><tr><th class="l">mode</th><th class="l">kind</th><th>n</th><th>cancelled</th><th>errors</th><th title="from when the request was due to its answer">latency ms<br>median / p90 / max</th><th title="behind the request before it in its lane">queued ms<br>median / p90</th><th title="on the completion lock (step 3) or a completion root another reader holds (step 4)">lock wait ms<br>median / p90 / max</th><th title="waiting for a statement another reader was typing">stmt wait<br>p90</th><th>trees<br>median (total)</th><th title="runs started by these requests (of them on the whole file)">runs<br>(whole-file)</th><th title="of the first requests after an edit: the session's run kept, or a fresh run; and how many as the scenario expects">edits kept /<br>fresh</th><th title="diagnostics of the whole-file kinds equal to a whole-file run of the same content">diags =<br>whole-file</th><th title="answers that differ from the baseline's answer to the same event">≠ baseline</th></tr></thead><tbody>${rows}</tbody></table>${ex ? `<h4>Answers that differ from the baseline</h4><div class="ex">${ex}</div>` : ''}`;
+  }
+  function rpRow(r) {
+    const tr = document.createElement('tr'); if (r.outcome !== 'ok') tr.className = 'cancelled';
+    tr.innerHTML = `<td>${r.seq}</td><td class="m-${r.mode}">${esc(r.mode)}</td><td title="${esc(r.label || '')}">${esc(r.kind)} ${esc(r.file.split('/').pop())}:${r.line}${r.lane ? ' <span class="dim">lane 2</span>' : ''}${r.editHow ? ` <span class="pill ${r.editHow === 'kept' ? 'o-resumed' : 'o-fresh'}" style="font-size:10px;padding:0 6px" title="${esc(r.editLabel + (r.lastEdit ? ': ' + r.lastEdit : ''))}">${r.editHow === 'kept' ? 'run kept' : 'fresh run'}${r.editExpect ? (r.editExpect === r.editHow ? ' ✓' : ' ✗') : ''}</span>` : ''}</td><td>${r.dueMs}</td><td>${r.queuedMs}</td><td>${r.ms}</td><td>${r.lockMs ? r.lockMs + ` <span class="dim">×${r.lockCount}</span>` : '<span class="dim">–</span>'}</td><td>${r.statementMs || '<span class="dim">–</span>'}</td><td>${r.trees}</td><td>${esc(r.how)}${r.backedOff ? ` <span class="dim">backed off ×${r.backedOff}</span>` : ''}</td>
+      <td>${r.diagnostics < 0 ? '–' : r.diagnostics}${r.wholeFileDiagnostics >= 0 ? (r.diagnostics === r.wholeFileDiagnostics ? ' <span class="good">=</span>' : ` <span class="bad">≠ ${r.wholeFileDiagnostics}</span>`) : ''}</td><td class="mono" title="${esc(r.answer)}">${esc(r.answer.slice(0, 90))}</td>`;
+    $('rpRows').prepend(tr); while ($('rpRows').children.length > 400) $('rpRows').lastChild.remove();
+    stripAdd(r.ms, `${r.mode} ${r.kind} ${r.file.split('/').pop()}:${r.line}: ${r.ms} ms (${r.how})`, r.outcome === 'ok' ? r.mode : 'cancelled');
+    if (r.editHow) editBadge(r.editHow, `${r.mode}: ${r.editLabel}${r.lastEdit ? ' · ' + r.lastEdit : ''} · first request after it ${r.ms} ms`, r.editExpect);
+  }
+  // the request starting now, in the editor: the replayed file's text, the offset marked
+  async function rpShow(c) {
+    if (!c || !c.file) return;
+    if (c.file !== rp.file) {
+      const r = await (await fetch('/replay/source?file=' + encodeURIComponent(c.file))).json();
+      if (!r.source) return;
+      rp.file = c.file; cm.setValue(r.source); clearBackground();
+      $('fname').textContent = $('stFile').textContent = 'replay: ' + c.file.split('/').pop();
+    }
+    if (rp.mark) rp.mark.clear(); if (rp.line != null) cm.removeLineClass(rp.line, 'background', 'line-replay');
+    const a = cm.posFromIndex(Math.max(0, c.offset)), b = c.endOffset > c.offset && c.kind === 'inlayHint' ? cm.posFromIndex(c.endOffset) : cm.posFromIndex(c.offset + 1);
+    if (c.offset >= 0) { rp.mark = cm.markText(a, b, { className: c.kind === 'inlayHint' ? 'line-replay' : 'replayHit', title: `${c.mode}: ${c.kind}` }); rp.line = a.line; cm.addLineClass(a.line, 'background', 'line-replay'); cm.setCursor(a); cm.scrollIntoView(a, 140); }
+    $('stLast').textContent = `replay ${c.mode}: #${c.seq} ${c.kind} @${c.offset}`;
+  }
+  async function rpPoll() {
+    if (rp.polling) return; rp.polling = true;
+    try {
+      while (true) {
+        let st; try { st = await (await fetch('/replay/status?since=' + rp.since)).json(); } catch (e) { await sleep(500); continue; }
+        rpRenderModes(st);
+        st.rows.forEach((r) => { rpRow(r); rp.since = Math.max(rp.since, r.seq); });
+        rpRenderFindings(st.findings);
+        if (st.running) await rpShow(st.cursor);
+        $('busy').textContent = st.running ? `replaying: ${st.current}` : '';
+        if (!st.running) break;
+        await sleep(150);
+      }
+    } finally {
+      rp.polling = false;
+      if (rp.saved) { const s = rp.saved; rp.saved = null; ['hoverMode', 'bgMode', 'usageMode'].forEach((id) => { $(id).checked = s[id]; }); }
+      // the driver the page now drives is the last mode's (the replay reset it)
+      try { $('freeMode').value = (await (await fetch('/modes')).json()).freeform; } catch (e) { /* ignore */ }
+    }
+  }
+  async function rpRun(modes) {
+    // the page's own requests would be readers of the same driver: off while the replay runs
+    if (!rp.saved) { rp.saved = Object.fromEntries(['hoverMode', 'bgMode', 'usageMode'].map((id) => [id, $(id).checked])); ['hoverMode', 'bgMode', 'usageMode'].forEach((id) => { $(id).checked = false; }); }
+    const p = rpParams(); if (modes) p.set('modes', modes.join(','));
+    const r = await (await fetch('/replay/run?' + p)).json();
+    if (r.error) { $('rpDesc').insertAdjacentHTML('beforeend', `<div class="bad">${esc(r.error)}</div>`); }
+    setLogCollapsed(false); panelTab('replay'); rp.file = null;
+    rpPoll();
+  }
+  $('rpAll').onclick = () => rpRun(null);
+  $('rpStop').onclick = () => fetch('/replay/stop', { method: 'POST' });
+  $('rpCopy').onclick = async () => { const t = await (await fetch('/replay/report.md')).text(); try { await navigator.clipboard.writeText(t); $('rpCopy').lastChild.textContent = ' Copied'; } catch (e) { /* not allowed */ } };
+  try { rp.modes = (await (await fetch('/modes')).json()).modes; } catch (e) { rp.modes = []; }
+  rpDescribe(); rpRenderModes({ modes: [] });
+  // a replay already running (or finished) when the page loads
+  fetch('/replay/status?since=0').then((r) => r.json()).then((st) => { if (st.rows.length || st.running) { rpRenderModes(st); st.rows.forEach((r) => { rpRow(r); rp.since = Math.max(rp.since, r.seq); }); rpRenderFindings(st.findings); if (st.running) rpPoll(); } }).catch(() => {});
+
+  // ---- the throughput demo
+  const tp = { polling: false, last: null, sel: null };
+  function tpPlot(st) {
+    const pts = st.points.filter((p) => p.failure === '' && p.wallMs > 0);
+    const speed = $('tpSpeedup').checked;
+    const base = (st.points.find((p) => p.n === 1 && p.failure === '') || {}).wallMs;
+    const W = 440, H = 180, L = 40, R = 10, T = 14, B = 28;
+    const maxN = Math.max(...st.ns, 1);
+    const ys = pts.map((p) => speed ? (base ? base / p.wallMs : 0) : p.wallMs / 1000);
+    const batchS = st.batchMs > 0 ? st.batchMs / 1000 : null;
+    let maxY = Math.max(...ys, speed ? maxN : (batchS || 0), speed ? 1 : 0.1);
+    // true x/y: both axes linear from 0, round-number ticks on y
+    const span = maxY * 1.05, raw = span / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    maxY = Math.ceil(span / step) * step;
+    const x = (n) => L + (n / maxN) * (W - L - R);
+    const y = (v) => H - B - (v / maxY) * (H - T - B);
+    let g = '';
+    for (let v = 0; v <= maxY + step / 2; v += step) g += `<line class="grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/><text x="${L - 4}" y="${y(v) + 3}" text-anchor="end">${+v.toFixed(2)}</text>`;
+    g += `<line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/>`;
+    for (let n = 0; n <= maxN; n += maxN > 16 ? Math.ceil(maxN / 16) : 1) g += `<line class="axis" x1="${x(n)}" y1="${H - B}" x2="${x(n)}" y2="${H - B + 3}"/><text x="${x(n)}" y="${H - B + 13}" text-anchor="middle"${st.ns.includes(n) ? ' class="lab"' : ''}>${n}</text>`;
+    g += `<text x="${(L + W - R) / 2}" y="${H - 3}" text-anchor="middle">reader threads</text>`;
+    g += `<text x="4" y="${T - 4}">${speed ? 'speed-up ×' : 'wall s'}</text>`;
+    if (speed) g += `<line class="ideal" x1="${x(0)}" y1="${y(0)}" x2="${x(Math.min(maxN, maxY))}" y2="${y(Math.min(maxN, maxY))}"><title>linear speed-up</title></line>`;
+    else if (batchS) g += `<line class="ref" x1="${L}" y1="${y(batchS)}" x2="${W - R}" y2="${y(batchS)}"/><text x="${W - R}" y="${y(batchS) - 3}" text-anchor="end" style="fill:#f08c00">batch typer ${batchS.toFixed(1)} s</text>`;
+    if (pts.length) g += `<polyline class="series" points="${pts.map((p, i) => `${x(p.n)},${y(ys[i])}`).join(' ')}"/>`;
+    pts.forEach((p, i) => { g += `<circle class="dot" cx="${x(p.n)}" cy="${y(ys[i])}" r="3.5"><title>N=${p.n}: wall ${(p.wallMs / 1000).toFixed(2)} s, worker CPU ${(p.workerCpuMs / 1000).toFixed(1)} s, root waits ${p.rootWaits}, ${p.differ} files differ</title></circle><text class="lab" x="${x(p.n)}" y="${y(ys[i]) - 7}" text-anchor="middle">${speed ? ys[i].toFixed(1) + '×' : ys[i].toFixed(2)}</text>`; });
+    $('tpPlot').innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+  }
+  // one lane per reader thread for the selected N: the open (serial), each file
+  // typed (sized by its time; hover for its name), idle until the wall ends
+  function tpTimeline(st) {
+    const done = st.points.filter((p) => p.failure === '' && p.lanes && p.lanes.length);
+    if (!done.length) { $('tpTimeline').innerHTML = ''; return; }
+    if (!done.some((p) => p.n === tp.sel)) tp.sel = done[done.length - 1].n;
+    const p = done.find((q) => q.n === tp.sel);
+    const W = 900, L = 26, R = 6, lane = 10, gap = 3, T = 4;
+    const H = T + p.lanes.length * (lane + gap) + 14;
+    const x = (ms) => L + (ms / p.wallMs) * (W - L - R);
+    let g = '';
+    p.lanes.forEach((files, t) => {
+      const y = T + t * (lane + gap);
+      g += `<text x="${L - 4}" y="${y + lane - 2}" text-anchor="end">${t}</text>`;
+      g += `<rect class="open" x="${x(0)}" y="${y}" width="${x(p.openMs) - x(0)}" height="${lane}"><title>open (serial): ${(p.openMs / 1000).toFixed(2)} s</title></rect>`;
+      files.forEach(([f, a, b], i) => { g += `<rect class="f${i % 2}" x="${x(a)}" y="${y}" width="${Math.max(0.5, x(b) - x(a))}" height="${lane}"><title>${esc(f)}: ${(b - a).toFixed(0)} ms</title></rect>`; });
+      const end = files.length ? files[files.length - 1][2] : p.openMs;
+      if (end < p.wallMs) g += `<rect class="idle" x="${x(end)}" y="${y}" width="${x(p.wallMs) - x(end)}" height="${lane}"><title>idle: ${((p.wallMs - end) / 1000).toFixed(2)} s</title></rect>`;
+    });
+    const yAxis = T + p.lanes.length * (lane + gap) + 10;
+    for (let s = 0; s <= p.wallMs / 1000 + 1e-9; s += p.wallMs > 4000 ? 1 : 0.5) g += `<text x="${x(s * 1000)}" y="${yAxis}" text-anchor="middle">${s}s</text>`;
+    $('tpTimeline').innerHTML = `<div class="pick">timeline: ${done.map((q) => `<button class="ghost${q.n === p.n ? ' on' : ''}" data-tn="${q.n}">N=${q.n}</button>`).join('')} <span class="dim">open ${(p.openMs / 1000).toFixed(2)} s · typing ${(p.typingMs / 1000).toFixed(2)} s · tail ${(p.tailMs / 1000).toFixed(2)} s of ${(p.wallMs / 1000).toFixed(2)} s</span></div><svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+    $('tpTimeline').querySelectorAll('button[data-tn]').forEach((b) => { b.onclick = () => { tp.sel = +b.dataset.tn; tpRender(tp.last); }; });
+  }
+  function tpRender(st) {
+    tp.last = st;
+    const run = st.state === 'warming' || st.state === 'batch' || st.state === 'running';
+    const what = { idle: 'Not run yet.', warming: 'Warm-up: the whole set, one reader, nothing skipped…', batch: 'The batch typer on the same files, for the reference line…', running: `N=${st.currentN}…`, done: 'Done.', cancelled: 'Cancelled.', failed: 'Failed: ' + st.error }[st.state] || st.state;
+    $('tpState').innerHTML = `${esc(what)} ${st.files ? `${st.files} files; ` : ''}${st.processors} processors; build <code>${esc(st.build)}</code>${st.warmMs > 0 ? `; warm-up ${(st.warmMs / 1000).toFixed(1)} s` : ''}${st.batchMs > 0 ? `; batch typer ${(st.batchMs / 1000).toFixed(1)} s` : ''}${run ? ` (${(st.elapsedMs / 1000).toFixed(0)} s)` : ''}${st.jvm ? `<br>JVM ${esc(st.jvm.version)}, ${esc(st.jvm.gc)}, max heap ${st.jvm.maxHeapGb} GB: <code>${esc(st.jvm.flags)}</code>` : ''}`;
+    $('tpProg').innerHTML = st.state === 'running' && st.progress.length ? st.progress.map((n, t) => `<div class="dim">thread ${t}: ${n} files<div class="bar"><i style="width:${Math.min(100, 100 * n * st.progress.length / Math.max(st.files, 1))}%"></i></div></div>`).join('') : '';
+    const base = (st.points.find((p) => p.n === 1 && p.failure === '') || {}).wallMs;
+    $('tpTable').querySelector('tbody').innerHTML = st.points.map((p) => p.failure
+      ? `<tr><td>${p.n}</td><td colspan="7" class="bad" style="text-align:left">${esc(p.failure)}</td></tr>`
+      : `<tr data-n="${p.n}"${p.n === tp.sel ? ' class="sel"' : ''}><td>${p.n}</td><td>${(p.wallMs / 1000).toFixed(2)}</td><td>${base ? (base / p.wallMs).toFixed(2) + '×' : ''}</td><td>${(p.workerCpuMs / 1000).toFixed(1)}</td><td>${p.rootWaits} / ${p.rootWaitMs.toFixed(0)} ms</td><td class="${p.differ ? 'bad' : 'good'}">${p.differ}</td><td>${p.backoffs}</td><td>${p.cyclesRaised}</td><td>${(p.openMs / 1000).toFixed(2)}</td><td>${(p.typingMs / 1000).toFixed(2)}</td><td>${(p.tailMs / 1000).toFixed(2)}</td></tr>`).join('');
+    $('tpTable').querySelectorAll('tbody tr[data-n]').forEach((tr) => { tr.onclick = () => { tp.sel = +tr.dataset.n; tpRender(tp.last); }; });
+    tpTimeline(st);
+    tpPlot(st);
+    $('tpRun').disabled = run;
+  }
+  async function tpPoll() {
+    if (tp.polling) return; tp.polling = true;
+    try {
+      while (true) {
+        let st; try { st = await (await fetch('/throughput/status')).json(); } catch (e) { await sleep(1000); continue; }
+        tpRender(st);
+        if (!['warming', 'batch', 'running'].includes(st.state)) break;
+        await sleep(400);
+      }
+    } finally { tp.polling = false; }
+  }
+  $('tpRun').onclick = async () => {
+    const st = await (await fetch('/throughput/run?ns=' + encodeURIComponent($('tpNs').value) + '&policy=' + $('tpPolicy').value, { method: 'POST' })).json();
+    setLogCollapsed(false); panelTab('throughput');
+    tpRender(st); tpPoll();
+  };
+  $('tpStop').onclick = () => fetch('/throughput/stop', { method: 'POST' });
+  $('tpSpeedup').onchange = () => { if (tp.last) tpPlot(tp.last); };
+  // a run already going (or finished) when the page loads: the plot survives a reload
+  fetch('/throughput/status').then((r) => r.json()).then((st) => { if (st.ns) $('tpNs').value = st.ns.join(','); if (st.policy) $('tpPolicy').value = st.policy; tpRender(st); if (['warming', 'batch', 'running'].includes(st.state)) tpPoll(); }).catch(() => {});
+
+  gotoObject(10);
+  scheduleBackground(); // the first file too
+})();
+</script>
+</body>
+</html>
