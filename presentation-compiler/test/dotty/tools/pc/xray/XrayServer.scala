@@ -559,6 +559,14 @@ object XrayServer:
     val out = ex.getResponseBody
     out.write(bytes); out.close()
 
+  private val httpThreads = new java.util.concurrent.atomic.AtomicInteger
+  /** The HTTP requests being handled: what, on which thread, since when. */
+  private val inFlightRequests = new java.util.concurrent.ConcurrentHashMap[Object, (String, Thread, Long)]()
+  private def inFlightRequest(ex: HttpExchange)(handle: => Unit): Unit =
+    val key = new Object
+    inFlightRequests.put(key, (s"${ex.getRequestMethod} ${ex.getRequestURI}", Thread.currentThread, System.nanoTime()))
+    try handle finally inFlightRequests.remove(key)
+
   def main(args: Array[String]): Unit =
     val port = sys.props.get("xray.port").map(_.toInt).getOrElse(8791)
     val page = findPage()
@@ -571,7 +579,12 @@ object XrayServer:
     println(s"[xray] compiler sources: ${sourcesRoot.map(r => s"$r (${sourceFiles().size} files)").getOrElse("not found")}")
     println(f"[xray] warm-up full run: ${(System.nanoTime() - t0) / 1e6}%.0f ms")
     val server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0)
-    server.createContext("/", ex => ex.getRequestURI.getPath match
+    // a thread per request: with the default executor every handler ran on the
+    // dispatcher thread, and one request blocked in the driver (I61) wedged the page
+    server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool { r =>
+      val t = new Thread(r, s"xray-http-${httpThreads.incrementAndGet()}"); t.setDaemon(true); t
+    })
+    server.createContext("/", ex => inFlightRequest(ex)(ex.getRequestURI.getPath match
       case "/" | "/index.html" =>
         reply(ex, 200, "text/html; charset=utf-8", Files.readString(page))
       case "/source" =>
@@ -621,8 +634,14 @@ object XrayServer:
         cancelNow = true
         releaseLatch()
         reply(ex, 200, "application/json", json(status()))
+      case "/inflight" =>
+        // the requests in flight, with where each one's thread is: for a page that waits too long
+        val now = System.nanoTime()
+        reply(ex, 200, "application/json", json(Map("requests" -> inFlightRequests.values.asScala.toList.filterNot(_._2 eq Thread.currentThread).sortBy(_._3).map((what, thread, since) =>
+          Map("request" -> what, "thread" -> thread.getName, "ms" -> (now - since) / 1000000, "state" -> thread.getState.toString,
+            "where" -> thread.getStackTrace.iterator.map(_.toString).filter(_.startsWith("dotty")).take(8).toList)))))
       case _ =>
-        reply(ex, 404, "text/plain", "not found"))
+        reply(ex, 404, "text/plain", "not found")))
     server.start()
     println(s"[xray] listening on http://127.0.0.1:$port/")
     Thread.currentThread.join()

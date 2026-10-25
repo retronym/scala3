@@ -241,6 +241,31 @@
     xray: svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 5.5h6M5 8h4M5 10.5h2"/>'),
   };
   document.querySelectorAll('[data-icon]').forEach((el) => el.insertAdjacentHTML('afterbegin', I[el.dataset.icon] || ''));
+  // ---- a request that takes too long is reported, not waited on silently: after 30 s the
+  // status bar says which request it is and where its thread is in the driver (/inflight)
+  {
+    const fetch0 = window.fetch.bind(window);
+    window.fetch = (url, opts) => {
+      const p = fetch0(url, opts);
+      if (String(url).startsWith('/inflight')) return p;
+      let done = false; p.finally(() => { done = true; stuck.delete(url); stuckReport(); }).catch(() => {});
+      setTimeout(async () => {
+        if (done) return;
+        try {
+          const r = await (await fetch0('/inflight')).json(), mine = r.requests.find((q) => q.request.includes(String(url).split('?')[0])) || r.requests[0];
+          stuck.set(url, mine ? `${mine.request}: ${mine.ms} ms, ${mine.state}${mine.where.length ? ' in ' + mine.where[0].replace(/\(.*\)/, '') : ''}` : String(url));
+          stuckReport(mine);
+        } catch (e) { stuck.set(url, String(url)); stuckReport(); }
+      }, 30000);
+      return p;
+    };
+  }
+  const stuck = new Map();
+  function stuckReport(detail) {
+    const el = document.getElementById('busy'); if (!el) return;
+    if (stuck.size) { el.textContent = `stuck: ${[...stuck.values()][0]}`; el.title = detail ? detail.where.join('\n') : ''; }
+    else if (el.textContent.startsWith('stuck:')) { el.textContent = ''; el.title = ''; }
+  }
   const src = await (await fetch('/source')).json();
   const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, indentUnit: 2, tabSize: 2, indentWithTabs: false,
     extraKeys: { Tab: (c) => c.replaceSelection('  ', 'end') }, configureMouse: () => ({ addNew: false }) });

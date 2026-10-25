@@ -209,7 +209,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   private val lateFiles = mutable.Set[AbstractFile]()
 
   /** A cache for static references to packages and classes */
-  val staticRefs = util.EqHashMap[Name, Denotation](initialCapacity = 1024)
+  val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
 
   /** Actions that need to be performed at the end of the current compilation run */
   private val finalizeActions = ListBuffer.empty[() => Unit]

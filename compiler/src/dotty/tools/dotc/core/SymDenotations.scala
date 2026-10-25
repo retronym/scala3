@@ -178,6 +178,23 @@ object SymDenotations {
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
       val interactive = ctx.mode.is(Mode.Interactive)
+      if interactive && ctx.base.isConcurrent then
+        // several readers: one completion at a time (step 3 of the
+        // multi-reader notes; an owner and a barrier per root is step 4)
+        val lock = ctx.base.completionLock
+        lock.lockFor(CompletionLock.What(CompletionLock.completionKind(completer), symbol))
+        try
+          // `completer` was read before the wait: the owner may have finished
+          // meanwhile, or left a different info (the unpickler's placeholder
+          // `NoCompleter` while it reads a type's right-hand side; running that
+          // one throws, finding I44). Look at the symbol as it is now.
+          myInfo match
+            case current: LazyType if current.needsCompletion(this) => lockAndComplete0(current, interactive)
+            case _ =>
+        finally lock.unlockFor()
+      else lockAndComplete0(completer, interactive)
+
+    private def lockAndComplete0(completer: LazyType, interactive: Boolean)(using Context): Unit =
       val reader: Reader | Null = if interactive then ctx.reader else null
       if myFlags.is(Touched) && !healLeakedTouched(reader) then
         if reader != null then reader.recordCyclePrevented(symbol)
@@ -279,7 +296,7 @@ object SymDenotations {
      *  @pre `isCompleting` is false, or this is a ModuleCompleter or SymbolLoader
      */
     protected[dotc] final def setPrivateWithin(pw: Symbol)(using Context): Unit = {
-      if (isCompleting)
+      if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
         assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
           s"Illegal call to `setPrivateWithin($pw)` while completing $this using completer $myInfo")
       myPrivateWithin = pw
@@ -438,8 +455,28 @@ object SymDenotations {
     /** The denotation is completed: info is not a lazy type and attributes have defined values */
     final def isCompleted: Boolean = !myInfo.isInstanceOf[LazyType]
 
-    /** The denotation is in train of being completed */
-    final def isCompleting: Boolean = myFlags.is(Touched) && !isCompleted
+    /** The denotation is in train of being completed, by this reader. With
+     *  several readers (interactive mode) a completion in progress on
+     *  another reader is not "completing" for this one: the peek waits for
+     *  it (the completion lock, step 3 of the multi-reader notes) and looks
+     *  again, so that the thirteen sites that skip a completing symbol do
+     *  not skip one that another thread happens to be completing (finding
+     *  I41; Track I's `peek_any_races`). Batch compilation pays a field read
+     *  when `Touched` is set.
+     */
+    final def isCompleting(using Context): Boolean =
+      myFlags.is(Touched) && !isCompleted && {
+        val base = ctx.base
+        !base.concurrent || isCompletingHere(base)
+      }
+
+    private def isCompletingHere(base: ContextBase): Boolean =
+      val lock = base.completionLock
+      // under the coarse lock every completion in progress is the lock holder's
+      lock.isHeldByCurrentThread ||
+        lock.locked(CompletionLock.peek) {
+          myFlags.is(Touched) && !isCompleted // still set: a leak, or a cycle as before
+        }
 
     /** The completer of this denotation. @pre: Denotation is not yet completed */
     final def completer: LazyType = myInfo.asInstanceOf[LazyType]
@@ -664,7 +701,7 @@ object SymDenotations {
     def isError: Boolean = false
 
     private def setAbsentInfo(): Unit = {
-      if (isCompleting)
+      if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
         assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
           s"Illegal attempt to mark $this absent while completing using completer $myInfo")
       myInfo = NoType
@@ -2030,19 +2067,28 @@ object SymDenotations {
     private var baseDataCache: BaseData = BaseData.None
     private var memberNamesCache: MemberNames = MemberNames.None
 
+    // The caches are read once into a local: with several readers another
+    // one may invalidate a cache (null it) between the check and the read
+    // (I67, a null `myBaseTypeCache` after `invalidateBaseTypeCache`).
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] = {
-      if (myMemberCachePeriod != ctx.period) {
-        myMemberCache = EqHashMap()
+      val known = myMemberCache
+      if (known == null || myMemberCachePeriod != ctx.period) {
+        val fresh = ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
+        myMemberCache = fresh
         myMemberCachePeriod = ctx.period
+        fresh
       }
-      myMemberCache.nn
+      else known
     }
 
     private def baseTypeCache(using Context): BaseTypeMap = {
-      if !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
-        myBaseTypeCache = new BaseTypeMap()
+      val known = myBaseTypeCache
+      if known == null || !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
+        val fresh: BaseTypeMap = ctx.base.sharing.newEqHashMap()
+        myBaseTypeCache = fresh
         myBaseTypeCachePeriod = ctx.period
-      myBaseTypeCache.nn
+        fresh
+      else known
     }
 
     def invalidateBaseDataCache() = {
@@ -2454,6 +2500,18 @@ object SymDenotations {
     /** Compute tp.baseType(this) */
     final def baseTypeOf(tp: Type)(using Context): Type = {
       val btrCache = baseTypeCache
+      // The computation in progress is marked by a `NoPrefix` sentinel in the
+      // cache, a black hole that detects a cycle. With several readers
+      // (interactive mode) the cache is shared and the sentinel would be
+      // another reader's in-progress computation, seen as a cycle (finding
+      // I34): the marks are then kept on the reader, per class denotation as
+      // the cache is (a type's base type for one class is computed inside its
+      // base type for another), and only results reach the cache.
+      val pending: util.EqHashSet[Type] | Null = if ctx.base.concurrent then ctx.reader.pendingBaseTypesOf(this) else null
+      def markInProgress(tp: CachedType): Unit =
+        if pending != null then pending += tp else btrCache(tp) = NoPrefix
+      def unmark(tp: CachedType): Unit =
+        if pending != null then pending -= tp else btrCache.remove(tp)
       def inCache(tp: Type) = tp match
         case tp: CachedType => btrCache.contains(tp)
         case _ => false
@@ -2462,9 +2520,10 @@ object SymDenotations {
           Stats.record("basetype cache entries")
           if (!baseTp.exists) Stats.record("basetype cache NoTypes")
         }
+        if pending != null then pending -= tp
         if !(tp.isProvisional || CapturingType.isUncachable(tp) || ctx.gadt.isNarrowing) then
           btrCache(tp) = baseTp
-        else
+        else if pending == null then
           btrCache.remove(tp) // Remove any potential sentinel value
       }
 
@@ -2476,6 +2535,7 @@ object SymDenotations {
       def recur(tp: Type): Type = try {
         tp match {
           case tp: CachedType =>
+            if pending != null && pending.contains(tp) then throw CyclicReference(this)
             val baseTp: Type | Null = btrCache.lookup(tp)
             if (baseTp != null)
               return ensureAcyclic(baseTp)
@@ -2496,7 +2556,7 @@ object SymDenotations {
             }
 
             def computeTypeRef = {
-              btrCache(tp) = NoPrefix
+              markInProgress(tp)
               val tpSym = tp.symbol
               tpSym.denot match {
                 case clsd: ClassDenotation =>
@@ -2523,7 +2583,7 @@ object SymDenotations {
                   if (inCache(superTp))
                     record(tp, baseTp)
                   else
-                    btrCache.remove(tp)
+                    unmark(tp)
                   baseTp
               }
             }
@@ -2531,7 +2591,7 @@ object SymDenotations {
 
           case tp @ AppliedType(tycon, args) =>
             def computeApplied = {
-              btrCache(tp) = NoPrefix
+              markInProgress(tp)
               val baseTp =
                 if (tycon.typeSymbol eq symbol) && !tycon.isLambdaSub then tp
                 else (tycon.typeParams: @unchecked) match
@@ -2596,7 +2656,14 @@ object SymDenotations {
       catch {
         case ex: Exception =>
           tp match
-            case tp: CachedType => btrCache.remove(tp)
+            case tp: CachedType => unmark(tp)
+            case _ =>
+          throw ex
+        case ex: CompilationUnit.CancelledCompilation =>
+          // a cancellation unwinding through the computation left the
+          // in-progress mark too (a `ControlThrowable`, not an `Exception`)
+          tp match
+            case tp: CachedType => unmark(tp)
             case _ =>
           throw ex
       }
@@ -3143,7 +3210,7 @@ object SymDenotations {
     implicit val None: MemberNames = new InvalidCache with MemberNames {
       def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = ???
     }
-    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period)
+    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base.concurrent)
   }
 
   /** A cache for baseclasses, as a sequence in linearization order and as a set that
@@ -3160,16 +3227,19 @@ object SymDenotations {
       def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context) = ???
       def signalProvisional() = ()
     }
-    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period)
+    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base.concurrent)
   }
 
-  private abstract class InheritedCacheImpl(val createdAt: Period) extends InheritedCache {
+  private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache {
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
     private var checkedPeriod: Period = Nowhere
 
-    protected def invalidateDependents() = {
+    protected def invalidateDependents() =
+      if concurrent then synchronized(invalidateDependents0()) else invalidateDependents0()
+
+    private def invalidateDependents0() = {
       if (dependent != null) {
         val it = dependent.nn.keySet.iterator()
         while (it.hasNext()) it.next().invalidate()
@@ -3177,10 +3247,21 @@ object SymDenotations {
       dependent = null
     }
 
-    protected def addDependent(dep: InheritedCache): Unit = {
+    protected def addDependent(dep: InheritedCache): Unit =
+      if concurrent then synchronized(addDependent0(dep)) else addDependent0(dep)
+
+    private def addDependent0(dep: InheritedCache): Unit = {
       if (dependent == null) dependent = new WeakHashMap
       dependent.nn.put(dep, ())
     }
+
+    /** Compute a cache's value: with several readers (interactive mode)
+     *  under the base's completion lock, so that the black hole `locked`
+     *  has one owner, like a completion's `Touched`.
+     */
+    protected inline def computing[T](using Context)(inline op: T): T =
+      if concurrent then ctx.base.completionLock.locked(CompletionLock.inheritedCache)(op)
+      else op
 
     def isValidAt(phase: Phase)(using Context) =
       checkedPeriod == ctx.period ||
@@ -3196,7 +3277,7 @@ object SymDenotations {
     def invalidate(): Unit = ()
   }
 
-  private class MemberNamesImpl(createdAt: Period) extends InheritedCacheImpl(createdAt) with MemberNames {
+  private class MemberNamesImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with MemberNames {
     private var cache: SimpleIdentityMap[NameFilter, Set[Name]] | Null = SimpleIdentityMap.empty
 
     final def isValid(using Context): Boolean =
@@ -3218,16 +3299,24 @@ object SymDenotations {
 
     def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = {
       assert(isValid)
-      val cached = cache.nn(keepOnly)
+      // `cache` read once per use: another reader may invalidate it (null)
+      // between a check and a use (finding I46)
+      val c0 = cache
+      val cached = if c0 == null then null else c0(keepOnly)
       try
         if (cached != null) cached
-        else {
-          locked = true
-          val computed =
-            try clsd.computeMemberNames(keepOnly)(using this, ctx)
-            finally locked = false
-          cache = cache.nn.updated(keepOnly, computed)
-          computed
+        else computing {
+          val c1 = cache
+          val cached1 = if c1 == null then null else c1(keepOnly) // computed meanwhile by the thread that held the lock?
+          if cached1 != null then cached1
+          else
+            locked = true
+            val computed =
+              try clsd.computeMemberNames(keepOnly)(using this, ctx)
+              finally locked = false
+            val c2 = cache
+            if c2 != null then cache = c2.updated(keepOnly, computed) // invalidated meanwhile: not stored
+            computed
         }
       finally addDependent(onBehalf)
     }
@@ -3235,7 +3324,7 @@ object SymDenotations {
     def sameGroup(p1: Phase, p2: Phase) = p1.sameMembersStartId == p2.sameMembersStartId
   }
 
-  private class BaseDataImpl(createdAt: Period) extends InheritedCacheImpl(createdAt) with BaseData {
+  private class BaseDataImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with BaseData {
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
 
     private var valid = true
@@ -3262,16 +3351,20 @@ object SymDenotations {
       assert(isValid)
       CyclicReference.trace("compute the base classes of ", clsd.symbol):
         cache match
-          case null =>
-            if (locked) throw CyclicReference(clsd)
-            locked = true
-            provisional = false
-            val computed =
-              try clsd.computeBaseData(using this, ctx)
-              finally locked = false
-            if (!provisional) cache = computed
-            else onBehalf.signalProvisional()
-            computed
+          case null => computing {
+            cache match
+              case null =>
+                if (locked) throw CyclicReference(clsd)
+                locked = true
+                provisional = false
+                val computed =
+                  try clsd.computeBaseData(using this, ctx)
+                  finally locked = false
+                if (!provisional) cache = computed
+                else onBehalf.signalProvisional()
+                computed
+              case mc => mc // computed meanwhile by the thread that held the lock
+          }
           case mc => mc
     }
 
