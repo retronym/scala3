@@ -54,7 +54,10 @@ class InteractiveDriver(
   import tpd.*
 
   override protected def initCtx: Context =
-    new InteractiveContextBase(logicalRootPackage, Sharing.Batch).initialCtx
+    // several requests at once (see `reading`): the base is concurrent;
+    // chosen here, before the settings are parsed, since the base's
+    // interners depend on it
+    new InteractiveContextBase(logicalRootPackage, Sharing.Serialised).initialCtx
 
   override def sourcesRequired: Boolean = false
 
