@@ -22,6 +22,7 @@ import staging.StagingLevel
 import cc.CleanupRetains
 
 import collection.mutable
+import scala.annotation.internal.{confined, scratch}
 import reporting.{NotConstant, trace}
 import util.Property
 import util.Spans.{Span, spanCoord}
@@ -1122,7 +1123,8 @@ object Inlines:
                     oldOwners = symbolMap.keys.toList,
                     newOwners = symbolMap.values.toList)(rhs2)
 
-    private class ParamAccessorsMapper:
+    // one per InlineParentTrait, which is one expansion
+    @scratch @confined private class ParamAccessorsMapper:
       private val paramAccessorsTrees: mutable.Map[Symbol, Map[Name, Tree]] = mutable.Map.empty
       private val paramAccessorsNewNames: mutable.Map[(Symbol, Name), Name] = mutable.Map.empty
 
@@ -1160,7 +1162,9 @@ object Inlines:
     enum InlineContext:
       case InlineTraits, SpecializedTraits, None
 
-  class InlineTraitState(
+  // On the initial context, so shared by every reader of a base; only SpecializeInlineTraits and DesugarSpecializedTraits
+  // (phases after typer, one thread) call `inlineParentInlineTraits`, which reads and fills `inlineOrigins`.
+  @scratch @confined class InlineTraitState(
     // For a class symbol created during inlining of an inline trait,
     // the chain of inlined traits which produced it. We don't actually care about the order. 
     // Used as a "seen list" for cycle checking. Persists across invocations of InlineParentTrait

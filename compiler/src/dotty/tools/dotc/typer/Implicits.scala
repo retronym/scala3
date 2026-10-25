@@ -37,7 +37,7 @@ import transform.Splicer
 import annotation.tailrec
 import NullOpsDecorator.stripNull
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, publishedBy, scratch, sharable}
 import scala.annotation.{nowarn, threadUnsafe}
 import scala.compiletime.uninitialized
 
@@ -106,7 +106,7 @@ object Implicits:
      */
     def companionRefs: TermRefSet = TermRefSet.empty
 
-    private var mySingletonClass: ClassSymbol | Null = null
+    @cache @benignRace("always defn.SingletonClass") private var mySingletonClass: ClassSymbol | Null = null
 
     /** Widen type so that it is neither a singleton type nor a type that inherits from scala.Singleton. */
     private def widenSingleton(tp: Type)(using Context): Type = {
@@ -560,7 +560,8 @@ object Implicits:
   /** An ambiguous implicits failure */
   class AmbiguousImplicits(val alt1: SearchSuccess, val alt2: SearchSuccess, val expectedType: Type, val argument: Tree, val nested: Boolean = false) extends SearchFailureType:
 
-    private[Implicits] var priorityChangeWarnings: List[GivenSearchPriorityWarning] = Nil
+    // set once, on the failure the search that made it returned (`searchImplicit`), before the search's caller sees it
+    @scratch @confined private[Implicits] var priorityChangeWarnings: List[GivenSearchPriorityWarning] = Nil
 
     def priorityChangeWarningNote(using Context): String =
       priorityChangeWarnings.map(_.ambiguousNote).mkString
@@ -942,7 +943,7 @@ trait Implicits:
     }
   }
 
-  private var synthesizer: Synthesizer | Null = null
+  @cache @benignRace("a Synthesizer holds only handlers built from the typer, no state; two are interchangeable (I91)") private var synthesizer: Synthesizer | Null = null
 
   /** Find an implicit argument for parameter `formal`.
    *  Return a failure as a SearchFailureType in the type of the returned tree.
@@ -2009,11 +2010,12 @@ final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
   // several threads) its state is per thread, so that two readers' searches
   // do not count each other's expressions or see each other's dictionary
   // (finding I55).
-  private final class State:
+  // the calling thread's: per thread on a concurrent base, the only one otherwise
+  @scratch @confined private final class State:
     var nestedSearches: Int = 0
     var dictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
   private val shared = State()
-  private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
+  @scratch @confined private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
   private def state: State = if local == null then shared else local.get.nn
 
   /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */
@@ -2194,7 +2196,9 @@ end SearchRoot
 
 /** A set of term references where equality is =:= */
 sealed class TermRefSet(using Context):
-  private val elems = new java.util.LinkedHashMap[TermSymbol, Type | List[Type]]
+  // filled by `collectCompanions` in `computeIScope`, then only read, once `implicitScopeCache` has published the
+  // `OfTypeImplicits` that holds it
+  @cache @publishedBy("init") private val elems = new java.util.LinkedHashMap[TermSymbol, Type | List[Type]]
 
   def isEmpty = elems.size == 0
 

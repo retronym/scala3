@@ -13,7 +13,7 @@ import ProtoTypes.*
 import util.Spans.*
 import util.Property
 import collection.mutable, mutable.ListBuffer
-import scala.annotation.internal.{lazyFact, publishedBy}
+import scala.annotation.internal.{guardedBy, lazyFact, publishedBy, scratch}
 import tpd.tpes
 import Variances.alwaysInvariant
 import config.{Config, Feature, MigrationVersion}
@@ -109,7 +109,7 @@ class Namer { typer: Typer =>
           m1
 
   /** We are entering symbols coming from a SourceLoader */
-  private var lateCompile = false
+  @scratch @guardedBy("writer") private var lateCompile = false
 
   /** The symbol of the given expanded tree. */
   def symbolOfTree(tree: Tree)(using Context): Symbol = {
