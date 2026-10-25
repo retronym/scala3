@@ -84,36 +84,53 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
   @scratch private val mySuspendedMessages: mutable.LinkedHashMap[SourceFile, mutable.LinkedHashSet[Warning]] = mutable.LinkedHashMap.empty
 
+  // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
+  // collections, so they are reached only with the evidence of the monitor of `suppressions` (`Sharing.serialised`:
+  // with concurrent readers only, as the batch compiler is one thread). Nothing issues a message while holding it.
   object suppressions:
+    private type Held = Sharing.Monitor[suppressions.type]
+    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised[suppressions.type, T](this)(op)
+
+    private def bySource(using Held) = mySuppressions
+    private def complete(using Held) = mySuppressionsComplete
+    private def suspended(using Held) = mySuspendedMessages
+
     // When the REPL creates a new run (ReplDriver.compile), parsing is already done in the old context, with the
     // previous Run. Parser warnings were suspended in the old run and need to be copied over so they are not lost.
     // Same as scala/scala/commit/79ca1408c7.
     def initSuspendedMessages(oldRun: Run | Null) =
-      mySuspendedMessages.clear()
+      // the REPL: one thread, this run is not yet shared and the old one is finished
+      given Held = Sharing.unlocked("the REPL is one thread, and neither run is shared")
+      suspended.clear()
       if oldRun != null then
-        mySuspendedMessages ++= oldRun.mySuspendedMessages
+        val old = oldRun
+        suspended ++= old.suppressions.suspendedOf(using Sharing.unlocked[old.suppressions.type]("the old run is finished"))
 
-    def suppressionsComplete(source: SourceFile) = source == NoSource || mySuppressionsComplete(source)
+    private def suspendedOf(using Held) = suspended
 
-    def addSuspendedMessage(warning: Warning) =
-      mySuspendedMessages.getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning
+    def suppressionsComplete(source: SourceFile)(using Context) =
+      source == NoSource || held(complete(source))
 
-    def nowarnAction(dia: Diagnostic): Action.Warning.type | Action.Verbose.type | Action.Silent.type =
-      mySuppressions.get(dia.pos.source) match
-      case Some(suppressions) =>
-        val matching = suppressions.iterator.filter(_.matches(dia))
-        if matching.hasNext then
-          val s = matching.next()
-          for other <- matching do
-            if !other.used then
-              other.markSuperseded() // superseded unless marked used later
-          s.markUsed()
-          if s.verbose then Action.Verbose
-          else Action.Silent
-        else
+    def addSuspendedMessage(warning: Warning)(using Context) =
+      held(suspended.getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning)
+
+    def nowarnAction(dia: Diagnostic)(using Context): Action.Warning.type | Action.Verbose.type | Action.Silent.type =
+      held:
+        bySource.get(dia.pos.source) match
+        case Some(suppressions) =>
+          val matching = suppressions.iterator.filter(_.matches(dia))
+          if matching.hasNext then
+            val s = matching.next()
+            for other <- matching do
+              if !other.used then
+                other.markSuperseded() // superseded unless marked used later
+            s.markUsed()
+            if s.verbose then Action.Verbose
+            else Action.Silent
+          else
+            Action.Warning
+        case none =>
           Action.Warning
-      case none =>
-        Action.Warning
 
     def registerNowarn(annotPos: SourcePosition, range: Span)(conf: String, pos: SrcPos)(using Context): Unit =
       var verbose = false
@@ -134,40 +151,48 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
       sup.provenance = ctx.reader.provenance
       addSuppression(sup)
 
-    def addSuppression(sup: Suppression): Unit =
-      val suppressions = mySuppressions.getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
-      if sup.start != sup.end then
-        suppressions += sup
+    def addSuppression(sup: Suppression)(using Context): Unit =
+      held:
+        val suppressions = bySource.getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
+        if sup.start != sup.end then
+          suppressions += sup
 
     /** In interactive mode, after an edit of `source`: each suppression of
      *  the file replaced by `f`'s result, or removed where it is null.
      */
-    def editSuppressions(source: SourceFile)(f: Suppression => Suppression | Null): Unit =
-      mySuppressions.get(source).foreach { sups =>
-        val kept = sups.flatMap(sup => f(sup) match
-          case null => None
-          case s: Suppression => Some(s))
-        sups.clear()
-        sups ++= kept
-      }
+    def editSuppressions(source: SourceFile)(f: Suppression => Suppression | Null)(using Context): Unit =
+      held:
+        bySource.get(source).foreach { sups =>
+          val kept = sups.flatMap(sup => f(sup) match
+            case null => None
+            case s: Suppression => Some(s))
+          sups.clear()
+          sups ++= kept
+        }
 
     def reportSuspendedMessages(source: SourceFile)(using Context): Unit = {
-      // sort suppressions. they are not added in any particular order because of lazy type completion
-      for (sups <- mySuppressions.get(source))
-        mySuppressions(source) = sups.sortBy(sup => 0 - sup.start)
-      mySuppressionsComplete += source
-      mySuspendedMessages.remove(source).foreach(_.foreach(ctx.reporter.issueIfNotSuppressed))
+      val messages = held:
+        // sort suppressions. they are not added in any particular order because of lazy type completion
+        for (sups <- bySource.get(source))
+          bySource(source) = sups.sortBy(sup => 0 - sup.start)
+        complete += source
+        suspended.remove(source)
+      messages.foreach(_.foreach(ctx.reporter.issueIfNotSuppressed))
     }
 
     def runFinished()(using Context): Unit =
       val hasErrors = ctx.reporter.hasErrors
       // report suspended messages (in case the run finished before typer)
-      mySuspendedMessages.keysIterator.toList.foreach(reportSuspendedMessages)
+      held(suspended.keysIterator.toList).foreach(reportSuspendedMessages)
       // report unused nowarns only if all all phases are done
       if !hasErrors && ctx.settings.WunusedHas.nowarn then
+        val removed = held:
+          for
+            source <- bySource.keysIterator.toList
+            sups   <- bySource.remove(source)
+          yield sups
         for
-          source <- mySuppressions.keysIterator.toList
-          sups   <- mySuppressions.remove(source)
+          sups <- removed
         do
           val suppressions = sups.reverse.toList
           for sup <- suppressions do
@@ -222,7 +247,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     myFiles
   }
 
-  /** The source files of all late entered symbols, as a set */
+  /** The source files of all late entered symbols, as a set. A completion of a source-loaded class enters one, and
+   *  completions of different roots run in parallel, so it is reached only with the evidence of its monitor.
+   */
   @scratch private val lateFiles = mutable.Set[AbstractFile]()
 
   /** A cache for static references to packages and classes */
