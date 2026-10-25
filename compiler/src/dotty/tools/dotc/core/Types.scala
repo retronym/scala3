@@ -44,8 +44,9 @@ import CaptureSet.IdentityCaptRefMap
 import Capabilities.*
 import transform.Recheck.currentRechecker
 
-import scala.annotation.internal.{benignRace, cache, sharable}
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, publishedBy, scratch, sharable}
 import scala.annotation.threadUnsafe
+import scala.annotation.meta.field
 import scala.util.control.NonFatal
 
 object Types extends TypeUtils {
@@ -2220,7 +2221,7 @@ object Types extends TypeUtils {
 
   /**  Instances of this class are cached and are not proxies. */
   abstract class CachedGroundType extends Type with CachedType {
-    private var myHash = HashUnknown
+    @cache @benignRace("the hash of an immutable type: every writer stores the same Int, written whole") private var myHash = HashUnknown
     final def hash: Int = {
       if (myHash == HashUnknown) {
         myHash = computeHash(null)
@@ -2234,7 +2235,7 @@ object Types extends TypeUtils {
 
   /**  Instances of this class are cached and are proxies. */
   abstract class CachedProxyType extends TypeProxy with CachedType {
-    protected var myHash: Int = HashUnknown
+    @cache @benignRace("the hash of an immutable type: every writer stores the same Int, written whole") protected var myHash: Int = HashUnknown
     final def hash: Int = {
       if (myHash == HashUnknown) {
         myHash = computeHash(null)
@@ -2325,6 +2326,7 @@ object Types extends TypeUtils {
 
   /** Implementations of this trait cache the results of `narrow` if the owner is RootClass. */
   trait NarrowCached extends Type:
+    @cache @benignRace("a caller that finds none makes the narrow itself, and uses its own result; the field only spares `uniques` (I95)")
     private var myNarrow: TermRef | Null = null
     override def narrow(using Context)(owner: Symbol): TermRef =
       if owner == defn.RootClass then
@@ -2347,10 +2349,16 @@ object Types extends TypeUtils {
 
     if !NamedType.validPrefix(prefix) then throw InvalidPrefix()
 
+    @cache @benignRace("names are interned, so every writer stores the same Name")
     private var myName: Name | Null = null
+    // Published by `checkedPeriod` (release store in `setDenot`, acquire load in `denot`, `symbol`), as `Symbol.lastDenot`.
+    // Some readers (`signature`, `denotationIsCurrent`, `withDenot`, ...) load it without the period: they take it as a
+    // hint and check its `validFor` before use, or recompute, so the annotation is disputed by the extractor on those sites.
+    @cache @publishedBy("Publish")
     private var lastDenotation: Denotation | Null = null
     private var lastSymbol: Symbol | Null = null
     private var checkedPeriod: Period = Nowhere
+    @cache @benignRace("a Byte computed from the same prefix, written whole")
     private var myStableHash: Byte = 0
     private var mySignature: Signature = uninitialized
     private var mySignatureRunId: RunId = NoRunId
@@ -2972,7 +2980,7 @@ object Types extends TypeUtils {
   /** The singleton type for path prefix#myDesignator.
    */
   abstract case class TermRef(override val prefix: Type,
-                              private var myDesignator: Designator)
+                              @(interned @field) @(benignRace @field)("a symbol designator is replaced by the symbol of the denotation (`setDenot`), the same one for every reader of a type in a run; a reader of the old one finds the same denotation") private var myDesignator: Designator)
     extends NamedType, ImplicitRef, SingletonType, ObjectCapability {
 
     type ThisType = TermRef
@@ -3001,7 +3009,7 @@ object Types extends TypeUtils {
   }
 
   abstract case class TypeRef(override val prefix: Type,
-                              private var myDesignator: Designator)
+                              @(interned @field) @(benignRace @field)("a symbol designator is replaced by the symbol of the denotation (`setDenot`), the same one for every reader of a type in a run; a reader of the old one finds the same denotation") private var myDesignator: Designator)
     extends NamedType, SetCapability {
 
     type ThisType = TypeRef
@@ -3389,6 +3397,7 @@ object Types extends TypeUtils {
 
     val parent: Type = parentExp(this: @unchecked)
 
+    @cache @benignRace("a RecThis compares by its binder, so every writer stores an equal value")
     private var myRecThis: RecThis | Null = null
 
     def recThis: RecThis = {
@@ -3840,6 +3849,7 @@ object Types extends TypeUtils {
     final def isTypeLambda: Boolean = isInstanceOf[TypeLambda]
     final def isHigherKinded: Boolean = isInstanceOf[TypeProxy]
 
+    @cache @benignRace("every writer builds the same list of parameter references, equal by binder and index")
     private var myParamRefs: List[ParamRefType] | Null = null
 
     def paramRefs: List[ParamRefType] = {
@@ -4055,7 +4065,9 @@ object Types extends TypeUtils {
       }
       else resType
 
+    @cache @benignRace("a Byte computed from the same type, written whole; a provisional result is not stored")
     private var myDependencyStatus: DependencyStatus = Unknown
+    @cache @benignRace("a Byte computed from the same type, written whole; a provisional result is not stored")
     private var myParamDependencyStatus: DependencyStatus = Unknown
 
     private def depStatus(initial: DependencyStatus, tp: Type, forParams: Boolean)(using Context): DependencyStatus =
@@ -4221,7 +4233,7 @@ object Types extends TypeUtils {
   abstract class LambdaTypeCompanion[N <: Name, PInfo <: Type, LT <: LambdaType] {
     def syntheticParamName(n: Int): N
 
-    @sharable private val memoizedNames = util.HashMap[Int, List[N]]()
+    @sharable @cache @guardedBy("this") private val memoizedNames = util.HashMap[Int, List[N]]()
     def syntheticParamNames(n: Int): List[N] = synchronized {
       memoizedNames.getOrElseUpdate(n, (0 until n).map(syntheticParamName).toList)
     }
@@ -4653,7 +4665,9 @@ object Types extends TypeUtils {
     private var cachedSuper: Type = uninitialized
 
     // Boolean caches: 0 = uninitialized, -1 = false, 1 = true
+    @cache @benignRace("a Byte computed from the same tycon and arguments, written whole")
     private var myStableHash: Byte = 0
+    @cache @benignRace("a Byte computed from the same tycon and arguments, written whole")
     private var myGround: Byte = 0
 
     private var myIsStableRunId: RunId = NoRunId
@@ -4939,6 +4953,9 @@ object Types extends TypeUtils {
     //val id = skid
     //assert(id != 10)
 
+    // two readers that find none each mint a name and one wins; the other's is returned once and dropped, so a skolem
+    // can be printed under two names (I91). Not an equal value, but nothing but printing and error messages reads it.
+    @cache @benignRace("the names are only printed: a reader that loses the race returns a name the field no longer holds")
     private var myRepr: Name | Null = null
     def repr(using Context): Name = {
       if (myRepr == null) myRepr = SkolemName.fresh()
@@ -4985,6 +5002,7 @@ object Types extends TypeUtils {
    *  @param  initNestingLevel the initial nesting level of the type variable. (c.f. nestingLevel)
    *  @param  precise          whether we should use instantiation without widening for this TypeVar.
    */
+  @scratch @confined // a type variable belongs to one typer state (I91)
   final class TypeVar private(
       initOrigin: TypeParamRef,
       creatorState: TyperState | Null,
@@ -5321,6 +5339,7 @@ object Types extends TypeUtils {
 
   object MatchType {
     /** A reduction and the context it was computed in, published at once. */
+    @cache @publishedBy("volatile") // `sharedReduced`; the context map is not changed once published
     final class Reduced(val context: util.MutableMap[Type, Type], val reduced: Type)
 
     def apply(bound: Type, scrutinee: Type, cases: List[Type])(using Context): MatchType =
@@ -5557,7 +5576,9 @@ object Types extends TypeUtils {
       decls: Scope,
       selfInfo: TypeOrSymbol) extends CachedGroundType with TypeType {
 
+    @cache @benignRace("computed from the class and the prefix alone: every writer stores an equal type")
     private var selfTypeCache: Type | Null = null
+    @cache @benignRace("computed from the class and the prefix alone: every writer stores an equal type")
     private var appliedRefCache: Type | Null = null
 
     /** The self type of a class is the conjunction of
@@ -5589,6 +5610,7 @@ object Types extends TypeUtils {
     }
 
     // cached because baseType needs parents
+    @cache @benignRace("computed from the declared parents and the prefix alone: every writer stores an equal list")
     private var parentsCache: List[Type] | Null = null
 
     override def parents(using Context): List[Type] = {
@@ -5851,6 +5873,7 @@ object Types extends TypeUtils {
 
     // 0 = unknown, -1 = false, 1 = true: one field, not a flag and a value, which another reader can see in
     // the other order and take the default `false` for the answer (I94)
+    @cache @benignRace("a Byte computed from the annotation, written whole")
     private var myIsRefining: Byte = 0
 
     def isRefining(using Context): Boolean =

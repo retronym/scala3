@@ -5,6 +5,7 @@ package core
 import Types.*, Contexts.*, Symbols.*, Decorators.*
 import util.Property
 import Names.Name
+import scala.annotation.internal.{confined, scratch}
 
 /** A utility module to produce match type reduction traces in error messages.
  */
@@ -18,6 +19,7 @@ object MatchTypeTrace:
     case EmptyScrutinee(scrut: Type)
   import TraceEntry.*
 
+  @scratch @confined // one trace per `record`, reached through the recording reader's context
   private class MatchTrace:
     var entries: List[TraceEntry] = Nil
 
