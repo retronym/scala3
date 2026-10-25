@@ -44,7 +44,7 @@ import CaptureSet.IdentityCaptRefMap
 import Capabilities.*
 import transform.Recheck.currentRechecker
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, sharable}
 import scala.annotation.threadUnsafe
 import scala.util.control.NonFatal
 
@@ -4595,6 +4595,7 @@ object Types extends TypeUtils {
     def paramInfoOrCompleter(using Context): Type = paramInfo
     def paramRef(using Context): Type = tl.paramRefs(n)
 
+    @cache @benignRace("structural variances are computed from the lambda alone: any writer stores the same flags")
     private var myVariance: FlagSet = UndefinedFlags
 
     /** Low level setter, only called from Variances.setStructuralVariances */

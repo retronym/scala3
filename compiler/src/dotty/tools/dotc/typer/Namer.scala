@@ -13,6 +13,7 @@ import ProtoTypes.*
 import util.Spans.*
 import util.Property
 import collection.mutable, mutable.ListBuffer
+import scala.annotation.internal.{lazyFact, publishedBy}
 import tpd.tpes
 import Variances.alwaysInvariant
 import config.{Config, Feature, MigrationVersion}
@@ -90,7 +91,7 @@ class Namer { typer: Typer =>
    *  one, so that trees that are shared between different DefDefs can be independently
    *  used as indices. It also contains a scope that contains nested parameters.
    */
-  @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
+  @lazyFact @publishedBy("volatile") @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
   def nestedTyper(using Context): mutable.Map[Symbol, Typer] =
     val m = myNestedTyper
     if m != null then m

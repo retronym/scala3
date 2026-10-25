@@ -30,7 +30,7 @@ import printing.*
 import config.{JavaPlatform, SJSPlatform, Platform, ScalaSettings}
 import StdNames.nme
 import compiletime.uninitialized
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{confined, scratch, sharable}
 import DenotTransformers.DenotTransformer
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.sbt.interfaces.{IncrementalCallback, ProgressCallback}
@@ -1028,7 +1028,8 @@ object Contexts {
     protected def fresh()(using Context): FreshContext =
       FreshContext(ctx.base).init(ctx, ctx)
 
-    private var inUse: Int = 0
+    // the pools are a reader's (`Reader.exploreContextPool` and its siblings)
+    @scratch @confined private var inUse: Int = 0
     private var pool = new mutable.ArrayBuffer[FreshContext]
 
     def next()(using Context): FreshContext =

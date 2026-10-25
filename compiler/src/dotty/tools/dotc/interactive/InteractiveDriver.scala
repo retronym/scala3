@@ -16,6 +16,7 @@ import reporting.*
 import util.*
 import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
+import scala.annotation.internal.{guardedBy, treeState}
 
 private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharing: Sharing) extends ContextBase(sharing) {
 
@@ -347,7 +348,7 @@ class InteractiveDriver(
   private val myOpenedFiles = new mutable.LinkedHashMap[URI, SourceFile].withDefaultValue(NoSource)
   def openedFiles: Map[URI, SourceFile] = myOpenedFiles.synchronized(immutable.VectorMap.from(myOpenedFiles)).withDefaultValue(NoSource)
 
-  private val myOpenedTrees = new mutable.LinkedHashMap[URI, List[SourceTree]].withDefaultValue(Nil)
+  @treeState @guardedBy("myOpenedTrees") private val myOpenedTrees = new mutable.LinkedHashMap[URI, List[SourceTree]].withDefaultValue(Nil)
   def openedTrees: Map[URI, List[SourceTree]] = myOpenedTrees.synchronized(immutable.VectorMap.from(myOpenedTrees)).withDefaultValue(Nil)
 
   private val myCompilationUnits = new mutable.LinkedHashMap[URI, CompilationUnit]

@@ -25,7 +25,7 @@ import reporting.Diagnostic.LoadingFailure
 import collection.mutable
 import cc.{CapturingType, derivedCapturingType, stripCapturing}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{guardedBy, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
 
@@ -3566,7 +3566,7 @@ object SymDenotations {
   private class BaseDataImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with BaseData {
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
 
-    private var valid = true
+    @guardedBy("completionLock") private var valid = true
     private var locked = false
     private var provisional = false
 

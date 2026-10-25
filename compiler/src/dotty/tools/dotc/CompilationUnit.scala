@@ -14,7 +14,7 @@ import ast.Trees.{Import, Ident}
 import typer.Nullables
 import core.Decorators.*
 import config.{SourceVersion, Feature}
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{featureArea, sharable}
 import scala.util.control.{ControlThrowable, NoStackTrace}
 import transform.MacroAnnotations.isMacroAnnotation
 import scala.io.Codec
@@ -79,7 +79,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   var needsStaging: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
-  var needsCaptureChecking: Boolean = false
+  @featureArea("cc") var needsCaptureChecking: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
   var needsSeparationChecking: Boolean = false

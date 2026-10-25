@@ -28,7 +28,7 @@ import collection.mutable
 import io.AbstractFile
 import util.{SourceFile, NoSource, Property, SourcePosition, SrcPos, EqHashMap, WrappedSourceFile}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{cache, publishedBy, sharable}
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
@@ -97,7 +97,7 @@ object Symbols extends SymUtils {
      *  mode, several readers) that finds the period current sees the
      *  denotation stored before it, never the previous one.
      */
-    private var lastDenot: SymDenotation = uninitialized
+    @cache @publishedBy("Publish") private var lastDenot: SymDenotation = uninitialized
     private var checkedPeriod: Period = Nowhere
 
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
