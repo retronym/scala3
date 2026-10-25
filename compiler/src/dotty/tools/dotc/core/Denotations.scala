@@ -141,7 +141,7 @@ object Denotations {
 
     /** The denotation with info(s) as seen from prefix type */
     def asSeenFrom(pre: Type)(using Context): AsSeenFromResult =
-      if Config.cacheAsSeenFrom && ctx.base.sharing.concurrent then
+      if Config.cacheAsSeenFrom && ctx.base.concurrent then
         val c = sharedAsSeenFrom
         if c != null && (c.prefix eq pre) && c.valid == ctx.period then c.result.asInstanceOf[AsSeenFromResult]
         else
@@ -830,7 +830,7 @@ object Denotations {
           // flock's validity, one writer at a time; with independent readers
           // one root for every bring-forward, so that cycles with completions
           // are detected
-          ctx.base.sharing.exclusive(CompletionLock.bringForward, CompletionLock.bringForward,
+          Sharing.exclusive(CompletionLock.bringForward, CompletionLock.bringForward,
             symbol)(initial.bringForward().current)
         else this
 

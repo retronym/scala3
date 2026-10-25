@@ -1304,7 +1304,7 @@ object desugar {
         // as each method is completed and typed. With concurrent readers, two
         // of them doing so for sibling methods removed each other's (finding
         // I86): each method gets parameter trees of its own.
-        val extParamss = if ctx.base.sharing.concurrent then mapParamss(ext.paramss)(freshCopy)(freshCopy) else ext.paramss
+        val extParamss = if ctx.base.concurrent then mapParamss(ext.paramss)(freshCopy)(freshCopy) else ext.paramss
         defDef(extMethod(mdef, extParamss))
       case _ => EmptyTree // we ignore all the other trees. Error was reported during parsing.
   }

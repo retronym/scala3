@@ -16,35 +16,11 @@ import Contexts.*
  *
  *  A concurrent sharing is only ever made by the interactive driver's base.
  *
- *  Every operation that takes code to run is an `inline def` whose batch branch is that code as it was before
+ *  Every operation that takes code to run is an `inline def` of the companion whose batch branch is that code as it was before
  *  concurrency: a batch call site compiles to a test of a final field and the original expression, and allocates
  *  nothing. The concurrent branches are ordinary methods of `interactive.SharingImpl`.
  */
 final class Sharing private (val concurrent: Boolean, val independent: Boolean):
-
-  /** `op` as one writer of the lazy facts keyed by `key` (`key` and `what` are evaluated only when readers are
-   *  concurrent) (`what` names it for lock-wait reports): under the
-   *  completion lock when readers are serialised, holding the claim on `key` when they are independent (a wait that
-   *  would close a wait-for cycle backs off, `CompletionRoots.backOff(cycleSubject)`), as is otherwise. For bring-forwards, lazy TASTy reads, inherited
-   *  caches. */
-  inline def exclusive[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
-    if concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
-
-  /** `op` holding the claim on `key` when readers are independent, as is otherwise (serialised readers need no
-   *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
-   *  another reader must wait for rather than take for a cycle. */
-  inline def claimed[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
-    if independent then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
-
-  /** `op` in `c0`, or, when readers are independent, in a private child of `c0`'s typer state, settled when it ends
-   *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by
-   *  one of them (I62, I66, I70, I76). */
-  inline def privately[T](c0: Context)(inline op: Context ?=> T): T =
-    if independent then interactive.SharingImpl.privately(c0, c => op(using c)) else op(using c0)
-
-  /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
-  inline def serialised[T](lock: AnyRef)(inline op: T): T =
-    if concurrent then lock.synchronized(op) else op
 
   // ---- construction-time choices: called once per base, run, cache or class, never per access
 
@@ -64,6 +40,36 @@ final class Sharing private (val concurrent: Boolean, val independent: Boolean):
     if independent then "Sharing.Independent" else if concurrent then "Sharing.Serialised" else "Sharing.Batch"
 
 object Sharing:
+  // The operations test the base's copies of the flags (`ContextState.concurrent`, `independent`): one field read
+  // from the base at each call site, not two.
+
+  /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
+   *  holding the claim on `key` when they are independent, where a wait that would close a wait-for cycle backs off
+   *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
+   *  `cycleSubject` are evaluated only on a concurrent base. For bring-forwards, lazy TASTy reads, inherited caches. */
+  inline def exclusive[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+    if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
+
+  /** `op` holding the claim on `key` when readers are independent, as is otherwise (serialised readers need no
+   *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
+   *  another reader must wait for rather than take for a cycle. */
+  inline def claimed[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+    if ctx.base.independent then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
+
+  /** `op` in `c0`, or, when readers are independent, in a private child of `c0`'s typer state, settled when it ends
+   *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by
+   *  one of them (I62, I66, I70, I76). */
+  inline def privately[T](c0: Context)(inline op: Context ?=> T): T =
+    if c0.base.independent then interactive.SharingImpl.privately(c0, c => op(using c)) else op(using c0)
+
+  /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
+  inline def serialised[T](lock: AnyRef)(inline op: T)(using Context): T =
+    if ctx.base.concurrent then lock.synchronized(op) else op
+
+  /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: with independent
+   *  readers settled and dropped (I76), with serialised readers committed under the completion lock. */
+  def endState(c1: Context, into: Context): Unit = interactive.SharingImpl.endState(c1, into)
+
   val Batch: Sharing = new Sharing(concurrent = false, independent = false)
   val Serialised: Sharing = new Sharing(concurrent = true, independent = false)
   val Independent: Sharing = new Sharing(concurrent = true, independent = true)

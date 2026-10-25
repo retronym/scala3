@@ -272,7 +272,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      base.sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))
+      Sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
     }
 
     /** SourceFile with given path, memoized */
@@ -837,7 +837,7 @@ object Contexts {
           .updated(notNullInfosLoc, Nil)
           .updated(compilationUnitLoc, NoCompilationUnit)
           .updated(profilerLoc, Profiler.NoOp)
-      c._searchHistory = new SearchRoot(perThread = base.sharing.concurrent)
+      c._searchHistory = new SearchRoot(perThread = base.concurrent)
       c._gadtState = GadtState(GadtConstraint.empty)
       c._inlineTraitState = InlineTraitState()
       c
@@ -1073,6 +1073,10 @@ object Contexts {
      *  (serialised readers) or claim `completionRoots` (independent readers). */
     final val sharing: Sharing) {
 
+    /** `sharing.concurrent` and `sharing.independent`, copied to the base: a hot test reads one field of it. */
+    final val concurrent: Boolean = sharing.concurrent
+    final val independent: Boolean = sharing.independent
+
     /** Interactive mode with several readers: the lock every completion
      *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
      *  to a new run (`Denotation.current`) and every computation of an
@@ -1094,7 +1098,7 @@ object Contexts {
     private var _nextSymId: Int = 0
     private val _concurrentSymIds = new java.util.concurrent.atomic.AtomicInteger(0)
     def nextSymId: Int =
-      if sharing.concurrent then _concurrentSymIds.incrementAndGet()
+      if concurrent then _concurrentSymIds.incrementAndGet()
       else { _nextSymId += 1; _nextSymId }
 
     /** Sources and Files that were loaded */

@@ -1895,7 +1895,7 @@ class TreeUnpickler(reader: TastyReader,
       // reads; with several readers (interactive mode) a lazy read runs under
       // the base's completion lock like a completion (finding I35).
       // with independent readers, the file's root, as the unpickler's completers claim it
-      ctx.base.sharing.exclusive(rootKey, CompletionLock.lazyTastyRead, owner)(complete0)
+      Sharing.exclusive(rootKey, CompletionLock.lazyTastyRead, owner)(complete0)
     }
 
     private def rootKey(using Context): AnyRef = {

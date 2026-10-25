@@ -1025,7 +1025,7 @@ class Namer { typer: Typer =>
         // rdr => ...)`, whose `T` comes from the closure's body); completed in
         // a state of its own, the variable was dropped with it and later
         // instantiated to `Nothing` (I66; I62's `val retractedVars` too).
-        val own = ctx.base.sharing.independent && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+        val own = ctx.base.independent && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
         if own then
           // a typer state of its own, reporting to the creation context's
           // reporter directly: a buffer flushed when the completion ends
@@ -1055,7 +1055,7 @@ class Namer { typer: Typer =>
             case target: TyperState if !own =>
               // independent readers: private, settled and dropped (I76); serialised: committed under the lock
               val c = ictx
-              interactive.SharingImpl.endState(c, c.fresh.setTyperState(target))
+              Sharing.endState(c, c.fresh.setTyperState(target))
             case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
@@ -1108,7 +1108,7 @@ class Namer { typer: Typer =>
               val ann =
                 if cls.is(JavaDefined) then Checking.checkNamedArgumentForJavaAnnotation(annotTree, cls.asClass)
                 else annotTree
-              val ann1 = Annotation.deferred(cls)(annotCtx.base.sharing.privately(annotCtx)(typedAheadExpr(ann)))
+              val ann1 = Annotation.deferred(cls)(Sharing.privately(annotCtx)(typedAheadExpr(ann)))
               sym.addAnnotation(ann1)
               ann
       case _ =>
@@ -1121,7 +1121,7 @@ class Namer { typer: Typer =>
             throw
               if sym.isCompleted then Inlines.MissingInlineInfo()
               else CyclicReference(sym)
-          val mdef = ctx.base.sharing.privately(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
+          val mdef = Sharing.privately(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
           PrepareInlineable.wrapRHS(original, mdef.tpt, mdef.rhs)
         PrepareInlineable.registerInlineInfo(sym, rhsToInline)(using localContext(sym))
       case _ =>

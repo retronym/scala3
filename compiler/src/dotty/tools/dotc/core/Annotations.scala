@@ -231,7 +231,7 @@ object Annotations {
    *  owner still meets it.
    */
   private inline def evaluatingOnce[T](self: AnyRef)(inline op: T)(using Context): T =
-    ctx.base.sharing.claimed(self, CompletionLock.lazyAnnotation, self)(op)
+    Sharing.claimed(self, CompletionLock.lazyAnnotation, self)(op)
 
   abstract class LazyAnnotation extends Annotation {
     protected var mySym: Symbol | (Context ?=> Symbol) | Null

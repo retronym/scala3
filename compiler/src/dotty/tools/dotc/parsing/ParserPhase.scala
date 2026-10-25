@@ -48,7 +48,7 @@ class Parser extends Phase {
         ctx.fresh.setCompilationUnit(unit).withRootImports
 
     val unitContexts0 =
-      if ctx.base.sharing.independent && unitContexts.lengthCompare(1) > 0 then parseInParallel(unitContexts)
+      if ctx.base.independent && unitContexts.lengthCompare(1) > 0 then parseInParallel(unitContexts)
       else
         for
           unitContext <- unitContexts

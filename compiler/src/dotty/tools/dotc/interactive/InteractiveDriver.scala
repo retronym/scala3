@@ -219,7 +219,7 @@ class InteractiveDriver(
   /** Do requests type concurrently, each completion with an owner
    *  (`-Yinteractive-readers`)? Off, they are serialised with completions.
    */
-  val independentReaders: Boolean = myInitCtx.base.sharing.independent
+  val independentReaders: Boolean = myInitCtx.base.independent
   assert(independentReaders == myInitCtx.settings.YinteractiveReaders.value(using myInitCtx),
     s"-Yinteractive-readers read from the arguments (${myInitCtx.base.sharing}) differs from the parsed setting")
 
@@ -1447,7 +1447,7 @@ class InteractiveDriver(
    *  conversion's `A` met bound to another reader's type).
    */
   private def endStatementState(ctx1: Context, ctx0: Context): Unit =
-    SharingImpl.endState(ctx1, ctx0)
+    Sharing.endState(ctx1, ctx0)
 
   /** Several files in one run, a session for each (the throughput
    *  experiment of the multi-reader notes): every top-level statement of
