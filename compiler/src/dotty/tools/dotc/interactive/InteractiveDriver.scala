@@ -16,7 +16,8 @@ import reporting.*
 import util.*
 import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
-import scala.annotation.internal.{guardedBy, treeState}
+import scala.annotation.meta.field
+import scala.annotation.internal.{cache, confined, guardedBy, publishedBy, scratch, treeState}
 
 private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharing: Sharing) extends ContextBase(sharing) {
 
@@ -52,8 +53,10 @@ private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharin
 
 // Assumes the context does not change; only use if this is true!
 class CachedLogicalPackage(extractor: Context ?=> Option[LogicalPackage]) {
-  private var cached: Option[LogicalPackage] | Null = null
-  def value(using Context): Option[LogicalPackage] =
+  // shared by every driver given it (`CachedLogicalPackage.none` is), so two bases may ask at once: the extractor
+  // runs once, and the package tree it builds is published by the monitor (`ParsedLogicalPackage` is read-only after)
+  @cache @guardedBy("this") private var cached: Option[LogicalPackage] | Null = null
+  def value(using Context): Option[LogicalPackage] = synchronized:
     initialize(cached, cached = _, extractor)
 }
 
@@ -84,7 +87,7 @@ class InteractiveDriver(
    *  not consume the interrupt flag itself: `Run.Progress.checkCancellation`
    *  already does, and it would hide the interrupt from `cancel()`.
    */
-  @volatile private var myCancelled = false
+  @scratch @publishedBy("volatile") @volatile private var myCancelled = false
 
   private val myProgressCallback: ProgressCallback = new ProgressCallback:
     // a pending writer cancels readers, not the writer that holds the lock
@@ -110,8 +113,8 @@ class InteractiveDriver(
   // typed or being typed, the splice, the diagnostics) is under the session's
   // monitor. What is concurrent is the typing of bodies.
 
-  private val regime = new java.util.concurrent.locks.ReentrantReadWriteLock(true)
-  @volatile private var writerPending = false
+  @treeState private val regime = new java.util.concurrent.locks.ReentrantReadWriteLock(true)
+  @treeState @publishedBy("volatile") @volatile private var writerPending = false
 
   /** Run `body` as a reader; retried when a writer pre-empted it. A
    *  cancellation unwinding from `body` runs `afterCancel` once the read lock
@@ -221,7 +224,8 @@ class InteractiveDriver(
     ctx
   }
 
-  @volatile private var myCtx: Context = myInitCtx
+  // written only by write actions (a run, `initialize`), read by anyone
+  @treeState @publishedBy("volatile") @volatile private var myCtx: Context = myInitCtx
 
   /** Does `runUpTo` type only the path to its target? Off with
    *  `-Yno-targeted-requests`, in which case every request types the whole
@@ -286,14 +290,14 @@ class InteractiveDriver(
    *  thread on its previous reader, whose checker belonged to an earlier,
    *  cancelled request (finding I47).
    */
-  private val myScopeDepth: ThreadLocal[Integer] = ThreadLocal.withInitial(() => Integer.valueOf(0))
+  @scratch @confined private val myScopeDepth: ThreadLocal[Integer] = ThreadLocal.withInitial(() => Integer.valueOf(0))
 
   /** The reader of the last request that typed (not of a scope that only
    *  reads), for the x-ray's status thread and for the tests that read a
    *  request's bookkeeping afterwards from another job; not used by the
    *  compiler.
    */
-  @volatile private var myLastReader: Reader = base.reader
+  @scratch @publishedBy("volatile") @volatile private var myLastReader: Reader = base.reader
   def readerOfLastRequest: Reader = myLastReader
 
   /** The holder of the completion lock and the root of its work, or "" (for
@@ -345,13 +349,13 @@ class InteractiveDriver(
 
   // The maps of open files: written by writers and by the splice of a
   // resume, read by the providers at any time; the readers get a snapshot.
-  private val myOpenedFiles = new mutable.LinkedHashMap[URI, SourceFile].withDefaultValue(NoSource)
+  @treeState @guardedBy("myOpenedFiles") private val myOpenedFiles = new mutable.LinkedHashMap[URI, SourceFile].withDefaultValue(NoSource)
   def openedFiles: Map[URI, SourceFile] = myOpenedFiles.synchronized(immutable.VectorMap.from(myOpenedFiles)).withDefaultValue(NoSource)
 
   @treeState @guardedBy("myOpenedTrees") private val myOpenedTrees = new mutable.LinkedHashMap[URI, List[SourceTree]].withDefaultValue(Nil)
   def openedTrees: Map[URI, List[SourceTree]] = myOpenedTrees.synchronized(immutable.VectorMap.from(myOpenedTrees)).withDefaultValue(Nil)
 
-  private val myCompilationUnits = new mutable.LinkedHashMap[URI, CompilationUnit]
+  @treeState @guardedBy("myCompilationUnits") private val myCompilationUnits = new mutable.LinkedHashMap[URI, CompilationUnit]
   def compilationUnits: Map[URI, CompilationUnit] = myCompilationUnits.synchronized(immutable.VectorMap.from(myCompilationUnits))
 
   initialize()
@@ -408,6 +412,13 @@ class InteractiveDriver(
       myCompilationUnits.synchronized(myCompilationUnits.get(uri)).map(unit => read(readCtx, unit, diags))
     }
 
+  /** The contexts of the definitions a run typed (`Typer.RecordedDefContexts`): readers typing skipped statements
+   *  concurrently put into it, a body edit (a write action) gets from it.
+   */
+  private class SyncIdentityHashMap[K, V] extends java.util.IdentityHashMap[K, V]:
+    override def put(key: K, value: V): V = synchronized(super.put(key, value))
+    override def get(key: Object | Null): V = synchronized(super.get(key))
+
   /** The state of a targeted run (see `runUpTo`): the run, the unit with
    *  the partially typed tree, the statements the run skipped (with the
    *  context to type them in), and the diagnostics so far. Its operations
@@ -415,14 +426,16 @@ class InteractiveDriver(
    */
   private class Session(val uri: URI, val source: SourceFile, val run: Run,
       val reporter: SessionReporter, val unit: CompilationUnit,
-      recorded: java.util.IdentityHashMap[Symbol, (Context, Symbol)] | Null,
+      @(treeState @field) @(guardedBy @field)("writer") recorded: java.util.IdentityHashMap[Symbol, (Context, Symbol)] | Null,
       shared: Boolean = false, takesNopos: Boolean = true):
     private def reader: Reader = base.reader
+
+    // `recorded` is read by `bodyEdit`, a write action; the map is filled by readers' typing (`Typer`), so it is a `SyncIdentityHashMap`
 
     // The session's bookkeeping is read and written under the session's
     // monitor; the typing of a claimed statement happens outside it.
 
-    private var skipped: List[Run.SkippedStat] = Nil
+    @guardedBy("this") private var skipped: List[Run.SkippedStat] = Nil
 
     /** The skipped statements a reader is typing right now (`claim`). */
     // with the thread of the reader that claimed each: a claim whose owner
@@ -539,7 +552,7 @@ class InteractiveDriver(
     }
 
     /** The skipped statements that `target`, an offset or a range, touches. */
-    def skippedTouching(target: Span): List[Run.SkippedStat] = skipped.filter(_.stat.span.touches(target))
+    def skippedTouching(target: Span): List[Run.SkippedStat] = synchronized(skipped.filter(_.stat.span.touches(target)))
 
     /** Is this the session of `uri` on the content of `source`? */
     def isOn(uri: URI, source: SourceFile): Boolean =
@@ -979,10 +992,10 @@ class InteractiveDriver(
      *  untyped tree is not comparable. Made on the first edit, then the
      *  parse of each accepted edit's new content.
      */
-    private var pristine: untpd.Tree | Null = null
+    @guardedBy("writer") private var pristine: untpd.Tree | Null = null
 
     /** The syntax errors of `pristine`. */
-    private var pristineErrors: List[Diagnostic] = Nil
+    @guardedBy("writer") private var pristineErrors: List[Diagnostic] = Nil
 
     /** A parse of `src` in a unit of its own, whose fresh names (`_$1`)
      *  are numbered as a fresh run's parse would number them.
@@ -1076,7 +1089,7 @@ class InteractiveDriver(
       val src = unit.source
       val typedHere = typedMembersIn(d.span)
       val main = typedHere.find(t => t.span == d.span && t.symbol.name == d.name)
-      val skippedHere = skipped.find(sk => !sk.inBlock && sk.stat.span == d.span)
+      val skippedHere = synchronized(skipped.find(sk => !sk.inBlock && sk.stat.span == d.span))
       val (ctx0, owner) = main match
         case Some(t) =>
           recorded match
@@ -1123,7 +1136,7 @@ class InteractiveDriver(
               case _ => super.transform(tree)
           install(mapper.transform(unit.tpdTree))
         // the statement, or what the old body's blocks skipped: they go with it
-        skipped = skipped.filterNot(sk => d.span.contains(sk.stat.span))
+        synchronized { skipped = skipped.filterNot(sk => d.span.contains(sk.stat.span)) }
         // what D's statements and completions reported goes with them, wherever
         // it is positioned; its statements' is stale until D' is typed (§12)
         val stats = olds.map(reporting.Provenance.Stat(_)).toSet[reporting.Provenance]
@@ -1150,7 +1163,7 @@ class InteractiveDriver(
           if dsym.exists then reader.withProvenance(reporting.Provenance.Stat(dsym))(ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine)))
           else ctx1.typer.index(stat :: Nil)(using ctx1.fresh.setProperty(typer.Typer.RefinedSymbols, refine))
         finally active = false
-        skipped = Run.SkippedStat(stat, ctx0, owner) :: skipped
+        synchronized { skipped = Run.SkippedStat(stat, ctx0, owner) :: skipped }
         pristine = parsed
         unit.untpdTree = parsed
         val news = cls.unforcedDecls.toList.filter(ofD(_, d1.span))
@@ -1170,8 +1183,8 @@ class InteractiveDriver(
       finally if !done then poisoned = true
 
     /** The time the last shift took, for the log, and of it the diagnostics' and suppressions'. */
-    private var shiftNanos = 0L
-    private var diagnosticsNanos = 0L
+    @guardedBy("writer") private var shiftNanos = 0L
+    @guardedBy("writer") private var diagnosticsNanos = 0L
 
     /** Shift everything the session keeps of its source (§12), with the
      *  diagnostics and suppressions of `dropped` dropped (those of `toStale`
@@ -1182,7 +1195,7 @@ class InteractiveDriver(
       val t0 = System.nanoTime()
       val src = unit.source
       shift.tree(unit.tpdTree)
-      skipped.foreach(sk => shift.tree(sk.stat))
+      synchronized(skipped).foreach(sk => shift.tree(sk.stat))
       // the file's packages: their members of this file, and what they hold
       unit.tpdTree.foreachSubTree {
         case p: PackageDef => p.symbol.moduleClass.asClass.unforcedDecls.foreach(shift.symbol)
@@ -1210,12 +1223,13 @@ class InteractiveDriver(
       case Typed, Wait, Abandoned
       case Claimed(sks: List[Run.SkippedStat])
 
+  // written only by write actions (a run), read by anyone
   @volatile private var mySession: Session | Null = null
 
   /** With several files in one run (`openAll`), the session of each; empty
    *  otherwise. Replaced, like `mySession`, by any run.
    */
-  @volatile private var myOtherSessions: Map[URI, Session] = Map.empty
+  @treeState @publishedBy("volatile") @volatile private var myOtherSessions: Map[URI, Session] = Map.empty
 
   private def sessionOf(uri: URI): Session | Null = mySession match
     case s: Session if s.uri == uri => s
@@ -1237,7 +1251,9 @@ class InteractiveDriver(
   private def adoptEdit(uri: URI, source: SourceFile): Boolean = sessionOf(uri) match
     case s: Session if bodyEdits && s.isResumable && !s.isOn(uri, source) =>
       myCancelled = false
-      s.adopt(source)
+      // a write action: `adoptEditWriting` may have chosen to run without one, on a session
+      // that a writer replaced since, so check again under the write lock
+      writing(isCurrent(s) && s.adopt(source))
     case s: Session =>
       myLastEdit = if bodyEdits && !s.isOn(uri, source) then s"no edit: the session is ${if s.run.isTainted then "tainted" else "poisoned"}" else ""
       false
@@ -1308,8 +1324,10 @@ class InteractiveDriver(
   /** What the last request on `uri` did with an edit (§12), or "". */
   def lastEdit(uri: URI): String = if sessionOf(uri) == null then "" else myLastEdit
 
-  /** What the last request did with an edit, for the log and the tests. */
-  private var myLastEdit: String = ""
+  /** What the last request did with an edit, for the log and the tests. Written by the edit's request (a write action
+   *  when it changes the session, else a plain clear), read by the log from any thread.
+   */
+  @scratch @publishedBy("volatile") @volatile private var myLastEdit: String = ""
 
   /** The id of the run that typed `uri`, or -1. */
   def runIdOf(uri: URI): Int = sessionOf(uri) match
@@ -1578,7 +1596,7 @@ class InteractiveDriver(
 
       myCancelled = false
       val reader = base.reader
-      val recorded = if bodyEdits then new java.util.IdentityHashMap[Symbol, (Context, Symbol)] else null
+      val recorded = if bodyEdits then new SyncIdentityHashMap[Symbol, (Context, Symbol)] else null
       val runCtx = myInitCtx.fresh.setReporter(reporter).setProgressCallback(myProgressCallback)
       if recorded != null then runCtx.setProperty(typer.Typer.RecordedDefContexts, recorded)
       val run = compiler.newRun(using runCtx)
