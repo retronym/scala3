@@ -16,7 +16,7 @@ import util.*
 import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
 
-private class InteractiveContextBase(sourcePackage: CachedLogicalPackage) extends ContextBase {
+private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharing: Sharing) extends ContextBase(sharing) {
 
   override protected def newPlatform(using Context): Platform = {
       if (settings.scalajs.value) new SJSPlatform(sourcePackage.value)
@@ -54,7 +54,7 @@ class InteractiveDriver(
   import tpd.*
 
   override protected def initCtx: Context =
-    new InteractiveContextBase(logicalRootPackage).initialCtx
+    new InteractiveContextBase(logicalRootPackage, Sharing.Batch).initialCtx
 
   override def sourcesRequired: Boolean = false
 
