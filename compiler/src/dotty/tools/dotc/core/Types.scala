@@ -909,7 +909,7 @@ object Types extends TypeUtils {
               // We need to compute the precise info only when checking for empty bounds
               // which is communicated by the CheckBoundsOrSelfType mode.
               rinfo
-            else if ctx.base.pendingMemberSearches.contains(name) then
+            else if ctx.reader.pendingMemberSearches.contains(name) then
               pinfo safe_& rinfo
             else
               pinfo recoverable_& rinfo
@@ -927,7 +927,7 @@ object Types extends TypeUtils {
                 pdenot.meet(
                   new JointRefDenotation(NoSymbol, rinfo, Period.allInRun(ctx.runId), pre, isRefinedMethod),
                   pre,
-                  safeIntersection = ctx.base.pendingMemberSearches.contains(name))
+                  safeIntersection = ctx.reader.pendingMemberSearches.contains(name))
             joint match
               case joint: SingleDenotation
               if isRefinedMethod
@@ -994,7 +994,7 @@ object Types extends TypeUtils {
       }
 
       def goAnd(l: Type, r: Type) =
-        go(l).meet(go(r), pre, safeIntersection = ctx.base.pendingMemberSearches.contains(name))
+        go(l).meet(go(r), pre, safeIntersection = ctx.reader.pendingMemberSearches.contains(name))
 
       def goOr(tp: OrType) =
         inline def searchAfterJoin =
@@ -1014,10 +1014,10 @@ object Types extends TypeUtils {
             searchAfterJoin
         else searchAfterJoin
 
-      val recCount = ctx.base.findMemberCount
+      val recCount = ctx.reader.findMemberCount
       if (recCount >= Config.LogPendingFindMemberThreshold)
-        ctx.base.pendingMemberSearches = name :: ctx.base.pendingMemberSearches
-      ctx.base.findMemberCount = recCount + 1
+        ctx.reader.pendingMemberSearches = name :: ctx.reader.pendingMemberSearches
+      ctx.reader.findMemberCount = recCount + 1
 
       def showPrefixSafely(pre: Type)(using Context): String = pre.stripTypeVar match
         case pre: TermRef => i"${pre.symbol.name}."
@@ -1034,8 +1034,8 @@ object Types extends TypeUtils {
           throw t
       finally
         if (recCount >= Config.LogPendingFindMemberThreshold)
-          ctx.base.pendingMemberSearches = ctx.base.pendingMemberSearches.tail
-        ctx.base.findMemberCount = recCount
+          ctx.reader.pendingMemberSearches = ctx.reader.pendingMemberSearches.tail
+        ctx.reader.findMemberCount = recCount
     }
 
     /** The set of names of members of this type that pass the given name filter
@@ -2756,8 +2756,8 @@ object Types extends TypeUtils {
      *  not loop before the error is detected.
      */
     final def controlled[T](op: => T)(using Context): T = try {
-      ctx.base.underlyingRecursions += 1
-      if ctx.base.underlyingRecursions < Config.LogPendingUnderlyingThreshold then
+      ctx.reader.underlyingRecursions += 1
+      if ctx.reader.underlyingRecursions < Config.LogPendingUnderlyingThreshold then
         op
       else if ctx.pendingUnderlying.contains(this) then
         throw CyclicReference(symbol)
@@ -2770,7 +2770,7 @@ object Types extends TypeUtils {
           ctx.pendingUnderlying -= this
     }
     finally
-      ctx.base.underlyingRecursions -= 1
+      ctx.reader.underlyingRecursions -= 1
 
     /** The argument corresponding to class type parameter `tparam` as seen from
      *  prefix `pre`. Can produce a TypeBounds type if `widenAbstract` is true,
