@@ -551,6 +551,7 @@ private sealed trait YSettings:
   val YretainTrees: Setting[Boolean] = BooleanSetting(ForkSetting, "Yretain-trees", "Retain trees for top-level classes, accessible from ClassSymbol#tree")
   val YinteractiveLog: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-log", "In interactive mode, print one line per request to stderr: what was typed, in which run, how long it took.")
   val YinteractiveReaders: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-readers", "In interactive mode, let requests type concurrently: each completion has an owner and other readers wait for it, instead of every request being serialised with every completion. Experimental.")
+  val YinteractiveBodyEdits: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-body-edits", "In interactive mode, keep the session's run across an edit inside the body of a definition with a declared type: only that definition is indexed and typed again.")
   val YnoTargetedRequests: Setting[Boolean] = BooleanSetting(ForkSetting, "Yno-targeted-requests", "In interactive mode, type the whole file for every request instead of only the path to the request's position (completion, hover, definition, signature help, expected type).")
   val YshowTreeIds: Setting[Boolean] = BooleanSetting(ForkSetting, "Yshow-tree-ids", "Uniquely tag all tree nodes in debugging output.")
   val YfromTastyIgnoreList: Setting[List[String]] = MultiStringSetting(ForkSetting, "Yfrom-tasty-ignore-list", "file", "List of `tasty` files in jar files that will not be loaded when using -from-tasty.")
