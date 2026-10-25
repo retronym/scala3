@@ -95,8 +95,11 @@ object CompletionLock:
     case _: SourcefileLoader => "load source"
     case _: SymbolLoader => "load classpath"
     case c if c.getClass.getName.contains("TreeUnpickler") => "unpickle TASTy"
-    case c if c.getClass.getName.contains("Namer") => "Namer signature"
+    case c if c.getClass.getName.contains("Namer") => namerKind
     case c => s"complete (${c.getClass.getSimpleName})"
+
+  /** The kind of a Namer completion's claim: a root that is one symbol. */
+  val namerKind: String = "Namer signature"
 
   val bringForward: What = What("bring forward", null)
   val inheritedCache: What = What("inherited cache", null)
@@ -105,3 +108,6 @@ object CompletionLock:
   val cleanup: What = What("cleanup", null)
   val peek: What = What("wait for a completion (isCompleting)", null)
   val readAction: What = What("read action (serialised mode)", null)
+  val lazyRef: What = What("lazy reference", null)
+  val lazyAnnotation: What = What("lazy annotation", null)
+  val packageObjects: What = What("package objects", null)
