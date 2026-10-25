@@ -5836,16 +5836,14 @@ object Types extends TypeUtils {
 
     override def stripped(using Context): Type = parent.stripped
 
-    private var isRefiningKnown = false
-    private var isRefiningCache: Boolean = uninitialized
+    // 0 = unknown, -1 = false, 1 = true: one field, not a flag and a value, which another reader can see in
+    // the other order and take the default `false` for the answer (I94)
+    private var myIsRefining: Byte = 0
 
-    def isRefining(using Context): Boolean = {
-      if (!isRefiningKnown) {
-        isRefiningCache = annot.symbol.derivesFrom(defn.RefiningAnnotationClass)
-        isRefiningKnown = true
-      }
-      isRefiningCache
-    }
+    def isRefining(using Context): Boolean =
+      if myIsRefining == 0 then
+        myIsRefining = if annot.symbol.derivesFrom(defn.RefiningAnnotationClass) then 1 else -1
+      myIsRefining > 0
 
     // equals comes from case class; no matching override is needed
 
