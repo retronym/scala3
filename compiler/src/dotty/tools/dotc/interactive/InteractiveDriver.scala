@@ -228,7 +228,30 @@ class InteractiveDriver(
    *  run keeps a session too.
    */
   val bodyEdits: Boolean = targetedRequests && myInitCtx.settings.YinteractiveBodyEdits.value(using myInitCtx)
-  def currentCtx: Context = myCtx
+  /** The context of the last run, for a provider that reads the typed tree after a
+   *  request. With parallel readers the run's root typer state is read-only (a
+   *  commit into it fails: "commit of ... into the run's root state"), so the
+   *  context is one with a typer state of its own, made once per run: the same
+   *  context on every call, as with one reader, and a state that these
+   *  providers, which a presentation compiler runs one request at a time, share
+   *  as they shared the root state. A provider that reads inside `readUpTo`
+   *  gets a state per read from its context argument.
+   */
+  def currentCtx: Context =
+    if !parallelReaders then myCtx
+    else
+      val root = myCtx
+      myProviderCtx match
+        case (r, c) if r eq root => c
+        case _ => synchronized:
+          myProviderCtx match
+            case (r, c) if r eq root => c
+            case _ =>
+              val c = readCtx
+              myProviderCtx = (root, c)
+              c
+
+  @volatile private var myProviderCtx: (Context, Context) | Null = null
 
   // ---- Readers ----
   //
