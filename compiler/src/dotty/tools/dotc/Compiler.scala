@@ -9,6 +9,7 @@ import Phases.Phase
 import transform.*
 import backend.jvm.GenBCode
 import localopt.{StringInterpolatorOpt, DropForMap}
+import scala.annotation.internal.{scratch, interned, guardedBy}
 
 /** The central class of the dotc compiler. The job of a compiler is to create
  *  runs, which process given `phases` in a given `rootContext`.
@@ -161,7 +162,7 @@ class Compiler {
   // TODO: Initially InitialRunId - 1, so that the first nextRunId call would return InitialRunId
   // Setting the initial runId to InitialRunId - 1 makes the scala2-library-bootstrap fail to compile,
   // when the underlying issue is fixed, please update dotc.profiler.RealProfiler.chromeTrace logic
-  private var runId: Periods.RunId = Periods.InitialRunId
+  @interned @guardedBy("writer") private var runId: Periods.RunId = Periods.InitialRunId
   def nextRunId: Periods.RunId = {
     runId += 1; runId
   }
@@ -172,7 +173,7 @@ class Compiler {
     if (run != null) run.reset()
   }
 
-  private var firstRun = true
+  @scratch @guardedBy("writer") private var firstRun = true
   def newRun(using Context): Run = {
     if !firstRun then reset()
     firstRun = false

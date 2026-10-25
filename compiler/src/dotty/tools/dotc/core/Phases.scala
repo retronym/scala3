@@ -17,7 +17,7 @@ import typer.{TyperPhase, RefChecks}
 import cc.CheckCaptures
 import typer.ImportInfo.withRootImports
 import ast.{tpd, untpd}
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, cache, guardedBy}
 import scala.compiletime.uninitialized
 
 object Phases {
@@ -32,7 +32,8 @@ object Phases {
     def transform(ref: SingleDenotation)(using Context): SingleDenotation = unsupported("transform")
   }
 
-  trait PhasesBase {
+  // Set by `usePhases` when a run starts, which in the interactive driver is a write action: readers find them settled.
+  @cache @guardedBy("writer") trait PhasesBase {
     this: ContextBase =>
 
     // drop NoPhase at beginning
