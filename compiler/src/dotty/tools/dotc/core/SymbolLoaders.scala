@@ -425,7 +425,7 @@ abstract class SymbolLoader extends LazyType { self =>
    *  the loader runs, as the root itself is (`SymDenotation.completeIndependently`).
    */
   private def hideOtherRoots(root: SymDenotation)(using Context): List[SymDenotation] =
-    if !(ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders) || root.isRoot then Nil
+    if !ctx.base.sharing.independent || root.isRoot then Nil
     else
       val key = completionRoot(root)
       val linked = root.scalacLinkedClass

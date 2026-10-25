@@ -3,7 +3,7 @@ package dotty.tools.dotc.util
 import WeakHashSet.Entry
 
 /** A `WeakHashSet` that several threads read without a lock (interactive
- *  mode, see `ContextState.concurrentReaders`): a hash-consing hit, the
+ *  mode, see `ContextState.sharing`): a hash-consing hit, the
  *  common case, is a lookup in the published table; only an insertion or
  *  a miss takes the set's monitor, where the subclass re-checks before it
  *  inserts, so that two threads interning equal elements get one object.

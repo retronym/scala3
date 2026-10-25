@@ -1894,14 +1894,13 @@ class TreeUnpickler(reader: TastyReader,
       // are one file's shared state, filled by completions and by these lazy
       // reads; with several readers (interactive mode) a lazy read runs under
       // the base's completion lock like a completion (finding I35).
-      if ctx.base.isConcurrent then
-        if ctx.base.independentReaders then
-          // the file's root, as the unpickler's completers claim it
-          val f = owner.associatedFile
-          val key: AnyRef = if f == null then TreeUnpickler.this else f
-          ctx.base.completionRoots.locked(key, CompletionLock.lazyTastyRead, () => CompletionRoots.backOff(owner))(complete0)
-        else ctx.base.completionLock.locked(CompletionLock.lazyTastyRead)(complete0)
-      else complete0
+      // with independent readers, the file's root, as the unpickler's completers claim it
+      ctx.base.sharing.exclusive(rootKey, CompletionLock.lazyTastyRead, owner)(complete0)
+    }
+
+    private def rootKey(using Context): AnyRef = {
+      val f = owner.associatedFile
+      if f == null then TreeUnpickler.this else f
     }
 
     private def complete0(using Context): T =

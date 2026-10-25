@@ -186,9 +186,10 @@ object SymDenotations {
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
       val interactive = ctx.mode.is(Mode.Interactive)
-      if interactive && ctx.base.isConcurrent && ctx.base.independentReaders then
+      val sharing = ctx.base.sharing
+      if sharing.independent then
         completeIndependently(completer)
-      else if interactive && ctx.base.isConcurrent then
+      else if sharing.concurrent then
         // several readers: one completion at a time (step 3 of the
         // multi-reader notes; an owner and a barrier per root is step 4)
         val lock = ctx.base.completionLock
@@ -299,7 +300,7 @@ object SymDenotations {
      *  from it (§4.1). A no-op otherwise.
      */
     final def awaitOtherReader()(using Context): Unit =
-      if ctx.base.isConcurrent && ctx.base.independentReaders then awaitOthers()
+      if ctx.base.sharing.independent then awaitOthers()
 
     /** The slow path of `Denotation.info`: the info is a lazy type. Complete
      *  it; the owner of a completion in progress sees its intermediate info,
@@ -365,7 +366,7 @@ object SymDenotations {
           // the completion (finding I53). The symbol is left with a completer
           // that pre-empts any reader that reaches it, which retries on a
           // fresh run.
-          if interactive && ctx.base.isConcurrent && ctx.base.independentReaders
+          if ctx.base.sharing.independent
              && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
           then info_=(UnwoundCompletion(completer, ctx.runId))
         case _: CyclicReference =>
@@ -602,11 +603,11 @@ object SymDenotations {
     final def isCompleting(using Context): Boolean =
       myFlags.is(Touched) && !isCompleted && {
         val base = ctx.base
-        !base.isConcurrent || isCompletingHere(base)
+        !base.sharing.concurrent || isCompletingHere(base)
       }
 
     private def isCompletingHere(base: ContextBase)(using Context): Boolean =
-      if base.independentReaders then
+      if base.sharing.independent then
         myInfo match
           case ip: InProgress if !ip.ownedHere =>
             // another reader's completion: wait for it and look again (§4.1)
@@ -2219,7 +2220,7 @@ object SymDenotations {
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] = {
       val known = myMemberCache
       if (known == null || myMemberCachePeriod != ctx.period) {
-        val fresh = ctx.base.newEqHashMap[Name, PreDenotation]()
+        val fresh = ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
         myMemberCache = fresh
         myMemberCachePeriod = ctx.period
         fresh
@@ -2230,7 +2231,7 @@ object SymDenotations {
     private def baseTypeCache(using Context): BaseTypeMap = {
       val known = myBaseTypeCache
       if known == null || !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
-        val fresh: BaseTypeMap = ctx.base.newEqHashMap()
+        val fresh: BaseTypeMap = ctx.base.sharing.newEqHashMap()
         myBaseTypeCache = fresh
         myBaseTypeCachePeriod = ctx.period
         fresh
@@ -2321,7 +2322,7 @@ object SymDenotations {
       // reader's completion and read its intermediate state; I73 for the
       // peek). The field is read once: `info_=` may null it between a check
       // and a read.
-      if !(ctx.base.isConcurrent && ctx.base.independentReaders) then
+      if !ctx.base.sharing.independent then
         val known = myTypeParams
         if known != null then known
         else
@@ -2683,7 +2684,7 @@ object SymDenotations {
       // I34): the marks are then kept on the reader, per class denotation as
       // the cache is (a type's base type for one class is computed inside its
       // base type for another), and only results reach the cache.
-      val pending: util.EqHashSet[Type] | Null = if ctx.base.isConcurrent then ctx.reader.pendingBaseTypesOf(this) else null
+      val pending: util.EqHashSet[Type] | Null = if ctx.base.sharing.concurrent then ctx.reader.pendingBaseTypesOf(this) else null
       def markInProgress(tp: CachedType): Unit =
         if pending != null then pending += tp else btrCache(tp) = NoPrefix
       def unmark(tp: CachedType): Unit =
@@ -2973,7 +2974,7 @@ object SymDenotations {
 
     /** The package objects in this class */
     def packageObjs(using Context): List[ClassDenotation] =
-      if ctx.base.independentReaders then
+      if ctx.base.sharing.independent then
         val c = sharedPackageObjs
         if c != null && c._1 == ctx.runId then c._2
         else if ctx.base.completionRoots.ownedHere(this) then Nil // break cycle in case we are looking for package object itself
@@ -3444,7 +3445,7 @@ object SymDenotations {
     implicit val None: MemberNames = new InvalidCache with MemberNames {
       def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = ???
     }
-    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base.isConcurrent)
+    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base.sharing.concurrent)
   }
 
   /** A cache for baseclasses, as a sequence in linearization order and as a set that
@@ -3461,7 +3462,7 @@ object SymDenotations {
       def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context) = ???
       def signalProvisional() = ()
     }
-    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base.isConcurrent)
+    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base.sharing.concurrent)
   }
 
   private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache { self =>
@@ -3494,12 +3495,8 @@ object SymDenotations {
      *  has one owner, like a completion's `Touched`.
      */
     protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: T): T =
-      if concurrent then
-        if ctx.base.independentReaders then
-          // the cache is its own root: its black hole `locked` has one owner
-          ctx.base.completionRoots.locked(self, CompletionLock.inheritedCache, () => CompletionRoots.backOff(clsd))(op)
-        else ctx.base.completionLock.locked(CompletionLock.inheritedCache)(op)
-      else op
+      // the cache is its own root: its black hole `locked` has one owner
+      ctx.base.sharing.exclusive(self, CompletionLock.inheritedCache, clsd)(op)
 
     def isValidAt(phase: Phase)(using Context) =
       checkedPeriod == ctx.period ||

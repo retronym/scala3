@@ -312,7 +312,7 @@ object Implicits:
     private val eligibleCache =
       // `NoContext.implicits` is made while `NoContext` is constructed, before any base exists
       val base: ContextBase | Null = irefCtx.base
-      if base == null then EqHashMap[Type, List[Candidate]]() else base.newEqHashMap[Type, List[Candidate]]()
+      if base == null then EqHashMap[Type, List[Candidate]]() else base.sharing.newEqHashMap[Type, List[Candidate]]()
 
     /** The level increases if current context has a different owner or scope than
      *  the context of the next-outer ImplicitRefs. This is however disabled under
@@ -639,7 +639,7 @@ import Implicits.*
 trait ImplicitRunInfo:
   self: Run =>
 
-  private lazy val implicitScopeCache = runContext.base.newEqHashMap[Type, OfTypeImplicits]()
+  private lazy val implicitScopeCache = runContext.base.sharing.newEqHashMap[Type, OfTypeImplicits]()
 
   private def isExcluded(sym: Symbol) =
     if migrateTo3 then false else sym.is(Package) || sym.isPackageObject

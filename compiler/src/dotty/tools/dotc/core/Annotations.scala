@@ -231,9 +231,7 @@ object Annotations {
    *  owner still meets it.
    */
   private inline def evaluatingOnce[T](self: AnyRef)(inline op: T)(using Context): T =
-    if ctx.base.independentReaders && !ctx.base.completionRoots.ownedHere(self) then
-      ctx.base.completionRoots.locked(self, CompletionLock.lazyAnnotation, () => CompletionRoots.backOff(self))(op)
-    else op
+    ctx.base.sharing.claimed(self, CompletionLock.lazyAnnotation, self)(op)
 
   abstract class LazyAnnotation extends Annotation {
     protected var mySym: Symbol | (Context ?=> Symbol) | Null

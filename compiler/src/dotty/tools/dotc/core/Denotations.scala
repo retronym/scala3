@@ -141,7 +141,7 @@ object Denotations {
 
     /** The denotation with info(s) as seen from prefix type */
     def asSeenFrom(pre: Type)(using Context): AsSeenFromResult =
-      if Config.cacheAsSeenFrom && ctx.base.isConcurrent then
+      if Config.cacheAsSeenFrom && ctx.base.sharing.concurrent then
         val c = sharedAsSeenFrom
         if c != null && (c.prefix eq pre) && c.valid == ctx.period then c.result.asInstanceOf[AsSeenFromResult]
         else
@@ -826,15 +826,12 @@ object Denotations {
       def toNewRun =
         util.Stats.record("current.bringForward")
         if exists then
-          if ctx.base.isConcurrent then
-            // several readers (interactive mode): the bring-forward writes the
-            // flock's validity, one writer at a time (see `completionLock`)
-            if ctx.base.independentReaders then
-              // one root for every bring-forward: cycles with completions are detected
-              ctx.base.completionRoots.locked(CompletionLock.bringForward, CompletionLock.bringForward,
-                () => CompletionRoots.backOff(symbol))(initial.bringForward().current)
-            else ctx.base.completionLock.locked(CompletionLock.bringForward)(initial.bringForward().current)
-          else initial.bringForward().current
+          // several readers (interactive mode): the bring-forward writes the
+          // flock's validity, one writer at a time; with independent readers
+          // one root for every bring-forward, so that cycles with completions
+          // are detected
+          ctx.base.sharing.exclusive(CompletionLock.bringForward, CompletionLock.bringForward,
+            symbol)(initial.bringForward().current)
         else this
 
       def goForward =

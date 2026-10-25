@@ -97,8 +97,7 @@ class Namer { typer: Typer =>
     else
       // filled by completions and consumed by body typing: with several
       // readers (interactive mode) the two run on different threads
-      val m1: mutable.Map[Symbol, Typer] =
-        if ctx.base.isConcurrent then scala.collection.concurrent.TrieMap() else new mutable.HashMap
+      val m1: mutable.Map[Symbol, Typer] = ctx.base.sharing.newMap()
       myNestedTyper = m1
       m1
 
@@ -1026,8 +1025,7 @@ class Namer { typer: Typer =>
         // rdr => ...)`, whose `T` comes from the closure's body); completed in
         // a state of its own, the variable was dropped with it and later
         // instantiated to `Nothing` (I66; I62's `val retractedVars` too).
-        val own = ctx.mode.is(Mode.Interactive) && ctx.base.isConcurrent && ctx.base.independentReaders
-          && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+        val own = ctx.base.sharing.independent && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
         if own then
           // a typer state of its own, reporting to the creation context's
           // reporter directly: a buffer flushed when the completion ends
@@ -1055,12 +1053,9 @@ class Namer { typer: Typer =>
           completedNormally = true
           commitInto match
             case target: TyperState if !own =>
+              // independent readers: private, settled and dropped (I76); serialised: committed under the lock
               val c = ictx
-              if ctx.base.isConcurrent && ctx.base.independentReaders then
-                // independent readers: private, settled and dropped (I76)
-                c.typerState.settle(c.fresh.setTyperState(target))(using c)
-              else
-                ctx.base.completionLock.locked(CompletionLock.commit)(c.typerState.commit()(using c.fresh.setTyperState(target)))
+              interactive.SharingImpl.endState(c, c.fresh.setTyperState(target))
             case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
@@ -1113,7 +1108,7 @@ class Namer { typer: Typer =>
               val ann =
                 if cls.is(JavaDefined) then Checking.checkNamedArgumentForJavaAnnotation(annotTree, cls.asClass)
                 else annotTree
-              val ann1 = Annotation.deferred(cls)(inPrivateState(annotCtx)(typedAheadExpr(ann)))
+              val ann1 = Annotation.deferred(cls)(annotCtx.base.sharing.privately(annotCtx)(typedAheadExpr(ann)))
               sym.addAnnotation(ann1)
               ann
       case _ =>
@@ -1126,7 +1121,7 @@ class Namer { typer: Typer =>
             throw
               if sym.isCompleted then Inlines.MissingInlineInfo()
               else CyclicReference(sym)
-          val mdef = inPrivateState(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
+          val mdef = ctx.base.sharing.privately(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
           PrepareInlineable.wrapRHS(original, mdef.tpt, mdef.rhs)
         PrepareInlineable.registerInlineInfo(sym, rhsToInline)(using localContext(sym))
       case _ =>
@@ -1372,20 +1367,6 @@ class Namer { typer: Typer =>
       sym.info
     end typeSig
   }
-
-  /** Run `op` (typing that is forced lazily, later, by whichever reader gets
-   *  there: an annotation's argument, an inline method's body) in the context
-   *  it captured. With independent readers that context's typer state may be
-   *  the run's root, which no reader commits into: `op` runs in a private
-   *  child of it, settled when it ends (I76).
-   */
-  private def inPrivateState[T](c0: Context)(op: Context ?=> T): T =
-    if c0.mode.is(Mode.Interactive) && c0.base.isConcurrent && c0.base.independentReaders then
-      val c1 = c0.fresh.setNewTyperState()
-      val result = op(using c1)
-      c1.typerState.settle(c0)(using c1)
-      result
-    else op(using c0)
 
   class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx0: Context)
   extends Completer(original)(ictx0), CompleterWithCleanup {

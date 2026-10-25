@@ -3216,7 +3216,7 @@ object Types extends TypeUtils {
     def ref(using Context): Type =
       if computed then
         if myRef == null then
-          if ctx.base.independentReaders && !ctx.base.completionRoots.ownedHere(this) then
+          if ctx.base.sharing.independent && !ctx.base.completionRoots.ownedHere(this) then
             // being computed by another reader (independent readers): wait for
             // it, not a cycle (finding I57: a false "Cyclic reference", and a
             // completion described with `...`)
@@ -3228,7 +3228,7 @@ object Types extends TypeUtils {
               || ctx.mode.is(Mode.Printing)
               || ctx.reporter.errorsReported)
           throw CyclicReference(NoDenotation)
-      else if ctx.base.independentReaders then
+      else if ctx.base.sharing.independent then
         // the computation has an owner, as a completion does
         ctx.base.completionRoots.locked(this, CompletionLock.lazyRef, () => CompletionRoots.backOff(this)) {
           if !computed then compute()
@@ -5294,7 +5294,7 @@ object Types extends TypeUtils {
           ctx.typerState.resetTo(saved)
 
       record("MatchType.reduce called")
-      if ctx.base.isConcurrent then
+      if ctx.base.sharing.concurrent then
         // a match type is shared by the readers and its reduction depends on
         // each one's constraint: the context and the result as one value (I78)
         val c = sharedReduced
@@ -5335,7 +5335,7 @@ object Types extends TypeUtils {
 
     /** True if the reduction uses GADT constraints. */
     def reducesUsingGadt(using Context): Boolean =
-      val reductionContext = if ctx.base.isConcurrent then (sharedReduced match { case null => null; case c => c.context }) else this.reductionContext
+      val reductionContext = if ctx.base.sharing.concurrent then (sharedReduced match { case null => null; case c => c.context }) else this.reductionContext
       reductionContext != null && reductionContext.iterator.exists:
         case (tp: TypeRef, tpCtx) => tpCtx.exists
         case _ => false
@@ -6451,7 +6451,7 @@ object Types extends TypeUtils {
           LazyRef { refCtx =>
             given Context = refCtx
             val ref1 = tp.ref
-            if refCtx.base.isConcurrent then
+            if refCtx.base.sharing.concurrent then
               // Several readers of the new run may force refs of this map at
               // once: a swap undone in a `finally` would hand a reader still
               // mapping the old run's context (finding I84). Runs do not

@@ -17,17 +17,12 @@ import util.*
 import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
 
-private class InteractiveContextBase(sourcePackage: CachedLogicalPackage) extends ContextBase {
+private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharing: Sharing) extends ContextBase(sharing) {
 
   override protected def newPlatform(using Context): Platform = {
       if (settings.scalajs.value) new SJSPlatform(sourcePackage.value)
       else new JavaPlatform(sourcePackage.value)
   }
-
-  /** Several requests at once (see `InteractiveDriver.reading`): the
-   *  interners, the caches and the completion lock are the concurrent ones.
-   */
-  override protected def concurrentReaders: Boolean = true
 
   /** The reader of each thread that types under this base (see `Reader`): a
    *  request binds its reader to its thread (`bindReader`), and a thread that
@@ -72,7 +67,12 @@ class InteractiveDriver(
   import tpd.*
 
   override protected def initCtx: Context =
-    new InteractiveContextBase(logicalRootPackage).initialCtx
+    // several requests at once (see `reading`): the base is concurrent, its
+    // readers independent with `-Yinteractive-readers`; chosen here, before
+    // the settings are parsed, since the base's interners depend on it
+    val independent = settings.exists(s => s == "-Yinteractive-readers" || s == "-Yinteractive-readers:true")
+    val sharing = if independent then Sharing.Independent else Sharing.Serialised
+    new InteractiveContextBase(logicalRootPackage, sharing).initialCtx
 
   override def sourcesRequired: Boolean = false
 
@@ -219,8 +219,9 @@ class InteractiveDriver(
   /** Do requests type concurrently, each completion with an owner
    *  (`-Yinteractive-readers`)? Off, they are serialised with completions.
    */
-  val independentReaders: Boolean = myInitCtx.settings.YinteractiveReaders.value(using myInitCtx)
-  myInitCtx.base.independentReaders = independentReaders
+  val independentReaders: Boolean = myInitCtx.base.sharing.independent
+  assert(independentReaders == myInitCtx.settings.YinteractiveReaders.value(using myInitCtx),
+    s"-Yinteractive-readers read from the arguments (${myInitCtx.base.sharing}) differs from the parsed setting")
 
   /** Does the session survive an edit inside the body of a definition with a
    *  declared type (`-Yinteractive-body-edits`, docs §12)? Then a whole-file
@@ -1446,8 +1447,7 @@ class InteractiveDriver(
    *  conversion's `A` met bound to another reader's type).
    */
   private def endStatementState(ctx1: Context, ctx0: Context): Unit =
-    if independentReaders then ctx1.typerState.settle(ctx0)(using ctx1)
-    else completionLocked(ctx1.typerState.commit()(using ctx0))
+    SharingImpl.endState(ctx1, ctx0)
 
   /** Several files in one run, a session for each (the throughput
    *  experiment of the multi-reader notes): every top-level statement of

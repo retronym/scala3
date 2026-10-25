@@ -3,7 +3,7 @@ package dotty.tools.dotc.util
 import GenericHashMap.DenseLimit
 
 /** An `EqHashMap` for a cache read and filled by several threads
- *  (interactive mode, see `ContextState.concurrentReaders`): a hit is found
+ *  (interactive mode, see `ContextState.sharing`): a hit is found
  *  without a lock, every other operation runs under the map's monitor.
  *  `getOrElseUpdate` evaluates `value` outside the monitor, since computing
  *  a cached value may itself take locks or recurse into the cache; two

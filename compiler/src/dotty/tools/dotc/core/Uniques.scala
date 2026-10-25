@@ -14,7 +14,7 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
 /** `Uniques` for a `ContextBase` read by several threads (interactive mode,
- *  see `ContextState.concurrentReaders`): a hit is found without a lock
+ *  see `ContextState.sharing`): a hit is found without a lock
  *  (`ConcurrentWeakHashSet`), every other operation is under the set's
  *  monitor, and `put` looks again there before it inserts. Interning is on
  *  the hottest path of type creation, so the batch compiler keeps the
