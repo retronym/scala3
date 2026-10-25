@@ -82,7 +82,7 @@ class Definitions {
   // See <http://docs.scala-lang.org/sips/pending/repeated-byname.html>.
   private def enterSpecialPolyClass(name: TypeName, paramFlags: FlagSet, parentConstrs: => Seq[Type]): ClassSymbol = {
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val paramDecls = newScope
         val typeParam = enterSyntheticTypeParam(cls, paramFlags, paramDecls)
@@ -121,7 +121,7 @@ class Definitions {
   private def newFunctionNType(name: TypeName): Symbol = {
     val impure = name.startsWith("Impure")
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val arity = name.functionArity
         if impure then
           val argParamNames = List.tabulate(arity)(tpnme.syntheticTypeParamName)
@@ -187,7 +187,7 @@ class Definitions {
     val info =
       if (useCompleter)
         new LazyType {
-          def complete(denot: SymDenotation)(using Context): Unit =
+          def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
             denot.info = ptype
         }
       else ptype
@@ -521,7 +521,7 @@ class Definitions {
   private def synthesizeNullClass(): ClassSymbol = {
     // When explicit-nulls is enabled, Null becomes a direct subtype of AnyVal
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val parents = if ctx.explicitNulls then AnyValType :: Nil else ObjectType :: Nil
         val decls = newScope
@@ -800,7 +800,7 @@ class Definitions {
     cls.infoOrCompleter match {
       case completer: ClassfileLoader =>
         cls.info = new ClassfileLoader(completer.classfile) {
-          override def complete(root: SymDenotation)(using Context): Unit = {
+          override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit = {
             super.complete(root)
             val constr = cls.primaryConstructor
             val noArgInfo = constr.info match {

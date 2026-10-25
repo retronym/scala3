@@ -5621,7 +5621,9 @@ object Types extends TypeUtils {
             if sym.isOpaqueAlias then // could have been reset because of a syntax error
               sym.infoOrCompleter match
                 case completer: LazyType =>
-                  completer.complete(sym) // will update the LazyRef
+                  // through the completion's own path (its `Touched`, root claim and hiding with parallel readers),
+                  // not by running the completer here, which two readers could then do at once
+                  sym.denot.completeFrom(completer) // will update the LazyRef
                   null                    // tells the LazyRef to use the updated value
                 case info => // can occur under cyclic references, e.g. i6225.scala
                   defn.AnyType

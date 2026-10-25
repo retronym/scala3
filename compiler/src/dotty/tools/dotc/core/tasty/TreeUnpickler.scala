@@ -157,7 +157,7 @@ class TreeUnpickler(reader: TastyReader,
     override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
       val f = symd.symbol.associatedFile
       if f == null then TreeUnpickler.this else f
-    def complete(denot: SymDenotation)(using Context): Unit =
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       def where =
         val f = denot.symbol.associatedFile
         if f == null then "" else s" in $f"
@@ -625,7 +625,7 @@ class TreeUnpickler(reader: TastyReader,
       if nextUnsharedTag == TYPEBOUNDS then name = name.toTypeName
       val typeReader = fork
       val completer = new LazyType {
-        def complete(denot: SymDenotation)(using Context) =
+        def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
           denot.info = typeReader.readType()
       }
       val sym = newSymbol(ctx.owner, name, Flags.Case, completer, coord = coordAt(start))
@@ -998,7 +998,7 @@ class TreeUnpickler(reader: TastyReader,
             val rhs = readTpt()(using localCtx)
 
             sym.info = new NoCompleter:
-              override def complete(denot: SymDenotation)(using Context): Unit = if !isBestEffortTasty then unsupported("complete")
+              override def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = if !isBestEffortTasty then unsupported("complete")
               override def completerTypeParams(sym: Symbol)(using Context) =
                 rhs.tpe.typeParams
 
@@ -1149,13 +1149,13 @@ class TreeUnpickler(reader: TastyReader,
           def ta = ctx.typeAssigner
           val flags = Flags.JavaDefined | Flags.PrivateLocal | Flags.Invisible
           val ctorCompleter = new LazyType {
-            def complete(denot: SymDenotation)(using Context) =
+            def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
               val sym = denot.symbol
               val pflags = flags | Flags.Param
               val tparamRefs = tparams.map(_.symbol.asType)
               lazy val derivedTparamSyms: List[TypeSymbol] = tparams.map: tdef =>
                 val completer = new LazyType {
-                  def complete(denot: SymDenotation)(using Context) =
+                  def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
                     denot.info = tdef.symbol.asType.info.subst(tparamRefs, derivedTparamRefs)
                 }
                 newSymbol(sym, tdef.name, Flags.JavaDefined | Flags.Param, completer, coord = cls.coord)

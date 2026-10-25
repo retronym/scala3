@@ -331,7 +331,7 @@ object SymDenotations {
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
       if reader != null then reader.completing += symbol
-      try atPhase(validFor.firstPhaseId)(completer.complete(this))
+      try atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
       catch case ex =>
         onUnwind(ex, interactive, reader, completer)
         throw ex
@@ -3283,7 +3283,7 @@ object SymDenotations {
     with ((TermSymbol, ClassSymbol) => LazyType) { self =>
 
     /** Sets all missing fields of given denotation */
-    def complete(denot: SymDenotation)(using Context): Unit
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit
 
     def apply(sym: Symbol): LazyType = this
     def apply(module: TermSymbol, modcls: ClassSymbol): LazyType = this
@@ -3339,7 +3339,7 @@ object SymDenotations {
    *  is a fresh run with fresh symbols.
    */
   final class UnwoundCompletion(original: LazyType, runId: Int) extends LazyType with SymbolLoaders.SecondCompleter:
-    def complete(denot: SymDenotation)(using Context): Unit =
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       if ctx.runId != runId then
         // a later run: the original completer degrades the stale symbol
         // itself, as it does with one reader ("left incomplete by an earlier
@@ -3358,7 +3358,7 @@ object SymDenotations {
    */
   final class InProgress(@volatile var current: Type, val owner: Thread, val rootKey: AnyRef) extends LazyType:
     def ownedHere: Boolean = owner eq Thread.currentThread
-    def complete(denot: SymDenotation)(using Context): Unit =
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       throw AssertionError(s"$denot: an InProgress is completed through its root, not run")
     override def completionRoot(symd: SymDenotation)(using Context): AnyRef = rootKey
     override def decls: Scope = current match
@@ -3375,7 +3375,7 @@ object SymDenotations {
 
   /** A missing completer */
   trait NoCompleter extends LazyType {
-    def complete(denot: SymDenotation)(using Context): Unit = unsupported("complete")
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = unsupported("complete")
   }
 
   @sharable object NoCompleter extends NoCompleter
@@ -3387,7 +3387,7 @@ object SymDenotations {
    */
   class ModuleCompleter(_moduleClass: ClassSymbol) extends LazyType {
     override def moduleClass(using Context): ClassSymbol = _moduleClass
-    def complete(denot: SymDenotation)(using Context): Unit = {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val from = moduleClass.denot.asClass
       denot.setFlag(from.flags.toTermFlags & RetainedModuleValFlags)
       denot.annotations = from.annotations filter (_.appliesToModule)
@@ -3413,7 +3413,7 @@ object SymDenotations {
       denot.setPrivateWithin(NoSymbol)
     }
 
-    def complete(denot: SymDenotation)(using Context): Unit = {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val sym = denot.symbol
       val errMsg = BadSymbolicReference(denot)
       report.error(errMsg, sym.srcPos)

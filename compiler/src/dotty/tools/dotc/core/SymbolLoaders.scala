@@ -314,7 +314,9 @@ object SymbolLoaders {
       val pre = root.owner.thisType
       root.info = ClassInfo(pre, root.symbol.asClass, Nil, currentDecls, pre.select(sourceModule))
       if (!sourceModule.isCompleted)
-        sourceModule.completer.complete(sourceModule)
+        val m = sourceModule.denot
+        // the module val is a root of this load: the same loader and root key, hidden while it runs (`hideOtherRoots`)
+        m.completer.complete(m)(using summon[Context], Sharing.unguarded("the package's module val is a root of its class's load"))
 
       val packageName = if (root.isEffectiveRoot) "" else root.symbol.javaClassName
 
@@ -432,7 +434,7 @@ abstract class SymbolLoader extends LazyType { self =>
       val candidates = List(linked, if root.is(ModuleClass) then root.sourceModule else linked.sourceModule)
       candidates.filter(_.exists).map(_.denot).distinct.filter(d => (d ne root) && (d.infoOrCompleter eq this) && d.hideWhileCompleting(key))
 
-  override def complete(root: SymDenotation)(using Context): Unit = profileCompletion(root) {
+  override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit = profileCompletion(root) {
     val hidden = hideOtherRoots(root)
     def loadingMessage(ex: IOException): Message = {
       if (ctx.debug) ex.printStackTrace()
@@ -586,7 +588,7 @@ class SourcefileLoader(srcfile: AbstractFile) extends SymbolLoader {
 class NoLoader extends SymbolLoader with NoCompleter {
   def description(using Context): String = "NoLoader"
   def compilationUnitInfo: CompilationUnitInfo | Null = null
-  override def complete(root: SymDenotation)(using Context): Unit =
+  override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit =
     super[NoCompleter].complete(root)
   def doComplete(root: SymDenotation)(using Context): Unit =
     unsupported("doComplete")

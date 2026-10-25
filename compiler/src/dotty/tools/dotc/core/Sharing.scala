@@ -49,7 +49,7 @@ object Sharing:
   /** Evidence that the code it is given to is the one writer of the lazy facts keyed by `key: K`: it runs in
    *  `exclusive(key)`. A capability in the manner of Clang's `REQUIRES`: state that only the writer may touch is
    *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `exclusive`,
-   *  `claimed` and `unguarded` make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
+   *  `claimed`, `unguarded` and a completion (`completing`) make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
    *  instance serves every key: a holder allocates nothing.
    */
   sealed abstract class Holds[K]
@@ -59,6 +59,12 @@ object Sharing:
    *  (Clang's `NO_THREAD_SAFETY_ANALYSIS`, scoped to one access).
    */
   inline def unguarded[K](inline why: String): Holds[K] = held.asInstanceOf[Holds[K]]
+
+  /** The evidence a completer runs with, `Holds[denot.type]`: made only by `SymDenotation.lockAndComplete0`, which
+   *  runs a completer under the denotation's `Touched` and, with several readers, its root's claim or the
+   *  completion lock. A completer passes it on to one it delegates to for the same denotation.
+   */
+  private[core] inline def completing[K]: Holds[K] = held.asInstanceOf[Holds[K]]
 
   /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
    *  holding the claim on `key` when they are parallel, where a wait that would close a wait-for cycle backs off

@@ -982,7 +982,7 @@ class Namer { typer: Typer =>
       nestedTyper(sym) = typer1
       typer1.indexConstructor(constr, sym)(using localContext(sym).setTyper(typer1))
 
-    final override def complete(denot: SymDenotation)(using Context): Unit = {
+    final override def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]): Unit = {
       if (Config.showCompletions && ctx.typerState != creationContext.typerState) {
         def levels(c: Context): Int =
           if (c.typerState eq creationContext.typerState) 0
@@ -2049,7 +2049,7 @@ class Namer { typer: Typer =>
 
   class SuspendCompleter extends LazyType, SymbolLoaders.SecondCompleter {
 
-    final override def complete(denot: SymDenotation)(using Context): Unit =
+    final override def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]): Unit =
       denot.resetFlag(Touched) // allow one more completion
       ctx.compilationUnit.suspend(i"reset $denot")
   }

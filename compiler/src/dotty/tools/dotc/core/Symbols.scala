@@ -642,7 +642,7 @@ object Symbols extends SymUtils {
       coord: Coord = NoCoord,
       compUnitInfo: CompilationUnitInfo | Null = null)(using Context): ClassSymbol = {
     def completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         denot.info = ClassInfo(owner.thisType, cls, parentTypes.map(_.dealias), decls, selfInfo)
@@ -665,7 +665,7 @@ object Symbols extends SymUtils {
       coord: Coord,
       compUnitInfo: CompilationUnitInfo | Null)(using Context): ClassSymbol = {
     def completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         val parents = parentTypes(cls).map(_.dealias)
@@ -742,7 +742,7 @@ object Symbols extends SymUtils {
       coord: Coord = NoCoord,
       compUnitInfo: CompilationUnitInfo | Null = null)(using Context): TermSymbol = {
     def completer(module: Symbol) = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         denot.info = ClassInfo(owner.thisType, cls, parentTypes.map(_.dealias), decls, TermRef(owner.thisType, module))
@@ -768,7 +768,7 @@ object Symbols extends SymUtils {
       coord: Coord,
       compUnitInfo: CompilationUnitInfo | Null)(using Context): TermSymbol = {
     def completer(module: Symbol) = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         val parents = parentTypes(cls).map(_.dealias)
@@ -944,7 +944,7 @@ object Symbols extends SymUtils {
         val odenot = original.denot
         val completer = new LazyType:
 
-          def complete(denot: SymDenotation)(using Context): Unit =
+          def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
 
             val oinfo = original.info match
               case ClassInfo(pre, _, parents, decls, selfInfo) =>

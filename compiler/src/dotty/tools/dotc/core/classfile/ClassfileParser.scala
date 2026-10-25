@@ -470,7 +470,7 @@ final class ClassfileParser(
   class MemberCompleter(name: SimpleName, jflags: Int, sig: String) extends LazyType {
     var attrCompleter: AttributeCompleter | Null = null
 
-    def complete(denot: SymDenotation)(using Context): Unit = {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val attrCompleter = this.attrCompleter
       assert(attrCompleter != null, "complete was called but attrCompleter was not set")
 
@@ -587,7 +587,7 @@ final class ClassfileParser(
 
     var tparams = classTParams
     def typeParamCompleter(start: Int) = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val savedIndex = index
         try {
           index = start
@@ -1117,7 +1117,7 @@ final class ClassfileParser(
     ).entered
 
   class AnnotConstructorCompleter(classInfo: TempClassInfoType) extends LazyType {
-    def complete(denot: SymDenotation)(using Context): Unit = {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val attrs = classInfo.decls.toList.filter(sym => sym.isTerm && sym != denot.symbol && sym.name != nme.CONSTRUCTOR)
       val paramNames = attrs.map(_.name.asTermName)
       val paramTypes = attrs.map(_.info.resultType)
