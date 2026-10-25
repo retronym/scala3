@@ -67,12 +67,14 @@ class CachingDriver private (
    *  whole file.
    */
   override def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    lastCompiledURI = null
-    val diags = super.runUpTo(uri, source, target)
-    if isFullyTyped(uri) then
-      lastCompiledURI = uri
-      previousDiags = diags
-    diags
+    if !targetedRequests then run(uri, source) // the driver's own check would call its `run`, not this caching one
+    else
+      lastCompiledURI = null
+      val diags = super.runUpTo(uri, source, target)
+      if isFullyTyped(uri) then
+        lastCompiledURI = uri
+        previousDiags = diags
+      diags
 
   def freshDriver(): InteractiveDriver =
     new InteractiveDriver(settings, sourcePackage)
