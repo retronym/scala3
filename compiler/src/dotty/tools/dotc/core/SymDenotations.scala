@@ -2030,20 +2030,18 @@ object SymDenotations {
     private var baseDataCache: BaseData = BaseData.None
     private var memberNamesCache: MemberNames = MemberNames.None
 
-    private def memberCache(using Context): EqHashMap[Name, PreDenotation] = {
-      if (myMemberCachePeriod != ctx.period) {
-        myMemberCache = EqHashMap()
-        myMemberCachePeriod = ctx.period
-      }
-      myMemberCache.nn
-    }
+    private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
+      Caching.stamped(myMemberCachePeriod, myMemberCache)(myMemberCachePeriod = _, myMemberCache = _)(ctx.period):
+        ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
+      .nn
 
-    private def baseTypeCache(using Context): BaseTypeMap = {
-      if !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
-        myBaseTypeCache = new BaseTypeMap()
-        myBaseTypeCachePeriod = ctx.period
-      myBaseTypeCache.nn
-    }
+    // `invalidateBaseTypeCache` nulls the cache: with several readers, after
+    // another reader found the period current (I67)
+    private def baseTypeCache(using Context): BaseTypeMap =
+      Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(myBaseTypeCachePeriod = _, myBaseTypeCache = _)(
+          (period, cache) => cache != null && currentHasSameBaseTypesAs(period), ctx.period):
+        ctx.base.sharing.newEqHashMap()
+      .nn
 
     def invalidateBaseDataCache() = {
       baseDataCache.invalidate()
@@ -2184,8 +2182,12 @@ object SymDenotations {
     override def appliedRef(using Context): Type = classInfo.appliedRef
 
     private def baseData(implicit onBehalf: BaseData, ctx: Context): (List[ClassSymbol], BaseClassSet) = {
-      if (!baseDataCache.isValid) baseDataCache = BaseData.newCache()
-      baseDataCache(this)
+      // read once: another reader's `invalidateBaseDataCache` may replace it meanwhile
+      var cache = baseDataCache
+      if !cache.isValid then
+        cache = BaseData.newCache()
+        baseDataCache = cache
+      cache(this)
     }
 
     /** The base classes of this class in linearization order,

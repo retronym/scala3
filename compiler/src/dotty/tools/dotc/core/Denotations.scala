@@ -75,6 +75,9 @@ object Denotations {
 
   implicit def eqDenotation: CanEqual[Denotation, Denotation] = CanEqual.derived
 
+  object PreDenotation:
+    final class AsSeenFrom(val prefix: Type, val result: PreDenotation, val valid: Period)
+
   /** A PreDenotation represents a group of single denotations or a single multi-denotation
    *  It is used as an optimization to avoid forming MultiDenotations too eagerly.
    */
@@ -130,9 +133,22 @@ object Denotations {
 
     type AsSeenFromResult <: PreDenotation
 
+    // with concurrent readers, the cache as one value, published at once: the
+    // three fields above, written by two readers, can pair one reader's prefix
+    // with the other's result (I78: `Conversion#apply` seen from
+    // `Conversion[String, Shown]` taking a `Showable`)
+    @volatile private var sharedAsSeenFrom: PreDenotation.AsSeenFrom | Null = null
+
     /** The denotation with info(s) as seen from prefix type */
     def asSeenFrom(pre: Type)(using Context): AsSeenFromResult =
-      if (Config.cacheAsSeenFrom) {
+      if Config.cacheAsSeenFrom && ctx.base.concurrent then
+        val c = sharedAsSeenFrom
+        if c != null && (c.prefix eq pre) && c.valid == ctx.period then c.result.asInstanceOf[AsSeenFromResult]
+        else
+          val result = computeAsSeenFrom(pre)
+          sharedAsSeenFrom = PreDenotation.AsSeenFrom(pre, result, if pre.isProvisional then Nowhere else ctx.period)
+          result
+      else if (Config.cacheAsSeenFrom) {
         if ((cachedPrefix ne pre) || ctx.period != validAsSeenFrom) {
           cachedAsSeenFrom = computeAsSeenFrom(pre)
           cachedPrefix = pre

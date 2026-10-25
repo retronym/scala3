@@ -1468,6 +1468,7 @@ object Build {
         Dependencies.sbtCompilerInterface,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),
@@ -1606,6 +1607,7 @@ object Build {
         Dependencies.sbtJunitInterface % Test,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),
