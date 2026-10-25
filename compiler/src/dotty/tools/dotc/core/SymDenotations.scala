@@ -1845,6 +1845,27 @@ object SymDenotations {
             c.ensureCompleted()
       end completeChildrenIn
 
+      /** In interactive mode a targeted run (`Run.isTargeted`) types only the
+       *  statements on the path to the target, so a child class elsewhere in
+       *  the file whose completer would register it (`registerIfChildInCreationContext`)
+       *  may never complete: complete every class (and enum value) of the
+       *  current unit that the Namer has indexed, the nested ones after their
+       *  owner (whose completion indexes its template). Batch compilation and
+       *  whole-file runs type them all anyway.
+       */
+      def completeClassesOfUnit()(using Context): Unit =
+        val unit = ctx.compilationUnit
+        val run = ctx.run
+        if ctx.mode.is(Mode.Interactive) && run != null && run.isTargeted
+           && (unit ne NoCompilationUnit) && !unit.untpdTree.isEmpty
+        then
+          ctx.typer.foreachIndexedDef(unit.untpdTree): (tree, sym) =>
+            tree match
+              case _: untpd.TypeDef if sym.isClass => sym.ensureCompleted()
+              // an enum value (`case Cleaning`): its completer registers it as a child
+              case _: untpd.ValDef if sym.originDenotation.is(EnumVal) => sym.ensureCompleted()
+              case _ =>
+
       if is(Sealed) || isAllOf(JavaEnum) && isClass then
         if !is(ChildrenQueried) then
           // Make sure all visible children are completed, so that
@@ -1852,6 +1873,7 @@ object SymDenotations {
           // is defined in the same scope as `cls` or in the companion object of `cls`.
           completeChildrenIn(owner)
           completeChildrenIn(companionClass)
+          completeClassesOfUnit()
           setFlag(ChildrenQueried)
 
       annotations.collect { case Annotation.Child(child) => child }.reverse
