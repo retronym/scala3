@@ -250,7 +250,16 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   /** The source files of all late entered symbols, as a set. A completion of a source-loaded class enters one, and
    *  completions of different roots run in parallel, so it is reached only with the evidence of its monitor.
    */
-  @scratch private val lateFiles = mutable.Set[AbstractFile]()
+  private object lateFiles:
+    @scratch private val files = mutable.Set[AbstractFile]()
+    private def held(using Sharing.Monitor[lateFiles.type]) = files
+
+    /** Is `file` newly entered? */
+    def enter(file: AbstractFile)(using Context): Boolean =
+      Sharing.serialised[lateFiles.type, Boolean](this)(held.add(file))
+
+    def size(using Context): Int =
+      Sharing.serialised[lateFiles.type, Int](this)(held.size)
 
   /** A cache for static references to packages and classes */
   @cache val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
@@ -577,8 +586,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  `rootTreeOrProvider`.
    */
   def lateCompile(file: AbstractFile, typeCheck: Boolean)(using Context): Unit =
-    if (!files.contains(file) && !lateFiles.contains(file)) {
-      lateFiles += file
+    if (!files.contains(file) && lateFiles.enter(file)) {
 
       val unit = CompilationUnit(ctx.getSource(file))
       val unitCtx = runContext.fresh
@@ -832,7 +840,7 @@ object Run {
      * - the number of traversals we expect to make over all files
      * - the number of late compilations
      */
-    private def totalProgress(): Int =
+    private def totalProgress()(using Context): Int =
       totalTraversals * work() + run.lateFiles.size
 
     private def work(): Int = run.files.size
