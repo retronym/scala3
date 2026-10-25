@@ -2214,29 +2214,18 @@ object SymDenotations {
     private var baseDataCache: BaseData = BaseData.None
     private var memberNamesCache: MemberNames = MemberNames.None
 
-    // The caches are read once into a local: with several readers another
-    // one may invalidate a cache (null it) between the check and the read
-    // (I67, a null `myBaseTypeCache` after `invalidateBaseTypeCache`).
-    private def memberCache(using Context): EqHashMap[Name, PreDenotation] = {
-      val known = myMemberCache
-      if (known == null || myMemberCachePeriod != ctx.period) {
-        val fresh = ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
-        myMemberCache = fresh
-        myMemberCachePeriod = ctx.period
-        fresh
-      }
-      else known
-    }
+    private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
+      Caching.stamped(myMemberCachePeriod, myMemberCache)(myMemberCachePeriod = _, myMemberCache = _)(ctx.period):
+        ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
+      .nn
 
-    private def baseTypeCache(using Context): BaseTypeMap = {
-      val known = myBaseTypeCache
-      if known == null || !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
-        val fresh: BaseTypeMap = ctx.base.sharing.newEqHashMap()
-        myBaseTypeCache = fresh
-        myBaseTypeCachePeriod = ctx.period
-        fresh
-      else known
-    }
+    // `invalidateBaseTypeCache` nulls the cache: with several readers, after
+    // another reader found the period current (I67)
+    private def baseTypeCache(using Context): BaseTypeMap =
+      Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(myBaseTypeCachePeriod = _, myBaseTypeCache = _)(
+          (period, cache) => cache != null && currentHasSameBaseTypesAs(period), ctx.period):
+        ctx.base.sharing.newEqHashMap()
+      .nn
 
     def invalidateBaseDataCache() = {
       baseDataCache.invalidate()
