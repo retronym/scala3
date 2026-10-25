@@ -81,8 +81,9 @@ abstract class BasePCSuite extends PcAssertions:
       .map(_.toFile)
       .forEach(_.delete)
 
+  // `-Dpc.options=-Yinteractive-readers` runs a suite that does not set its own options in that mode
   protected def scalacOptions(classpath: Seq[Path]): Seq[String] =
-    immutable.Seq.empty
+    sys.props.get("pc.options").toList.flatMap(_.split(' ').filter(_.nonEmpty))
   protected def additionalClasspath: Seq[Path] = Nil
   protected def mockEntries: MockEntries = new MockEntries {}
 
