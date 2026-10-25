@@ -55,7 +55,7 @@ object Rules:
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
     Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.exclusive` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
-    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; in a `synchronized` block or `Sharing.serialised` → synchronized; in the `op` of `Sharing.exclusive`, `SharingImpl.exclusive` or `CompletionLock.locked` → completion-lock; in the `op` of `Sharing.claimed`, `SharingImpl.claimed` or `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
+    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; in a `synchronized` block or `Sharing.serialised` → synchronized; in the `op` of `Sharing.exclusive`, `SharingImpl.exclusive` or `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `Sharing.claimed`, `SharingImpl.claimed` or `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
   )
 
   val reach: List[Rule] = List(
@@ -332,7 +332,9 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           methodStack = dd.symbol :: methodStack
           val savedInit = initDepth
           if dd.name == "<init>" then initDepth += 1
-          try super.traverseTree(tree)(owner)
+          // a method that takes the evidence of a claim (`Sharing.Holds`) runs inside `Sharing.exclusive`
+          val holds = dd.termParamss.exists(_.params.exists(_.tpt.tpe.dealias.typeSymbol.fullName.replace("$", "") == "dotty.tools.dotc.core.Sharing.Holds"))
+          try if holds then withProt("completion-lock")(super.traverseTree(tree)(owner)) else super.traverseTree(tree)(owner)
           finally { methodStack = methodStack.tail; initDepth = savedInit }
         case Assign(lhs, rhs) =>
           record(lhs.symbol, write = true, reset = isReset(rhs), lhs.pos)
