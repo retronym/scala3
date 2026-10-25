@@ -2854,8 +2854,12 @@ object SymDenotations {
       if (this.is(PackageClass) || !Config.cacheMemberNames)
         computeMemberNames(keepOnly) // don't cache package member names; they might change
       else {
-        if (!memberNamesCache.isValid) memberNamesCache = MemberNames.newCache()
-        memberNamesCache(keepOnly, this)
+        // read once, as `baseData` does: another reader may invalidate it meanwhile (I92)
+        var cache = memberNamesCache
+        if !cache.isValid then
+          cache = MemberNames.newCache()
+          memberNamesCache = cache
+        cache(keepOnly, this)
       }
 
     def computeMemberNames(keepOnly: NameFilter)(implicit onBehalf: MemberNames, ctx: Context): Set[Name] = {
@@ -3531,7 +3535,9 @@ object SymDenotations {
         }
 
     def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = {
-      assert(isValid)
+      // with several readers another one may invalidate this cache after the caller found it valid (I92): the
+      // names are computed and not stored
+      assert(concurrent || isValid)
       // `cache` read once per use: another reader may invalidate it (null)
       // between a check and a use (finding I46)
       val c0 = cache
@@ -3581,7 +3587,7 @@ object SymDenotations {
 
     def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context)
         : (List[ClassSymbol], BaseClassSet) = {
-      assert(isValid)
+      assert(concurrent || isValid) // as in `MemberNamesImpl.apply` (I92)
       CyclicReference.trace("compute the base classes of ", clsd.symbol):
         cache match
           case null => computing(clsd) {
