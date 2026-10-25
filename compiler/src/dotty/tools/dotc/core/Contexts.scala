@@ -272,7 +272,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec))
+      Sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
     }
 
     /** SourceFile with given path, memoized */
@@ -896,9 +896,11 @@ object Contexts {
       val result = op(using nestedCtx)
       if commit(result)(using nestedCtx) then
         nestedCtx.typerState.commit()
-        nestedCtx.typerState.setCommittable(true)
       result
     finally
+      // the pooled typer state is reused: committable again whatever happened
+      // (`commit` clears the flag before it merges, and a merge can throw)
+      nestedCtx.typerState.setCommittable(true)
       pool.free()
 
   /** Run `op` with a pool-allocated context that has the given `owner`. */
@@ -1065,15 +1067,41 @@ object Contexts {
 
   /** The essential mutable state of a context base, collected into a common class */
   class ContextState(final val sharing: Sharing) {
+
+    /** Is this base read by several threads at once (an interactive base
+     *  serving concurrent requests, see `Reader` and
+     *  `docs/_docs/internals/interactive-multi-reader.md`)? Decided once, at
+     *  construction, by the subclass: the interners, the caches that are maps
+     *  and the symbol id counter below get concurrent implementations, and
+     *  completions take `completionLock`. Batch compilation answers false and
+     *  keeps the unsynchronised ones; the concurrent classes are then never
+     *  loaded.
+     */
+    protected def concurrentReaders: Boolean = false
+    final val isConcurrent: Boolean = concurrentReaders
+
     /** `sharing.concurrent` and `sharing.independent`, copied to the base: a hot test reads one field of it. */
     final val concurrent: Boolean = sharing.concurrent
     final val independent: Boolean = sharing.independent
+
+    /** Interactive mode with several readers: the lock every completion
+     *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
+     *  to a new run (`Denotation.current`) and every computation of an
+     *  inherited cache (base classes, member names) runs under, so that the
+     *  lazy facts of the symbol table have one writer at a time while bodies
+     *  are typed concurrently. Reentrant: a completion forces others. Not
+     *  used in batch compilation.
+     */
+    val completionLock: CompletionLock = CompletionLock(this)
 
     // Symbols state
 
     /** Counter for unique symbol ids */
     private var _nextSymId: Int = 0
-    def nextSymId: Int = { _nextSymId += 1; _nextSymId }
+    private val _concurrentSymIds = new java.util.concurrent.atomic.AtomicInteger(0)
+    def nextSymId: Int =
+      if concurrent then _concurrentSymIds.incrementAndGet()
+      else { _nextSymId += 1; _nextSymId }
 
     /** Sources and Files that were loaded */
     val sources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
@@ -1111,13 +1139,13 @@ object Contexts {
 
     // Types state
     /** A table for hash consing unique types */
-    private[core] val uniques: Uniques = Uniques()
+    private[core] val uniques: Uniques = sharing.newUniques()
 
     /** A table for hash consing unique applied types */
-    private[dotc] val uniqueAppliedTypes: AppliedUniques = AppliedUniques()
+    private[dotc] val uniqueAppliedTypes: AppliedUniques = sharing.newAppliedUniques()
 
     /** A table for hash consing unique named types */
-    private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
+    private[core] val uniqueNamedTypes: NamedTypeUniques = sharing.newNamedTypeUniques()
 
     var emptyTypeBounds: TypeBounds | Null = null
     var emptyWildcardBounds: WildcardType | Null = null
@@ -1126,7 +1154,7 @@ object Contexts {
      *  instead of storing messages directly in ErrorTypes in order
      *  to avoid space leaks - the message usually captures a context.
      */
-    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = mutable.Map()
+    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = sharing.newMap()
 
     // Phases state
 
