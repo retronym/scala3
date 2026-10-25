@@ -23,6 +23,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.parsing.Tokens
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.pc.AutoImports.AutoImportEdits
 import dotty.tools.pc.AutoImports.AutoImportsGenerator
 import dotty.tools.pc.printer.ShortenedTypePrinter
@@ -70,7 +71,8 @@ class CompletionProvider(
      */
 
     val driver = if wasCursorApplied then cachingDriver.freshDriver() else cachingDriver
-    driver.run(uri, sourceFile)
+    // Only the statements up to the one containing the offset are typed
+    driver.runUpTo(uri, sourceFile, Span(params.offset()))
 
     given ctx: Context = driver.currentCtx
     val pos = driver.sourcePosition(params)
