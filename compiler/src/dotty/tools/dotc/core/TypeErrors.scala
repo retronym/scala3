@@ -89,6 +89,8 @@ end MissingType
  * so it requires knowing denot already.
  * @param denot
  */
+// One cycle, thrown and caught on the stack of the reader that met it.
+@scala.annotation.internal.scratch @scala.annotation.internal.confined
 class CyclicReference(
     val denot: SymDenotation,
     val optTrace: Array[CyclicReference.TraceElement] | Null)(using Context)

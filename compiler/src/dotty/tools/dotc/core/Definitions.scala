@@ -3,6 +3,7 @@ package dotc
 package core
 
 import scala.annotation.{threadUnsafe => tu}
+import scala.annotation.internal.{benignRace, cache, guardedBy, lazyFact, publishedBy}
 import Types.*, Contexts.*, Symbols.*, SymDenotations.*, StdNames.*, Names.*, Phases.*
 import Flags.*, Scopes.*, Decorators.*, NameOps.*, Periods.*, NullOpsDecorator.*
 import unpickleScala2.Scala2Unpickler.ensureConstructor
@@ -53,6 +54,8 @@ object Definitions {
 class Definitions {
   import Definitions.*
 
+  // Set by `init`, which each run's root context calls: a write action of the interactive driver, with no reader.
+  @lazyFact @guardedBy("writer")
   private var initCtx: Context = uninitialized
   private given currentContext[Dummy_so_its_a_def]: Context = initCtx
 
@@ -1632,17 +1635,27 @@ class Definitions {
    *  called from a synthesizer installed in ScalaPackageClass.
    */
   private class FunType(prefix: String):
+    // An element is written once per writer, to the class's reference, which every writer computes equal; the array
+    // is replaced and written under the monitor, so a store is not lost to a copy. A reader that misses computes it.
+    @cache @benignRace("every writer stores the class's reference; stores and growth are under the monitor")
     private var classRefs: Array[TypeRef | Null] = new Array(22)
-    def apply(n: Int): TypeRef =
-      while n >= classRefs.length do
-        classRefs = Array.copyOf(classRefs, classRefs.length * 2)
-      if classRefs(n) == null then
+    def apply(n: Int)(using Context): TypeRef =
+      val refs = classRefs
+      val known = if n < refs.length then refs(n) else null
+      if known != null then known
+      else
+        // computed outside the monitor: it may complete symbols
         val funName = s"scala.$prefix$n"
-        classRefs(n) =
+        val ref =
           if prefix.startsWith("Impure")
           then staticRef(funName.toTypeName).symbol.typeRef
           else requiredClassRef(funName)
-      classRefs(n).nn
+        synchronized {
+          while n >= classRefs.length do
+            classRefs = Array.copyOf(classRefs, classRefs.length * 2)
+          classRefs(n) = ref
+        }
+        ref
   end FunType
 
   private def funTypeIdx(isContextual: Boolean, isImpure: Boolean): Int =
@@ -2111,6 +2124,8 @@ class Definitions {
   class PerRun[T](generate: Context ?=> T) {
     // the run id and the value in one immutable object, so that a reader on
     // another thread (interactive mode) sees the pair or nothing
+    // Readers of one run store equal values, and a `Cached` has only final fields, so a plain race publishes it.
+    @cache @benignRace("readers of one run generate equal values; Cached has final fields only")
     private var cached: PerRun.Cached[T] | Null = null
     def apply()(using Context): T = {
       val c = cached
@@ -2142,7 +2157,10 @@ class Definitions {
     ScalaNumericBoxedClasses() `union` Set(BoxedUnitClass, BoxedBooleanClass)
   )
 
+  // Filled by `valueTypeRef`, from the lazy vals that `init` forces (`ScalaValueClasses`), and only read after.
+  @lazyFact @publishedBy("init")
   private val valueTypeEnc = mutable.Map[TypeName, PrimitiveClassEnc]()
+  @lazyFact @publishedBy("init")
   private val typeTags = mutable.Map[TypeName, Name]().withDefaultValue(nme.specializedTypeNames.Object)
 
 //  private val unboxedTypeRef = mutable.Map[TypeName, TypeRef]()
@@ -2253,6 +2271,7 @@ class Definitions {
 
   @tu lazy val reservedScalaClassNames: Set[Name] = syntheticScalaClasses.map(_.name).toSet + tpnme.Null
 
+  @lazyFact @guardedBy("writer")
   private var isInitialized = false
 
   def init()(using Context): Unit = {

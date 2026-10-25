@@ -9,7 +9,7 @@ import NameTags.*
 import Contexts.*
 import Decorators.*
 
-import scala.annotation.internal.{interned, sharable}
+import scala.annotation.internal.{interned, publishedBy, sharable}
 
 /** Defines possible kinds of NameInfo of a derived name */
 object NameKinds {
@@ -17,9 +17,10 @@ object NameKinds {
   // These are sharable since all NameKinds are created eagerly at the start of the program
   // before any concurrent threads are forked. for this to work, NameKinds should never
   // be created lazily or in modules that start running after compilers are forked.
-  @sharable private val simpleNameKinds = new Array[ClassifiedNameKind](64)
-  @sharable private val qualifiedNameKinds = new Array[QualifiedNameKind](64)
-  @sharable private val numberedNameKinds = new Array[NumberedNameKind](64)
+  // the name kinds register themselves by tag as this object is initialised
+  @interned @publishedBy("init") @sharable private val simpleNameKinds = new Array[ClassifiedNameKind](64)
+  @interned @publishedBy("init") @sharable private val qualifiedNameKinds = new Array[QualifiedNameKind](64)
+  @interned @publishedBy("init") @sharable private val numberedNameKinds = new Array[NumberedNameKind](64)
   @interned @sharable private val uniqueNameKinds = util.EqHashMap[TermName, UniqueNameKind]()
 
   /** A class for the info stored in a derived name */
