@@ -140,6 +140,12 @@ class TyperState() {
   /** The closest ancestor of this typer state (including possibly this typer state itself)
    *  which is not yet committed, or which does not have a parent.
    */
+  /** Has this typer state been committed into its parent? */
+  def hasBeenCommitted: Boolean = isCommitted
+
+  /** The previous typer state, the one this state commits into. */
+  def previousState: TyperState | Null = previous
+
   def uncommittedAncestor: TyperState =
     previous match
       case null => this
