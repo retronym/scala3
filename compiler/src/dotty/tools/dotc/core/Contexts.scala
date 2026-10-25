@@ -31,6 +31,7 @@ import config.{JavaPlatform, SJSPlatform, Platform, ScalaSettings}
 import StdNames.nme
 import compiletime.uninitialized
 import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, publishedBy, scratch, sharable}
+import java.lang.invoke.VarHandle
 import DenotTransformers.DenotTransformer
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.sbt.interfaces.{IncrementalCallback, ProgressCallback}
@@ -239,8 +240,10 @@ object Contexts {
     @cache @benignRace("every writer stores an equivalent ContextualImplicits, whose fields are final")
     private var implicitsCache: ContextualImplicits | Null = null
     def implicits: ContextualImplicits = {
-      if (implicitsCache == null)
-        implicitsCache = {
+      val cached = implicitsCache
+      if (cached != null) cached
+      else {
+        val result = {
           val infoIfImport = importInfoIfImportContext
           val implicitRefs: List[ImplicitRef] =
             if (isClassDefContext)
@@ -259,7 +262,9 @@ object Contexts {
           if (implicitRefs.isEmpty) outerImplicits
           else new ContextualImplicits(implicitRefs, outerImplicits, infoIfImport)(this)
         }
-      implicitsCache.nn
+        implicitsCache = result
+        result
+      }
     }
 
     /** Either the current scope, or, if the current context owner is a class,
@@ -298,17 +303,30 @@ object Contexts {
       )
 
     // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
-    // context). A lost update drops a derived context, which is made again.
-    @cache @benignRace("a lost update only drops a derived context, which is made again")
+    // context). A lost update drops a derived context, which is made again. A derived context's fields are plain, so
+    // with concurrent readers its store is preceded by a release fence and a lookup is followed by an acquire fence
+    // (as `Caching` does): the reader that finds it sees it complete.
+    @cache @benignRace("a lost update only drops a derived context, which is made again; entries are published after a release fence")
     private var related: SimpleIdentityMap[Phase | SourceFile, Context] | Null = null
+
+    private def concurrentBase: Boolean =
+      val b: ContextBase | Null = base // `NoContext` has none
+      b != null && b.concurrent
 
     private def lookup(key: Phase | SourceFile): Context | Null =
       util.Stats.record("Context.related.lookup")
-      if related == null then
+      val map = related
+      if map == null then
         related = SimpleIdentityMap.empty
         null
       else
-        related.nn(key)
+        if concurrentBase then VarHandle.acquireFence()
+        map(key)
+
+    private def relate(key: Phase | SourceFile, derived: Context): Unit =
+      val map = related.nn
+      if concurrentBase then VarHandle.releaseFence()
+      related = map.updated(key, derived)
 
     private def withPhase(phase: Phase, pid: PhaseId): Context =
       util.Stats.record("Context.withPhase")
@@ -320,7 +338,7 @@ object Contexts {
         if ctx1 == null then
           util.Stats.record("Context.withPhase.new")
           ctx1 = fresh.setPhase(pid)
-          related = related.nn.updated(phase, ctx1)
+          relate(phase, ctx1)
         ctx1
 
     final def withPhase(phase: Phase): Context = withPhase(phase, phase.id)
@@ -341,7 +359,7 @@ object Contexts {
             // so set `mustExistIfNotNull` to false.
             ctx2.setCompilationUnit(CompilationUnit(source, mustExistIfNotNull = false))
           ctx1 = ctx2
-          related = related.nn.updated(source, ctx2)
+          relate(source, ctx2)
         ctx1
 
     // `creationTrace`-related code. To enable, uncomment the code below and the
