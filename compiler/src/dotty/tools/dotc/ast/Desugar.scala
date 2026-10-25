@@ -1296,6 +1296,7 @@ object desugar {
 
   /** Transform extension construct to list of extension methods */
   def extMethods(ext: ExtMethods)(using Context): Tree = flatTree {
+    var firstMethod = true
     ext.methods.map:
       case exp: Export => exp
       case mdef: DefDef =>
@@ -1305,7 +1306,12 @@ object desugar {
         // of them doing so for sibling methods removed each other's (finding
         // I86): each method gets parameter trees of its own. Serialised readers
         // type one at a time and keep the shared trees, as batch compilation does.
-        val extParamss = if ctx.base.independent then mapParamss(ext.paramss)(freshCopy)(freshCopy) else ext.paramss
+        // The first method keeps the extension's own, which tools that look up a
+        // parameter in the untyped `ExtMethods` (the presentation compiler's
+        // highlight of `Int` in `extension (xs: List[Int])`) find typed in place.
+        val extParamss =
+          if ctx.base.independent && !firstMethod then mapParamss(ext.paramss)(freshCopy)(freshCopy) else ext.paramss
+        firstMethod = false
         defDef(extMethod(mdef, extParamss))
       case _ => EmptyTree // we ignore all the other trees. Error was reported during parsing.
   }
