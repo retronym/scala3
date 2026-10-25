@@ -46,11 +46,27 @@ object Sharing:
   // The operations test the base's copies of the flags (`ContextState.concurrent`, `parallel`): one field read
   // from the base at each call site, not two.
 
+  /** Evidence that the code it is given to is the one writer of the lazy facts keyed by `key: K`: it runs in
+   *  `exclusive(key)`. A capability in the manner of Clang's `REQUIRES`: state that only the writer may touch is
+   *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `exclusive`
+   *  and `unguarded` make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
+   *  instance serves every key: a holder allocates nothing.
+   */
+  sealed abstract class Holds[K]
+  private object held extends Holds[Any]
+
+  /** Evidence of `exclusive(key)` without its claim, for an access that races on purpose; `why` says why it is safe
+   *  (Clang's `NO_THREAD_SAFETY_ANALYSIS`, scoped to one access).
+   */
+  inline def unguarded[K](inline why: String): Holds[K] = held.asInstanceOf[Holds[K]]
+
   /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
    *  holding the claim on `key` when they are parallel, where a wait that would close a wait-for cycle backs off
    *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
    *  `cycleSubject` are evaluated only on a concurrent base. For bring-forwards, lazy TASTy reads, inherited caches. */
-  inline def exclusive[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+  inline def exclusive[K <: AnyRef, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
+      inline op: Holds[K] ?=> T)(using Context): T =
+    given Holds[K] = held.asInstanceOf[Holds[K]]
     if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
 
   /** `op` holding the claim on `key` when readers are parallel, as is otherwise (serialised readers need no
