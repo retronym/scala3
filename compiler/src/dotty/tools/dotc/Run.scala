@@ -231,6 +231,68 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   def canProgress()(using Context): Boolean =
     foldProgress(true /* not cancelled by default */)(p => !p.checkCancellation())
 
+  // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
+  //
+  // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
+  // a package, a template or a block on the path to the target, only those
+  // whose span contains the target (see `Targeting`); the others are recorded
+  // in `skippedStats` with the context they would have been typed in and the
+  // statement owner, for the driver to type later in this same run when a
+  // request lands in one of them. Their symbols exist (the Namer indexed them)
+  // and complete lazily as usual. Batch compilation never sets any of this.
+
+  /** The offset the run types towards; `NoSpan` for a run that types everything. */
+  var typingTarget: Span = Spans.NoSpan
+
+  /** The statements `typedStats` skipped, innermost lists last. */
+  val skippedStats: ListBuffer[Run.SkippedStat] = ListBuffer.empty
+
+  /** Set once by the driver when the run starts with a target: the run is a
+   *  targeted session's, and stays so for its later resumes and completion
+   *  (`typingTarget` itself is reset between them).
+   */
+  var isTargeted: Boolean = false
+
+  /** The owner of the statement list about to be typed by `Typer.typedStats`
+   *  that is subject to targeting (the package class, the template's local
+   *  dummy, or the owner of a block), set by `targetNextStats` right before
+   *  the call and consumed by it.
+   */
+  var targetedStatsOwner: Symbol = NoSymbol
+
+  /** Set with `targetedStatsOwner` for the statements of a block: skipped
+   *  ones leave a stub in the typed `Block`, and are recorded as block
+   *  statements, which the driver splices back in place (`spliceAll`).
+   */
+  var targetedStatsInBlock: Boolean = false
+
+  /** Mark the next `typedStats` list, owned by `owner`, as subject to
+   *  targeting. Call only when `typingTarget.exists`.
+   */
+  def targetNextStats(owner: Symbol, inBlock: Boolean = false)(using Context): Unit =
+    assert(!targetedStatsOwner.exists, i"targeting of $targetedStatsOwner not consumed before $owner")
+    targetedStatsOwner = owner
+    targetedStatsInBlock = inBlock
+    if !inBlock then targetingTyperState = ctx.typerState
+
+  /** The typer state of the statement list targeting started from: a package
+   *  or class body, or the recorded context of a resumed statement. A block
+   *  is targeted only when it is typed in this state: a block typed under a
+   *  nested state (a closure argument, typed in the state `tryEither` makes
+   *  for the application) or an explore state (an overload or implicit
+   *  candidate) may be typed again or thrown away, and what it skipped would
+   *  be recorded in a context that does not last. Such blocks are typed whole.
+   */
+  var targetingTyperState: TyperState | Null = null
+
+  /** Back to the defaults: no target, no pending mark, nothing skipped. */
+  def clearTargeting(): Unit =
+    typingTarget = Spans.NoSpan
+    targetedStatsOwner = NoSymbol
+    targetedStatsInBlock = false
+    targetingTyperState = null
+    skippedStats.clear()
+
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>
       progress.currentUnitCount += 1 // trace that we completed a unit in the current (sub)phase
@@ -636,6 +698,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 }
 
 object Run {
+  /** A statement left untyped by a targeted run (see `typingTarget`). */
+  case class SkippedStat(stat: ast.untpd.Tree, ctx: Context, owner: Symbol, inBlock: Boolean = false)
+
 
   case class SubPhase(name: String):
     override def toString: String = name
