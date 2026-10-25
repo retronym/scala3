@@ -5,6 +5,7 @@ package util
 import dotty.tools.io.*
 import Spans.*
 import core.Contexts.*
+import core.Sharing
 import core.Decorators.*
 
 import scala.io.Codec
