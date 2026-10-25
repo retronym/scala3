@@ -837,7 +837,7 @@ class Completions(
         // isField returns true for some classes
         def isJavaClass = sym.is(JavaDefined) && isModuleOrClass
         (sym.isField && !isJavaClass && !isModuleOrClass) || sym.getter != NoSymbol
-      catch case _ => false
+      catch case NonFatal(_) => false
 
     def isInheritedFromScalaLibrary(sym: Symbol) =
       sym.owner == defn.AnyClass ||

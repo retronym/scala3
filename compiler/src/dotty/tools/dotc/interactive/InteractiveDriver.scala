@@ -47,8 +47,30 @@ class InteractiveDriver(
 
   override def sourcesRequired: Boolean = false
 
+  /** Cancellation of the current request. `myCancelled` is set by `cancel()`
+   *  (which `Run.Progress` calls when it notices a thread interrupt) and stays
+   *  set until the next run starts. `myCancelChecker` is the client's own
+   *  cancellation test, installed for the duration of a request by
+   *  `withCancelChecker`. `isCancelled` does not consume the interrupt flag
+   *  itself: `Run.Progress.checkCancellation` already does, and it would hide
+   *  the interrupt from `cancel()`.
+   */
+  @volatile private var myCancelled = false
+  @volatile private var myCancelChecker: () => Boolean = InteractiveDriver.neverCancelled
+
   private val myProgressCallback: ProgressCallback = new ProgressCallback:
-    override def isCancelled(): Boolean = Thread.interrupted()
+    override def isCancelled(): Boolean = myCancelled || myCancelChecker()
+    override def cancel(): Unit = myCancelled = true
+
+  /** Run `body` with `check` as the cancellation test polled by the typer
+   *  (see `Run.checkCancelledTyping`). A run started inside `body` is aborted
+   *  with `CompilationUnit.CancelledCompilation` once `check` returns true.
+   */
+  def withCancelChecker[T](check: () => Boolean)(body: => T): T =
+    val previous = myCancelChecker
+    myCancelChecker = check
+    try body
+    finally myCancelChecker = previous
 
   private val myInitCtx: Context = {
     val rootCtx = initCtx.fresh.addMode(Mode.ReadPositions).addMode(Mode.Interactive)
@@ -99,8 +121,10 @@ class InteractiveDriver(
       val unit: CompilationUnit):
     var skipped: List[Run.SkippedStat] = Nil
     var diagnostics: List[Diagnostic] = Nil
-    /** Set when a skipped statement has no typer state left to be typed in
-     *  (see `liveContext`): the next request starts a fresh run.
+    /** Set when the typing of a skipped statement was aborted and the statement
+     *  could not be replaced: typing consumes the attachments of untyped trees
+     *  (`SymOfTree`, `TypedAhead`, `ExpandedTree`), so it can not be typed a
+     *  second time, and the next request starts a fresh run.
      */
     var poisoned: Boolean = false
 
@@ -120,6 +144,24 @@ class InteractiveDriver(
       skipped = skipped ++ run.skippedStats.toList
       run.skippedStats.clear()
 
+    /** A new stretch of typing in this run starts: forget a cancellation of
+     *  the previous request and the completions it unwound.
+     */
+    private def beginTyping(): Unit =
+      myCancelled = false
+      run.cancelledCompletions.clear()
+
+    /** The typing of `sk` was aborted by a cancellation: the statement can
+     *  not be typed a second time (typing consumes the attachments of the
+     *  untyped trees and the nested typers of the methods). Whatever was
+     *  typed before the abort stays typed; the statements skipped inside the
+     *  aborted one are its own and go with it. Replace it, or poison the
+     *  session.
+     */
+    private def abandon(sk: Run.SkippedStat): Unit =
+      reporter.removeBufferedMessages(using sk.ctx)
+      if !replacePoisoned(sk) || !replaceUnwound(sk.stat.span)(using sk.ctx) then poisoned = true
+
     /** Is `sym` defined in this session's file, by the identity of its
      *  `associatedFile` (a virtual file has no equality of its own)?
      */
@@ -134,6 +176,7 @@ class InteractiveDriver(
      *  served from it.
      */
     def complete(): List[Diagnostic] =
+      beginTyping()
       while skipped.nonEmpty && !poisoned do
         val batch = skipped.sortBy(_.stat.span.start)
         skipped = Nil
@@ -151,9 +194,16 @@ class InteractiveDriver(
               case Some(ctx0) =>
                 // in its own typer state, committed once typed (see `resumeIn`)
                 val ctx1 = ctx0.fresh.setNewTyperState()
-                val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
-                ctx1.typerState.commit()(using ctx0)
-                typed += ((sk, stats))
+                try
+                  val stats = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)._1
+                  ctx1.typerState.commit()(using ctx0)
+                  typed += ((sk, stats))
+                catch case ex: CompilationUnit.CancelledCompilation =>
+                  // the ones typed so far are kept; the aborted one is replaced
+                  // or poisons the session, as in a resume
+                  skipped = skipped ++ batch.dropWhile(_ ne sk).drop(1)
+                  abandon(sk)
+                  throw ex
         finally
           val entries = typed.result()
           if entries.nonEmpty then spliceAll(entries)(using entries.head._1.ctx)
@@ -196,13 +246,14 @@ class InteractiveDriver(
         case ts1 => Some(ctx0.fresh.setTyperState(ts1))
 
     private def resumeIn(sk: Run.SkippedStat, ctx0: Context, target: Span): List[Diagnostic] =
+      beginTyping()
       assertOwnSource(sk)
       skipped = skipped.filterNot(_ eq sk)
       run.clearTargeting()
       run.typingTarget = target
       try
         // typed in its own typer state, committed into the session's only once
-        // the statement is typed
+        // the statement is typed: a cancellation drops its constraints with it
         val ctx1 = ctx0.fresh.setNewTyperState()
         run.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
         // a resumed block statement continues the targeting of its block
@@ -213,7 +264,100 @@ class InteractiveDriver(
         assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")
         spliceAll(List((sk, stats)))(using ctx0)
         diagnostics
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        abandon(sk)
+        throw ex
       finally run.clearTargeting()
+
+    /** Does `owner` define `name` in this file: the companion of a statement
+     *  to replace. A companion is not replaced alone: the synthetic members a
+     *  case class gives its object (`apply`, `unapply`) were merged into the
+     *  object's tree by the class's expansion, and a fresh parse of the object
+     *  alone lacks them.
+     */
+    private def hasCompanionHere(owner: Symbol, name: Name)(using Context): Boolean =
+      val cls = if owner.isClass then owner else owner.owner
+      cls.isClass && {
+        val sym = cls.asClass.classDenot.info.decls.lookup(name)
+        sym.exists && isFileOf(sym.associatedFile)
+      }
+
+    /** Replace the skipped statement `sk`, whose typing was aborted, by a
+     *  fresh parse of its source range, indexed afresh in the same run and
+     *  context: its symbols are unlinked from the owner's scope and re-created,
+     *  and it is skipped again. References to the old symbols typed earlier
+     *  keep them. Only definitions are replaced (not the synthetic
+     *  `<file>$package` object of top-level definitions, nor a nested package
+     *  clause, nor a statement that is an expression).
+     */
+    private def replacePoisoned(sk: Run.SkippedStat): Boolean =
+      given Context = sk.ctx
+      val head = sk.stat
+      val replaceable = !sk.inBlock && (head match
+        case mdef: untpd.ModuleDef => !mdef.rawMods.is(Flags.Synthetic) && !hasCompanionHere(sk.owner, mdef.name.toTypeName)
+        case tdef: untpd.TypeDef => !hasCompanionHere(sk.owner, tdef.name.toTermName)
+        case _: untpd.DefDef | _: untpd.ValDef => true
+        case _ => false)
+      if !replaceable then return false
+      val parsed = new parsing.Parsers.Parser(source).parse()
+      val fresh = new untpd.UntypedTreeAccumulator[Option[untpd.Tree]]:
+        def apply(x: Option[untpd.Tree], tree: untpd.Tree)(using Context): Option[untpd.Tree] =
+          if x.isDefined then x
+          else if tree.span == head.span && tree.getClass == head.getClass then Some(tree)
+          else if tree.span.contains(head.span) then foldOver(x, tree)
+          else x
+      fresh(None, parsed) match
+        case Some(stat) =>
+          val cls = (if sk.owner.isClass then sk.owner else sk.owner.owner).asClass.classDenot
+          val old = cls.info.decls.toList.filter(sym => sym.span.exists && stat.span.contains(sym.span) && definesHere(sym))
+          // A given or implicit is held by the `ContextualImplicits` cached on
+          // the session's contexts (and by the run's implicit scopes), by
+          // symbol: a fresh symbol would not be found, and the old one is
+          // what is being replaced. The session is poisoned instead.
+          if old.exists(definesImplicit) then return false
+          old.foreach(cls.delete)
+          ctx.typer.index(stat :: Nil)
+          skipped = Run.SkippedStat(stat, sk.ctx, sk.owner) :: skipped
+          true
+        case None =>
+          false
+
+    /** Is `sym` a given or implicit, or a class or object whose indexed
+     *  members (nested ones included) hold one.
+     */
+    private def definesImplicit(sym: Symbol)(using Context): Boolean =
+      sym.isOneOf(Flags.GivenOrImplicit)
+      || sym.is(Flags.ModuleClass) && sym.sourceModule.isOneOf(Flags.GivenOrImplicit)
+      || sym.isClass && sym.asClass.unforcedDecls.exists(definesImplicit)
+
+    /** The symbols whose completion the cancellation unwound through
+     *  (`Run.cancelledCompletions`): a Namer completer that was unwound can
+     *  not be run again (a method's had entered its parameters in the nested
+     *  typer's scope; a class's had set the temporary info, and the class is
+     *  `isCompleted` without parents), and the statement that defines each
+     *  one is replaced like the aborted statement itself (`replacePoisoned`),
+     *  or the session is poisoned: a symbol of this file in no skipped
+     *  statement (a local of a block, a member of a companion). The symbols
+     *  of other files (the classpath's loaders leave their roots loadable
+     *  again; a sourcepath file's completers are left alone) are not touched.
+     *  `replaced` is the span of the aborted statement, replaced already.
+     *  Returns false when the session is to be poisoned.
+     */
+    private def replaceUnwound(replaced: Span)(using Context): Boolean =
+      val syms = run.cancelledCompletions.toList
+      run.cancelledCompletions.clear()
+      var done = List(replaced)
+      var ok = true
+      for sym <- syms if ok && sym.exists && definesHere(sym) do
+        if !sym.span.exists then ok = false
+        else if !done.exists(_.contains(sym.span)) then
+          skipped.find(_.stat.span.contains(sym.span)) match
+            case Some(sk) =>
+              skipped = skipped.filterNot(_ eq sk)
+              if replacePoisoned(sk) then done = sk.stat.span :: done
+              else ok = false
+            case None => ok = false
+      ok
 
     /** Complete every symbol of the skipped statements, in the run that
      *  created their completers: the statement's own symbols, then the
@@ -227,7 +371,13 @@ class InteractiveDriver(
     def completeSymbols(): Unit =
       given Context = myCtx.fresh.setCompilationUnit(unit) // the session's run context, with root imports
       assert(ctx.runId == run.runContext.runId, s"the completers of $uri were created in run ${run.runContext.runId}, not in run ${ctx.runId}")
+      run.cancelledCompletions.clear()
       try skipped.foreach(sk => ctx.typer.foreachIndexedDef(sk.stat)((_, sym) => sym.ensureCompleted()))
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        // the session is kept (the walk runs again when a file is next left),
+        // with the statements of the unwound completers replaced
+        if !replaceUnwound(NoSpan) then poisoned = true
+        throw ex
       finally diagnostics = diagnostics ++ reporter.removeBufferedMessages
 
     /** Insert the typed `stats` into the statements of their owner in the
@@ -364,6 +514,7 @@ class InteractiveDriver(
     import typer.ImportInfo.*
 
     val previousCtx = myCtx
+    val previousSource = myOpenedFiles.get(uri)
     // A targeted run leaves the symbols of the statements it skipped with
     // completers of its own run, which refuse to complete in a later run
     // (`Namer.Completer.complete` gives `UnspecifiedErrorType`): a run on
@@ -377,11 +528,14 @@ class InteractiveDriver(
     // Any new run resets the caches of the context base: a previous targeted
     // run can no longer be resumed.
     mySession = null
+    var startedRun: Run | Null = null
     try {
       val reporter =
         new StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages
 
+      myCancelled = false
       val run = compiler.newRun(using myInitCtx.fresh.setReporter(reporter).setProgressCallback(myProgressCallback))
+      startedRun = run
       myCtx = run.runContext.withRootImports
 
       given Context = myCtx
@@ -395,6 +549,9 @@ class InteractiveDriver(
           run.compileSources(List(source))
           run.skippedStats.toList
         finally run.clearTargeting()
+      // A cancellation noticed before the typer skips the units instead of
+      // unwinding (see `Run.didEnterUnit`); discard that run too.
+      if myProgressCallback.isCancelled() then throw CompilationUnit.CancelledCompilation()
       run.printSummary()
       val ctxRun = ctx.run.nn
       val unit = if ctxRun.units.nonEmpty then ctxRun.units.head else ctxRun.suspendedUnits.head
@@ -417,6 +574,19 @@ class InteractiveDriver(
         myCtx = previousCtx
         close(uri)
         Nil
+      case ex: CompilationUnit.CancelledCompilation =>
+        // The aborted run's trees and units are discarded: the previous run's
+        // stay current, and the caller decides what to answer. Its context
+        // stays current, though: the run brought the denotations it touched
+        // forward to its own run id, and a query under the previous run's
+        // context would find them "invalid in run".
+        startedRun match
+          case r: Run => myCtx = r.runContext.withRootImports.fresh.setPhase(myInitCtx.base.typerPhase)
+          case null => myCtx = previousCtx
+        previousSource match
+          case Some(s) => myOpenedFiles(uri) = s
+          case None => myOpenedFiles.remove(uri)
+        throw ex
     }
   }
 
@@ -489,3 +659,5 @@ class InteractiveDriver(
   }
 }
 
+object InteractiveDriver:
+  private val neverCancelled: () => Boolean = () => false

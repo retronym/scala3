@@ -10,6 +10,7 @@ import scala.meta.internal.pc.PresentationCompilerConfigImpl
 import scala.meta.pc.CancelToken
 import scala.meta.pc.reports.EmptyReportContext
 
+import dotty.tools.dotc.CompilationUnit.CancelledCompilation
 import dotty.tools.dotc.core.Contexts.Context
 import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.util.SourceFile
@@ -93,6 +94,23 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val start = System.nanoTime()
     val result = body
     (result, (System.nanoTime() - start) / 1000000)
+
+  private def inTyperCheckpoint(): Boolean =
+    Thread.currentThread.getStackTrace.exists(_.getMethodName == "checkCancelledTyping")
+
+  /** Runs `body` on the driver with a checker that cancels at the `n`th typer checkpoint. */
+  private def cancelAtCheckpoint(n: Int)(body: CachingDriver => Unit): (Boolean, Int) =
+    withDriver { driver =>
+      var polls = 0
+      val thrown =
+        try
+          driver.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= n }) {
+            body(driver)
+          }
+          false
+        catch case _: CancelledCompilation => true
+      (thrown, polls)
+    }
 
   @Test def `targeted-prefix-and-timing` =
     // Warm up the compiler on other content
@@ -193,6 +211,59 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     }
     println(s"[another-file-sees-the-signatures] SessA.m in SessB: $obtained; diagnostics: $diags")
     org.junit.Assert.assertEquals("(x: Int): Int", obtained)
+
+  @Test def `a-replaced-object-still-finds-givens` =
+    // The soak's sequence (shapes, seed 2, step 265): a cancellation lands while
+    // resuming `object Infer` at `def c`, Infer is re-parsed and re-indexed, the
+    // next request types the fresh Infer, and a completion in its `val d`
+    // must still find the given `Show[Int]` of the package.
+    val code =
+      """|object Wrapper:
+         |  case class Plain(y: String)
+         |trait Show[T]:
+         |  def show(t: T): String
+         |given Show[Int] with
+         |  def show(t: Int) = t.toString
+         |object Infer:
+         |  val a = Wrapper.Plain("p")
+         |  val b = a.y
+         |  def c =
+         |    val xs = (1 to 40).toList
+         |    xs.map(_ + 1).filter(_ > 2).map(_ * 2).filter(_ < 100).sum + b.length
+         |  val d = summon[Show[Int]].sh
+         |""".stripMargin
+    val uri = URI.create("file:///Replaced.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atC = code.indexOf("xs.map(_ + 1)") + 3
+    val atD = code.indexOf(".sh\n") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (thrown, polls, labels1, labels2, oracle) = withDriver { d =>
+        // Infer skipped: the first request is in Wrapper
+        d.runUpTo(uri, src, Span(code.indexOf("case class Plain") + 12))
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 2 }) { d.runUpTo(uri, src, Span(atC)) }; false }
+          catch case _: CancelledCompilation => true
+        def complete(at: Int): List[String] =
+          d.runUpTo(uri, src, Span(at))
+          val unit = d.compilationUnits(uri)
+          given dotty.tools.dotc.core.Contexts.Context = d.currentCtx.fresh.setCompilationUnit(unit).withPhase(dotty.tools.dotc.core.Phases.typerPhase(using d.currentCtx))
+          dotty.tools.dotc.interactive.Completion.completions(dotty.tools.dotc.util.SourcePosition(src, Span(at)))._2.map(_.label).sorted
+        val labels1 = complete(atC)
+        val labels2 = complete(atD)
+        val fresh = new dotty.tools.dotc.interactive.InteractiveDriver(dotty.tools.pc.utils.TestingWorkspaceSearch(dotty.tools.pc.base.TestResources.classpath.map(_.toString)).settings, dotty.tools.dotc.interactive.CachedLogicalPackage.none)
+        fresh.run(uri, src)
+        val unit = fresh.compilationUnits(uri)
+        given dotty.tools.dotc.core.Contexts.Context = fresh.currentCtx.fresh.setCompilationUnit(unit).withPhase(dotty.tools.dotc.core.Phases.typerPhase(using fresh.currentCtx))
+        val oracle = dotty.tools.dotc.interactive.Completion.completions(dotty.tools.dotc.util.SourcePosition(src, Span(atD)))._2.map(_.label).sorted
+        (thrown, polls, labels1, labels2, oracle)
+      }
+      println(s"[a-replaced-object-still-finds-givens] thrown=$thrown polls=$polls; at def c: $labels1; at val d: $labels2; whole-file: $oracle")
+      assert(thrown, "the cancellation must land inside def c")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), labels2.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
   @Test def `block-statements-are-skipped-too` =
     // In a method body only the statement at the target is typed; a statement
@@ -329,6 +400,94 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     val fresh = new dotty.tools.dotc.interactive.InteractiveDriver(dotty.tools.pc.utils.TestingWorkspaceSearch(dotty.tools.pc.base.TestResources.classpath.map(_.toString)).settings, dotty.tools.dotc.interactive.CachedLogicalPackage.none)
     fresh.run(uri, src)
     (session, labelsOf(fresh))
+
+  @Test def `cancel-inside-a-sibling-completer` =
+    // The oracle's sequence on Contexts.scala (seed 1, step 14): a resume into
+    // `def set` forces the completer of its skipped sibling `update[T]`, and
+    // the cancellation lands inside that completer (its long signature). The
+    // resumed statement is replaced; the sibling must be too: its completer,
+    // retried, had entered `T$1` next to the `T` it entered before the abort
+    // ("T is already defined as type T"), and `update(...)` then failed to
+    // type against the mixed signature.
+    val params = (1 to 40).map(i => s"p$i: List[Map[T, T]]").mkString(", ")
+    val args = (1 to 40).map(_ => "Nil").mkString(", ")
+    val code =
+      s"""|object Store:
+          |  class Loc[T]
+          |  def set(x: Int): Int = update(new Loc[Int], x, $args).to
+          |  def update[T](loc: Loc[T], value: T, $params): Int = 1
+          |""".stripMargin
+    val uri = URI.create("file:///Sibling.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atSet = code.indexOf("update(new") + 3
+    val atTo = code.indexOf(".to\n") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (thrown, polls, run1, run2, skippedBefore, skippedAfter, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("class Loc") + 8)) // set and update skipped
+        val run1 = d.runIdOf(uri)
+        val skippedBefore = d.untypedSpans(uri).size
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 2 }) { d.runUpTo(uri, src, Span(atSet)) }; false }
+          catch case _: CancelledCompilation => true
+        val skippedAfter = d.untypedSpans(uri).size
+        val (session, oracle) = completionsVsOracle(d, uri, src, atTo)
+        (thrown, polls, run1, d.runIdOf(uri), skippedBefore, skippedAfter, session, oracle)
+      }
+      println(s"[cancel-inside-a-sibling-completer] thrown=$thrown polls=$polls run=$run1->$run2 skipped=$skippedBefore->$skippedAfter; session: ${session.take(6)}; whole-file: ${oracle.take(6)}")
+      assert(thrown, "the cancellation must land")
+      assertEquals(run1, run2, "the session is kept: both statements are replaced")
+      assertEquals(skippedBefore, skippedAfter, "the aborted statement and the sibling are skipped again")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  @Test def `cancel-inside-a-given-class-completer` =
+    // The shape of finding I18 (a given not found after a cancellation, in
+    // the same run): a cancellation lands inside the class completer of a
+    // given (its parents being typed) that an implicit search forced. The
+    // completer had set the class's temporary info, so the class is
+    // `isCompleted` without parents and is never retried, and
+    // `summon[Show[Int]]` finds no given for the rest of the run. A given is
+    // not replaced (the contexts' implicit caches hold it by symbol): the
+    // session is poisoned and the next request starts fresh. (A top-level
+    // given is a member of the synthetic package object, which is typed
+    // whole by the first request; one in an object is completed lazily.)
+    val markers = (1 to 40).map(i => s"trait M$i").mkString("\n")
+    val withs = (1 to 40).map(i => s"M$i").mkString(" with ")
+    val code =
+      s"""|trait Show[T]:
+          |  def show(t: T): String
+          |$markers
+          |object Givens:
+          |  given Show[Int] with $withs with
+          |    def show(t: Int) = t.toString
+          |object Infer:
+          |  import Givens.given
+          |  val d = summon[Show[Int]].sh
+          |  val e = 1
+          |""".stripMargin
+    val uri = URI.create("file:///GivenCompleter.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atD = code.indexOf(".sh\n") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (thrown, polls, run1, run2, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("val e = 1") + 4)) // val d and Givens skipped
+        val run1 = d.runIdOf(uri)
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 2 }) { d.runUpTo(uri, src, Span(atD)) }; false }
+          catch case _: CancelledCompilation => true
+        val (session, oracle) = completionsVsOracle(d, uri, src, atD)
+        (thrown, polls, run1, d.runIdOf(uri), session, oracle)
+      }
+      println(s"[cancel-inside-a-given-class-completer] thrown=$thrown polls=$polls run=$run1->$run2; session: $session; whole-file: $oracle")
+      assert(thrown, "the cancellation must land")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
   private val closureBody =
     """|object Com {
@@ -474,6 +633,161 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     println(s"[a-block-in-a-method-body-is-still-targeted] skipped: $skipped")
     assert(skipped.exists(_.startsWith("val b")), s"a statement of the if's block is skipped: $skipped")
 
+  @Test def `a-cancelled-resume-leaves-no-constraint-behind` =
+    // A resumed statement is typed in the session's long-lived typer state
+    // (the class body's). A cancellation drops the statement's tree, and must
+    // drop what its partial typing added to the constraint with it: type
+    // variables created for trees that no longer exist, possibly instantiated.
+    // The statement is long and every line of it a polymorphic chain, so that
+    // a cancellation at an early checkpoint (one every 16 typed trees) lands
+    // with type variables already created.
+    val lines = (0 until 40).map(j => s"    val v$j = xs.map(_ + $j).foldLeft(0)(_ + _) + List(v${if j == 0 then 0 else j - 1}, $j).max").mkString("\n")
+      .replace("List(v0, 0)", "List(0, 0)")
+    val code =
+      s"""|object Leak {
+          |  def heavy(xs: List[Int]): Int = {
+          |$lines
+          |    v39
+          |  }
+          |  def light = 1
+          |}
+          |""".stripMargin
+    val uri = URI.create("file:///Leak.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atLight = code.indexOf("def light") + 6
+    val atInHeavy = code.indexOf("val v30") + 6
+    def snapshot(d: dotty.tools.dotc.interactive.InteractiveDriver): (Int, Int, Int) =
+      val ts = d.currentCtx.typerState
+      (ts.ownedVars.size, ts.constraint.domainParams.size, ts.uninstVars.size)
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (before, after, thrown, polls, sameRun, again) = withDriver { d =>
+        d.runUpTo(uri, src, Span(atLight)) // heavy is skipped
+        val run0 = d.runIdOf(uri)
+        val before = snapshot(d)
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 3 }) { d.runUpTo(uri, src, Span(atInHeavy)) }; false }
+          catch case _: CancelledCompilation => true
+        val after = snapshot(d)
+        val sameRun = d.runIdOf(uri) == run0
+        // and the request after it still answers
+        d.runUpTo(uri, src, Span(atInHeavy))
+        val unit = d.compilationUnits(uri)
+        given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+        val again = dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(atInHeavy)).headOption
+          .map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>")
+        (before, after, thrown, polls, sameRun, again)
+      }
+      println(s"[a-cancelled-resume-leaves-no-constraint-behind] thrown=$thrown polls=$polls same run=$sameRun; (ownedVars, domainParams, uninstVars) before=$before after=$after; then at v30: $again")
+      assert(thrown, "the cancellation must land inside the resume")
+      assert(sameRun, "a cancelled resume keeps the run")
+      org.junit.Assert.assertEquals("the session's typer state is as it was before the cancelled resume", before, after)
+      assert(again.exists(_.contains("Int")), s"the request after the cancellation answers: $again")
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  @Test def `a-cancelled-completing-run-leaves-no-constraint-behind` =
+    // A resumed statement is typed in the session's long-lived typer state
+    // (the class body's). A cancellation drops the statement's tree, and must
+    // drop what its partial typing added to the constraint with it: type
+    // variables created for trees that no longer exist, possibly instantiated.
+    // The statement is long and every line of it a polymorphic chain, so that
+    // a cancellation at an early checkpoint (one every 16 typed trees) lands
+    // with type variables already created.
+    val lines = (0 until 40).map(j => s"    val v$j = xs.map(_ + $j).foldLeft(0)(_ + _) + List(v${if j == 0 then 0 else j - 1}, $j).max").mkString("\n")
+      .replace("List(v0, 0)", "List(0, 0)")
+    val code =
+      s"""|object Leak {
+          |  def heavy(xs: List[Int]): Int = {
+          |$lines
+          |    v39
+          |  }
+          |  def light = 1
+          |}
+          |""".stripMargin
+    val uri = URI.create("file:///Leak2.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atLight = code.indexOf("def light") + 6
+    val atInHeavy = code.indexOf("val v30") + 6
+    def snapshot(d: dotty.tools.dotc.interactive.InteractiveDriver): (Int, Int, Int) =
+      val ts = d.currentCtx.typerState
+      (ts.ownedVars.size, ts.constraint.domainParams.size, ts.uninstVars.size)
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      val (before, after, thrown, polls, sameRun, again) = withDriver { d =>
+        d.runUpTo(uri, src, Span(atLight)) // heavy is skipped
+        val run0 = d.runIdOf(uri)
+        val before = snapshot(d)
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 3 }) { d.run(uri, src) }; false }
+          catch case _: CancelledCompilation => true
+        val after = snapshot(d)
+        val sameRun = d.runIdOf(uri) == run0
+        // and the request after it still answers
+        d.runUpTo(uri, src, Span(atInHeavy))
+        val unit = d.compilationUnits(uri)
+        given Context = d.currentCtx.fresh.setCompilationUnit(unit)
+        val again = dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(atInHeavy)).headOption
+          .map(t => if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>")
+        (before, after, thrown, polls, sameRun, again)
+      }
+      println(s"[a-cancelled-completing-run-leaves-no-constraint-behind] thrown=$thrown polls=$polls same run=$sameRun; (ownedVars, domainParams, uninstVars) before=$before after=$after; then at v30: $again")
+      assert(thrown, "the cancellation must land inside the completing run")
+      assert(sameRun, "a cancelled completing run keeps the run")
+      org.junit.Assert.assertEquals("the session's typer state is as it was before the cancelled completing run", before, after)
+      assert(again.exists(_.contains("Int")), s"the request after the cancellation answers: $again")
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  @Test def `cancel-inside-a-member-driver-only` =
+    // the same sequence as `cancel-inside-a-member`, on the driver, with any exception printed
+    val heavy = Set(300)
+    val (code, _) = params(bigSource("cancel-member-d", 300, heavy = heavy))
+    val (code2, offset2) = params(bigSource("cancel-member-d", 300, inGiant = true, heavy = heavy))
+    val uri2 = URI.create("file:///CancelD.scala")
+    val src = SourceFile.virtual(uri2, code)
+    withDriver { d =>
+      try
+        d.runUpTo(uri2, src, Span(code.indexOf("this.meth", code.indexOf("object M300")) + 9))
+        println(s"[driver-only] after val r: run=${d.runIdOf(uri2)} skipped=${d.untypedSpans(uri2).size}")
+        var polls = 0
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then polls += 1; polls >= 1 }) { d.runUpTo(uri2, src, Span(offset2)) }; false }
+          catch case _: CancelledCompilation => true
+        println(s"[driver-only] cancel: thrown=$thrown polls=$polls run=${d.runIdOf(uri2)} skipped=${d.untypedSpans(uri2).size}")
+        d.runUpTo(uri2, src, Span(offset2))
+        println(s"[driver-only] again: run=${d.runIdOf(uri2)} skipped=${d.untypedSpans(uri2).size}")
+      catch case scala.util.control.NonFatal(ex) =>
+        println(s"[driver-only] EXCEPTION ${ex}\n" + ex.getStackTrace.take(14).mkString("\n"))
+        throw ex
+    }
+
+  @Test def `a-macro-in-a-long-targeted-run` =
+    // I19: the trees of an inlined macro body carry the macro's source, and a
+    // skip rule comparing their spans with the target offset skipped the splice
+    // body's `$anonfun` whenever the offset fell outside it, which depended on the
+    // file's length (a chain of 30 failed, 3 worked). Targeting applies to the
+    // request's source only. The checkpoint mask is varied to show it is not that.
+    def source(tag: String, chain: Int) =
+      val stats = (0 until chain).map(j => s"    val a$j = xs.map(_ + $j).filter(_ > $j).sum + ${if j == 0 then "latched" else s"a${j - 1}"}").mkString("\n")
+      s"// $tag\nobject G {\n  def giant(xs: List[Int]): Int = {\n    val latched = tests.macros.Latch.await\n$stats\n    a0 + a${chain - 1}\n  }\n}\n"
+    def macroErrors(diags: List[dotty.tools.dotc.reporting.Diagnostic]) = diags.map(_.msg.message).filter(_.contains("interpreted"))
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    try
+      withDriver { d =>
+        for (label, m, chain) <- List(("mask 1023, chain 30", 1023, 30), ("mask 1023, chain 3", 1023, 3), ("no checkpoint, chain 30", (1 << 30) - 1, 30), ("mask 15, chain 3", 15, 3)) do
+          dotty.tools.dotc.Run.typerCheckpointMask = m
+          val code = source(label, chain)
+          val uri = URI.create(s"file:///Macro${m}_$chain.scala")
+          val src = SourceFile.virtual(uri, code)
+          val diags = d.runUpTo(uri, src, Span(code.indexOf(s"val a${chain - 1} =") + 8))
+          println(s"[a-macro-in-a-long-targeted-run] $label: ${macroErrors(diags).map(_.take(70))}")
+          org.junit.Assert.assertEquals(s"$label: the macro must expand (targeting applies to the request's source only, not to the inlined body's trees)", Nil, macroErrors(diags))
+      }
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
   @Test def `edit-starts-a-new-run` =
     assertNoDiff(expectedAt(10), complete(bigSource("edit", 10)))
     val (runId1, typed1, _) = state()
@@ -483,3 +797,52 @@ class CompletionSessionSuite extends BaseCompletionSuite:
     println(s"[edit-starts-a-new-run] after edit: runId=$runId2 typedTopLevelCount=$typed2")
     assert(runId2 > runId1, "changed content must start a new run")
 
+  @Test def `cancel-inside-a-statement` =
+    val heavy = Set(300)
+    assertNoDiff(expectedAt(10), complete(bigSource("cancel", 10, heavy = heavy)))
+    val (runId1, typed1, skipped1) = state()
+    println(s"[cancel-inside-a-statement] after object 10: runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1")
+    val (code, offset) = params(bigSource("cancel", 300, inGiant = true, heavy = heavy))
+    // Cancel at the second typer checkpoint reached while typing object 300
+    // (its member `giant` contains the target, so it is typed with the object)
+    val (thrown, polls) = cancelAtCheckpoint(2)(_.runUpTo(uri, SourceFile.virtual(uri, code), Span(offset)))
+    val (runId2, typed2, skipped2) = state()
+    println(s"[cancel-inside-a-statement] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2")
+    assert(thrown, "the resume must be aborted with CancelledCompilation")
+    assertEquals(runId1, runId2, "the aborted resume must keep the run")
+    assertEquals(typed1, typed2, "the aborted statement is not typed")
+    assertEquals(skipped1, skipped2, "the aborted statement is replaced and skipped again")
+    // Within a typed statement, still served by the same run
+    assertNoDiff(expectedAt(10), complete(bigSource("cancel", 10, heavy = heavy)))
+    val (runId3, typed3, _) = state()
+    println(s"[cancel-inside-a-statement] after object 10 (typed): runId=$runId3 typedTopLevelCount=$typed3")
+    assertEquals(runId1, runId3, "a request within a typed statement is served by the same run")
+    // The replaced statement, typed this time
+    val obtained4 = complete(bigSource("cancel", 300, inGiant = true, heavy = heavy))
+    val (runId4, typed4, skipped4) = state()
+    println(s"[cancel-inside-a-statement] inside giant of object 300 (replaced, resumed): runId=$runId4 typedTopLevelCount=$typed4 skipped=$skipped4 (${obtained4.linesIterator.size} items)")
+    assert(obtained4.linesIterator.exists(_.startsWith("filter")), s"expected filter among the completions, got: $obtained4")
+    assertEquals(runId1, runId4, "the resume after the abort must continue the same run")
+    assertEquals(typed1 + 2, typed4, "object 300 is typed")
+    assertNoDiff(expectedAt(300), complete(bigSource("cancel", 300, heavy = heavy)))
+
+  @Test def `cancel-inside-a-member` =
+    val heavy = Set(300)
+    // `val r` of the heavy object: its methods, `giant` included, are skipped
+    assertNoDiff(expectedAt(300), complete(bigSource("cancel-member", 300, heavy = heavy)))
+    val (runId1, typed1, skipped1) = state()
+    println(s"[cancel-inside-a-member] after `val r` of object 300: runId=$runId1 typedTopLevelCount=$typed1 skipped=$skipped1")
+    val (code, offset) = params(bigSource("cancel-member", 300, inGiant = true, heavy = heavy))
+    // Cancel at the first typer checkpoint reached while typing `giant` alone
+    val (thrown, polls) = cancelAtCheckpoint(1)(_.runUpTo(uri, SourceFile.virtual(uri, code), Span(offset)))
+    val (runId2, typed2, skipped2) = state()
+    println(s"[cancel-inside-a-member] thrown=$thrown polls=$polls; after the abort: runId=$runId2 typedTopLevelCount=$typed2 skipped=$skipped2")
+    assert(thrown, "the resume must be aborted with CancelledCompilation")
+    assertEquals(runId1, runId2, "the aborted resume must keep the run")
+    assertEquals(skipped1, skipped2, "the aborted member is replaced and skipped again")
+    val obtained3 = complete(bigSource("cancel-member", 300, inGiant = true, heavy = heavy))
+    val (runId3, typed3, skipped3) = state()
+    println(s"[cancel-inside-a-member] inside giant again: runId=$runId3 typedTopLevelCount=$typed3 skipped=$skipped3 (${obtained3.linesIterator.size} items)")
+    assert(obtained3.linesIterator.exists(_.startsWith("filter")), s"expected filter among the completions, got: $obtained3")
+    assertEquals(runId1, runId3, "after an abort inside a member, the same run serves the next request")
+    assertEquals(skipped2 - 1, skipped3, "the member is typed")

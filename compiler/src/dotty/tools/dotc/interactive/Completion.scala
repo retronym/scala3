@@ -26,6 +26,7 @@ import dotty.tools.dotc.util.Chars
 import dotty.tools.dotc.util.SourcePosition
 
 import scala.collection.mutable
+import scala.util.control.NonFatal
 import dotty.tools.dotc.core.ContextOps.localContext
 import dotty.tools.dotc.core.Names
 import dotty.tools.dotc.core.Types
@@ -583,7 +584,7 @@ object Completion:
             val convertedTree = ctx.typer.typedAheadExpr(untpd.Apply(untpd.TypedSplice(methodRefTree), untpd.TypedSplice(qual) :: Nil))
             Inferencing.fullyDefinedType(convertedTree.tpe, "", pos)
         catch
-          case error => conversionTarget.tree.tpe // fallback to not fully defined type
+          case NonFatal(_) => conversionTarget.tree.tpe // fallback to not fully defined type
 
       if qual.typeOpt.isExactlyNothing || qual.typeOpt.isNullType then
         Map.empty

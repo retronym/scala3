@@ -1,9 +1,13 @@
 package dotty.tools.pc
 
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ScheduledExecutorService
 
 import scala.concurrent.ExecutionContextExecutor
+import scala.meta.internal.metals.PcQueryContext
 import scala.meta.internal.pc.CompilerAccess
+import scala.meta.internal.pc.CompilerWrapper
+import scala.meta.pc.CancelToken
 import scala.meta.pc.PresentationCompilerConfig
 
 import dotty.tools.dotc.reporting.StoreReporter
@@ -24,6 +28,25 @@ class Scala3CompilerAccess(
     ):
 
   def newReporter = new StoreReporter(null)
+
+  /** Interruptable requests abort their compilation when the token is
+   *  cancelled: the driver polls the token from the typer (see
+   *  `InteractiveDriver.withCancelChecker`) and unwinds with a
+   *  `CancelledCompilation`, which `withSharedCompiler` maps to `default`
+   *  while keeping the compiler instance.
+   */
+  override def withInterruptableCompiler[T](
+      default: T,
+      token: CancelToken
+  )(
+      thunk: CompilerWrapper[StoreReporter, CachingDriver] => T
+  )(implicit queryInfo: PcQueryContext): CompletableFuture[T] =
+    val cancelled = token.onCancel().toCompletableFuture
+    val isCancelled: () => Boolean =
+      () => cancelled.isDone && cancelled.getNow(false)
+    super.withInterruptableCompiler(default, token) { access =>
+      access.compiler().withCancelChecker(isCancelled)(thunk(access))
+    }
 
   /** Handle the exception in order to make sure that we retry immediately.
    *  Otherwise, we will wait until the end of the timeout, which is 20s by
