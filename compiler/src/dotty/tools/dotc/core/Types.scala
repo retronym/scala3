@@ -44,7 +44,7 @@ import CaptureSet.IdentityCaptRefMap
 import Capabilities.*
 import transform.Recheck.currentRechecker
 
-import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, publishedBy, scratch, sharable}
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
@@ -3219,8 +3219,12 @@ object Types extends TypeUtils {
   }
 
   // `refFn` can be null only if `computed` is true.
-  case class LazyRef(private var refFn: (Context => (Type | Null)) | Null) extends UncachedProxyType with ValueType {
-    private var myRef: Type | Null = null
+  case class LazyRef(@(lazyFact @field) @(guardedBy @field)("rootClaim") private var refFn: (Context => (Type | Null)) | Null) extends UncachedProxyType with ValueType {
+    // Written under this reference's claim, read without it by a reader that finds `computed` and waits on the claim for
+    // the value. Volatile, so that the reader that sees the value sees the type it points to complete. `refFn` is read
+    // without the claim only by the case class's own `_1` and `copy`, which nothing calls.
+    @lazyFact @publishedBy("volatile") @volatile private var myRef: Type | Null = null
+    @lazyFact @benignRace("set once and never reset: a reader that sees it false takes the claim and checks again, one that sees it true and no value waits on the claim")
     private var computed = false
 
     def ref(using Context): Type =
