@@ -275,7 +275,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      Sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
+      Sharing.serialised[base.type, SourceFile](base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
     }
 
     /** SourceFile with given path, memoized */
@@ -284,16 +284,18 @@ object Contexts {
       case Some(file) => getSource(file)
 
     /** AbstractFile with given path, memoized */
-    def getFile(path: String): Option[AbstractFile] = base.files.get(path).orElse(
-      try
-        val file = new PlainFile(Path(path))
-        base.files(path) = file
-        Some(file)
-      catch
-        case ex: InvalidPathException =>
-          report.error(em"invalid file path: ${ex.getMessage}")
-          None
-    )
+    def getFile(path: String): Option[AbstractFile] =
+      Sharing.serialised[base.type, Option[AbstractFile]](base)(base.files.get(path))(using this).orElse(
+        try
+          val file = new PlainFile(Path(path))
+          // readers that miss at once store equal files
+          Sharing.serialised[base.type, Unit](base)(base.files(path) = file)(using this)
+          Some(file)
+        catch
+          case ex: InvalidPathException =>
+            report.error(em"invalid file path: ${ex.getMessage}")
+            None
+      )
 
     // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
     // context). A lost update drops a derived context, which is made again.
@@ -1131,11 +1133,15 @@ object Contexts {
       if concurrent then _concurrentSymIds.incrementAndGet()
       else { _nextSymId += 1; _nextSymId }
 
-    /** Sources and Files that were loaded */
+    /** Sources and Files that were loaded. Readers of a concurrent base share them, so they are reached only with
+     *  the evidence of this base's monitor (`Sharing.serialised`, `locking`).
+     */
     @interned @guardedBy("this")
-    val sources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
+    private val mySources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
     @cache @guardedBy("this")
-    val files: util.HashMap[String, AbstractFile] = util.HashMap()
+    private val myFiles: util.HashMap[String, AbstractFile] = util.HashMap()
+    private[core] def sources(using Sharing.Monitor[this.type]): util.HashMap[AbstractFile, SourceFile] = mySources
+    private[core] def files(using Sharing.Monitor[this.type]): util.HashMap[String, AbstractFile] = myFiles
 
     /** Cache for magic offset header lookups, scoped to this compiler instance
      *  so that concurrent compilers in the same classloader don't share stale entries. */
@@ -1252,8 +1258,10 @@ object Contexts {
       emptyTypeBounds = null
       emptyWildcardBounds = null
       errorTypeMsg.clear()
-      sources.clear()
-      files.clear()
+      Sharing.locking[this.type, Unit](this) {
+        sources.clear()
+        files.clear()
+      }
       initialReader.reset()  // forces re-evaluation of top and bottom classes in TypeComparer
 
     // Test that access is single threaded
