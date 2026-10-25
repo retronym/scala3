@@ -225,27 +225,32 @@ object Annotations {
   private def refersToLambdaParam(tp: Type, tl: TermLambda)(using Context): Boolean =
     tp.existsPart(isLambdaParam(_, tl), stopAt = StopAt.Static)
 
-  /** With parallel readers (`-Yinteractive-parallel`), a lazy annotation's
-   *  thunk is evaluated by one reader: another one waits for it rather than
-   *  meeting the evaluation's `null` (a cycle on one reader). Re-entry on the
-   *  owner still meets it.
-   */
-  private inline def evaluatingOnce[T](self: AnyRef)(inline op: T)(using Context): T =
-    Sharing.claimed(self, CompletionLock.lazyAnnotation, self)(op)
+  // With parallel readers (`-Yinteractive-parallel`), a lazy annotation's thunk is evaluated by one reader, holding
+  // the annotation's claim (`Sharing.claimed`): another one waits for it rather than meeting the evaluation's `null`
+  // (a cycle on one reader). Re-entry on the owner still meets it. The fields are written only by the holder of the
+  // claim (a `Sharing.Holds`), and read without it: they are volatile, so a reader that finds a symbol or a tree finds
+  // it complete, and one that finds the thunk or the evaluation's `null` takes the claim.
+  abstract class LazyAnnotation(initSym: Symbol | (Context ?=> Symbol) | Null, initTree: Tree | (Context ?=> Tree) | Null)
+  extends Annotation {
+    @volatile private var mySym: Symbol | (Context ?=> Symbol) | Null = initSym
+    @volatile private var myTree: Tree | (Context ?=> Tree) | Null = initTree
 
-  abstract class LazyAnnotation extends Annotation {
-    protected var mySym: Symbol | (Context ?=> Symbol) | Null
+    private def setSym(sym: Symbol | (Context ?=> Symbol) | Null)(using Sharing.Holds[this.type]): Unit = mySym = sym
+    private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
+
     override def symbol(using parentCtx: Context): Symbol =
-      if !mySym.isInstanceOf[Symbol] then evaluatingOnce(this)(symbol0) else symbol0
+      val sym = mySym
+      if sym.isInstanceOf[Symbol] && sym.asInstanceOf[Symbol].defRunId == parentCtx.runId then sym.asInstanceOf[Symbol]
+      else Sharing.claimed[this.type, Symbol](this, CompletionLock.lazyAnnotation, this)(symbol0)
 
-    private def symbol0(using parentCtx: Context): Symbol =
+    private def symbol0(using parentCtx: Context, holds: Sharing.Holds[this.type]): Symbol =
       assert(mySym != null)
       mySym match {
         case symFn: (Context ?=> Symbol) @unchecked =>
-          mySym = null
-          try mySym = atPhaseBeforeTransforms(symFn)
+          setSym(null)
+          try setSym(atPhaseBeforeTransforms(symFn))
           catch case ex: CompilationUnit.CancelledCompilation =>
-            mySym = ctx ?=> symFn(using ctx) // the next run evaluates the thunk again
+            setSym(ctx ?=> symFn(using ctx)) // the next run evaluates the thunk again
             throw ex
             // We should always produce the same annotation tree, no matter when the
             // annotation is evaluated. Setting the phase to a pre-transformation phase
@@ -253,23 +258,24 @@ object Annotations {
             // will be the Erasure typer, but that doesn't seem to affect the annotation
             // trees we create, so we leave it as is)
         case sym: Symbol if sym.defRunId != parentCtx.runId =>
-          mySym = sym.denot.current.symbol
+          setSym(sym.denot.current.symbol)
         case _ =>
       }
       mySym.asInstanceOf[Symbol]
 
-    protected var myTree: Tree | (Context ?=> Tree) | Null
     def tree(using Context): Tree =
-      if !myTree.isInstanceOf[Tree @unchecked] then evaluatingOnce(this)(tree0) else tree0
+      val t = myTree
+      if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
+      else Sharing.claimed[this.type, Tree](this, CompletionLock.lazyAnnotation, this)(tree0)
 
-    private def tree0(using Context): Tree =
+    private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>
-          myTree = null
-          try myTree = atPhaseBeforeTransforms(treeFn)
+          setTree(null)
+          try setTree(atPhaseBeforeTransforms(treeFn))
           catch case ex: CompilationUnit.CancelledCompilation =>
-            myTree = ctx ?=> treeFn(using ctx) // the next run evaluates the thunk again
+            setTree(ctx ?=> treeFn(using ctx)) // the next run evaluates the thunk again
             throw ex
         case _ =>
       }
@@ -280,9 +286,7 @@ object Annotations {
   }
 
   class DeferredSymAndTree(symFn: Context ?=> Symbol, treeFn: Context ?=> Tree)
-  extends LazyAnnotation:
-    protected var mySym: Symbol | (Context ?=> Symbol) | Null = ctx ?=> symFn(using ctx)
-    protected var myTree: Tree | (Context ?=> Tree) | Null = ctx ?=> treeFn(using ctx)
+  extends LazyAnnotation(ctx ?=> symFn(using ctx), ctx ?=> treeFn(using ctx))
 
   /** An annotation indicating the body of a right-hand side,
    *  typically of an inline method. Treated specially in
@@ -301,20 +305,25 @@ object Annotations {
     def tree(using Context): Tree = body
   }
 
-  abstract class LazyBodyAnnotation extends BodyAnnotation {
+  abstract class LazyBodyAnnotation(initTree: Tree | (Context ?=> Tree) | Null) extends BodyAnnotation {
     // Copy-pasted from LazyAnnotation to avoid having to turn it into a trait
-    protected var myTree: Tree | (Context ?=> Tree) | Null
-    def tree(using Context): Tree =
-      if !myTree.isInstanceOf[Tree @unchecked] then evaluatingOnce(this)(tree0) else tree0
+    @volatile private var myTree: Tree | (Context ?=> Tree) | Null = initTree
 
-    private def tree0(using Context): Tree =
+    private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
+
+    def tree(using Context): Tree =
+      val t = myTree
+      if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
+      else Sharing.claimed[this.type, Tree](this, CompletionLock.lazyAnnotation, this)(tree0)
+
+    private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>
-          myTree = null
-          try myTree = atPhaseBeforeTransforms(treeFn)
+          setTree(null)
+          try setTree(atPhaseBeforeTransforms(treeFn))
           catch case ex: CompilationUnit.CancelledCompilation =>
-            myTree = ctx ?=> treeFn(using ctx) // the next run evaluates the thunk again
+            setTree(ctx ?=> treeFn(using ctx)) // the next run evaluates the thunk again
             throw ex
         case _ =>
       }
@@ -326,8 +335,7 @@ object Annotations {
 
   object LazyBodyAnnotation {
     def apply(bodyFn: Context ?=> Tree): LazyBodyAnnotation =
-      new LazyBodyAnnotation:
-        protected var myTree: Tree | (Context ?=> Tree) | Null = ctx ?=> bodyFn(using ctx)
+      new LazyBodyAnnotation(ctx ?=> bodyFn(using ctx)) {}
   }
 
   object Annotation {
@@ -358,10 +366,7 @@ object Annotations {
 
     /** Create an annotation where the tree is computed lazily. */
     def deferred(sym: Symbol)(treeFn: Context ?=> Tree): Annotation =
-      new LazyAnnotation {
-        protected var myTree: Tree | (Context ?=> Tree) | Null = ctx ?=> treeFn(using ctx)
-        protected var mySym: Symbol | (Context ?=> Symbol) | Null = sym
-      }
+      new LazyAnnotation(sym, ctx ?=> treeFn(using ctx)) {}
 
     /** Create an annotation where the symbol and the tree are computed lazily. */
     def deferredSymAndTree(symFn: Context ?=> Symbol)(treeFn: Context ?=> Tree): Annotation =

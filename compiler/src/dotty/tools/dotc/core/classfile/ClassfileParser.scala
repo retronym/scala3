@@ -851,21 +851,19 @@ final class ClassfileParser(
     }
   }
 
-  class ClassfileAnnotation(annotType: Type, lazyArgs: List[(NameOrString, untpd.Tree | EnumTag)]) extends LazyAnnotation {
-    private def args(using Context): List[untpd.Tree] =
-      lazyArgs.map {
-        case (name, tree: untpd.Tree) => untpd.NamedArg(name.name, tree).withSpan(NoSpan)
-        case (name, tag: EnumTag)     => untpd.NamedArg(name.name, tag.toTree).withSpan(NoSpan)
-      }
+  private def annotationArgs(lazyArgs: List[(NameOrString, untpd.Tree | EnumTag)])(using Context): List[untpd.Tree] =
+    lazyArgs.map {
+      case (name, tree: untpd.Tree) => untpd.NamedArg(name.name, tree).withSpan(NoSpan)
+      case (name, tag: EnumTag)     => untpd.NamedArg(name.name, tag.toTree).withSpan(NoSpan)
+    }
 
-    protected var mySym: Symbol | (Context ?=> Symbol) | Null =
-      (ctx: Context) ?=> annotType.classSymbol
-
-    protected var myTree: Tree | (Context ?=> Tree) | Null =
-      (ctx: Context) ?=> untpd.resolveConstructor(annotType, args)
+  class ClassfileAnnotation(annotType: Type, lazyArgs: List[(NameOrString, untpd.Tree | EnumTag)])
+  extends LazyAnnotation(
+    (ctx: Context) ?=> annotType.classSymbol,
+    (ctx: Context) ?=> untpd.resolveConstructor(annotType, annotationArgs(lazyArgs))) {
 
     def untpdTree(using Context): untpd.Tree =
-      untpd.New(untpd.TypeTree(annotType), List(args))
+      untpd.New(untpd.TypeTree(annotType), List(annotationArgs(lazyArgs)))
   }
 
   /** Parse and return a single annotation.  If it is malformed,
