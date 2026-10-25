@@ -169,29 +169,67 @@ object SymDenotations {
           CyclicReference.trace("compute the signature of ", symbol):
             lockAndComplete(completer)
 
-    /** Set `Touched`, run the completer, and clear the lock on the way out
-     *  when a cancellation unwinds through it (see `onCancel`).
+    /** Set `Touched`, run the completer, and clear the lock on the way out.
+     *  Interactive mode also keeps the set of symbols whose completion is in
+     *  progress on the run (`Run.completing`), so that a `Touched` flag can
+     *  be told from a cycle (see `healLeakedTouched`), and records an
+     *  exception that unwinds through the completion (see `onUnwind`). Batch
+     *  compilation pays one mode test.
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
-      if myFlags.is(Touched) then
+      val interactive = ctx.mode.is(Mode.Interactive)
+      val run: Run | Null = if interactive then ctx.run else null
+      if myFlags.is(Touched) && !healLeakedTouched(run) then
+        if run != null then run.recordCyclePrevented(symbol)
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
+      if run != null then run.completing += symbol
       try atPhase(validFor.firstPhaseId)(completer.complete(this))
-      catch case ex: CompilationUnit.CancelledCompilation =>
-        onCancel()
+      catch case ex =>
+        onUnwind(ex, interactive, run)
         throw ex
+      finally if run != null then run.completing -= symbol
 
-    /** A cancellation unwound through this completion before it finished:
-     *  clear `Touched` so that the next run can complete the symbol instead of
-     *  reporting a cyclic reference, and record the symbol on the run, whether
-     *  complete or not: a class completer sets the temporary info before it
-     *  types the parents, and the class is then `isCompleted` with that info
-     *  (see `Run.cancelledCompletions`). The caller rethrows.
+    /** `Touched` is set but, in interactive mode, no completion of this
+     *  symbol is in progress: the flag is what an exception unwinding through
+     *  an earlier completion left (a stale lock, not a cycle). Clear it and
+     *  complete; record the healing on the run. In batch mode (`run` is
+     *  null), or when the completion is in progress, it is a cycle.
      */
-    private def onCancel()(using Context): Unit =
-      untouchIfIncomplete()
-      val r = ctx.run
-      if r != null then r.cancelledCompletions += symbol
+    private def healLeakedTouched(run: Run | Null)(using Context): Boolean =
+      run != null && !run.completing.contains(symbol) && {
+        myFlags &~= Touched
+        run.recordLeakHealed(symbol)
+        true
+      }
+
+    /** An exception unwound through this completion before it finished. For
+     *  a cancellation, in any mode, clear `Touched` so that the next run can
+     *  complete the symbol instead of reporting a cyclic reference. In
+     *  interactive mode do the same for a cyclic reference (the result of a
+     *  computation that met a cycle below it must not be kept: IntelliJ's
+     *  `mayCacheNow` rule; the request's answer degrades where the exception
+     *  is handled, and the symbol is completable again afterwards) and for
+     *  any other exception (a stack overflow, an assertion in a partial tree),
+     *  which is also recorded on the run as a completion of unknown state
+     *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
+     *  stays set, as before. The caller rethrows.
+     */
+    private def onUnwind(ex: Throwable, interactive: Boolean, run: Run | Null)(using Context): Unit =
+      ex match
+        case _: CompilationUnit.CancelledCompilation =>
+          untouchIfIncomplete()
+          // whether complete or not: a class completer sets the temporary
+          // info before it types the parents, and the class is then
+          // `isCompleted` with that info (see `Run.cancelledCompletions`)
+          val r = ctx.run
+          if r != null then r.cancelledCompletions += symbol
+        case _: CyclicReference =>
+          if interactive then untouchIfIncomplete()
+        case _ if interactive =>
+          untouchIfIncomplete()
+          if run != null then run.recordCompletionUnwound(symbol, ex)
+        case _ =>
 
     private def untouchIfIncomplete(): Unit =
       if !isCompleted then myFlags &~= Touched

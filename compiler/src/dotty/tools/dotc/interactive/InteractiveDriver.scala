@@ -134,10 +134,12 @@ class InteractiveDriver(
     def isOn(uri: URI, source: SourceFile): Boolean =
       this.uri == uri && this.source.textContent() == source.textContent()
 
-    /** A poisoned session holds a statement that is neither typed nor
-     *  skipped: the request starts a fresh run.
+    /** A run that had a completion unwound by an exception of unknown effect
+     *  (not a cycle, not a cancellation) holds state nothing should be served
+     *  or resumed from, and a poisoned session holds a statement that is
+     *  neither typed nor skipped: the request starts a fresh run.
      */
-    def isResumable: Boolean = !poisoned
+    def isResumable: Boolean = !run.isTainted && !poisoned
 
     /** Move the statements the run skipped since into the session's. */
     private def collectSkipped(): Unit =
@@ -467,6 +469,14 @@ class InteractiveDriver(
       count(s.unit.tpdTree)
     case null => -1
 
+  /** Is the targeted run of `uri` tainted: did an exception of unknown effect
+   *  unwind through a completion (see `Run.isTainted`)? The next request on
+   *  it starts a fresh run.
+   */
+  def isTainted(uri: URI): Boolean = sessionOf(uri) match
+    case s: Session => s.run.isTainted
+    case null => false
+
   /** The spans of the statements the targeted run of `uri` has not typed. */
   def untypedSpans(uri: URI): List[Span] = sessionOf(uri) match
     case s: Session => s.skipped.map(_.stat.span)
@@ -497,10 +507,10 @@ class InteractiveDriver(
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     mySession match
       case s: Session if s.isOn(uri, source) =>
-        // Nothing is served or resumed from a poisoned session (a request in
-        // a poisoned statement's range would be served from the tree without
-        // it): the request starts a fresh run, which is cheap for a targeted
-        // run.
+        // Nothing is served or resumed from a tainted or poisoned session
+        // (a request in a poisoned statement's range would be served from the
+        // tree without it): the request starts a fresh run, which is cheap
+        // for a targeted run.
         if !s.isResumable then run(uri, source, target)
         else s.skippedAt(target) match
           case None => s.diagnostics
