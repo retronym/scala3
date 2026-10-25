@@ -3,6 +3,7 @@ package dotty.tools.pc
 import scala.meta.internal.pc.SemanticTokens.*
 import scala.meta.internal.pc.TokenNode
 import scala.meta.pc.Node
+import scala.meta.pc.RangeParams
 import scala.meta.pc.VirtualFileParams
 
 import dotty.tools.dotc.ast.tpd.*
@@ -12,18 +13,26 @@ import dotty.tools.dotc.core.Symbols.NoSymbol
 import dotty.tools.dotc.core.Symbols.Symbol
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourcePosition
+import dotty.tools.dotc.util.Spans.{NoSpan, Span}
 import dotty.tools.pc.utils.InteractiveEnrichments.*
 
 import org.eclipse.lsp4j.SemanticTokenModifiers
 import org.eclipse.lsp4j.SemanticTokenTypes
 
 /** Provides semantic tokens of file(@param params) according to the LSP
- *  specification.
+ *  specification. Params that are `RangeParams` ask for the tokens of that
+ *  range (`textDocument/semanticTokens/range`): only the statements that
+ *  touch it are typed and walked, and only the tokens that touch it are
+ *  returned.
  */
 final class PcSemanticTokensProvider(
     driver: InteractiveDriver,
     params: VirtualFileParams
 ):
+  private val range: Span = params match
+    case r: RangeParams => Span(r.offset(), r.endOffset())
+    case _ => NoSpan
+
   /** Declaration is set for:
    *    1. parameters,
    *    2. defs/vals/vars without rhs,
@@ -57,7 +66,7 @@ final class PcSemanticTokensProvider(
         case _ => !df.rhs.isEmpty
     case _ => false
 
-  object Collector extends SimpleCollector[Option[Node]](driver, params):
+  object Collector extends SimpleCollector[Option[Node]](driver, params, range):
     override def collect(
         parent: Option[Tree]
     )(tree: Tree | EndMarker, pos: SourcePosition, symbol: Option[Symbol]): Option[Node] =
@@ -83,6 +92,7 @@ final class PcSemanticTokensProvider(
     Collector
       .result()
       .flatten
+      .filter(n => !range.exists || Span(n.start(), n.end()).touches(range))
       .sortWith((n1, n2) =>
         if n1.start() == n2.start() then n1.end() < n2.end()
         else n1.start() < n2.start()
