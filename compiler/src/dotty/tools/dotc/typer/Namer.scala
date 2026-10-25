@@ -280,7 +280,9 @@ class Namer { typer: Typer =>
         symFn: (FlagSet, S => Type, Symbol) => S): Symbol = {
       val prev =
         if (lateCompile && ctx.owner.is(Package)) ctx.effectiveScope.lookup(name)
-        else NoSymbol
+        else ctx.property(Typer.RefinedSymbols) match
+          case Some(refined) => refined(name, tree.nameSpan)
+          case None => NoSymbol
 
       var flags1 = flags
       if name.isTypeName && Feature.ccEnabled then
