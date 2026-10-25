@@ -90,7 +90,13 @@ object Symbols extends SymUtils {
       ctx.settings.Whas.safeInit ||        // initialization check
       ctx.settings.YsafeInitGlobal.value
 
-    /** The last denotation of this symbol */
+    /** The last denotation of this symbol, and the period it was last found
+     *  valid in. `checkedPeriod` publishes `lastDenot`: it is stored after the
+     *  denotation with release semantics and read with acquire semantics
+     *  (`util.Publish`), so that a reader on another thread (interactive
+     *  mode, several readers) that finds the period current sees the
+     *  denotation stored before it, never the previous one.
+     */
     private var lastDenot: SymDenotation = uninitialized
     private var checkedPeriod: Period = Nowhere
 
@@ -102,13 +108,13 @@ object Symbols extends SymUtils {
     private[core] def denot_=(d: SymDenotation): Unit = {
       util.Stats.record("Symbol.denot_=")
       lastDenot = d
-      checkedPeriod = Nowhere
+      util.Publish.setSymbolCheckedPeriod(this, Nowhere.rawCode)
     }
 
     /** The current denotation of this symbol */
     final def denot(using Context): SymDenotation = {
       util.Stats.record("Symbol.denot")
-      if checkedPeriod == ctx.period then lastDenot
+      if Period.fromCode(util.Publish.symbolCheckedPeriod(this)) == ctx.period then lastDenot
       else computeDenot(lastDenot)
     }
 
@@ -117,6 +123,11 @@ object Symbols extends SymUtils {
       // the JIT (reputedly, cutoff is at 35 bytes)
       util.Stats.record("Symbol.computeDenot")
       val now = ctx.period
+      // The plain store first: `recomputeDenot` brings the denotation forward,
+      // which reads `symbol.denot` on the way (`updateValidity`), and that
+      // reentrant read must find the period current and return `lastDenot`
+      // (a stack overflow otherwise). The release store after the new
+      // denotation is what publishes it to other threads.
       checkedPeriod = now
       if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
     }
@@ -126,7 +137,9 @@ object Symbols extends SymUtils {
       util.Stats.record("Symbol.recomputeDenot")
       val newd = lastd.current.asInstanceOf[SymDenotation]
       if newd.exists || lastd.initial.validFor.firstPhaseId <= ctx.phaseId then
+        // the denotation first, then the period that publishes it
         lastDenot = newd
+        util.Publish.setSymbolCheckedPeriod(this, ctx.period.rawCode)
       else
         // We are trying to bring forward a symbol that is defined only at a later phase
         // (typically, a nested Java class, invisible before erasure).
@@ -134,9 +147,14 @@ object Symbols extends SymUtils {
         // previous validity, which means we will try another bring forward when the symbol
         // is referenced at a later phase. Otherwise we'd get stuck on NoDenotation here.
         // See #15562 and test i15562b in ReplCompilerTests
-        checkedPeriod = lastd.validFor
+        util.Publish.setSymbolCheckedPeriod(this, lastd.validFor.rawCode)
       newd
     }
+
+    /** The period `lastDenot` was last found valid in (a plain read, for
+     *  tests and tools; the compiler reads it through `Publish`).
+     */
+    private[dotc] def lastCheckedPeriod: Period = checkedPeriod
 
     /** The original denotation of this symbol, without forcing anything */
     final def originDenotation: SymDenotation =

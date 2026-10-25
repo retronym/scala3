@@ -2470,10 +2470,14 @@ object Types extends TypeUtils {
      */
     final def denot(using Context): Denotation =
       util.Stats.record("NamedType.denot")
+      // the period first (an acquire load), then the denotation it publishes:
+      // read the other way round, another reader's `setDenot` between the two
+      // reads pairs a null denotation with a current period (I78)
+      val checked = Period.fromCode(util.Publish.namedTypeCheckedPeriod(this))
       val lastd = lastDenotation.asInstanceOf[Denotation]
       // Even if checkedPeriod == now we still need to recheck lastDenotation.validFor
       // as it may have been mutated by SymDenotation#installAfter
-      if checkedPeriod != Nowhere && lastd.validFor.contains(ctx.period) then lastd
+      if checked != Nowhere && lastd.validFor.contains(ctx.period) then lastd
       else computeDenot
 
     private def computeDenot(using Context): Denotation = {
@@ -4637,20 +4641,20 @@ object Types extends TypeUtils {
   extends CachedProxyType with ValueType {
 
     private var validSuper: Period = Nowhere
-    private var cachedSuper: Type = uninitialized
+    private var cachedSuper: Type | Null = null
 
     // Boolean caches: 0 = uninitialized, -1 = false, 1 = true
     private var myStableHash: Byte = 0
     private var myGround: Byte = 0
 
-    private var myisStableRunId: RunId = NoRunId
+    private var myIsStableRunId: RunId = NoRunId
     private var myIsStable: Boolean = uninitialized
 
     private var myEvalRunId: RunId = NoRunId
     private var myEvalued: Type = uninitialized
 
     private var validUnderlyingNormalizable: Period = Nowhere
-    private var cachedUnderlyingNormalizable: Type = uninitialized
+    private var cachedUnderlyingNormalizable: Type | Null = null
 
     def isGround(acc: TypeAccumulator[Boolean])(using Context): Boolean =
       if myGround == 0 then myGround = if acc.foldOver(true, this) then 1 else -1
@@ -4662,13 +4666,14 @@ object Types extends TypeUtils {
       // run. See docs/_docs/internals/periods.md for more information. We do
       // not need to check the phase because once a type is not provisional, its
       // stability should not change anymore.
-      if myisStableRunId != ctx.runId then
+      if myIsStableRunId != ctx.runId then
         val res: Boolean = computeIsStable
         // We don't cache if the type is provisional because `Type#isStable`
         // calls `Type#stripTypeVar` which might return different results later.
         if !isProvisional then
-          myisStableRunId = ctx.runId
+          // the value before the run id that publishes it (independent readers)
           myIsStable = res
+          myIsStableRunId = ctx.runId
         res
       else
         myIsStable
@@ -4679,10 +4684,14 @@ object Types extends TypeUtils {
 
     override def underlying(using Context): Type = tycon
 
+    // with concurrent readers another reader's period can be visible before its
+    // result: the result is the local one, and a cached one not seen yet is
+    // computed again (I78: a null `underlyingNormalizable`)
     override def superType(using Context): Type =
-      if ctx.period != validSuper then
+      val cached = cachedSuper
+      if ctx.period != validSuper || cached == null then
         var superIsProvisional = tycon.isProvisional
-        cachedSuper = tycon match
+        val result = tycon match
           case tycon: HKTypeLambda => defn.AnyType
           case tycon: TypeRef if tycon.symbol.isClass => tycon
           case tycon: TypeProxy =>
@@ -4692,8 +4701,10 @@ object Types extends TypeUtils {
               // see tests/pos/typeclass-encoding3b.scala:348 for an example
             tycon.superType.applyIfParameterized(args)
           case _ => defn.AnyType
+        cachedSuper = result
         validSuper = if superIsProvisional then Nowhere else ctx.period
-      cachedSuper
+        result
+      else cached
 
     override def translucentSuperType(using Context): Type = tycon match {
       case tycon: TypeRef if tycon.symbol.isOpaqueAlias =>
@@ -4720,14 +4731,18 @@ object Types extends TypeUtils {
      *  HKTypeLambda applications before the underlying normalizable type is reached.
      */
     override def underlyingNormalizable(using Context): Type =
-      if ctx.period != validUnderlyingNormalizable then tycon match
+      val cached = cachedUnderlyingNormalizable
+      if ctx.period != validUnderlyingNormalizable || cached == null then tycon match
         case tycon: TypeRef if defn.isCompiletimeAppliedType(tycon.symbol) =>
           cachedUnderlyingNormalizable = this
           validUnderlyingNormalizable = ctx.period
+          this
         case _ =>
-          cachedUnderlyingNormalizable = superType.underlyingNormalizable
+          val result = superType.underlyingNormalizable
+          cachedUnderlyingNormalizable = result
           validUnderlyingNormalizable = validSuper
-      cachedUnderlyingNormalizable
+          result
+      else cached
 
     override def tryNormalize(using Context): Type =
       if isMatchAlias && MatchTypeTrace.isRecording then
@@ -4751,8 +4766,9 @@ object Types extends TypeUtils {
       else
         val res = TypeEval.tryCompiletimeConstantFold(this)
         if !isProvisional then
-          myEvalRunId = ctx.runId
+          // the value before the run id that publishes it (independent readers)
           myEvalued = res
+          myEvalRunId = ctx.runId
         res
 
     def lowerBound(using Context): Type = tycon.stripTypeVar match {
@@ -5189,6 +5205,7 @@ object Types extends TypeUtils {
 
     private var myReduced: Type | Null = null
     private var reductionContext: util.MutableMap[Type, Type] | Null = null
+    @volatile private var sharedReduced: MatchType.Reduced | Null = null
 
     private def thisMatchType = this
 
@@ -5207,6 +5224,10 @@ object Types extends TypeUtils {
       }
 
       def setReductionContext(): Unit =
+        reductionContext = computeReductionContext()
+
+      def computeReductionContext(): util.MutableMap[Type, Type] =
+        val result = util.HashMap[Type, Type]()
         new TypeTraverser:
           var footprint: Set[Type] = Set()
           var deep: Boolean = true
@@ -5234,47 +5255,72 @@ object Types extends TypeUtils {
           traverse(scrutinee)
           deep = false
           cases.foreach(traverse)
-          reductionContext = util.HashMap()
           for tp <- footprint do
-            reductionContext.nn(tp) = contextInfo(tp)
+            result(tp) = contextInfo(tp)
           matchTypes.println(i"footprint for $thisMatchType $hashCode: ${footprint.toList.map(x => (x, contextInfo(x)))}%, %")
-      end setReductionContext
+        result
+      end computeReductionContext
 
       def changedReductionContext(): Boolean =
         val isUpToDate = reductionContext != null && reductionContext.nn.iterator.forall(contextInfo(_) `eq` _)
         if !isUpToDate then setReductionContext()
         !isUpToDate
 
-      record("MatchType.reduce called")
-      if !Config.cacheMatchReduced
-          || myReduced == null
-          || changedReductionContext()
-          || MatchTypeTrace.isRecording
-      then
-        record("MatchType.reduce computed")
-        if (myReduced != null) record("MatchType.reduce cache miss")
+      def reduce(): Type =
         val saved = ctx.typerState.snapshot()
         try
-          myReduced = ctx.handleRecursive("reduce match type for scrutinee", scrutinee):
+          ctx.handleRecursive("reduce match type for scrutinee", scrutinee):
             trace(i"reduce match type $this $hashCode", matchTypes, show = true):
               withMode(Mode.Type):
                 TypeComparer.reduceMatchWith: cmp =>
                   cmp.matchCases(scrutinee.normalized, cases.map(MatchTypeCaseSpec.analyze))
-        catch case NonFatal(t) =>
-          myReduced = NoType
-          throw t
         finally
           ctx.typerState.resetTo(saved)
-          // this drops caseLambdas in constraint and undoes any typevar
-          // instantiations during matchtype reduction
 
-      //else println(i"no change for $this $hashCode / $myReduced")
-      myReduced.nn
+      record("MatchType.reduce called")
+      if ctx.base.concurrent then
+        // a match type is shared by the readers and its reduction depends on
+        // each one's constraint: the context and the result as one value (I78)
+        val c = sharedReduced
+        if Config.cacheMatchReduced && c != null && !MatchTypeTrace.isRecording
+           && c.context.iterator.forall(contextInfo(_) `eq` _)
+        then c.reduced
+        else
+          val context = computeReductionContext()
+          val result = reduce()
+          sharedReduced = MatchType.Reduced(context, result)
+          result
+      else
+        if !Config.cacheMatchReduced
+            || myReduced == null
+            || changedReductionContext()
+            || MatchTypeTrace.isRecording
+        then
+          record("MatchType.reduce computed")
+          if (myReduced != null) record("MatchType.reduce cache miss")
+          val saved = ctx.typerState.snapshot()
+          try
+            myReduced = ctx.handleRecursive("reduce match type for scrutinee", scrutinee):
+              trace(i"reduce match type $this $hashCode", matchTypes, show = true):
+                withMode(Mode.Type):
+                  TypeComparer.reduceMatchWith: cmp =>
+                    cmp.matchCases(scrutinee.normalized, cases.map(MatchTypeCaseSpec.analyze))
+          catch case NonFatal(t) =>
+            myReduced = NoType
+            throw t
+          finally
+            ctx.typerState.resetTo(saved)
+            // this drops caseLambdas in constraint and undoes any typevar
+            // instantiations during matchtype reduction
+
+        //else println(i"no change for $this $hashCode / $myReduced")
+        myReduced.nn
     }
 
     /** True if the reduction uses GADT constraints. */
     def reducesUsingGadt(using Context): Boolean =
-      reductionContext != null && reductionContext.nn.iterator.exists:
+      val reductionContext = if ctx.base.concurrent then (sharedReduced match { case null => null; case c => c.context }) else this.reductionContext
+      reductionContext != null && reductionContext.iterator.exists:
         case (tp: TypeRef, tpCtx) => tpCtx.exists
         case _ => false
 
@@ -5284,6 +5330,9 @@ object Types extends TypeUtils {
   class CachedMatchType(bound: Type, scrutinee: Type, cases: List[Type]) extends MatchType(bound, scrutinee, cases)
 
   object MatchType {
+    /** A reduction and the context it was computed in, published at once. */
+    final class Reduced(val context: util.MutableMap[Type, Type], val reduced: Type)
+
     def apply(bound: Type, scrutinee: Type, cases: List[Type])(using Context): MatchType =
       unique(new CachedMatchType(bound, scrutinee, cases))
 

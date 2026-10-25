@@ -39,7 +39,8 @@ object WrappedSourceFile:
 
   private def lookupMagicHeader(sourceFile: SourceFile)(using Context): MagicHeaderInfo =
     val cache = ctx.base.magicHeaderCache
-    cache.lookup(sourceFile) match
+    // shared by the readers of a concurrent base: a lookup or an update races a grow
+    Sharing.serialised(cache)(cache.lookup(sourceFile)) match
       case null =>
         val magicHeader = ctx.settings.YmagicOffsetHeader.value
         val result =
@@ -60,7 +61,7 @@ object WrappedSourceFile:
                   report.warning(em"original source file not found: $name")
                   NoHeader
               case None => NoHeader
-        cache(sourceFile) = result
+        Sharing.serialised(cache) { cache(sourceFile) = result }
         result
       case result => result
 
@@ -199,9 +200,11 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
    *  Lines are numbered from 0
    */
   def offsetToLine(offset: Int): Int = {
-    lastLine = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
-    if (offset >= length) lastLine -= 1 // compensate for the sentinel
-    lastLine
+    // the result in a local: `lastLine` is only a hint, shared by the readers of a file
+    var line = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
+    lastLine = line
+    if (offset >= length) line -= 1 // compensate for the sentinel
+    line
   }
 
   /** The index of the first character of the line containing position `offset` */
