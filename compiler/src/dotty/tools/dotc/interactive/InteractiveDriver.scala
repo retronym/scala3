@@ -23,6 +23,17 @@ private class InteractiveContextBase(sourcePackage: CachedLogicalPackage) extend
       else new JavaPlatform(sourcePackage.value)
   }
 
+  /** The reader of each thread that types under this base (see `Reader`): a
+   *  request binds its reader to its thread (`bindReader`), and a thread that
+   *  never did (a provider reading the typed tree after a request) gets one
+   *  of its own. Batch compilation keeps the base's single reader, a field
+   *  read; here it is a `ThreadLocal` read, in interactive mode only.
+   */
+  private val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
+
+  override def reader: Reader = threadReader.get.nn
+
+  def bindReader(reader: Reader): Unit = threadReader.set(reader)
 }
 
 // Assumes the context does not change; only use if this is true!
@@ -47,30 +58,18 @@ class InteractiveDriver(
 
   override def sourcesRequired: Boolean = false
 
-  /** Cancellation of the current request. `myCancelled` is set by `cancel()`
-   *  (which `Run.Progress` calls when it notices a thread interrupt) and stays
-   *  set until the next run starts. `myCancelChecker` is the client's own
-   *  cancellation test, installed for the duration of a request by
-   *  `withCancelChecker`. `isCancelled` does not consume the interrupt flag
-   *  itself: `Run.Progress.checkCancellation` already does, and it would hide
-   *  the interrupt from `cancel()`.
+  /** The driver's sticky cancellation: set by `cancel()` (which `Run.Progress`
+   *  calls when it notices a thread interrupt) and reset when the next
+   *  request starts typing. The client's own cancellation test for a request
+   *  is on the request's `Reader` (`withCancelChecker`). `isCancelled` does
+   *  not consume the interrupt flag itself: `Run.Progress.checkCancellation`
+   *  already does, and it would hide the interrupt from `cancel()`.
    */
   @volatile private var myCancelled = false
-  @volatile private var myCancelChecker: () => Boolean = InteractiveDriver.neverCancelled
 
   private val myProgressCallback: ProgressCallback = new ProgressCallback:
-    override def isCancelled(): Boolean = myCancelled || myCancelChecker()
+    override def isCancelled(): Boolean = myCancelled
     override def cancel(): Unit = myCancelled = true
-
-  /** Run `body` with `check` as the cancellation test polled by the typer
-   *  (see `Run.checkCancelledTyping`). A run started inside `body` is aborted
-   *  with `CompilationUnit.CancelledCompilation` once `check` returns true.
-   */
-  def withCancelChecker[T](check: () => Boolean)(body: => T): T =
-    val previous = myCancelChecker
-    myCancelChecker = check
-    try body
-    finally myCancelChecker = previous
 
   private val myInitCtx: Context = {
     val rootCtx = initCtx.fresh.addMode(Mode.ReadPositions).addMode(Mode.Interactive)
@@ -91,7 +90,59 @@ class InteractiveDriver(
    *  file as `run` does: the gate on the behaviour of this branch.
    */
   val targetedRequests: Boolean = !myInitCtx.settings.YnoTargetedRequests.value(using myInitCtx)
+
   def currentCtx: Context = myCtx
+
+  // ---- Readers ----
+  //
+  // Each request types under a `Reader` of its own (its comparer stack and
+  // context pools, its target and skipped statements, its completion
+  // bookkeeping, its cancellation checker; see `Reader`), bound to the thread
+  // of the request on the context base (`InteractiveContextBase.reader`), so
+  // that every context the request types under, captured earlier or not,
+  // reaches it. The reader stays bound to the thread after the request, so
+  // that the providers that read the typed tree afterwards, and the tests
+  // that read a request's bookkeeping, find it. Still one reader at a time:
+  // the readers of concurrent requests are step 3 of the multi-reader notes.
+
+  private def base: InteractiveContextBase = myInitCtx.base.asInstanceOf[InteractiveContextBase]
+
+  /** The nesting of `withCancelChecker` scopes: a request outside any scope
+   *  gets a fresh reader of its own (`requestReader`).
+   */
+  private var myScopeDepth = 0
+
+  /** The reader of the last request that started, for the x-ray's status
+   *  thread; not used by the compiler.
+   */
+  @volatile private var myLastReader: Reader = base.reader
+  def readerOfLastRequest: Reader = myLastReader
+
+  private def bindReader(check: () => Boolean): Reader =
+    val r = base.newReader(check)
+    base.bindReader(r)
+    myLastReader = r
+    r
+
+  /** Run `body` with `check` as the cancellation test polled by the typer
+   *  (see `Reader.checkCancelledTyping`), on a fresh reader bound to this
+   *  thread. A run started inside `body` is aborted with
+   *  `CompilationUnit.CancelledCompilation` once `check` returns true. The
+   *  reader of an outermost scope stays bound after `body`, so that what the
+   *  request computed can be read under `currentCtx`.
+   */
+  def withCancelChecker[T](check: () => Boolean)(body: => T): T =
+    val previous = base.reader
+    bindReader(check)
+    myScopeDepth += 1
+    try body
+    finally
+      myScopeDepth -= 1
+      if myScopeDepth > 0 then base.bindReader(previous)
+
+  /** The reader of the request that starts: the scope's, or a fresh one. */
+  private def requestReader(): Reader =
+    if myScopeDepth == 0 then bindReader(Reader.neverCancelled) else base.reader
 
   private val compiler: Compiler = new InteractiveCompiler
 
@@ -109,6 +160,7 @@ class InteractiveDriver(
   def run(uri: URI, sourceCode: String): List[Diagnostic] = run(uri, SourceFile.virtual(uri, sourceCode))
 
   def run(uri: URI, source: SourceFile): List[Diagnostic] =
+    requestReader()
     mySession match
       case s: Session if targetedRequests && s.isOn(uri, source) && s.isResumable && s.skipped.nonEmpty =>
         // A whole-file run on the content of the session completes the session
@@ -124,6 +176,8 @@ class InteractiveDriver(
    */
   private class Session(val uri: URI, val source: SourceFile, val run: Run, val reporter: StoreReporter,
       val unit: CompilationUnit):
+    /** The reader of the request in progress on the session. */
+    private def reader: Reader = base.reader
     var skipped: List[Run.SkippedStat] = Nil
     var diagnostics: List[Diagnostic] = Nil
     /** Set when the typing of a skipped statement was aborted and the statement
@@ -146,17 +200,17 @@ class InteractiveDriver(
      */
     def isResumable: Boolean = !run.isTainted && !poisoned
 
-    /** Move the statements the run skipped since into the session's. */
+    /** Move the statements the reader skipped since into the session's. */
     private def collectSkipped(): Unit =
-      skipped = skipped ++ run.skippedStats.toList
-      run.skippedStats.clear()
+      skipped = skipped ++ reader.skippedStats.toList
+      reader.skippedStats.clear()
 
     /** A new stretch of typing in this run starts: forget a cancellation of
      *  the previous request and the completions it unwound.
      */
     private def beginTyping(): Unit =
       myCancelled = false
-      run.cancelledCompletions.clear()
+      reader.cancelledCompletions.clear()
 
     /** The typing of `sk` was aborted by a cancellation: the statement can
      *  not be typed a second time (typing consumes the attachments of the
@@ -187,7 +241,7 @@ class InteractiveDriver(
       while skipped.nonEmpty && !poisoned do
         val batch = skipped.sortBy(_.stat.span.start)
         skipped = Nil
-        run.clearTargeting() // no target: each statement typed whole
+        reader.clearTargeting() // no target: each statement typed whole
         val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
         try
           for sk <- batch do
@@ -256,15 +310,15 @@ class InteractiveDriver(
       beginTyping()
       assertOwnSource(sk)
       skipped = skipped.filterNot(_ eq sk)
-      run.clearTargeting()
-      run.typingTarget = target
+      reader.clearTargeting()
+      reader.typingTarget = target
       try
         // typed in its own typer state, committed into the session's only once
         // the statement is typed: a cancellation drops its constraints with it
         val ctx1 = ctx0.fresh.setNewTyperState()
-        run.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
+        reader.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
         // a resumed block statement continues the targeting of its block
-        run.targetingTyperState = ctx1.typerState
+        reader.targetingTyperState = ctx1.typerState
         val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
         ctx1.typerState.commit()(using ctx0)
         collectSkipped()
@@ -274,7 +328,7 @@ class InteractiveDriver(
       catch case ex: CompilationUnit.CancelledCompilation =>
         abandon(sk)
         throw ex
-      finally run.clearTargeting()
+      finally reader.clearTargeting()
 
     /** Does `owner` define `name` in this file: the companion of a statement
      *  to replace. A companion is not replaced alone: the synthetic members a
@@ -338,7 +392,7 @@ class InteractiveDriver(
       || sym.isClass && sym.asClass.unforcedDecls.exists(definesImplicit)
 
     /** The symbols whose completion the cancellation unwound through
-     *  (`Run.cancelledCompletions`): a Namer completer that was unwound can
+     *  (`Reader.cancelledCompletions`): a Namer completer that was unwound can
      *  not be run again (a method's had entered its parameters in the nested
      *  typer's scope; a class's had set the temporary info, and the class is
      *  `isCompleted` without parents), and the statement that defines each
@@ -351,8 +405,8 @@ class InteractiveDriver(
      *  Returns false when the session is to be poisoned.
      */
     private def replaceUnwound(replaced: Span)(using Context): Boolean =
-      val syms = run.cancelledCompletions.toList
-      run.cancelledCompletions.clear()
+      val syms = reader.cancelledCompletions.toList
+      reader.cancelledCompletions.clear()
       var done = List(replaced)
       var ok = true
       for sym <- syms if ok && sym.exists && definesHere(sym) do
@@ -378,7 +432,7 @@ class InteractiveDriver(
     def completeSymbols(): Unit =
       given Context = myCtx.fresh.setCompilationUnit(unit) // the session's run context, with root imports
       assert(ctx.runId == run.runContext.runId, s"the completers of $uri were created in run ${run.runContext.runId}, not in run ${ctx.runId}")
-      run.cancelledCompletions.clear()
+      reader.cancelledCompletions.clear()
       try skipped.foreach(sk => ctx.typer.foreachIndexedDef(sk.stat)((_, sym) => sym.ensureCompleted()))
       catch case ex: CompilationUnit.CancelledCompilation =>
         // the session is kept (the walk runs again when a file is next left),
@@ -512,7 +566,7 @@ class InteractiveDriver(
   /** What the session of `uri` did, for the log. */
   private def sessionSummary(uri: URI): String =
     val trees = sessionOf(uri) match
-      case s: Session => s" trees=${s.run.typedTrees}"
+      case s: Session => s" trees=${base.reader.typedTrees}"
       case null => ""
     s"run=${runIdOf(uri)} typedTop=${typedTopLevelCount(uri)} skipped=${untypedSpans(uri).size}$trees"
 
@@ -555,6 +609,7 @@ class InteractiveDriver(
    *  tree use `run` instead.
    */
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    requestReader()
     val before = mySession
     val skippedBefore = if before == null then -1 else before.skipped.size
     logged(s"runUpTo ${fileNameOf(uri)}@${target.start}")(runUpTo0(uri, source, target)) {
@@ -628,6 +683,7 @@ class InteractiveDriver(
         new StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages
 
       myCancelled = false
+      val reader = base.reader
       val run = compiler.newRun(using myInitCtx.fresh.setReporter(reporter).setProgressCallback(myProgressCallback))
       startedRun = run
       myCtx = run.runContext.withRootImports
@@ -636,16 +692,16 @@ class InteractiveDriver(
 
       myOpenedFiles(uri) = source
 
-      run.typingTarget = target
+      reader.typingTarget = target
       run.isTargeted = target.exists
       val skipped =
         try
           run.compileSources(List(source))
-          run.skippedStats.toList
-        finally run.clearTargeting()
+          reader.skippedStats.toList
+        finally reader.clearTargeting()
       // A cancellation noticed before the typer skips the units instead of
       // unwinding (see `Run.didEnterUnit`); discard that run too.
-      if myProgressCallback.isCancelled() then throw CompilationUnit.CancelledCompilation()
+      if myCancelled || reader.cancelChecker() then throw CompilationUnit.CancelledCompilation()
       run.printSummary()
       val ctxRun = ctx.run.nn
       val unit = if ctxRun.units.nonEmpty then ctxRun.units.head else ctxRun.suspendedUnits.head
@@ -752,6 +808,3 @@ class InteractiveDriver(
     run.compileUnits(Nil, myCtx)
   }
 }
-
-object InteractiveDriver:
-  private val neverCancelled: () => Boolean = () => false

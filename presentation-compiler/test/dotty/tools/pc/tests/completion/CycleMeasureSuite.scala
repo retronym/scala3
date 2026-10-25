@@ -53,7 +53,7 @@ class CycleMeasureSuite extends BasePCSuite:
               driver.runUpTo(uri, source, Span(p))
               val id = driver.runIdOf(uri)
               if id != runId then { fresh += 1; runId = id }
-              val run = driver.currentCtx.run
+              val run = driver.currentCtx.reader
               val before = (run.cyclesPrevented.size, run.completionsUnwound.size)
               val items = driver.compilationUnits.get(uri) match
                 case Some(unit) =>
