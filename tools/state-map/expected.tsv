@@ -1,0 +1,41 @@
+# What docs/_docs/internals/interactive-multi-reader.md §8 (the I91 table, I92–I96) says of each cache, as
+# field-key regex, kind, protection (a regex; `*` for any), and the row it comes from. `StateMap.scala` reports every
+# row whose fields the rules place differently, and every row that matches no field.
+core\.Types\.NamedType#(lastDenotation|lastSymbol|checkedPeriod)	C	Publish	NamedType lastDenotation/lastSymbol/checkedPeriod: util.Publish, release/acquire (I36, I78)
+core\.Symbols\.Symbol#(lastDenot|checkedPeriod)	C	Publish	Symbol.lastDenot/checkedPeriod: util.Publish (I36)
+core\.Denotations\.PreDenotation#sharedAsSeenFrom	C	packed-volatile	PreDenotation.asSeenFrom: one immutable value in a volatile field (I78)
+core\.Denotations\.PreDenotation#(cachedAsSeenFrom|validAsSeenFrom|cachedPrefix)	C	batch-only	PreDenotation.asSeenFrom: the plain fields are batch only (StampedCachesTest exception)
+core\.Types\.MatchType#sharedReduced	C	packed-volatile	MatchType.reduced: one immutable value in a volatile field (I79)
+core\.Types\.MatchType#(myReduced|reductionContext)	C	batch-only	MatchType.reduced: the plain fields are batch only
+core\.SymDenotations\.PackageClassDenotation#sharedPackageObjs	C	packed-volatile|root-claim	PackageClassDenotation.packageObjs: packed, computed under a claim (I79)
+core\.SymDenotations\.PackageClassDenotation#(packageObjsCache|packageObjsRunId)	C	batch-only	packageObjs: the plain fields are batch only
+core\.Types\.LazyRef#(myRef|computed)	B	root-claim	LazyRef.myRef/computed: a claim per lazy reference with parallel readers (I57)
+core\.SymDenotations\.InheritedCacheImpl#dependent	B	synchronized	InheritedCacheImpl.dependent: under the cache's monitor
+core\.SymDenotations\.InheritedCacheImpl#checkedPeriod	B	*	InheritedCacheImpl.checkedPeriod: a stamp without a value, a stale read only checks again
+core\.SymDenotations\.(MemberNamesImpl#cache|BaseDataImpl#(cache|valid|locked))	B	completion-lock	MemberNamesImpl.cache, BaseDataImpl.cache/valid/locked: computed under Sharing.exclusive
+core\.SymDenotations\.ClassDenotation#(myMemberCache|myMemberCachePeriod|myBaseTypeCache|myBaseTypeCachePeriod)	C	Caching	ClassDenotation's member and base-type caches: through Caching
+core\.Types\.(NamedType#mySignature|NamedType#mySignatureRunId|TypeRef#myCanDropAlias(Period)?|AndType#myBaseClasses(Period)?|OrType#.*|MethodOrPoly#my(Java|Scala2)?Signature(RunId)?|AppliedType#(validSuper|cachedSuper|myIsStable(RunId)?|myEval(RunId|ued)|validUnderlyingNormalizable|cachedUnderlyingNormalizable))	C	Caching	the stamped caches in Types: through Caching (StampedCachesTest)
+core\.SymDenotations\.ClassDenotation#(memberNamesCache|baseDataCache)	C	*	memberNamesCache, baseDataCache: class 1, fixed (I92), read once
+core\.Types\.Type#mightBeProvisional	C	*	Type.mightBeProvisional: class 1, fixed (I93)
+core\.Types\.AnnotatedType#myIsRefining	C	none	AnnotatedType.isRefining: one byte, as myGround (I94)
+core\.Types\.RecType#openedWithPrefix	C	none	RecType.openedWithPrefix: class 1, open (I96)
+typer\.Namer#myNestedTyper	*	volatile	Namer.nestedTyper: class 1, fixed (I90): created under the monitor, published through a volatile field
+typer\.Namer\.TypeDefCompleter#myTypeParams	B	volatile	TypeDefCompleter.myTypeParams: class 1, fixed (I91): indexed under the monitor, published volatile
+core\.OrderingConstraint#myUninstVars	*	volatile	OrderingConstraint.myUninstVars: class 1, fixed, unproven (I91): filled first, published volatile
+core\.SymDenotations\.ClassDenotation#fullNameCache	C	none	fullNameCache: class 2, a lost update loses an entry
+core\.Types\.(NamedType#myName|NamedType#myStableHash|AppliedType#myStableHash|AppliedType#myGround|Cached\w*Type#myHash|LambdaType#myParamRefs|TermLambda#my(Param)?DependencyStatus|ClassInfo#(selfTypeCache|appliedRefCache|parentsCache)|SkolemType#myRepr|NarrowCached#myNarrow|RecType#myRecThis)	C	none	class 2: one field, the same value from any writer, or an interned or structurally equal one
+core\.Types\.LambdaParam#myVariance	C	none	LambdaParam.myVariance: class 2
+core\.SymDenotations\.(SymDenotation#myTargetName|ClassDenotation#(myThisType|myTypeRef|myTypeParams))	C	none	SymDenotation myThisType/myTypeRef/myTargetName/myTypeParams: class 2
+typer\.ImportInfo#(mySym|myUnimported|mySelectorInfo)	C	none	ImportInfo mySym/myUnimported/mySelectorInfo: class 2
+typer\.Implicits\.ImplicitRefs#mySingletonClass	C	none	Implicits mySingletonClass: class 2
+typer\.Implicits#synthesizer	C	none	Implicits synthesizer: class 2, interchangeable
+CompilationUnit#myAssignmentSpans	C	none	CompilationUnit.myAssignmentSpans: class 2
+core\.SymDenotations\.LazyType#(mySourceModule|myModuleClass)	B	*	LazyType.mySourceModule/myModuleClass: class 2, found by name in the owner's scope
+cc\.Capabilities\..*#(myCaptureSet|captureSetValid|myClassifiers|classifiersValid|myDerived|isClassified|skolems)	*	post-typer	the capture checker's: phases after typer that the interactive compiler does not run
+transform\.CapturedVars#myRefInfo	*	post-typer	CapturedVars.myRefInfo: a phase after typer
+core\.Types\.(TypeMap#variance|ApproximatingTypeMap#expandingBounds|VariantTraversal#variance)	A	thread-confined	TypeMap.variance, ApproximatingTypeMap.expandingBounds: a map is one traversal's
+core\.SymDenotations\.SymDenotation#(myFlags|myInfo|myAnnotations|myParamss|myPrivateWithin)	B	completion-lock	SymDenotation's own state, written by its completion under its claim
+core\.SymDenotations\.LazyType#myDecls	B	completion-lock	myDecls: the denotation's own state, set by its completer
+core\.Types\.TypeVar#(inst|currentOrigin|owningState)	unclassified	*	TypeVar inst/currentOrigin/owningState: not caches, a type variable's, which belongs to one typer state
+core\.Symbols\.Symbol#myDefTree	unclassified	*	Symbol.myDefTree: not lazy, assigned by its owner
+ast\.Trees\.DefTree#myMods	E	*	Trees.myMods: not lazy, assigned by its owner
