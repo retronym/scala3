@@ -6,12 +6,16 @@ import scala.collection.mutable
 import core.Names.TermName
 import core.NameKinds.UniqueNameKind
 import core.StdNames.str
+import scala.annotation.internal.{interned, guardedBy}
 
 abstract class FreshNameCreator {
   def newName(prefix: TermName, unique: UniqueNameKind): TermName
 }
 
 object FreshNameCreator {
+  // A unit's creator is reached by every reader that types a statement of the unit: the counters are read and written
+  // under its monitor.
+  @interned @guardedBy("this")
   class Default extends FreshNameCreator {
     protected var counter: Int = 0
     protected val counters: mutable.Map[String, Int] = mutable.HashMap() withDefaultValue 0
@@ -23,8 +27,12 @@ object FreshNameCreator {
      */
     def newName(prefix: TermName, unique: UniqueNameKind): TermName = {
       val key = str.sanitize(prefix.toString) + unique.separator
-      counters(key) += 1
-      prefix.derived(unique.NumberedInfo(counters(key)))
+      val n = synchronized {
+        val n = counters(key) + 1
+        counters(key) = n
+        n
+      }
+      prefix.derived(unique.NumberedInfo(n))
     }
   }
 }
