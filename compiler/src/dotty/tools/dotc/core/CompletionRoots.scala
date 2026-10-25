@@ -38,6 +38,7 @@ final class CompletionRoots(base: Contexts.ContextState):
     var waitedSince = 0L
     var cycleSince = 0L
     var seen: Claim | Null = null
+    var lastChain: List[Claim] | Null = null
     while true do
       val c = claims.get(key)
       if c == null then
@@ -55,7 +56,9 @@ final class CompletionRoots(base: Contexts.ContextState):
           waitedSince = System.nanoTime()
           seen = c
         cycleChain(me, c) match
-          case null => cycleSince = 0L
+          case null =>
+            cycleSince = 0L
+            lastChain = null
           case chain =>
             val parties = chain.map(_.owner)
             if me.namerCompletionDepth == 0 then
@@ -75,8 +78,13 @@ final class CompletionRoots(base: Contexts.ContextState):
               // every party inside a Namer completion, every root a symbol:
               // a cycle between signatures, reported where a single reader
               // reports it, by one reader of the cycle (a fixed order of
-              // the threads picks it)
-              cycle()
+              // the threads picks it). The chain is read from fields the
+              // readers change as they go: only one seen at two looks, a slice
+              // apart, with the same claims, is a cycle and not a snapshot of
+              // two waits that ended (I87)
+              val last = lastChain
+              if last != null && last.corresponds(chain)(_ eq _) then cycle()
+              else lastChain = chain
         me.waitingOn = c
         try c.done.await(5, TimeUnit.MILLISECONDS)
         finally me.waitingOn = null
@@ -109,6 +117,9 @@ final class CompletionRoots(base: Contexts.ContextState):
     var chain: List[Claim] = Nil
     var steps = 0
     while claim != null && steps < 1000 do
+      // a released claim is a stale edge: `waitingOn` of a reader that has been woken
+      // and has not yet cleared it (finding I87)
+      if claim.done.getCount == 0 then return null
       chain = claim :: chain
       if claim.owner eq me then return chain
       claim = claim.owner.waitingOn
