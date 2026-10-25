@@ -83,6 +83,28 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    *  of underlying during a controlled operation exists. */
   private[dotc] val pendingUnderlying: util.HashSet[Type] = util.HashSet[Type]()
 
+  /** The types whose base type for a class is being computed
+   *  (`ClassDenotation.baseTypeOf`) on this reader, with several readers: the
+   *  in-progress mark that the single-reader cache keeps as a `NoPrefix`
+   *  sentinel, per class denotation as that cache is.
+   */
+  private val pendingBaseTypes: util.EqHashMap[AnyRef, util.EqHashSet[Type]] = util.EqHashMap()
+  def pendingBaseTypesOf(cls: AnyRef): util.EqHashSet[Type] =
+    pendingBaseTypes.getOrElseUpdate(cls, util.EqHashSet[Type]())
+
+  // ---- The typer's name-resolution scratch (`Typer.findRef`) ----
+
+  /** The set of all root import symbols that have been encountered as a
+   *  qualifier of an import so far, during one lookup (saved and restored
+   *  around `Typer.findRef`).
+   */
+  var unimported: Set[Symbol] = Set()
+
+  /** Temporary data item for a single call to `typedIdent`: the symbol that
+   *  would be found under Scala2 mode but is not in dotty.
+   */
+  var foundUnderScala2: Type = Types.NoType
+
   // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
   //
   // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
@@ -191,6 +213,29 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
     if run != null then run.markTainted()
     Run.CycleStats.unwound(sym, ex)
 
+  // ---- Waits on the completion lock (several readers, see `CompletionLock`) ----
+
+  /** Time this reader spent waiting for a statement another reader was
+   *  typing (`InteractiveDriver`'s claims), in nanoseconds.
+   */
+  @volatile var statementWaitNanos: Long = 0L
+
+  /** Time this reader spent blocked on the completion lock, in nanoseconds. */
+  @volatile var lockWaitNanos: Long = 0L
+  @volatile var lockWaitCount: Int = 0
+
+  /** The waits of at least `Reader.recordedWaitNanos`, with what the lock
+   *  holder was doing when the wait began: its root (the outermost
+   *  acquisition) and its innermost, and the holder's thread.
+   */
+  val lockWaits: java.util.concurrent.ConcurrentLinkedQueue[Reader.LockWait] = new java.util.concurrent.ConcurrentLinkedQueue()
+
+  def recordLockWait(nanos: Long, root: AnyRef | Null, current: AnyRef | Null, holder: String): Unit =
+    lockWaitNanos += nanos
+    lockWaitCount += 1
+    if nanos >= Reader.recordedWaitNanos then
+      lockWaits.add(Reader.LockWait(nanos, String.valueOf(root), String.valueOf(current), holder))
+
   // ---- The cancellation checkpoint (`Typer.typed`) ----
 
   private var typedTreeCount = 0
@@ -222,9 +267,18 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
 
   private def pollCancellation()(using Context): Unit =
     if ctx.mode.is(Mode.Interactive) then
-      val run = ctx.run
-      if (run != null && !run.canProgress()) || cancelChecker() then
+      if cancelChecker() then
+        cancelledByChecker = true
         throw CompilationUnit.CancelledCompilation()
+      val run = ctx.run
+      if run != null && !run.canProgress() then
+        throw CompilationUnit.CancelledCompilation()
+
+  /** Did the last cancellation of this reader come from its own checker (the
+   *  client's), as opposed to the driver's sticky flag (a writer pre-empting
+   *  the reader, which the driver retries; see `InteractiveDriver.reading`)?
+   */
+  var cancelledByChecker: Boolean = false
 
   /** Forget the type comparers (`ContextState.reset`, at the start of a run):
    *  a comparer caches what depends on the run's settings and definitions.
@@ -234,6 +288,12 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
     comparersInUse = 0
 
 object Reader:
+  /** A wait on the completion lock and what the holder was doing. */
+  final case class LockWait(nanos: Long, root: String, current: String, holder: String)
+
+  /** Waits shorter than this are counted but not itemised. */
+  val recordedWaitNanos: Long = 200_000L
+
   private[dotc] val neverCancelled: () => Boolean = () => false
 
   /** The reader of a `ContextBase` before its settings are known: a few fuel

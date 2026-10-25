@@ -1886,13 +1886,22 @@ class TreeUnpickler(reader: TastyReader,
       op: TreeReader => Context ?=> T) extends Trees.Lazy[T] {
     def complete(using Context): T = {
       pickling.println(i"starting to read at ${reader.reader.currentAddr} with owner $owner")
+      // The unpickler's address maps (`symAtAddr`, `treeAtAddr`, `typeAtAddr`)
+      // are one file's shared state, filled by completions and by these lazy
+      // reads; with several readers (interactive mode) a lazy read runs under
+      // the base's completion lock like a completion (finding I35).
+      if ctx.base.isConcurrent then
+        ctx.base.completionLock.locked(CompletionLock.lazyTastyRead)(complete0)
+      else complete0
+    }
+
+    private def complete0(using Context): T =
       atPhaseBeforeTransforms {
         op(reader)(using ctx
           .withOwner(owner)
           .withModeBits(mode)
           .withSource(source))
       }
-    }
   }
 
   /** A lazy datastructure that records how definitions are nested in TASTY data.
