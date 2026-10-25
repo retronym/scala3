@@ -159,13 +159,12 @@ object XrayServer:
 
   private val driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
 
-  /** `Run.typedTreeCount` is private to the compiler; read it reflectively so
-   *  that the compiler patch stays exactly `docs/upstream/dotc-session.patch`.
+  /** The trees typed under the reader of the last request
+   *  (`Reader.typedTrees`): the reader is per request, so the count is the
+   *  request's own, whatever run it typed in, and readable from the status
+   *  thread while the request runs on another.
    */
-  private val typedTreeCountField =
-    classOf[Run].getDeclaredFields.find(_.getName.contains("typedTreeCount")).map { f => f.setAccessible(true); f }
-  private def typedTreeCount(run: Run): Int =
-    typedTreeCountField.map(_.getInt(run)).getOrElse(-1)
+  private def typedTreeCount(run: Run): Int = driver.readerOfLastRequest.typedTrees
 
   case class Stat(name: String, start: Int, end: Int)
 
@@ -309,13 +308,12 @@ object XrayServer:
   @volatile private var runAtStart: Run | Null = null
   @volatile private var startedAt = 0L
 
-  /** Trees typed by the request in flight: the run's counter less what it
-   *  was at the start, or the whole counter if the request started a run.
+  /** Trees typed by the request in flight: the reader of the request is
+   *  fresh, so its counter is the request's own.
    */
   private def treesSoFar: Int =
     val run = driver.currentCtx.run
     if run == null then 0
-    else if run eq runAtStart then typedTreeCount(run) - countAtStart
     else typedTreeCount(run)
 
   private def status(): Map[String, Any] =
@@ -429,9 +427,9 @@ object XrayServer:
     val runAfter = driver.currentCtx.run
     val countAfter = if runAfter != null then typedTreeCount(runAfter) else 0
     val sameRun = runIdAfter == runIdBefore
+    // the request's reader counted only this request's trees
     val typedTrees =
-      if cancelled && polledRun != null && polledRun.runContext.runId != runIdBefore then polledCount
-      else if sameRun then countAfter - countBefore
+      if cancelled && polledRun != null then polledCount
       else countAfter
 
     val statRows = stats.map { st =>
@@ -470,7 +468,7 @@ object XrayServer:
       "prefixBefore" -> prefixBefore, "prefix" -> prefixAfter,
       "fullyTyped" -> driver.isFullyTyped(uri),
       "tainted" -> driver.isTainted(uri),
-      "cyclesPrevented" -> (if runAfter != null then runAfter.cyclesPrevented.size else 0),
+      "cyclesPrevented" -> driver.readerOfLastRequest.cyclesPrevented.size,
       "statements" -> statRows, "cursorStatement" -> cursorStat,
       "cursorDef" -> (try enclosingDef(source, offset) catch case scala.util.control.NonFatal(_) => null),
       "typedStatements" -> statRows.count(_("state") != "untyped"),
