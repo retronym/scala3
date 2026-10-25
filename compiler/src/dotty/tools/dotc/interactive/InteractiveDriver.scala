@@ -86,6 +86,11 @@ class InteractiveDriver(
 
   private var myCtx: Context = myInitCtx
 
+  /** Does `runUpTo` type only the path to its target? Off with
+   *  `-Yno-targeted-requests`, in which case every request types the whole
+   *  file as `run` does: the gate on the behaviour of this branch.
+   */
+  val targetedRequests: Boolean = !myInitCtx.settings.YnoTargetedRequests.value(using myInitCtx)
   def currentCtx: Context = myCtx
 
   private val compiler: Compiler = new InteractiveCompiler
@@ -105,7 +110,7 @@ class InteractiveDriver(
 
   def run(uri: URI, source: SourceFile): List[Diagnostic] =
     mySession match
-      case s: Session if s.isOn(uri, source) && s.isResumable && s.skipped.nonEmpty =>
+      case s: Session if targetedRequests && s.isOn(uri, source) && s.isResumable && s.skipped.nonEmpty =>
         // A whole-file run on the content of the session completes the session
         // instead of replacing it, so the requests after it are served from the
         // run that holds the whole file typed.
@@ -505,7 +510,8 @@ class InteractiveDriver(
    *  tree use `run` instead.
    */
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    mySession match
+    if !targetedRequests then run(uri, source)
+    else mySession match
       case s: Session if s.isOn(uri, source) =>
         // Nothing is served or resumed from a tainted or poisoned session
         // (a request in a poisoned statement's range would be served from the
@@ -519,6 +525,21 @@ class InteractiveDriver(
           case Some(sk) => s.resume(sk, target)
       case _ =>
         run(uri, source, target)
+
+  /** Type the statement that defines `sym` if it is in the file of `uri` and
+   *  the session skipped it: a resume into it (or a fresh run for a local
+   *  definition), after which providers that read the typed tree of a
+   *  definition (`defTree`, a name position) find it. Returns whether
+   *  anything was typed, in which case the unit's tree is new.
+   */
+  def typeDefinitionOf(uri: URI, sym: Symbol): Boolean =
+    given Context = myCtx
+    sessionOf(uri) match
+      case s: Session if sym.exists && sym.span.exists && s.isFileOf(sym.source.file)
+          && s.skippedAt(Span(sym.span.point)).isDefined =>
+        runUpTo(uri, s.source, Span(sym.span.point))
+        true
+      case _ => false
 
   private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
     import typer.ImportInfo.*

@@ -12,6 +12,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.Signatures
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.pc.printer.ShortenedTypePrinter
 import dotty.tools.pc.printer.ShortenedTypePrinter.IncludeDefaultParam
 import dotty.tools.pc.utils.InteractiveEnrichments.*
@@ -28,7 +29,8 @@ object SignatureHelpProvider:
     val uri = params.uri().nn
     val text = params.text().nn
     val sourceFile = SourceFile.virtual(uri, text)
-    driver.run(uri.nn, sourceFile)
+    // only the path to the position is typed (unless -Yno-targeted-requests)
+    driver.runUpTo(uri.nn, sourceFile, Span(params.offset()))
 
     driver.compilationUnits.get(uri) match
       case Some(unit) =>
@@ -42,7 +44,18 @@ object SignatureHelpProvider:
         given Context =
           newctx.setPrinterFn(_ => ShortenedTypePrinter(search, IncludeDefaultParam.Never)(using indexedContext))
 
-        val (paramN, callableN, alternatives) = Signatures.signatureHelp(path, pos.span)
+        val (paramN, callableN, alternatives) = locally {
+          val first @ (_, _, alternatives0) = Signatures.signatureHelp(path, pos.span)
+          // a callee defined in this file whose statement the targeted run
+          // skipped is typed now (its typed tree gives the return type of an
+          // erroneous signature); then the help is computed over the new tree
+          val typedNow = alternatives0.flatMap(_.denot).map(_.symbol).filter(sym => driver.typeDefinitionOf(uri, sym))
+          if typedNow.isEmpty then first
+          else
+            val unit1 = driver.compilationUnits(uri)
+            val ctx1 = summon[Context].fresh.setCompilationUnit(unit1)
+            Signatures.signatureHelp(Interactive.pathTo(unit1.tpdTree, pos.span)(using ctx1), pos.span)(using ctx1)
+        }
 
         val infos = alternatives.flatMap: signature =>
           signature.denot.map(signature -> _)
