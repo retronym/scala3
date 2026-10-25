@@ -11,7 +11,7 @@ import config.Config
 import config.Printers.constr
 import reflect.ClassTag
 import annotation.tailrec
-import annotation.internal.sharable
+import annotation.internal.{cache, publishedBy, scratch, sharable}
 import cc.{CapturingType, derivedCapturingType}
 
 import scala.compiletime.uninitialized
@@ -148,6 +148,10 @@ import OrderingConstraint.*
  *  @param hardVars a set of type variables that are marked as hard and therefore will not
  *               undergo a `widenUnion` when instantiated to their lower bound.
  */
+// A constraint is an immutable value to the typer states that hold it: `newConstraint` makes a copy and
+// `adjustDeps` and `dropDeps` bring its reverse dependencies up to date before it is returned. (The shared `empty`
+// constraint is written only with equal values: it has no dependencies to adjust.)
+@scratch
 class OrderingConstraint(private val boundsMap: ParamBounds,
                          private val lowerMap : ParamOrdering,
                          private val upperMap : ParamOrdering,
@@ -257,6 +261,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
    *  type parameter is instantiated to a larger type, the constraint would be narrowed
    *  (i.e. solution set changes other than simply being made larger).
    */
+  @publishedBy("init")
   private var coDeps: ReverseDeps = SimpleIdentityMap.empty
 
   /** A map that associates type parameters of this constraint with all other type
@@ -264,6 +269,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
    *  type parameter is instantiated to a smaller type, the constraint would be narrowed.
    *  (i.e. solution set changes other than simply being made smaller).
    */
+  @publishedBy("init")
   private var contraDeps: ReverseDeps = SimpleIdentityMap.empty
 
   /** Null-safe indexing */
@@ -887,6 +893,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
         i += 1
     }
 
+  @cache @publishedBy("volatile")
   @volatile private var myUninstVars: mutable.ArrayBuffer[TypeVar] | Null = null
 
   /** The uninstantiated typevars of this constraint */

@@ -13,7 +13,7 @@ import java.lang.ref.WeakReference
 import util.{Stats, SimpleIdentityMap}
 import Decorators.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{confined, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 
 object TyperState {
@@ -44,6 +44,11 @@ object TyperState {
       ts.upLevels = upLevels
 }
 
+// A typer state is one reader's: with parallel readers each statement and each completion types in a state of its own
+// (`Sharing.privately`, settled when it ends), and a run's root state is read-only once the run opens (`readOnlyRoot`);
+// serialised readers share the root state one at a time under the completion lock, and the batch compiler has one
+// thread.
+@scratch @confined
 class TyperState() {
   import TyperState.{LevelMap, BadTyperStateAssertion}
 
@@ -303,6 +308,8 @@ class TyperState() {
    *  (`-Yinteractive-parallel`): no state is committed into it once the run is
    *  opened. Each reader's typer state is private to it and ends with `settle`.
    */
+  // set by the driver's write action that ends the run, before any reader reads it
+  @publishedBy("init")
   var readOnlyRoot: Boolean = false
 
   /** End this typer state without committing it (parallel readers): the

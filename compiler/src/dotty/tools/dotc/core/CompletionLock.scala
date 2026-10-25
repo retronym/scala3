@@ -6,6 +6,8 @@ import java.util.concurrent.locks.ReentrantLock
 
 import Symbols.Symbol
 
+import scala.annotation.internal.{guardedBy, publishedBy, scratch}
+
 /** The completion lock of a `ContextBase` read by several threads
  *  (interactive mode, step 3 of `docs/_docs/internals/interactive-multi-reader.md`):
  *  a reentrant lock that also keeps what its holder is doing (the outermost
@@ -18,9 +20,11 @@ final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock:
   import CompletionLock.What
 
   // written by the holder only; read by waiters before they block
-  @volatile private var rootWhat: What | Null = null
-  @volatile private var currentWhat: What | Null = null
-  @volatile private var holderName: String = ""
+  @scratch @publishedBy("packed") @volatile private var rootWhat: What | Null = null
+  @scratch @publishedBy("packed") @volatile private var currentWhat: What | Null = null
+  @scratch @publishedBy("volatile") @volatile private var holderName: String = ""
+  // the holder's, touched only between `lockFor` having acquired the lock and `unlockFor` releasing it
+  @scratch @guardedBy("completionLock")
   private val stack = new java.util.ArrayDeque[What]()
 
   /** Acquire the lock to do `what`. */

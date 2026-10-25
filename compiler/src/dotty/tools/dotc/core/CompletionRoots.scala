@@ -5,6 +5,7 @@ package core
 import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
 
 import scala.jdk.CollectionConverters.*
+import scala.annotation.internal.{confined, interned, scratch}
 
 /** Owners of completion roots, with parallel readers (`-Yinteractive-parallel`,
  *  step 4 of `docs/_docs/internals/interactive-multi-reader.md`, §3.1).
@@ -30,6 +31,7 @@ final class CompletionRoots(currentReader: () => Reader):
 
   def this(base: Contexts.ContextState) = this(() => base.reader)
 
+  @interned
   private val claims = new ConcurrentHashMap[AnyRef, Claim]()
 
   /** Claim `key` for this thread's reader, to do `what`; wait while another
@@ -146,5 +148,8 @@ object CompletionRoots:
 
   /** A reader's claim on a root, released when its holds come back to 0. */
   final class Claim(val owner: Reader, val what: CompletionLock.What, val ownerName: String):
+    // changed only by the owner (`acquire` re-entering, `release`); `@volatile` is not needed for that
+    @scratch @confined
     @volatile var holds: Int = 1
+    @scratch
     val done: CountDownLatch = new CountDownLatch(1)

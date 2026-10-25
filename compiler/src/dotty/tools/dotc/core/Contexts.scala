@@ -30,7 +30,7 @@ import printing.*
 import config.{JavaPlatform, SJSPlatform, Platform, ScalaSettings}
 import StdNames.nme
 import compiletime.uninitialized
-import scala.annotation.internal.{confined, scratch, sharable}
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, publishedBy, scratch, sharable}
 import DenotTransformers.DenotTransformer
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.sbt.interfaces.{IncrementalCallback, ProgressCallback}
@@ -234,6 +234,9 @@ object Contexts {
     def typeAssigner: TypeAssigner = store(typeAssignerLoc)
 
     /** The new implicit references that are introduced by this scope */
+    // Readers that share a context (a completer's creation context) may both compute it and the later store wins:
+    // the values are equivalent, and a `ContextualImplicits` is made of final fields, so either one is safely seen.
+    @cache @benignRace("every writer stores an equivalent ContextualImplicits, whose fields are final")
     private var implicitsCache: ContextualImplicits | Null = null
     def implicits: ContextualImplicits = {
       if (implicitsCache == null)
@@ -292,6 +295,9 @@ object Contexts {
           None
     )
 
+    // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
+    // context). A lost update drops a derived context, which is made again.
+    @cache @benignRace("a lost update only drops a derived context, which is made again")
     private var related: SimpleIdentityMap[Phase | SourceFile, Context] | Null = null
 
     private def lookup(key: Phase | SourceFile): Context | Null =
@@ -619,45 +625,64 @@ object Contexts {
   /** A fresh context allows selective modification
    *  of its attributes using the with... methods.
    */
+  @scratch
   class FreshContext(base: ContextBase) extends Context(base) {
     util.Stats.record("Context.fresh")
 
+    // A fresh context's fields are set by whoever makes it (`fresh.setX`, `init`, `FreshContext.initial`) before it is
+    // handed on, and not changed after: so readers that share a context (a completer's creation context) see its
+    // fields as set. The exceptions are a pooled context, which only its reader's pool reuses (`reuseIn`) and which
+    // must not be retained, and `_period`, which `SingleDenotation._goForward` sets and restores on the context it is
+    // given while a denotation transformer runs.
+
+    @publishedBy("init")
     private var _outer: Context = uninitialized
     def outer: Context = _outer
 
     private var _period: Period = uninitialized
     final def period: Period = _period
 
+    @publishedBy("init")
     private var _mode: Mode = uninitialized
     final def mode: Mode = _mode
 
+    @publishedBy("init")
     private var _owner: Symbol = uninitialized
     final def owner: Symbol = _owner
 
+    @publishedBy("init")
     private var _tree: Tree[?] = uninitialized
     final def tree: Tree[?] = _tree
 
+    @publishedBy("init")
     private var _scope: Scope = uninitialized
     final def scope: Scope = _scope
 
+    @publishedBy("init")
     private var _typerState: TyperState = uninitialized
     final def typerState: TyperState = _typerState
 
+    @publishedBy("init")
     private var _gadtState: GadtState = uninitialized
     final def gadtState: GadtState = _gadtState
     
+    @publishedBy("init")
     private var _inlineTraitState: InlineTraitState = uninitialized
     final def inlineTraitState: InlineTraitState = _inlineTraitState
 
+    @publishedBy("init")
     private var _searchHistory: SearchHistory = uninitialized
     final def searchHistory: SearchHistory = _searchHistory
 
+    @publishedBy("init")
     private var _source: SourceFile = uninitialized
     final def source: SourceFile = _source
 
+    @publishedBy("init")
     private var _moreProperties: Map[Key[Any], Any] = uninitialized
     final def moreProperties: Map[Key[Any], Any] = _moreProperties
 
+    @publishedBy("init")
     private var _store: Store = uninitialized
     final def store: Store = _store
 
@@ -977,7 +1002,9 @@ object Contexts {
     /** The initial context */
     val initialCtx: Context = FreshContext.initial(this: @unchecked, settings)
 
-    /** The platform, initialized by `initPlatform()`. */
+    /** The platform, initialized by `initPlatform()`. Set by `initialize`, which a run calls as it begins (an
+     *  interactive run is a write action, with no reader), and read after. */
+    @cache @publishedBy("init")
     private var _platform: Platform | Null = null
 
     /** The platform */
@@ -1030,7 +1057,7 @@ object Contexts {
 
     // the pools are a reader's (`Reader.exploreContextPool` and its siblings)
     @scratch @confined private var inUse: Int = 0
-    private var pool = new mutable.ArrayBuffer[FreshContext]
+    @scratch @confined private var pool = new mutable.ArrayBuffer[FreshContext]
 
     def next()(using Context): FreshContext =
       val base = ctx.base
@@ -1086,11 +1113,13 @@ object Contexts {
      *  are typed concurrently. Reentrant: a completion forces others. Not
      *  used in batch compilation.
      */
+    @interned @publishedBy("init")
     val completionLock: CompletionLock = CompletionLock(this)
 
     /** The owners of completion roots with parallel readers (see
      *  `Sharing.Parallel`, `CompletionRoots`).
      */
+    @interned @publishedBy("init")
     val completionRoots: CompletionRoots = CompletionRoots(this)
 
     // Symbols state
@@ -1103,19 +1132,25 @@ object Contexts {
       else { _nextSymId += 1; _nextSymId }
 
     /** Sources and Files that were loaded */
+    @interned @guardedBy("this")
     val sources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
+    @cache @guardedBy("this")
     val files: util.HashMap[String, AbstractFile] = util.HashMap()
 
     /** Cache for magic offset header lookups, scoped to this compiler instance
      *  so that concurrent compilers in the same classloader don't share stale entries. */
+    @cache @guardedBy("magicHeaderCache")
     private[dotc] val magicHeaderCache: util.HashMap[SourceFile, WrappedSourceFile.MagicHeaderInfo] = util.HashMap()
 
     /** Was best effort file used during compilation? */
+    @scratch @benignRace("only ever set to true, by any reader that loads a best effort file")
     private[core] var usedBestEffortTasty = false
 
     /** If coverage option is used, it stores all instrumented statements (for InstrumentCoverage).
      * We need this information to be persisted across different runs, so it's stored here.
      */
+    // written and read by the InstrumentCoverage phase, which runs after the typer on one thread
+    @scratch @confined
     private[dotc] var coverage: Coverage | Null = null
 
     /** The reader of batch compilation: the comparer stack, the context
@@ -1130,7 +1165,10 @@ object Contexts {
     /** The fuel settings of a reader (`Context.handleRecursive`), known once
      *  `ContextBase.initialize` has run.
      */
+    // set by `ContextBase.initialize`, which a run calls as it begins (an interactive run is a write action)
+    @cache @publishedBy("init")
     private[dotc] var maxFuel: Int = Reader.initialFuel
+    @cache @publishedBy("init")
     private[dotc] var enrichErrorMessages: Boolean = true
 
     /** A reader with this base's fuel and the given cancellation checker. */
@@ -1146,43 +1184,63 @@ object Contexts {
     /** A table for hash consing unique named types */
     private[core] val uniqueNamedTypes: NamedTypeUniques = sharing.newNamedTypeUniques()
 
+    // hash-consed: readers that make one at once store the same instance
+    @cache @benignRace("every writer stores the interned instance")
     var emptyTypeBounds: TypeBounds | Null = null
+    @cache @benignRace("every writer stores the interned instance")
     var emptyWildcardBounds: WildcardType | Null = null
 
     /** A map from ErrorType to associated message. We use this map
      *  instead of storing messages directly in ErrorTypes in order
      *  to avoid space leaks - the message usually captures a context.
      */
+    @cache
     private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = sharing.newMap()
 
     // Phases state
 
+    // The phases are set by `usePhases` and `setPhasePlan`, which a run calls as it begins (an interactive run is a
+    // write action, with no reader), and read after.
+    @cache @publishedBy("init")
     private[core] var phasesPlan: List[List[Phase]] = uninitialized
 
     /** Phases by id */
+    @cache @publishedBy("init")
     private[dotc] var phases: Array[Phase] = uninitialized
 
     /** Phases with consecutive Transforms grouped into a single phase, Empty array if fusion is disabled */
+    @cache @publishedBy("init")
     private[core] var fusedPhases: Array[Phase] = Array.empty[Phase]
 
     /** Next denotation transformer id */
+    @cache @publishedBy("init")
     private[core] var nextDenotTransformerId: Array[Periods.PhaseId] = uninitialized
 
+    @cache @publishedBy("init")
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
 
-    /** Flag to suppress inlining, set after overflow */
+    /** Flag to suppress inlining, set after overflow.
+     *  Finding: this is a reader's scratch (it is set and reset around one call's expansion) on the base all readers
+     *  share, so a reader that overflows makes the others stop inlining until it backs out. It belongs in `Reader`.
+     */
+    @scratch
     private[dotc] var stopInlining: Boolean = false
 
     /** Cached -Yno-double-bindings setting. This is accessed from `setDenot`, which
      *  is fairly hot, so we don't want to lookup the setting each time it is called.
      */
+    @cache @benignRace("set to true from the -Yno-double-bindings setting as a run begins, never reset")
     private[dotc] var checkNoDoubleBindings = false
 
     // Reporters state
+    // Finding: the margin of `trace` output, changed around each traced call on the base all readers share; with
+    // several readers tracing, a lost update leaves the margin off by the difference. It belongs in `Reader`.
+    @scratch
     private[dotc] var indent: Int = 0
 
     protected[dotc] val indentTab: String = "  "
 
+    @cache @benignRace("every writer stores an equal (setting, WConf) pair, an immutable value")
     private[dotc] var wConfCache: (List[String], WConf) = uninitialized
 
     private[dotc] val patched: Rewrites.PatchedFiles = Rewrites.newPatchedFiles()
@@ -1201,6 +1259,8 @@ object Contexts {
     // Test that access is single threaded
 
     /** The thread on which `checkSingleThreaded was invoked last */
+    // only `Run.compileUnits` calls the check, and not in interactive mode
+    @scratch @confined
     @sharable private var thread: Thread | Null = null
 
     /** Check that we are on the same thread as before */

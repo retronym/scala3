@@ -5,10 +5,15 @@ import Contexts.*
 import config.Printers.{default, typr}
 import dotty.tools.dotc.util.NoSourcePosition
 
+import scala.annotation.internal.{benignRace, cache}
 import scala.compiletime.uninitialized
 
 trait ConstraintRunInfo { self: Run =>
+  // A statistic for `printMaxConstraint`, reported by every constraint made, from every reader: the pair is stored
+  // in two fields, so racing readers can pair one's size with another's constraint (finding; it only misprints)
+  @cache @benignRace("a statistic printed under -Ydetailed-stats; a race can pair a size with another constraint")
   private var maxSize = 0
+  @cache @benignRace("a statistic printed under -Ydetailed-stats; a race can pair a size with another constraint")
   private var maxConstraint: Constraint | Null = null
   def recordConstraintSize(c: Constraint, size: Int): Unit =
     if (size > maxSize) {
