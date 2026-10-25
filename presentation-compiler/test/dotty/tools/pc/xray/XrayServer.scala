@@ -45,7 +45,7 @@ object XrayServer:
    *  A snapshot rather than the live checkout, so that the files do not move
    *  under the page and the patch's own edits are not what is shown.
    */
-  private val sourcesRoot: Option[Path] =
+  private[xray] val sourcesRoot: Option[Path] =
     sys.props.get("xray.sources").map(Paths.get(_)).filter(Files.isDirectory(_)).orElse(
       Iterator.iterate(Paths.get("").toAbsolutePath)(_.getParent).takeWhile(_ != null)
         .map(_.resolve("out/xray-sources/compiler/src/dotty/tools/dotc")).find(Files.isDirectory(_))).orElse(
@@ -153,13 +153,225 @@ object XrayServer:
   /** The whole test JVM's classpath, so that the compiler's own sources
    *  resolve against its classes (the generated file sees it too).
    */
-  private val settings =
-    List("-color:never", "-Ximport-suggestion-timeout", "0",
+  /** The options the build compiles the compiler with (`thisBuildSettings`
+   *  in project/Build.scala, `scalacOptions`), so that the compiler's own
+   *  sources are typed as the build types them and a whole-file run's
+   *  diagnostics are the build's: without `-language:implicitConversions` and
+   *  `-Yexplicit-nulls` the x-ray reported warnings and errors the build never
+   *  does. All but `-Werror` (a warning stays a warning in the editor). Keep
+   *  in step with Build.scala.
+   */
+  val buildOptions: List[String] = List(
+    "-feature", "-deprecation", "-unchecked",
+    "-Wconf:msg=package scala contains object and package with same name:i",
+    "-Wconf:src=scaladoc-testcases/.*:s",
+    "-Wconf:src=presentation-compiler-testcases/.*:s",
+    "-Wconf:msg=The RHS of reassignment must be transitively initialized:i",
+    "-Wconf:msg=Could not verify that the method argument is transitively initialized:i",
+    "-Wconf:msg=may cause initialization errors:i",
+    "-Wconf:cat=deprecation&origin=scala\\.collection\\.Iterable\\.stringPrefix:s",
+    "-encoding", "UTF8",
+    "-language:implicitConversions",
+    "--java-output-version:17",
+    "-Yexplicit-nulls",
+    "-Wsafe-init")
+
+  private[xray] val baseSettings =
+    buildOptions ++ List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", sys.props.getOrElse("java.class.path", BuildInfo.ideTestsDependencyClasspath.map(_.toPath.toString).mkString(File.pathSeparator)))
     // `-Dxray.readers=independent`: `-Yinteractive-readers` (step 4); otherwise serialised (step 3)
-    ++ (if sys.props.get("xray.readers").contains("independent") then List("-Yinteractive-readers") else Nil)
 
-  private val driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
+  /** The flags of the driver the page drives by hand (freeform mode), set by
+   *  `/reset?mode=` to one of the replay's modes. `-Dxray.readers=independent`
+   *  starts it with `-Yinteractive-readers` (step 4); otherwise serialised (step 3).
+   */
+  @volatile private[xray] var freeformMode: Replay.Mode =
+    if sys.props.get("xray.readers").contains("independent") then Replay.modeNamed("readers") else Replay.modeNamed("default")
+  private def settings: List[String] = baseSettings ++ freeformMode.flags
+
+  @volatile private[xray] var driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
+
+  /** Reset the typer state: a fresh driver (a new symbol table, run ids from
+   *  1), warmed up like the first one. */
+  /** A driver for `mode`: `CachingDriver` (Metals' own, with its
+   *  same-content cache) for a mode that says so, the plain driver otherwise.
+   */
+  private[xray] def newDriver(mode: Replay.Mode): InteractiveDriver =
+    val flags = baseSettings ++ mode.flags
+    if mode.cache then dotty.tools.pc.CachingDriver(flags, () => java.util.List.of[java.nio.file.Path](), null, scala.meta.pc.SourcePathMode.DISABLED)
+    else new InteractiveDriver(flags, CachedLogicalPackage.none)
+
+  private[xray] def resetDriver(mode: Replay.Mode = freeformMode): Map[String, Any] = lock.synchronized {
+    val t0 = System.nanoTime()
+    freeformMode = mode
+    driver = newDriver(mode)
+    driver.run(generatedUri, SourceFile.virtual(generatedUri, generatedSource("warmup", 5)))
+    backgroundState = Map("state" -> "idle")
+    Map("warmupMs" -> (System.nanoTime() - t0) / 1000000, "mode" -> mode.key, "flags" -> mode.flags.mkString(" "))
+  }
+
+  // ---- the background pass: another reader completes the session (`readAll`)
+  // on its own thread, concurrently with the foreground requests (the
+  // read/write regime of step 3), and reports what the typed tree holds:
+  // semantic tokens and diagnostics, for the page to paint.
+
+  @volatile private[xray] var backgroundState: Map[String, Any] = Map("state" -> "idle")
+  private val foregroundCount = new java.util.concurrent.atomic.AtomicInteger(0)
+  /** The background reader and what it set out to type, for the progress the
+   *  page polls: the skipped statements at the start, and those still skipped. */
+  @volatile private var backgroundReader: dotty.tools.dotc.Reader | Null = null
+  @volatile private var backgroundSpansAtStart: List[Span] = Nil
+  @volatile private var backgroundUri: URI | Null = null
+
+  /** The lock waits of a reader, for a result: total, count, the longest. */
+  private def lockWaitsOf(r: dotty.tools.dotc.Reader | Null): Map[String, Any] =
+    if r == null then Map("lockWaitMs" -> 0.0, "lockWaitCount" -> 0, "lockWaits" -> Nil, "backedOff" -> 0)
+    else
+      val waits = r.lockWaits.iterator().asScala.toList.sortBy(-_.nanos)
+      // the times the reader backed off from a wait-for cycle and was retried (step 4): a livelock shows as a growing count
+      Map("lockWaitMs" -> math.round(r.lockWaitNanos / 1e5) / 10.0, "lockWaitCount" -> r.lockWaitCount, "backedOff" -> r.waitCyclesBackedOff,
+        "lockWaits" -> waits.take(5).map(w => Map("ms" -> math.round(w.nanos / 1e5) / 10.0, "root" -> w.root, "current" -> w.current, "holder" -> w.holder)))
+
+  /** Every itemised lock wait of the foreground requests since the last
+   *  reset (`/lockwaits`), for the distribution in the design notes.
+   */
+  private val allForegroundWaits = new java.util.concurrent.ConcurrentLinkedQueue[(Double, Double, String, String, String)]()
+
+  /** The state of the background pass, with its progress while it runs. */
+  private def backgroundStatus(): Map[String, Any] =
+    val st = backgroundState
+    if st("state") != "running" then st
+    else
+      val r = backgroundReader
+      val uri = backgroundUri
+      val remaining = if uri == null then Nil else driver.untypedSpans(uri)
+      val typingNow = if uri == null then Nil else driver.typingSpans(uri)
+      val typedSoFar = backgroundSpansAtStart.filterNot(sp => remaining.exists(_ == sp) || typingNow.exists(_ == sp))
+      val owner = driver.completionOwnerNow
+      st ++ lockWaitsOf(r) ++ Map(
+        "typedTrees" -> (if r == null then 0 else r.typedTrees),
+        "spansAtStart" -> backgroundSpansAtStart.size, "spansRemaining" -> (remaining.size + typingNow.size),
+        "typedSpans" -> typedSoFar.map(sp => Map("start" -> sp.start, "end" -> sp.end)),
+        "typingSpans" -> typingNow.map(sp => Map("start" -> sp.start, "end" -> sp.end)),
+        "completionOwner" -> owner)
+
+  /** The diagnostics of the file in `ds` for the page, those still stale marked. */
+  private def problemsOf(uri: URI, source: SourceFile, ds: List[dotty.tools.dotc.reporting.Diagnostic]): List[Map[String, Any]] =
+    val stale = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[dotty.tools.dotc.reporting.Diagnostic, java.lang.Boolean])
+    driver.staleDiagnostics(uri).foreach(stale.add)
+    ds.filter { d => val f = d.pos.source.file; d.pos.exists && f != null && f.path == source.file.path }.map(d => Map(
+      "start" -> d.pos.start, "end" -> d.pos.end,
+      "level" -> (if d.level >= dotty.tools.dotc.interfaces.Diagnostic.ERROR then "error" else if d.level >= dotty.tools.dotc.interfaces.Diagnostic.WARNING then "warning" else "info"),
+      "message" -> d.msg.message, "stale" -> stale.contains(d)))
+
+  /** The diagnostics of a whole-file run of `code` in a fresh driver of its
+   *  own: the count the background pass must match (cached by content).
+   */
+  private val oracleRuns = new java.util.concurrent.ConcurrentHashMap[String, List[(Int, String)]]()
+  private def oracleDiagnostics(uri: URI, code: String): List[(Int, String)] =
+    oracleRuns.computeIfAbsent(code, _ => {
+      val d = new InteractiveDriver(settings, CachedLogicalPackage.none)
+      val source = SourceFile.virtual(uri, code)
+      d.run(uri, source).filter { dg => val f = dg.pos.source.file; dg.pos.exists && f != null && f.path == source.file.path }
+        .map(dg => (dg.pos.start, dg.msg.message))
+    }).nn
+
+  /** The background pass: on `code`, the statements overlapping
+   *  [visibleFrom, visibleTo) first (a targeted request at `visibleFrom` makes
+   *  the session if there is none, then the session's completion types the
+   *  visible skipped statements before the rest), on its own thread and
+   *  reader, while the page's requests are served by another.
+   */
+  private def startBackground(code: String, file: String, visibleFrom: Int, visibleTo: Int): Map[String, Any] =
+    if backgroundState("state") == "running" then backgroundStatus()
+    else
+      val uri = uriOf(file)
+      val source = SourceFile.virtual(uri, code)
+      val visible = if visibleFrom >= 0 && visibleTo > visibleFrom then Span(visibleFrom, visibleTo) else dotty.tools.dotc.util.Spans.NoSpan
+      backgroundState = Map("state" -> "running", "code" -> code)
+      backgroundUri = uri
+      backgroundSpansAtStart = Nil
+      backgroundReader = null
+      val t = new Thread((() => {
+        val t0 = System.nanoTime()
+        val before = foregroundCount.get
+        try
+          backgroundState = driver.withCancelChecker(() => false) {
+           backgroundReader = driver.readerOfThisThread
+           // the visible lines first: a targeted request at their start (a
+           // fresh targeted run, or served/resumed in the session)
+           if visible.exists then driver.runUpTo(uri, source, Span(visible.start))
+           backgroundSpansAtStart = driver.untypedSpans(uri)
+           val runBefore = driver.runIdOf(uri)
+           val tFirst = (System.nanoTime() - t0) / 1e6
+           driver.readAll(uri, source, visible) { (ctx, unit, diags) =>
+            given Context = ctx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx))
+            val runAfter = driver.runIdOf(uri)
+            val own = diags.filter { d => val f = d.pos.source.file; d.pos.exists && f != null && f.path == unit.source.file.path }
+            Map("state" -> "done", "code" -> code,
+              "outcome" -> (if runAfter == runBefore && runBefore != -1 then "completed the session" else "fresh whole-file run"),
+              "runId" -> ctx.runId, "ms" -> (System.nanoTime() - t0) / 1000000,
+              "visibleFirstMs" -> math.round(tFirst * 10) / 10.0,
+              "statements" -> backgroundSpansAtStart.size,
+              "foregroundDuring" -> (foregroundCount.get - before),
+              "diagnosticCount" -> own.size,
+              // the unit's own `SourceFile` (the trees carry the session's, not this request's copy)
+              "tokens" -> semanticTokens(unit.tpdTree, unit.source),
+              "diagnostics" -> own.map(d => Map(
+                "start" -> d.pos.start, "end" -> d.pos.end,
+                "level" -> (if d.level >= dotty.tools.dotc.interfaces.Diagnostic.ERROR then "error" else if d.level >= dotty.tools.dotc.interfaces.Diagnostic.WARNING then "warning" else "info"),
+                "message" -> d.msg.message)))
+          }} ++ lockWaitsOf(backgroundReader)
+          // the check: a whole-file run in a fresh driver reports the same diagnostics
+          val oracle = oracleDiagnostics(uri, code)
+          val mine = backgroundState.get("diagnostics") match
+            case Some(ds: List[?]) => ds.collect { case m: Map[?, ?] => (m.asInstanceOf[Map[String, Any]]("start").asInstanceOf[Int], m.asInstanceOf[Map[String, Any]]("message").toString) }
+            case _ => Nil
+          def lineOf(o: Int) = code.substring(0, math.min(o, code.length)).count(_ == '\n') + 1
+          val missing = oracle.diff(mine).map((o, m) => Map("line" -> lineOf(o), "message" -> m.take(200)))
+          val extra = mine.diff(oracle).map((o, m) => Map("line" -> lineOf(o), "message" -> m.take(200)))
+          backgroundState = backgroundState ++ Map("oracleDiagnosticCount" -> oracle.size,
+            "diagnosticsMatch" -> (missing.isEmpty && extra.isEmpty), "missingDiagnostics" -> missing, "extraDiagnostics" -> extra)
+        catch
+          case ex: CompilationUnit.CancelledCompilation => backgroundState = Map("state" -> "error", "error" -> "cancelled")
+          case scala.util.control.NonFatal(ex) => backgroundState = Map("state" -> "error", "error" -> ex.toString)
+      }): Runnable, "xray-background")
+      t.setDaemon(true); t.start()
+      backgroundState
+
+  /** The identifiers of the typed tree with a symbol, by kind, for semantic
+   *  highlighting: the name part of each `Ident`, `Select` and definition.
+   */
+  private[xray] def semanticTokens(tree: tpd.Tree, source: SourceFile)(using Context): List[Map[String, Any]] =
+    import dotty.tools.dotc.core.Flags.*
+    val out = List.newBuilder[Map[String, Any]]
+    def kindOf(sym: Symbol): String =
+      if sym.is(Package) then "package"
+      else if sym.is(Module) || sym.is(ModuleClass) then "object"
+      else if sym.is(Trait) then "trait"
+      else if sym.isClass then "class"
+      else if sym.isType then "type"
+      else if sym.is(Method) then "method"
+      else if sym.is(Param) then "param"
+      else if sym.is(Mutable) then "var"
+      else "val"
+    def add(start: Int, end: Int, sym: Symbol): Unit =
+      if start >= 0 && end > start && end <= source.length then
+        out += Map("start" -> start, "end" -> end, "kind" -> kindOf(sym), "info" -> (try sym.showLocated catch case scala.util.control.NonFatal(_) => sym.name.toString))
+    val traverser = new tpd.TreeTraverser:
+      def traverse(t: tpd.Tree)(using Context): Unit =
+        if (t.source eq source) && t.span.exists && !t.span.isSynthetic then
+          t match
+            case t: tpd.Ident if t.symbol.exists && !t.name.isEmpty => add(t.span.start, t.span.end, t.symbol)
+            // a constructor has no name in the source (`<init>`; the primary
+            // one's name span is its parameter list's opening)
+            case t: tpd.Select if t.symbol.exists && t.span.point >= 0 && !t.symbol.isConstructor => add(t.span.point, t.span.point + t.name.toString.length, t.symbol)
+            case t: tpd.MemberDef if t.symbol.exists && !t.symbol.is(Synthetic) && !t.symbol.isConstructor =>
+              val p = t.nameSpan; add(p.start, p.end, t.symbol)
+            case _ =>
+        traverseChildren(t)
+    traverser.traverse(tree)
+    out.result().distinctBy(m => (m("start"), m("end")))
 
   /** The trees typed under the reader of the last request
    *  (`Reader.typedTrees`): the reader is per request, so the count is the
@@ -196,6 +408,62 @@ object XrayServer:
    *  `offset`, from a parse: what the page shows as the definition at the
    *  cursor (a top-level statement of a real source is the whole file).
    */
+  /** The definitions of `source`, by a parse: for the structure view and the
+   *  go-to-symbol picker (name, kind, offsets, nesting depth).
+   */
+  private def definitionsOf(source: SourceFile): List[Map[String, Any]] =
+    given Context = driver.currentCtx.fresh.setSource(source)
+    val tree = new Parsers.Parser(source).parse()
+    val out = List.newBuilder[Map[String, Any]]
+    val finder = new untpd.UntypedTreeTraverser:
+      var depth = 0
+      def traverse(t: untpd.Tree)(using Context): Unit =
+        val kind = t match
+          case m: untpd.ModuleDef => "object"
+          case d: untpd.TypeDef if d.isClassDef => if d.mods.is(dotty.tools.dotc.core.Flags.Trait) then "trait" else if d.mods.is(dotty.tools.dotc.core.Flags.Enum) then "enum" else "class"
+          case d: untpd.TypeDef => "type"
+          case d: untpd.DefDef => "def"
+          case v: untpd.ValDef => if v.mods.is(dotty.tools.dotc.core.Flags.Mutable) then "var" else "val"
+          case _ => ""
+        if kind.nonEmpty && t.span.exists then
+          val name = t.asInstanceOf[untpd.NameTree].name.toString
+          if !name.contains("$") && !t.asInstanceOf[untpd.MemberDef].mods.is(dotty.tools.dotc.core.Flags.Synthetic) then
+            out += Map("name" -> name, "kind" -> kind, "start" -> t.span.start, "end" -> t.span.end, "point" -> t.span.point, "depth" -> depth)
+          depth += 1
+          traverseChildren(t)
+          depth -= 1
+        else traverseChildren(t)
+    finder.traverse(tree)
+    out.result()
+
+  /** The top-level definitions of the snapshot (the definition index), for
+   *  the go-to-symbol picker across files. */
+  private def indexedSymbols(): List[Map[String, Any]] =
+    definitionIndex.toList.sortBy(_._1).map((fqn, file) => Map("name" -> fqn.split('.').last, "fqn" -> fqn, "file" -> file))
+
+  /** Every typed reference to the symbol of the innermost typed tree at
+   *  `offset` in the unit's typed tree, by name position: the usages the
+   *  editor highlights at the caret (only in the typed statements).
+   */
+  private[xray] def usagesAt(tree: tpd.Tree, offset: Int, source: SourceFile)(using Context): Map[String, Any] =
+    val sym0 = Interactive.pathTo(tree, Span(offset)).headOption.map(_.symbol).getOrElse(NoSymbol)
+    val sym = if sym0.is(dotty.tools.dotc.core.Flags.ModuleVal) then sym0.moduleClass else sym0
+    if !sym.exists then Map("found" -> false)
+    else
+      val out = List.newBuilder[Map[String, Any]]
+      def same(s: Symbol) = (s eq sym) || (s.is(dotty.tools.dotc.core.Flags.ModuleVal) && (s.moduleClass eq sym)) || (sym.is(dotty.tools.dotc.core.Flags.ModuleVal) && (sym.moduleClass eq s))
+      val tr = new tpd.TreeTraverser:
+        def traverse(t: tpd.Tree)(using Context): Unit =
+          if (t.source eq source) && t.span.exists && !t.span.isSynthetic then
+            t match
+              case t: tpd.Ident if same(t.symbol) => out += Map("start" -> t.span.start, "end" -> t.span.end, "write" -> false)
+              case t: tpd.Select if same(t.symbol) && t.span.point >= 0 => out += Map("start" -> t.span.point, "end" -> (t.span.point + t.name.toString.length), "write" -> false)
+              case t: tpd.MemberDef if same(t.symbol) && !t.symbol.isConstructor => val p = t.nameSpan; out += Map("start" -> p.start, "end" -> p.end, "write" -> true)
+              case _ =>
+          traverseChildren(t)
+      tr.traverse(tree)
+      Map("found" -> true, "symbol" -> sym.showLocated, "usages" -> out.result().distinctBy(m => m("start")))
+
   private def enclosingDef(source: SourceFile, offset: Int): Map[String, Any] | Null =
     given Context = driver.currentCtx.fresh.setSource(source)
     val tree = new Parsers.Parser(source).parse()
@@ -264,7 +532,7 @@ object XrayServer:
     }
     b.append('"').toString
 
-  private def json(v: Any): String = v match
+  private[xray] def json(v: Any): String = v match
     case null => "null"
     case s: String => jsonStr(s)
     case b: Boolean => b.toString
@@ -286,7 +554,7 @@ object XrayServer:
       case _ => r.get("completions").collect { case l: List[?] => s"${l.size} completions, first ${l.headOption.getOrElse("-")}" }.getOrElse("")
     val line = code.substring(0, math.min(offset, code.length)).count(_ == '\n') + 1
     val snippet = code.substring(math.max(0, offset - 30), math.min(code.length, offset + 10)).replace("\n", "\\n")
-    println(s"[xray] #$seq ${if file.isEmpty then "A.scala" else file}:$line $kind@$offset${if cancel >= 0 then s" cancel=$cancel" else ""}${if latch then " latched" else ""} -> ${r.getOrElse("outcome", "?")} run=${r.getOrElse("runId", "?")} typedTop=${r.getOrElse("prefixBefore", "?")}->${r.getOrElse("prefix", "?")} skipped=${r.getOrElse("untypedSpans", "?")} trees=${r.getOrElse("typedTrees", "?")} ${r.getOrElse("ms", "?")}ms touched=${r.getOrElse("touched", "?")}${if r.get("tainted").contains(true) then " TAINTED" else ""} | $tail${r.get("error").collect { case e: String => s" | ERROR $e" }.getOrElse("")}${r.get("where").collect { case w: String => s" | $w" }.getOrElse("")} | «$snippet»")
+    println(s"[xray] #$seq ${if file.isEmpty then "A.scala" else file}:$line $kind@$offset${if cancel >= 0 then s" cancel=$cancel" else ""}${if latch then " latched" else ""} -> ${r.getOrElse("outcome", "?")} run=${r.getOrElse("runId", "?")} typedTop=${r.getOrElse("prefixBefore", "?")}->${r.getOrElse("prefix", "?")} skipped=${r.getOrElse("untypedSpans", "?")} trees=${r.getOrElse("typedTrees", "?")} backedOff=${r.getOrElse("backedOff", "?")} ${r.getOrElse("ms", "?")}ms touched=${r.getOrElse("touched", "?")}${if r.get("tainted").contains(true) then " TAINTED" else ""} | $tail${r.get("error").collect { case e: String => s" | ERROR $e" }.getOrElse("")}${r.get("where").collect { case w: String => s" | $w" }.getOrElse("")} | «$snippet»")
 
   /** The latch file `xray.Latch.await` polls, armed for a latched request. */
   /** The latch file the `Latch.await` macro polls: `-Dxray.latch`, else one
@@ -331,6 +599,7 @@ object XrayServer:
    *  the request started.
    */
   def request(kind: String, code: String, offset: Int, cancelAfterMs: Long, latch: Boolean = false, file: String = ""): Map[String, Any] = lock.synchronized {
+    foregroundCount.incrementAndGet()
     cancelNow = false
     if latch then armLatch() else releaseLatch()
     // (an async request without the latch runs the same way, on its own thread, cancellable through /cancel)
@@ -366,6 +635,7 @@ object XrayServer:
     @volatile var polledCount = 0
     var polls = 0
     val start = System.nanoTime()
+    val bgRunningAtStart = backgroundState("state") == "running"
     val deadline = if cancelAfterMs >= 0 then start + cancelAfterMs * 1000000L else Long.MaxValue
     val checker: () => Boolean = () =>
       polls += 1
@@ -385,8 +655,10 @@ object XrayServer:
     var hover: Map[String, Any] | Null = null
     var diagnostics = 0
     var diagnosticText: List[String] = Nil
+    var union: List[dotty.tools.dotc.reporting.Diagnostic] = Nil
     def keep(ds: List[dotty.tools.dotc.reporting.Diagnostic]): Int =
       diagnosticText = ds.take(8).map(d => s"${d.pos.line + 1}: ${d.msg.message.take(160)}")
+      union = ds
       ds.size
     try
       driver.withCancelChecker(checker) {
@@ -480,9 +752,20 @@ object XrayServer:
       "ms" -> math.round(ms * 10) / 10.0,
       "touched" -> touched, "touchedBefore" -> touchedBefore, "completed" -> completed, "scopeSize" -> total,
       "diagnostics" -> diagnostics, "diagnosticText" -> diagnosticText,
+      // the session's diagnostic set (the union of its stores, §12), for the
+      // Problems tab and the gutter; an edited definition's old ones are stale
+      "problems" -> problemsOf(uri, source, union),
       "completions" -> completions.map(c => c.label + (if c.description.nonEmpty then " " + c.description else "")).take(50),
-      "hover" -> hover
-    )
+      "hover" -> hover,
+      // what the request did with an edit (-Yinteractive-body-edits): kept the run, or why not
+      "lastEdit" -> driver.lastEdit(uri)
+    ) ++ {
+      // this request's reader (bound on this thread by the request): its waits on the completion lock
+      val r = driver.readerOfThisThread
+      val lw = lockWaitsOf(r)
+      r.lockWaits.iterator().asScala.foreach(w => allForegroundWaits.add((math.round(w.nanos / 1e5) / 10.0, math.round(ms * 10) / 10.0, w.root, w.current, w.holder)))
+      lw ++ Map("concurrentWithBackground" -> (bgRunningAtStart || backgroundState("state") == "running"))
+    }
   }
 
   /** The definition of the symbol of the innermost typed tree at `offset`:
@@ -544,22 +827,37 @@ object XrayServer:
         .getOrElse(throw new IllegalStateException(s"xray.html not found from ${Paths.get("").toAbsolutePath}; pass -Dxray.page"))
     }
 
-  private def readBody(ex: HttpExchange): String =
+  private[xray] def readBody(ex: HttpExchange): String =
     new String(ex.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
 
   /** The request body is `{"kind","code","offset","cancelAfterMs"}`; the
    *  code is sent URL-encoded as a separate field to keep the parser trivial.
    */
-  private def field(body: String, name: String): Option[String] =
+  private[xray] def field(body: String, name: String): Option[String] =
     body.split('&').map(_.split("=", 2)).collectFirst { case Array(k, v) if k == name => java.net.URLDecoder.decode(v, StandardCharsets.UTF_8) }
 
-  private def reply(ex: HttpExchange, status: Int, contentType: String, body: String): Unit =
+  private[xray] def reply(ex: HttpExchange, status: Int, contentType: String, body: String): Unit =
     val bytes = body.getBytes(StandardCharsets.UTF_8)
     ex.getResponseHeaders.add("Content-Type", contentType)
     ex.getResponseHeaders.add("Cache-Control", "no-store")
     ex.sendResponseHeaders(status, bytes.length)
     val out = ex.getResponseBody
     out.write(bytes); out.close()
+
+  /** The git tip of the checkout the server runs from, and whether it has
+   *  local changes, for the page's title bar: a screenshot names its binary.
+   */
+  private[xray] lazy val gitTip: String =
+    try
+      def git(args: String*) =
+        val p = new ProcessBuilder(("git" +: args)*).redirectErrorStream(true).start()
+        val out = new String(p.getInputStream.readAllBytes(), StandardCharsets.UTF_8).trim
+        p.waitFor(); out
+      val tip = git("rev-parse", "--short=10", "HEAD")
+      val branch = git("rev-parse", "--abbrev-ref", "HEAD")
+      val dirty = git("status", "--porcelain", "--untracked-files=no").nonEmpty
+      s"$branch @ $tip${if dirty then " + local changes" else ""}"
+    catch case scala.util.control.NonFatal(_) => "unknown build"
 
   private val httpThreads = new java.util.concurrent.atomic.AtomicInteger
   /** The HTTP requests being handled: what, on which thread, since when. */
@@ -573,6 +871,7 @@ object XrayServer:
     val port = sys.props.get("xray.port").map(_.toInt).getOrElse(8791)
     val page = findPage()
     println(s"[xray] page: $page")
+    println(s"[xray] build: $gitTip")
     println(s"[xray] latch file: ${latchFile.map(_.getPath).getOrElse("none (-Dxray.latch not set: latched requests disabled)")}")
     releaseLatch()
     println(s"[xray] warming up the driver on other content")
@@ -631,6 +930,78 @@ object XrayServer:
       case "/release" if ex.getRequestMethod == "POST" =>
         releaseLatch()
         reply(ex, 200, "application/json", json(status()))
+      case "/symbols" =>
+        val query = Option(ex.getRequestURI.getRawQuery).getOrElse("")
+        val file = field(query, "file").getOrElse("")
+        val code = sourcesRoot.filter(_ => file.nonEmpty).map(root => Files.readString(root.resolve(file))).getOrElse(generatedSource("x-ray demo"))
+        reply(ex, 200, "application/json", json(Map("file" -> file, "definitions" -> definitionsOf(SourceFile.virtual(uriOf(file), code)), "index" -> (if field(query, "index").contains("1") then indexedSymbols() else Nil))))
+      case "/usages" if ex.getRequestMethod == "POST" =>
+        // the typed tree of the current unit of the file, under the read lock: a read action
+        val body = readBody(ex)
+        val code = field(body, "code").getOrElse("")
+        val offset = field(body, "offset").map(_.toInt).getOrElse(0)
+        val file = field(body, "file").getOrElse("")
+        val uri = uriOf(file)
+        val source = SourceFile.virtual(uri, code)
+        val result =
+          try driver.readUpTo(uri, source, Span(offset)) { (ctx, unit, _) =>
+            given Context = ctx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx))
+            usagesAt(unit.tpdTree, offset, unit.source)
+          }
+          catch case scala.util.control.NonFatal(e) => Map("found" -> false, "error" -> e.toString)
+        reply(ex, 200, "application/json", json(result))
+      case "/reset" if ex.getRequestMethod == "POST" =>
+        val body = readBody(ex)
+        val mode = field(body, "mode").flatMap(k => Replay.modes.find(_.key == k)).getOrElse(freeformMode)
+        reply(ex, 200, "application/json", json(resetDriver(mode)))
+      case "/modes" =>
+        reply(ex, 200, "application/json", json(Map("freeform" -> freeformMode.key, "build" -> gitTip,
+          "modes" -> Replay.modes.map(m => Map("key" -> m.key, "title" -> m.title, "flags" -> m.flags.mkString(" "))))))
+      case p if p.startsWith("/replay") =>
+        Replay.route(ex, p)
+      case p if p.startsWith("/throughput") =>
+        ThroughputDemo.route(ex, p, sourcesRoot)
+      case "/background" if ex.getRequestMethod == "POST" =>
+        val body = readBody(ex)
+        reply(ex, 202, "application/json", json(startBackground(field(body, "code").getOrElse(""), field(body, "file").getOrElse(""),
+          field(body, "visibleFrom").map(_.toInt).getOrElse(-1), field(body, "visibleTo").map(_.toInt).getOrElse(-1))))
+      case "/hover" if ex.getRequestMethod == "POST" =>
+        // a lean hover (no x-ray bookkeeping): runUpTo at the offset and the
+        // type of the innermost typed tree there, as a read action; its wall
+        // time and its time blocked on the completion lock
+        val body = readBody(ex)
+        val code = field(body, "code").getOrElse("")
+        val offset = field(body, "offset").map(_.toInt).getOrElse(0)
+        val file = field(body, "file").getOrElse("")
+        val uri = uriOf(file)
+        val source = SourceFile.virtual(uri, code)
+        val beside0 = backgroundState("state") == "running"
+        val t0 = System.nanoTime()
+        val result =
+          try
+            val text = driver.readUpTo(uri, source, Span(offset)) { (ctx, unit, _) =>
+              given Context = ctx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx))
+              Interactive.pathTo(unit.tpdTree, Span(offset)).headOption match
+                case Some(t) if t.hasType => t.tpe.widenTermRefExpr.show
+                case Some(_) => "<untyped>"
+                case None => "<no tree>"
+            }
+            Map("hover" -> text)
+          catch case scala.util.control.NonFatal(e) => Map("error" -> e.toString)
+        val ms = (System.nanoTime() - t0) / 1e6
+        val r = driver.readerOfThisThread
+        r.lockWaits.iterator().asScala.foreach(w => allForegroundWaits.add((math.round(w.nanos / 1e5) / 10.0, math.round(ms * 10) / 10.0, w.root, w.current, w.holder)))
+        reply(ex, 200, "application/json", json(result ++ lockWaitsOf(r) ++ Map("ms" -> math.round(ms * 100) / 100.0,
+          "statementWaitMs" -> math.round(r.statementWaitNanos / 1e5) / 10.0,
+          "concurrentWithBackground" -> (beside0 || backgroundState("state") == "running"))))
+      case "/lockwaits" =>
+        // every itemised wait of the foreground requests since the last reset: (ms, request wall ms, root, current, holder)
+        val q = Option(ex.getRequestURI.getRawQuery).getOrElse("")
+        val rows = allForegroundWaits.iterator().asScala.toList
+        if field(q, "reset").contains("1") then allForegroundWaits.clear()
+        reply(ex, 200, "application/json", json(Map("waits" -> rows.map((ms, wall, root, cur, holder) => Map("ms" -> ms, "wall" -> wall, "root" -> root, "current" -> cur, "holder" -> holder)))))
+      case "/background" =>
+        reply(ex, 200, "application/json", json(backgroundStatus()))
       case "/cancel" if ex.getRequestMethod == "POST" =>
         // The checker sees the flag at the next checkpoint (every 1024 typed trees); the latch is released so that typing gets there.
         cancelNow = true
