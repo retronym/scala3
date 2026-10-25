@@ -9,12 +9,12 @@ import util.Spans.*
 import collection.mutable
 
 /** Targeted typing of one statement list (interactive mode, see
- *  `Run.typingTarget` and `InteractiveDriver.runUpTo`).
+ *  `Reader.typingTarget` and `InteractiveDriver.runUpTo`).
  *
  *  Of the statements of a package, a template or a block on the path to the
  *  target only the statement whose span contains the target is typed (a class
  *  and its synthetic companion share the span, so both are); `skip` records
- *  the others on the run, with the context they would have been typed in, for
+ *  the others on the reader, with the context they would have been typed in, for
  *  the driver to type later in the same run. The rules, in the order `skip`
  *  applies them:
  *
@@ -43,8 +43,8 @@ private[typer] final class Targeting(
     typer: Typer, stats: List[untpd.Tree], exprOwner: Symbol, inBlock: Boolean, buf: mutable.ListBuffer[tpd.Tree])(using Context):
   import Targeting.*
 
-  private val run = ctx.run.nn
-  private val target = run.typingTarget
+  private val reader = ctx.reader
+  private val target = reader.typingTarget
 
   private val nextAfterTarget: untpd.Tree | Null =
     if !stats.exists(_.span.contains(target)) then
@@ -86,7 +86,7 @@ private[typer] final class Targeting(
       && !forcedSpan.contains(stat.span)
     if skipped then
       if inBlock then buf ++= stubsOf(stat)
-      run.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock)
+      reader.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock)
     else stat match
       case _: untpd.DefTree | _: untpd.ExtMethods =>
         if stat.span.contains(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
@@ -118,17 +118,17 @@ private[typer] final class Targeting(
 private[typer] object Targeting:
 
   /** The targeting of the list `stats` owned by `exprOwner`, if it is subject
-   *  to it: there is a target, `Run.targetNextStats` marked this very list,
+   *  to it: there is a target, `Reader.targetNextStats` marked this very list,
    *  and it is a list of the request's own source. Consumes the mark.
    */
   def of(typer: Typer, stats: List[untpd.Tree], exprOwner: Symbol, buf: mutable.ListBuffer[tpd.Tree])(using Context): Targeting | Null =
-    val run = ctx.run.nn
-    if !run.typingTarget.exists then null
+    val reader = ctx.reader
+    if !reader.typingTarget.exists then null
     else
-      val marked = exprOwner eq run.targetedStatsOwner
-      val inBlock = run.targetedStatsInBlock
-      run.targetedStatsOwner = NoSymbol
-      run.targetedStatsInBlock = false
+      val marked = exprOwner eq reader.targetedStatsOwner
+      val inBlock = reader.targetedStatsInBlock
+      reader.targetedStatsOwner = NoSymbol
+      reader.targetedStatsInBlock = false
       if marked && (ctx.compilationUnit ne NoCompilationUnit) && (ctx.source eq ctx.compilationUnit.source)
       then new Targeting(typer, stats, exprOwner, inBlock, buf)
       else null
