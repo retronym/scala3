@@ -46,3 +46,18 @@ class CompletionParallelProviderSuite extends BaseCompletionSuite:
          |""".stripMargin,
       filter = _.contains("(implicit)")
     )
+
+  /** Finding I89: candidates that do not apply (other extension methods in
+   *  scope) leave errors buffered in the reader's typer state, and the type
+   *  variables of the extension that does apply were then not instantiated.
+   */
+  @Test def `extension-type-variable-inference` =
+    check(
+      """|object M:
+         |  extension [T](xs: List[T]) def test(p: T => Boolean): List[T] = ???
+         |  List(1,2,3).tes@@
+         |""".stripMargin,
+      """|test(p: Int => Boolean): List[Int]
+         |""".stripMargin,
+      filter = _.contains("test")
+    )
