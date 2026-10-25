@@ -911,7 +911,20 @@ class Namer { typer: Typer =>
   }
 
   /** The completer of a symbol defined by a member def or import (except ClassSymbols) */
-  class Completer(val original: Tree)(ictx: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+  class Completer(val original: Tree)(ictx0: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+
+    /** The context with which this completer was created; with independent
+     *  readers (`-Yinteractive-readers`), for the duration of `complete`, the
+     *  same with a fresh committable typer state of its own (§3.1): two
+     *  readers completing two symbols of one file would otherwise both write
+     *  the namer's typer state, which readers' body typing derives from (I48).
+     */
+    protected var ictx: Context = ictx0
+
+    /** `ictx` was replaced or restored: a subclass that derived a context
+     *  from it once derives it again.
+     */
+    protected def rebased(): Unit = ()
 
     protected def localContext(owner: Symbol): FreshContext = ctx.fresh.setOwner(owner).setTree(original)
 
@@ -923,7 +936,7 @@ class Namer { typer: Typer =>
       if myNotNullInfos == null then ictx else ictx.withNotNullInfos(myNotNullInfos.nn)
 
     // make sure testing contexts are not captured by completers
-    assert(!ictx.reporter.isInstanceOf[ExploringReporter])
+    assert(!ictx0.reporter.isInstanceOf[ExploringReporter])
 
     def setNotNullInfos(infos: List[NotNullInfo]): Unit =
       myNotNullInfos = infos
@@ -977,14 +990,92 @@ class Namer { typer: Typer =>
         report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
+        // Interactive: the creation context's typer state may have been
+        // committed since the completer was made (a definition typed ahead
+        // under a nested state, from another file's typing, which then
+        // committed it: its locals keep completers in that state, and the
+        // statement is typed later by a resume or a pass). Complete in the
+        // nearest ancestor state that can still take constraints, as a resume
+        // does (`liveContext`); in place, a commit into the committed state
+        // failed (I65). Not in the ancestor state itself, which may be the
+        // run's, shared by every reader: in a child of it, committed into it
+        // under the completion lock when the completion ends, as a resumed
+        // statement is (typing in the shared state unlocked raced with the
+        // commits of other readers, I70).
+        var commitInto: TyperState | Null = null
+        if ctx.mode.is(Mode.Interactive) && ictx.typerState.hasBeenCommitted then
+          def live(ts: TyperState | Null): TyperState | Null =
+            if ts == null then null
+            else if ts.isCommittable && !ts.hasBeenCommitted then ts
+            else live(ts.previousState)
+          live(ictx.typerState.previousState) match
+            case ts: TyperState =>
+              ictx = ictx.freshOver(ictx.outer).setTyperState(ts.fresh())
+              commitInto = ts
+              rebased()
+            case null =>
+        val saved = ictx
+        // A typer state of its own for what several readers share: members and
+        // top-level definitions. A local is completed only by the reader typing
+        // its enclosing statement, in that statement's typer state, as in the
+        // serialised mode: its inferred type may hold a variable that the
+        // statement's later typing constrains (`val lazyStats = readLater(end,
+        // rdr => ...)`, whose `T` comes from the closure's body); completed in
+        // a state of its own, the variable was dropped with it and later
+        // instantiated to `Nothing` (I66; I62's `val retractedVars` too).
+        val own = ctx.base.independent && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+        if own then
+          // a typer state of its own, reporting to the creation context's
+          // reporter directly: a buffer flushed when the completion ends
+          // would be captured, with this state, by the completers of the
+          // members it indexes, and their diagnostics, issued when they are
+          // completed later, would land in it after its flush (I59)
+          // a copy of the creation context at its own level (`freshOver` its
+          // outer), not a child of it (`fresh`): for a class owner a child
+          // with the same owner reads as the class's inner scope, where the
+          // self type is visible, and typing the self type itself then looked
+          // names up through `this`, back into the self symbol (I63)
+          ictx = saved.freshOver(saved.outer).setTyperState(saved.typerState.fresh(reporter = saved.reporter))
+          rebased()
+        var completedNormally = false
         try
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
+          completedNormally = true
+          commitInto match
+            case target: TyperState if !own =>
+              // independent readers: private, settled and dropped (I76); serialised: committed under the lock
+              val c = ictx
+              Sharing.endState(c, c.fresh.setTyperState(target))
+            case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
             val completer = SuspendCompleter()
             denot.info = completer
             completer.complete(denot)
+        finally
+          if own then
+            // the completion's result is published fully defined: its type
+            // variables made permanent (not committed into the namer's state,
+            // which other readers derive from); its diagnostics went to the
+            // namer's reporter as they were issued, where every reader of the
+            // session finds them
+            val ts = ictx.typerState
+            try
+              // what the completion left uninstantiated (a local val's inferred
+              // type `Set[A | TermRef]`, `A` from `Set.empty[A]`) would be
+              // interpolated later in the namer's typer state; no other state
+              // knows these variables' constraints, so they are instantiated
+              // here: those in the completed info as `fullyDefinedType` would,
+              // the rest from below (I62)
+              if completedNormally && !ts.ownedVars.isEmpty then
+                given Context = ictx
+                if denot.isCompleted then Inferencing.isFullyDefined(denot.info, ForceDegree.all)
+                ts.ownedVars.foreach(tv => if !tv.isInstantiated then tv.instantiate(fromBelow = true))
+              ts.gc()(using ictx)
+            finally
+              ictx = saved
+              rebased()
     }
 
     private var completedTypeParamSyms: List[TypeSymbol] | Null = null
@@ -1007,7 +1098,7 @@ class Namer { typer: Typer =>
               val ann =
                 if cls.is(JavaDefined) then Checking.checkNamedArgumentForJavaAnnotation(annotTree, cls.asClass)
                 else annotTree
-              val ann1 = Annotation.deferred(cls)(typedAheadExpr(ann)(using annotCtx))
+              val ann1 = Annotation.deferred(cls)(Sharing.privately(annotCtx)(typedAheadExpr(ann)))
               sym.addAnnotation(ann1)
               ann
       case _ =>
@@ -1020,7 +1111,7 @@ class Namer { typer: Typer =>
             throw
               if sym.isCompleted then Inlines.MissingInlineInfo()
               else CyclicReference(sym)
-          val mdef = typedAheadExpr(original).asInstanceOf[tpd.DefDef]
+          val mdef = Sharing.privately(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
           PrepareInlineable.wrapRHS(original, mdef.tpt, mdef.rhs)
         PrepareInlineable.registerInlineInfo(sym, rhsToInline)(using localContext(sym))
       case _ =>
@@ -1130,8 +1221,8 @@ class Namer { typer: Typer =>
       knownTypeSig
   }
 
-  class TypeDefCompleter(original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx) with TypeParamsCompleter {
+  class TypeDefCompleter(original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0) with TypeParamsCompleter {
     private var myTypeParams: List[TypeSymbol] | Null = null
     private var nestedCtx: Context | Null = null
     assert(!original.isClassDef)
@@ -1180,7 +1271,10 @@ class Namer { typer: Typer =>
 
     override final def typeSig(sym: Symbol): Type =
       val tparamSyms = completerTypeParams(sym)(using ictx)
-      given ctx: Context = nestedCtx.nn
+      // made when the type parameters were first asked for, possibly under
+      // another completion's typer state (see `Completer.ictx`)
+      val nc = nestedCtx.nn
+      given ctx: Context = if nc.typerState eq ictx.typerState then nc else nc.fresh.setTyperState(ictx.typerState)
 
       def abstracted(tp: TypeBounds): TypeBounds =
         HKTypeLambda.boundsFromParams(tparamSyms, tp)
@@ -1264,11 +1358,14 @@ class Namer { typer: Typer =>
     end typeSig
   }
 
-  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx), CompleterWithCleanup {
-    withDecls(newScope(using ictx))
+  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0), CompleterWithCleanup {
+    withDecls(newScope(using ictx0))
 
-    protected given completerCtx: Context = localContext(cls)
+    private var myCompleterCtx: Context = localContext(cls)
+    protected given completerCtx[Dummy_so_its_a_def]: Context = myCompleterCtx
+    // derived from `ictx`: again when `ictx` is replaced or restored
+    override protected def rebased(): Unit = myCompleterCtx = localContext(cls)
 
     private var localCtx: Context = uninitialized
 
@@ -2190,7 +2287,7 @@ class Namer { typer: Typer =>
       && infoDontForceAnnots.abstractTypeMembers.nonEmpty
   end needsTracked
 
-  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = owner.infoOrCompleter match
+  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = { owner.denot.awaitOtherReader(); owner.infoOrCompleter } match // I73
     case info: ClassInfo =>
       info.decls.lookupAll(sym.name).filter(d => d.is(ParamAccessor)).toList
     case _ => List(sym)
@@ -2202,6 +2299,7 @@ class Namer { typer: Typer =>
    */
   def setTrackedConstrParam(param: ValDef)(using Context): Unit =
     val sym = symbolOfTree(param)
+    sym.maybeOwner.maybeOwner.denot.awaitOtherReader() // I73
     sym.maybeOwner.maybeOwner.infoOrCompleter match
       case info: ClassInfo if needsTracked(sym, param, sym.maybeOwner.maybeOwner) =>
         typr.println(i"set tracked $param, $sym: ${sym.info} containing ${sym.info.memberNames(abstractTypeNameFilter).toList}")

@@ -225,9 +225,20 @@ object Annotations {
   private def refersToLambdaParam(tp: Type, tl: TermLambda)(using Context): Boolean =
     tp.existsPart(isLambdaParam(_, tl), stopAt = StopAt.Static)
 
+  /** With independent readers (`-Yinteractive-readers`), a lazy annotation's
+   *  thunk is evaluated by one reader: another one waits for it rather than
+   *  meeting the evaluation's `null` (a cycle on one reader). Re-entry on the
+   *  owner still meets it.
+   */
+  private inline def evaluatingOnce[T](self: AnyRef)(inline op: T)(using Context): T =
+    Sharing.claimed(self, CompletionLock.lazyAnnotation, self)(op)
+
   abstract class LazyAnnotation extends Annotation {
     protected var mySym: Symbol | (Context ?=> Symbol) | Null
     override def symbol(using parentCtx: Context): Symbol =
+      if !mySym.isInstanceOf[Symbol] then evaluatingOnce(this)(symbol0) else symbol0
+
+    private def symbol0(using parentCtx: Context): Symbol =
       assert(mySym != null)
       mySym match {
         case symFn: (Context ?=> Symbol) @unchecked =>
@@ -249,6 +260,9 @@ object Annotations {
 
     protected var myTree: Tree | (Context ?=> Tree) | Null
     def tree(using Context): Tree =
+      if !myTree.isInstanceOf[Tree @unchecked] then evaluatingOnce(this)(tree0) else tree0
+
+    private def tree0(using Context): Tree =
       assert(myTree != null)
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>
@@ -291,6 +305,9 @@ object Annotations {
     // Copy-pasted from LazyAnnotation to avoid having to turn it into a trait
     protected var myTree: Tree | (Context ?=> Tree) | Null
     def tree(using Context): Tree =
+      if !myTree.isInstanceOf[Tree @unchecked] then evaluatingOnce(this)(tree0) else tree0
+
+    private def tree0(using Context): Tree =
       assert(myTree != null)
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>

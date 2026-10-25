@@ -154,7 +154,7 @@ class SessionOracleSuite extends BasePCSuite:
    *  answer the whole-file oracle's. The whole-file runs and the cancellations
    *  of the single-reader walk are kept, from either thread.
    */
-  private def oracle2(rel: String, seed: Int, requests: Int, cancelEvery: Int = 7): Unit =
+  private def oracle2(rel: String, seed: Int, requests: Int, cancelEvery: Int = 7, independent: Boolean = true): Unit =
     val root = sourcesRoot.getOrElse(throw new AssertionError(s"compiler sources not found from ${Paths.get("").toAbsolutePath}"))
     val path = root.resolve(rel)
     val content = Files.readString(path)
@@ -168,7 +168,8 @@ class SessionOracleSuite extends BasePCSuite:
     val tWhole = (System.nanoTime() - t0) / 1e6
     val mask = dotty.tools.dotc.Run.typerCheckpointMask
     dotty.tools.dotc.Run.typerCheckpointMask = 15
-    val driver = newDriver()
+    // `independent`: `-Yinteractive-readers` (step 4); without, serialised (step 3)
+    val driver = new InteractiveDriver(if independent then settings :+ "-Yinteractive-readers" else settings, CachedLogicalPackage.none)
     val failure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
     val counts = new java.util.concurrent.ConcurrentHashMap[String, Int]()
     def count(k: String) = counts.merge(k, 1, _ + _)
@@ -262,3 +263,4 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `two-readers-SourceTree-seed-1` = oracle2("interactive/SourceTree.scala", 1, 300)
   @Test def `two-readers-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300)
   @Test def `two-readers-Contexts-seed-1` = oracle2("core/Contexts.scala", 1, 200)
+  @Test def `two-readers-serialised-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300, independent = false)

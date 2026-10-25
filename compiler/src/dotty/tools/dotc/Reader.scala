@@ -215,6 +215,27 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
 
   // ---- Waits on the completion lock (several readers, see `CompletionLock`) ----
 
+  /** The completion root this reader is waiting for, if any (independent
+   *  readers, `CompletionRoots`): the edge of the wait-for graph that the
+   *  cycle check follows.
+   */
+  @volatile var waitingOn: core.CompletionRoots.Claim | Null = null
+
+  /** The waits this reader backed off from because they would have closed a
+   *  wait-for cycle (`CompletionRoots.backOff`), for tests and the x-ray.
+   */
+  @volatile var waitCyclesBackedOff: Int = 0
+
+  /** How many Namer completions this reader is inside now (independent
+   *  readers): a reader inside one never backs off from a wait-for cycle
+   *  (I74), since a Namer completion cannot run twice.
+   */
+  @volatile var namerCompletionDepth: Int = 0
+
+  /** The wait-for cycles between Namer completions this reader reported as a
+   *  `CyclicReference` (the single-reader answer, I74). */
+  @volatile var cyclesRaised: Int = 0
+
   /** Time this reader spent waiting for a statement another reader was
    *  typing (`InteractiveDriver`'s claims), in nanoseconds.
    */

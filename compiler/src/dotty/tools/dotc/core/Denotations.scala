@@ -202,9 +202,8 @@ object Denotations {
      *  Uncompleted denotations set myInfo to a LazyType.
      */
     final def info(using Context): Type = {
-      def completeInfo = { // Written this way so that `info` is small enough to be inlined
-        this.asInstanceOf[SymDenotation].completeFrom(myInfo.asInstanceOf[LazyType]); info
-      }
+      def completeInfo = // Written this way so that `info` is small enough to be inlined
+        this.asInstanceOf[SymDenotation].infoAfterCompletion
       if (myInfo.isInstanceOf[LazyType]) completeInfo else myInfo
     }
 
@@ -827,11 +826,12 @@ object Denotations {
       def toNewRun =
         util.Stats.record("current.bringForward")
         if exists then
-          if ctx.base.isConcurrent then
-            // several readers (interactive mode): the bring-forward writes the
-            // flock's validity, one writer at a time (see `completionLock`)
-            ctx.base.completionLock.locked(CompletionLock.bringForward)(initial.bringForward().current)
-          else initial.bringForward().current
+          // several readers (interactive mode): the bring-forward writes the
+          // flock's validity, one writer at a time; with independent readers
+          // one root for every bring-forward, so that cycles with completions
+          // are detected
+          Sharing.exclusive(CompletionLock.bringForward, CompletionLock.bringForward,
+            symbol)(initial.bringForward().current)
         else this
 
       def goForward =

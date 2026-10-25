@@ -3095,6 +3095,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     def isInner(owner: Symbol) = owner == sym || sym.is(Param) && owner == sym.owner
     val outer = ctx.outersIterator.dropWhile(c => isInner(c.owner)).next()
     def local: FreshContext = outer.fresh.setOwner(newLocalDummy(sym.owner))
+    sym.owner.denot.awaitOtherReader() // I73
     val ctx0 = sym.owner.infoOrCompleter match
       case completer: Namer#Completer
       if sym.is(Param) && completer.completerTypeParams(sym).nonEmpty =>
@@ -4273,7 +4274,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // We have to check the Completer of symbol befor typedValDef,
     // otherwise the symbol is already completed using creation context.
     mdef.getAttachment(SymOfTree) match {
-      case Some(sym) => sym.infoOrCompleter match {
+      case Some(sym) => { sym.denot.awaitOtherReader(); sym.infoOrCompleter } match { // I73
         case completer: Namer#Completer =>
           if completer.creationContext.notNullInfos ne ctx.notNullInfos then
             // The RHS of a val def should know about not null facts established
