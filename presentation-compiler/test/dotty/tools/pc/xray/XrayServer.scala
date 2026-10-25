@@ -156,6 +156,8 @@ object XrayServer:
   private val settings =
     List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", sys.props.getOrElse("java.class.path", BuildInfo.ideTestsDependencyClasspath.map(_.toPath.toString).mkString(File.pathSeparator)))
+    // `-Dxray.readers=independent`: `-Yinteractive-readers` (step 4); otherwise serialised (step 3)
+    ++ (if sys.props.get("xray.readers").contains("independent") then List("-Yinteractive-readers") else Nil)
 
   private val driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
 
