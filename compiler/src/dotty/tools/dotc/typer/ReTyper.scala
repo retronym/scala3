@@ -147,7 +147,7 @@ class ReTyper(nestingLevel: Int = 0) extends Typer(nestingLevel) with ReChecking
   override def retrieveSym(tree: untpd.Tree)(using Context): Symbol = tree.symbol
   override def symbolOfTree(tree: untpd.Tree)(using Context): Symbol = tree.symbol
 
-  override def localTyper(sym: Symbol): Typer = this
+  override def localTyper(sym: Symbol)(using Context): Typer = this
 
   override def index(trees: List[untpd.Tree])(using Context): Context = ctx
 

@@ -2412,8 +2412,9 @@ object Types extends TypeUtils {
 
     final def symbol(using Context): Symbol =
       // We can rely on checkedPeriod (unlike in the definition of `denot` below)
-      // because SymDenotation#installAfter never changes the symbol
-      if (checkedPeriod == ctx.period) lastSymbol.asInstanceOf[Symbol]
+      // because SymDenotation#installAfter never changes the symbol.
+      // (An acquire read: `setDenot` stores the symbol before the period.)
+      if Period.fromCode(util.Publish.namedTypeCheckedPeriod(this)) == ctx.period then lastSymbol.asInstanceOf[Symbol]
       else computeSymbol
 
     private def computeSymbol(using Context): Symbol =
@@ -2422,7 +2423,7 @@ object Types extends TypeUtils {
           if (sym.isValidInCurrentRun) sym else denot.symbol
         case name =>
           (if (denotationIsCurrent) lastDenotation.asInstanceOf[Denotation] else denot).symbol
-      if checkedPeriod != Nowhere then checkedPeriod = ctx.period
+      if checkedPeriod != Nowhere then util.Publish.setNamedTypeCheckedPeriod(this, ctx.period.rawCode)
       result
 
     /** There is a denotation computed which is valid (somewhere in) the
@@ -2460,7 +2461,7 @@ object Types extends TypeUtils {
      *  Used to get the class underlying a ThisType.
      */
     private[Types] def stableInRunSymbol(using Context): Symbol =
-      if (checkedPeriod.runId == ctx.runId) lastSymbol.nn
+      if Period.fromCode(util.Publish.namedTypeCheckedPeriod(this)).runId == ctx.runId then lastSymbol.nn
       else symbol
 
     def info(using Context): Type = denot.info
@@ -2628,7 +2629,8 @@ object Types extends TypeUtils {
 
       lastDenotation = denot
       lastSymbol = denot.symbol
-      checkedPeriod = if (prefix.isProvisional) Nowhere else ctx.period
+      // the period publishes the two fields above (a release store)
+      util.Publish.setNamedTypeCheckedPeriod(this, (if (prefix.isProvisional) Nowhere else ctx.period).rawCode)
       designator match {
         case sym: Symbol if designator ne lastSymbol.nn =>
           designator = lastSymbol.asInstanceOf[Designator{ type ThisName = self.ThisName }]

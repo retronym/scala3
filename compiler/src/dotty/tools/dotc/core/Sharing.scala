@@ -40,9 +40,20 @@ object Sharing:
   // The operations test the base's copies of the flags (`ContextState.concurrent`, `independent`): one field read
   // from the base at each call site, not two.
 
+  /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
+   *  holding the claim on `key` when they are independent, where a wait that would close a wait-for cycle backs off
+   *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
+   *  `cycleSubject` are evaluated only on a concurrent base. For bring-forwards, lazy TASTy reads, inherited caches. */
+  inline def exclusive[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+    if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
+
   /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
   inline def serialised[T](lock: AnyRef)(inline op: T)(using Context): T =
     if ctx.base.concurrent then lock.synchronized(op) else op
+
+  /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: committed under
+   *  the completion lock. */
+  def endState(c1: Context, into: Context): Unit = interactive.SharingImpl.endState(c1, into)
 
   val Batch: Sharing = new Sharing(concurrent = false, independent = false)
   val Serialised: Sharing = new Sharing(concurrent = true, independent = false)
