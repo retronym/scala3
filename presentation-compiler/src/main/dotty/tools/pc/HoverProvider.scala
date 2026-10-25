@@ -22,6 +22,7 @@ import dotty.tools.dotc.core.Types.*
 import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.Span
 import dotty.tools.dotc.util.SourcePosition
 import dotty.tools.pc.printer.ShortenedTypePrinter
 import dotty.tools.pc.printer.ShortenedTypePrinter.IncludeDefaultParam
@@ -38,7 +39,8 @@ object HoverProvider:
     val uri = params.uri().nn
     val text = params.text().nn
     val sourceFile = SourceFile.virtual(uri, text)
-    driver.run(uri, sourceFile)
+    // only the path to the position is typed (unless -Yno-targeted-requests)
+    driver.runUpTo(uri, sourceFile, Span(params.offset()))
     val unit = driver.compilationUnits.get(uri)
 
     given ctx: Context =
