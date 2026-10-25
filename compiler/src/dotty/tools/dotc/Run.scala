@@ -74,8 +74,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   @scratch @guardedBy("writer") private var myUnits: List[CompilationUnit] = Nil
 
-  private var myUnitsCached: List[CompilationUnit] = Nil
-  private var myFiles: Set[AbstractFile] = Set.empty
+  // `files` of `myUnits`, with the units it was made from: one immutable pair in one volatile field, so that a reader
+  // that finds the units it asks for finds their files with them
+  @cache @publishedBy("packed") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
   // `@nowarn` annotations by source file, populated during typer
   @scratch private val mySuppressions: mutable.LinkedHashMap[SourceFile, ListBuffer[Suppression]] = mutable.LinkedHashMap.empty
@@ -240,11 +241,13 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  from TASTY.
    */
   def files: Set[AbstractFile] = {
-    if (myUnits ne myUnitsCached) {
-      myUnitsCached = myUnits
-      myFiles = (myUnits ++ suspendedUnits).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
-    }
-    myFiles
+    val cached = myFilesOf
+    val us = myUnits
+    if us eq cached._1 then cached._2
+    else
+      val fs = (us ++ suspendedUnits).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
+      myFilesOf = (us, fs)
+      fs
   }
 
   /** The source files of all late entered symbols, as a set. A completion of a source-loaded class enters one, and
@@ -681,7 +684,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     // TODO: This makes `runContext` unusable after being reset.
     myCtx = null.asInstanceOf[Context]
     myUnits = Nil
-    myUnitsCached = Nil
+    myFilesOf = (Nil, Set.empty)
   }
 
   /** Produces the following contexts, from outermost to innermost
