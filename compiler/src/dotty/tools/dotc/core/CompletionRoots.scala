@@ -25,8 +25,10 @@ import scala.jdk.CollectionConverters.*
  *  wait ends. The check runs at every slice of a wait, since another
  *  reader's wait may start after this one's.
  */
-final class CompletionRoots(base: Contexts.ContextState):
+final class CompletionRoots(currentReader: () => Reader):
   import CompletionRoots.Claim
+
+  def this(base: Contexts.ContextState) = this(() => base.reader)
 
   private val claims = new ConcurrentHashMap[AnyRef, Claim]()
 
@@ -34,7 +36,7 @@ final class CompletionRoots(base: Contexts.ContextState):
    *  reader holds it. `cycle` reports a wait-for cycle (it throws).
    */
   def acquire(key: AnyRef, what: CompletionLock.What, cycle: () => Nothing): Unit =
-    val me = base.reader
+    val me = currentReader()
     var waitedSince = 0L
     var cycleSince = 0L
     var seen: Claim | Null = null
@@ -106,7 +108,7 @@ final class CompletionRoots(base: Contexts.ContextState):
   /** Does this reader hold the claim on `key`? */
   def ownedHere(key: AnyRef): Boolean =
     val c = claims.get(key)
-    c != null && (c.owner eq base.reader)
+    c != null && (c.owner eq currentReader())
 
   /** The claims of a wait-for cycle that waiting on `c` would close: `c`,
    *  then what its owner waits on, and so on, back to a claim of `me`; null
