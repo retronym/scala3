@@ -119,14 +119,19 @@ object Types extends TypeUtils {
     def isProvisional(using Context): Boolean = mightBeProvisional && testProvisional
 
     private def testProvisional(using Context): Boolean =
+      // The cycle breaker: on batch the type's own flag, cleared while its parts are tested; with parallel readers a
+      // set of this test's own, since another reader asking meanwhile would find the type not provisional (I93)
+      val breaking: util.EqHashSet[Type] | Null = if ctx.base.parallel then util.EqHashSet() else null
+      def breakCycle(t: Type): Unit =
+        if breaking == null then t.mightBeProvisional = false else breaking += t
       class ProAcc extends TypeAccumulator[Boolean]:
         override def apply(x: Boolean, t: Type) = x || test(t, this)
       def test(t: Type, theAcc: TypeAccumulator[Boolean] | Null): Boolean =
-        if t.mightBeProvisional then
-          t.mightBeProvisional = t match
+        if t.mightBeProvisional && (breaking == null || !breaking.contains(t)) then
+          val result = t match
             case t: TypeRef =>
               t.currentSymbol.isProvisional || !t.currentSymbol.isStatic && {
-                (t: Type).mightBeProvisional = false // break cycles
+                breakCycle(t)
                 test(t.prefix, theAcc)
                 || t.denot.infoOrCompleter.match
                     case info: LazyType => true
@@ -143,12 +148,14 @@ object Types extends TypeUtils {
             case t: LazyRef =>
               !t.completed || test(t.ref, theAcc)
             case t: ParamRef =>
-              (t: Type).mightBeProvisional = false // break cycles
+              breakCycle(t)
               test(t.underlying, theAcc)
             case _ =>
               (if theAcc != null then theAcc else ProAcc()).foldOver(false, t)
-        end if
-        t.mightBeProvisional
+          if breaking != null then breaking -= t
+          t.mightBeProvisional = result
+          result
+        else false
       end test
       test(this, null)
     end testProvisional
