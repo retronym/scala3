@@ -175,7 +175,19 @@ class InteractiveDriver(
    *  whose owner a commit had lost).
    */
   private def readCtx: Context =
-    if parallelReaders then myCtx.fresh.setNewTyperState() else myCtx
+    if parallelReaders then
+      val c = myCtx.fresh.setNewTyperState()
+      // This state stands where the run's root state stands with one reader, so its reporter
+      // is not one that holds "unreported errors": `interpolateTypeVars` returns early when
+      // `hasUnreportedErrors`, which a buffering reporter with an outer one answers true to
+      // after any candidate that does not apply (an extension method tried in a completion),
+      // and the type variables of every later application stay uninstantiated (finding I89).
+      // The outer reporter stays: the typer asks `errorsReported` through it, and a state
+      // without one recovers from a nested error differently (`StoreReporter(null)` made
+      // `Infer.d.leng` answer nothing after `val d = summon[Show[Int]].sh`).
+      c.typerState.setReporter(new StoreReporter(myCtx.typerState.reporter, fromTyperState = true) { override def hasUnreportedErrors = false })
+      c
+    else myCtx
 
   /** `op` under the completion lock unless readers are parallel
    *  (`-Yinteractive-parallel`): a request's read action is one unit, a

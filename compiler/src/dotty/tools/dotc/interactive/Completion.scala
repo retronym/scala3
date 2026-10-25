@@ -637,12 +637,6 @@ object Completion:
             s"Exception when trying to apply extension method:\n ${ex.getMessage()}\n${ex.getStackTrace().mkString("\n")}"
           )
           None
-        finally
-          // The errors of a candidate that does not apply are not the completion's. In a typer
-          // state of its own (a reader's, `-Yinteractive-parallel`) they stay buffered, and
-          // `Reporter.hasUnreportedErrors` then stops `interpolateTypeVars` for every later
-          // candidate: `test(p: T => Boolean)` for `test(p: Int => Boolean)` (finding I89).
-          ctx.typerState.reporter.removeBufferedMessages
 
       def extractMemberExtensionMethods(types: Seq[Type]): Seq[(TermRef, TermName)] =
         object DenotWithMatchingName:
