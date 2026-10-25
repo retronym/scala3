@@ -90,16 +90,22 @@ class Namer { typer: Typer =>
    *  one, so that trees that are shared between different DefDefs can be independently
    *  used as indices. It also contains a scope that contains nested parameters.
    */
-  private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
+  @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
   def nestedTyper(using Context): mutable.Map[Symbol, Typer] =
     val m = myNestedTyper
     if m != null then m
     else
       // filled by completions and consumed by body typing: with several
-      // readers (interactive mode) the two run on different threads
-      val m1: mutable.Map[Symbol, Typer] = ctx.base.sharing.newMap()
-      myNestedTyper = m1
-      m1
+      // readers (interactive mode) the two run on different threads, and the
+      // first use of a typer may be on both at once: a map made by each, one
+      // of them lost with the symbols entered in it (finding I90)
+      synchronized:
+        val m0 = myNestedTyper
+        if m0 != null then m0
+        else
+          val m1: mutable.Map[Symbol, Typer] = ctx.base.sharing.newMap()
+          myNestedTyper = m1
+          m1
 
   /** We are entering symbols coming from a SourceLoader */
   private var lateCompile = false
