@@ -9,6 +9,7 @@ import scala.jdk.CollectionConverters.*
 import scala.meta.pc.SemanticdbFileManager
 import scala.meta.pc.SourcePathMode
 
+import dotty.tools.dotc.CompilationUnit
 import dotty.tools.dotc.core.Contexts.Context
 import dotty.tools.dotc.interactive.{
   CachedLogicalPackage,
@@ -50,7 +51,14 @@ class CachingDriver private (
     lastCompiledURI == uri && compilationUnits.get(uri).forall(_.source.textContent() == content)
 
   override def run(uri: URI, source: SourceFile): List[Diagnostic] =
-    if !alreadyCompiled(uri, source.textContent()) then previousDiags = super.run(uri, source)
+    if !alreadyCompiled(uri, source.textContent()) then
+      try previousDiags = super.run(uri, source)
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        // The aborted run's `newRun` already reset the caches of the context
+        // base (`ContextBase.reset`), so the previous run's trees can no longer
+        // be served from the cache: the next request compiles the file again.
+        lastCompiledURI = null
+        throw ex
     lastCompiledURI = uri
     previousDiags
 

@@ -153,12 +153,8 @@ object SymDenotations {
           println(i"${"  " * indent}completing ${if (isType) "type" else "val"} $name")
           indent += 1
 
-          if myFlags.is(Touched) then
-            throw CyclicReference(this)(using ctx.withOwner(symbol))
-          myFlags |= Touched
-
           // completions.println(s"completing ${this.debugString}")
-          try atPhase(validFor.firstPhaseId)(completer.complete(this))
+          try lockAndComplete(completer)
           catch {
             case ex: CyclicReference =>
               println(s"error while completing ${this.debugString}")
@@ -171,10 +167,34 @@ object SymDenotations {
         }
         else
           CyclicReference.trace("compute the signature of ", symbol):
-            if myFlags.is(Touched) then
-              throw CyclicReference(this)(using ctx.withOwner(symbol))
-            myFlags |= Touched
-            atPhase(validFor.firstPhaseId)(completer.complete(this))
+            lockAndComplete(completer)
+
+    /** Set `Touched`, run the completer, and clear the lock on the way out
+     *  when a cancellation unwinds through it (see `onCancel`).
+     */
+    private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
+      if myFlags.is(Touched) then
+        throw CyclicReference(this)(using ctx.withOwner(symbol))
+      myFlags |= Touched
+      try atPhase(validFor.firstPhaseId)(completer.complete(this))
+      catch case ex: CompilationUnit.CancelledCompilation =>
+        onCancel()
+        throw ex
+
+    /** A cancellation unwound through this completion before it finished:
+     *  clear `Touched` so that the next run can complete the symbol instead of
+     *  reporting a cyclic reference, and record the symbol on the run, whether
+     *  complete or not: a class completer sets the temporary info before it
+     *  types the parents, and the class is then `isCompleted` with that info
+     *  (see `Run.cancelledCompletions`). The caller rethrows.
+     */
+    private def onCancel()(using Context): Unit =
+      untouchIfIncomplete()
+      val r = ctx.run
+      if r != null then r.cancelledCompletions += symbol
+
+    private def untouchIfIncomplete(): Unit =
+      if !isCompleted then myFlags &~= Touched
 
     protected[dotc] def info_=(tp: Type): Unit = {
       /* // DEBUG
