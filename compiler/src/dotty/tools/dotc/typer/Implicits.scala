@@ -274,14 +274,18 @@ object Implicits:
    */
   class OfTypeImplicits(tp: Type, override val companionRefs: TermRefSet)(initctx: Context) extends ImplicitRefs(initctx) {
     implicits.println(i"implicit scope of type $tp = ${companionRefs.showAsList}%, %")
-    @threadUnsafe lazy val refs: List[ImplicitRef] = {
+    // Not `@threadUnsafe`: an implicit scope is cached for the run
+    // (`implicitScopeCache`) and read by every reader in interactive mode; an
+    // unsafely published list (its cells' `next` is a var) could be seen cut
+    // short by another thread.
+    lazy val refs: List[ImplicitRef] = {
       val buf = new mutable.ListBuffer[TermRef]
       for (companion <- companionRefs) buf ++= companion.implicitMembers
       buf.toList
     }
 
     /** The candidates that are eligible for expected type `tp` */
-    @threadUnsafe lazy val eligible: List[Candidate] =
+    lazy val eligible: List[Candidate] =
       trace(i"eligible($tp), companions = ${companionRefs.showAsList}%, %", implicitsDetailed, show = true) {
         if (refs.nonEmpty && monitored) record(s"check eligible refs in tpe", refs.length)
         filterMatching(tp)
