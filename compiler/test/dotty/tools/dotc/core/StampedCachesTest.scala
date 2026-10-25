@@ -7,7 +7,7 @@ import scala.jdk.CollectionConverters.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** A lint over `compiler/src/dotty/tools/dotc/core`: a `private var` that stamps a cache (a `Period` or `RunId`, or
+/** A lint over `compiler/src/dotty/tools/dotc/core` and `cc`: a `private var` that stamps a cache (a `Period`, `RunId` or `Validity`, or
  *  named `…Period`, `…RunId`, `valid…`, `checked…`) is read and written only in the stamp and setter arguments of a
  *  `Caching` helper, or reset (`= Nowhere`, `= NoRunId`). With several readers a plain read of the stamp, then the
  *  value, can pair a current stamp with an old value or the default (docs/_docs/internals/interactive-multi-reader.md
@@ -47,10 +47,11 @@ class StampedCachesTest:
     assertEquals(List(8), strayUses(text, "myFooPeriod"))
 
 object StampedCachesTest:
-  private val coreDir = Paths.get("compiler/src/dotty/tools/dotc/core")
+  // `cc` for the capture checker's `Validity` stamps on capabilities
+  private val dirs = List("core", "cc").map(d => Paths.get(s"compiler/src/dotty/tools/dotc/$d"))
 
   private def sources: List[Path] =
-    Files.list(coreDir).iterator.asScala.filter(_.toString.endsWith(".scala")).toList.sortBy(_.toString)
+    dirs.flatMap(d => Files.list(d).iterator.asScala.filter(_.toString.endsWith(".scala"))).sortBy(_.toString)
 
   /** Stamp fields that are not caches, or are caches that are not two plain fields kept through `Caching`. */
   private val exceptions: Map[(String, String), String] = Map(
@@ -67,6 +68,10 @@ object StampedCachesTest:
       "batch only: keyed by the prefix as well, so packed into one volatile value on a concurrent base",
     ("SymDenotations.scala", "packageObjsRunId") ->
       "batch only: a cycle-breaking sentinel, so packed and computed under a completion-root claim with parallel readers",
+    ("Capability.scala", "captureSetValid") ->
+      "the capture checker's: stored only while capture checking, a phase after typer, which the interactive compiler does not run",
+    ("Capability.scala", "classifiersValid") ->
+      "the capture checker's, as `captureSetValid`"
   )
 
   private val StampField = raw"private var (\w+)\s*:\s*(\w+)".r
@@ -76,7 +81,7 @@ object StampedCachesTest:
 
   def stampFields(text: String): List[String] =
     StampField.findAllMatchIn(text).collect {
-      case m if m.group(2) == "Period" || m.group(2) == "RunId" || isStampName(m.group(1).nn) => m.group(1).nn
+      case m if m.group(2) == "Period" || m.group(2) == "RunId" || m.group(2) == "Validity" || isStampName(m.group(1).nn) => m.group(1).nn
     }.toList.distinct
 
   /** The extents of the argument lists of each `Caching.<helper>` call before its block: the stamp, the value, their
