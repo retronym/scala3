@@ -36,7 +36,29 @@ class CompletionSoakSuite extends BasePCSuite:
     List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator))
 
-  private def newDriver() = new InteractiveDriver(settings, CachedLogicalPackage.none)
+  private def newDriver(bodyEdits: Boolean = false) =
+    new InteractiveDriver(if bodyEdits then settings :+ "-Yinteractive-body-edits" else settings, CachedLogicalPackage.none)
+
+  /** Edits of the objects file's marked text: inside bodies of methods with
+   *  a declared type (one leaving a type error, one in the 120-statement
+   *  method), and one of a signature.
+   */
+  private val objectsEdits: List[String => String] = List(
+    _.replace("xs.map(_ + 5).", "xs.map(_ + 5 * 2)."),
+    _.replace("= xs.map(_ + 12).", "= { val k = 12; xs.map(_ + k) }."),
+    _.replace("    a0 + a119\n", "    a0 + a119 + a7\n"),
+    _.replace("fil@@ter(_ > 20).sum", "fil@@ter(_ > 20).sum + xs.hea"),
+    _.replace("def method30(xs: List[Int]): Int", "def method30(xs: List[Int]): Long"))
+
+  /** Edits of the shapes file: a companion's explicit `apply` (in an object
+   *  no point is in, so skipped whole: refused), a match's scrutinee, an
+   *  extension method (refused), a method without a result type (refused).
+   */
+  private val shapesEdits: List[String => String] = List(
+    _.replace("def apply(x: Int): TestClass = ???", "def apply(x: Int): TestClass = new TestClass(x + 1)"),
+    _.replace("def energy(act: Hobby): Int = act match", "def energy(act: Hobby): Int = (act: Activity | Hobby) match"),
+    _.replace("str.toUpperCase * times", "str.toUpperCase * (times + 1)"),
+    _.replace("def giv = summon[Show[String]].sho@@", "def giv = summon[Show[String]].sho@@ + \"\""))
 
   /** `@@` marks the completion points; the content is the text without them. */
   private def points(marked: String): (String, List[Int]) =
@@ -148,16 +170,22 @@ class CompletionSoakSuite extends BasePCSuite:
   private def inTyperCheckpoint(): Boolean =
     Thread.currentThread.getStackTrace.exists(_.getMethodName == "checkCancelledTyping")
 
-  private def soak(name: String, file: String => String, seed: Int, steps: Int): Unit =
+  /** With `edits`, the driver keeps its run across edits inside bodies
+   *  (`-Yinteractive-body-edits`), and an edit step moves to any variant:
+   *  the two tags (a layout edit) or one of `edits` applied to tag `a`.
+   */
+  private def soak(name: String, file: String => String, seed: Int, steps: Int, edits: List[String => String] = Nil): Unit =
     // A checkpoint every 16 typed trees, so that cancellations land inside
     // the small statements a targeted run types (1024 by default)
     val mask = dotty.tools.dotc.Run.typerCheckpointMask
     dotty.tools.dotc.Run.typerCheckpointMask = 15
-    try soak0(name, file, seed, steps)
+    try soak0(name, file, seed, steps, edits)
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
-  private def soak0(name: String, file: String => String, seed: Int, steps: Int): Unit =
-    val variants = List("a", "b").map(tag => points(file(tag)))
+  private def soak0(name: String, file: String => String, seed: Int, steps: Int, edits: List[String => String]): Unit =
+    val variants = List("a", "b").map(tag => points(file(tag))) ++ edits.map(e => points(e(file("a"))))
+    for (v, i) <- variants.zipWithIndex.drop(2) do
+      org.junit.Assert.assertTrue(s"edit $i changes the file", v._1 != variants.head._1)
     // The oracle: a fresh driver, the whole file typed, the completions at every point
     val oracle = variants.map { (content, offsets) =>
       val d = newDriver()
@@ -165,7 +193,8 @@ class CompletionSoakSuite extends BasePCSuite:
       d.run(uri, source)
       offsets.map(o => o -> labels(d, source, o)).toMap
     }
-    val driver = newDriver()
+    val driver = newDriver(bodyEdits = edits.nonEmpty)
+    val adopted = mutable.Map.empty[String, Int].withDefaultValue(0)
     val rng = new Random(seed)
     var variant = 0
     var runId = -1
@@ -177,6 +206,9 @@ class CompletionSoakSuite extends BasePCSuite:
       val (content, _) = variants(variant)
       val source = SourceFile.virtual(uri, content)
       val diags = driver.runUpTo(uri, source, Span(offset))
+      if what.startsWith("edit") then
+        adopted(driver.lastEdit(uri).replaceAll(", shifted.*", "").replaceAll(" at \\[.*", "").replaceAll("\\d+", "N")) += 1
+        log += s"$step edit to variant $variant: ${driver.lastEdit(uri)}"
       val obtained = labels(driver, source, offset)
       def treeAt: String =
         driver.compilationUnits.get(uri).map { unit =>
@@ -210,7 +242,7 @@ class CompletionSoakSuite extends BasePCSuite:
         val again = SourceFile.virtual(uri, content + "\n// again")
         driver.runUpTo(uri, again, Span(offset))
         println(s"[soak] the same completion in a fresh run of this driver: ${labels(driver, again, offset)}")
-      org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
+      org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] completions at $offset after $what (variant $variant)\n${log.takeRight(if edits.nonEmpty then 40 else 8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
       val t = touched(driver)
       org.junit.Assert.assertTrue(s"[$name seed=$seed step $step] symbols still Touched after $what: ${t.mkString(", ")}", t.isEmpty)
     for step <- 1 to steps do
@@ -218,8 +250,10 @@ class CompletionSoakSuite extends BasePCSuite:
       val offset = offsets(rng.nextInt(offsets.size))
       rng.nextInt(10) match
         case 0 =>
-          variant = 1 - variant
-          check(step, "edit+complete", offsets(rng.nextInt(offsets.size)))
+          // one edit at a time: from `a` to any variant, from any other back to `a`
+          variant = if variants.size == 2 then 1 - variant else if variant == 0 then 1 + rng.nextInt(variants.size - 1) else 0
+          val now = variants(variant)._2
+          check(step, "edit+complete", now(rng.nextInt(now.size)))
         case 1 | 2 =>
           val k = 1 + rng.nextInt(3)
           var p = 0
@@ -238,7 +272,9 @@ class CompletionSoakSuite extends BasePCSuite:
           check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))
         case _ =>
           check(step, "complete", offset)
-    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points")
+    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points${if edits.nonEmpty then adopted.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") else ""}")
+    if edits.nonEmpty then
+      org.junit.Assert.assertTrue(s"[$name seed=$seed] some body edits keep the run: $adopted", adopted.keys.exists(_.startsWith("body edit")))
     // A small file is mostly served from what is typed, so few attempts find typing to land in
     org.junit.Assert.assertTrue(s"[$name seed=$seed] the cancellations must land: $cancelled of ${steps / 5} attempts", cancelled >= 1)
 
@@ -355,3 +391,8 @@ class CompletionSoakSuite extends BasePCSuite:
   @Test def `two-readers-shapes-seed-2` = soak2("shapes", shapesFile, 2, 300)
   @Test def `two-readers-serialised-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300, independent = false)
   @Test def `two-readers-serialised-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300, independent = false)
+  // edits inside bodies keep the run (docs §12)
+  @Test def `objects-body-edits-seed-1` = soak("objects", objectsFile(_), 1, 300, objectsEdits)
+  @Test def `objects-body-edits-seed-2` = soak("objects", objectsFile(_), 2, 300, objectsEdits)
+  @Test def `shapes-body-edits-seed-1` = soak("shapes", shapesFile, 1, 300, shapesEdits)
+  @Test def `shapes-body-edits-seed-2` = soak("shapes", shapesFile, 2, 300, shapesEdits)

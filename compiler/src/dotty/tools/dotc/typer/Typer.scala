@@ -90,6 +90,20 @@ object Typer {
   /** Tree adaptation lost fidelity; this attachment preserves the original tree. */
   val AdaptedTree = new Property.StickyKey[tpd.Tree]
 
+  /** In interactive mode, where the driver keeps a session that survives an
+   *  edit inside a body (`-Yinteractive-body-edits`): the context and
+   *  statement owner each definition of a package or template was typed in,
+   *  by symbol, so that it can be re-indexed and typed again in the same
+   *  context after an edit. A context property of the session's run.
+   */
+  val RecordedDefContexts = new Property.Key[java.util.IdentityHashMap[Symbol, (Context, Symbol)]]
+
+  /** In interactive mode, while the driver re-indexes a definition after an
+   *  edit inside its body: the existing symbol the Namer refines instead of
+   *  creating one, by name and the span of the name, or `NoSymbol`.
+   */
+  val RefinedSymbols = new Property.Key[(Name, Span) => Symbol]
+
   /** An attachment on a Select node with an `apply` field indicating that the `apply`
    *  was inserted by the Typer.
    */
@@ -4223,7 +4237,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           case none =>
             val newCtx = if (ctx.owner.isTerm && adaptCreationContext(mdef)) ctx
               else ctx.withNotNullInfos(initialNotNullInfos)
-            typed(mdef)(using newCtx) match {
+            val typedMdef = typed(mdef)(using newCtx)
+            if !ctx.owner.isTerm then
+              ctx.property(RecordedDefContexts) match
+                case Some(recorded) if typedMdef.isInstanceOf[ValOrDefDef] => recorded.put(typedMdef.symbol, (ctx, exprOwner))
+                case _ =>
+            typedMdef match {
               case mdef1: DefDef
               if mdef1.symbol.is(Inline, butNot = Deferred) && !Inlines.bodyToInline(mdef1.symbol).isEmpty =>
                 buf ++= inlineExpansion(mdef1)

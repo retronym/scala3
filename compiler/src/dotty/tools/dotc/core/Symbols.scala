@@ -62,7 +62,7 @@ object Symbols extends SymUtils {
      *
      *  @pre coord == NoCoord
      */
-    private[core] def coord_=(c: Coord): Unit = {
+    private[dotc] def coord_=(c: Coord): Unit = {
       // assert(myCoord == NoCoord)
         // This assertion fails for CommentPickling test.
         // TODO: figure out what's wrong in the setup of CommentPicklingTest and re-enable assertion.
