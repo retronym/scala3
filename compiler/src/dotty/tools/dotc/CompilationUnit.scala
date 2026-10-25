@@ -157,7 +157,7 @@ object CompilationUnit {
 
   class SuspendException extends Exception with NoStackTrace
 
-  /** Thrown from `Run.checkCancelledTyping` to abort an interactive run whose
+  /** Thrown from `Reader.checkCancelledTyping` to abort an interactive run whose
    *  progress callback reports cancellation. The run's partial results are
    *  discarded by the catcher (`InteractiveDriver.run`); lazy state that was
    *  being computed when the exception unwinds (symbol completions, lazy

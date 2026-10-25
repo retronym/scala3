@@ -194,7 +194,8 @@ abstract class Reporter extends interfaces.ReporterResult {
             errors = e :: errors
             _errorCount += 1
             if ctx.typerState.isGlobalCommittable then
-              ctx.base.errorsToBeReported = true
+              val run = ctx.run
+              if run != null then run.errorsToBeReported = true
           case i: Info    =>
             infos = i :: infos
             _infoCount += 1
