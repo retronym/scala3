@@ -1606,12 +1606,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // completes lazily if a later statement refers to it. A block typed for
     // another reason is typed whole, and so is one inside an inline method
     // (its body is kept whole for its callers) or one typed speculatively
-    // (see `Run.targetingTyperState`).
-    val run = ctx.run
-    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
-       && (ctx.typerState eq run.targetingTyperState)
+    // (see `Reader.targetingTyperState`).
+    val reader = ctx.reader
+    if reader.typingTarget.exists && blockSpan.exists && blockSpan.contains(reader.typingTarget)
+       && (ctx.typerState eq reader.targetingTyperState)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
-    then run.targetNextStats(ctx.owner, inBlock = true)
+    then reader.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
@@ -3569,10 +3569,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       val dummy = localDummy(cls, impl)
       // only a class that contains the target is typed along the path to it,
       // and not one typed speculatively (a local class in a closure argument)
-      val run = ctx.run.nn
-      if run.typingTarget.exists && cdef.span.contains(run.typingTarget)
-         && (run.targetingTyperState == null || (ctx.typerState eq run.targetingTyperState))
-      then run.targetNextStats(dummy)
+      val reader = ctx.reader
+      if reader.typingTarget.exists && cdef.span.contains(reader.typingTarget)
+         && (reader.targetingTyperState == null || (ctx.typerState eq reader.targetingTyperState))
+      then reader.targetNextStats(dummy)
       val body1 =
         implementDeferredGivens(
           addParentRefinements(
@@ -3758,7 +3758,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               case _ =>
           // a package clause is never skipped as a statement, so one that does not
           // contain the target is targeted too: all of its statements are skipped
-          if ctx.run.nn.typingTarget.exists then ctx.run.nn.targetNextStats(pkg.moduleClass)
+          if ctx.reader.typingTarget.exists then ctx.reader.targetNextStats(pkg.moduleClass)
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)
             stats1 = stats1 ++ typedBlockStats(MainProxies.proxies(stats1))._1
@@ -4170,11 +4170,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       record("typed total")
       if ctx.phase.isTyper then
         assertPositioned(tree)
-      val run = ctx.run.nn
-      run.checkCancelledTyping()
+      ctx.reader.checkCancelledTyping()
       if tree.source != ctx.source && tree.source.exists then
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
-      else if run.isCancelled then
+      else if ctx.run.nn.isCancelled then
         tree.withType(WildcardType)
       else adapt(typedUnadapted(tree, pt, locked), pt, locked)
     }

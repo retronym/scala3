@@ -171,35 +171,35 @@ object SymDenotations {
 
     /** Set `Touched`, run the completer, and clear the lock on the way out.
      *  Interactive mode also keeps the set of symbols whose completion is in
-     *  progress on the run (`Run.completing`), so that a `Touched` flag can
-     *  be told from a cycle (see `healLeakedTouched`), and records an
+     *  progress on the reader (`Reader.completing`), so that a `Touched` flag
+     *  can be told from a cycle (see `healLeakedTouched`), and records an
      *  exception that unwinds through the completion (see `onUnwind`). Batch
      *  compilation pays one mode test.
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
       val interactive = ctx.mode.is(Mode.Interactive)
-      val run: Run | Null = if interactive then ctx.run else null
-      if myFlags.is(Touched) && !healLeakedTouched(run) then
-        if run != null then run.recordCyclePrevented(symbol)
+      val reader: Reader | Null = if interactive then ctx.reader else null
+      if myFlags.is(Touched) && !healLeakedTouched(reader) then
+        if reader != null then reader.recordCyclePrevented(symbol)
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
-      if run != null then run.completing += symbol
+      if reader != null then reader.completing += symbol
       try atPhase(validFor.firstPhaseId)(completer.complete(this))
       catch case ex =>
-        onUnwind(ex, interactive, run)
+        onUnwind(ex, interactive, reader)
         throw ex
-      finally if run != null then run.completing -= symbol
+      finally if reader != null then reader.completing -= symbol
 
     /** `Touched` is set but, in interactive mode, no completion of this
      *  symbol is in progress: the flag is what an exception unwinding through
      *  an earlier completion left (a stale lock, not a cycle). Clear it and
-     *  complete; record the healing on the run. In batch mode (`run` is
+     *  complete; record the healing on the reader. In batch mode (`reader` is
      *  null), or when the completion is in progress, it is a cycle.
      */
-    private def healLeakedTouched(run: Run | Null)(using Context): Boolean =
-      run != null && !run.completing.contains(symbol) && {
+    private def healLeakedTouched(reader: Reader | Null)(using Context): Boolean =
+      reader != null && !reader.completing.contains(symbol) && {
         myFlags &~= Touched
-        run.recordLeakHealed(symbol)
+        reader.recordLeakHealed(symbol)
         true
       }
 
@@ -211,24 +211,23 @@ object SymDenotations {
      *  `mayCacheNow` rule; the request's answer degrades where the exception
      *  is handled, and the symbol is completable again afterwards) and for
      *  any other exception (a stack overflow, an assertion in a partial tree),
-     *  which is also recorded on the run as a completion of unknown state
+     *  which is also recorded on the reader as a completion of unknown state
      *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
      *  stays set, as before. The caller rethrows.
      */
-    private def onUnwind(ex: Throwable, interactive: Boolean, run: Run | Null)(using Context): Unit =
+    private def onUnwind(ex: Throwable, interactive: Boolean, reader: Reader | Null)(using Context): Unit =
       ex match
         case _: CompilationUnit.CancelledCompilation =>
           untouchIfIncomplete()
           // whether complete or not: a class completer sets the temporary
           // info before it types the parents, and the class is then
-          // `isCompleted` with that info (see `Run.cancelledCompletions`)
-          val r = ctx.run
-          if r != null then r.cancelledCompletions += symbol
+          // `isCompleted` with that info (see `Reader.cancelledCompletions`)
+          ctx.reader.cancelledCompletions += symbol
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>
           untouchIfIncomplete()
-          if run != null then run.recordCompletionUnwound(symbol, ex)
+          if reader != null then reader.recordCompletionUnwound(symbol, ex)
         case _ =>
 
     private def untouchIfIncomplete(): Unit =
