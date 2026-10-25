@@ -14,6 +14,7 @@ import util.{Property, SourceFile, Spans}
 import Spans.*
 
 import scala.annotation.tailrec
+import scala.annotation.internal.{cache, confined, scratch}
 import scala.collection.{immutable, mutable}
 
 /** Some creators for typed trees */
@@ -1389,7 +1390,7 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
   trait TreeProvider {
     protected def computeRootTrees(using Context): List[Tree]
 
-    private var myTrees: List[Tree] | Null = null
+    @cache private var myTrees: List[Tree] | Null = null
 
     /** Get trees defined by this provider. Cache them if -Yretain-trees is set. */
     def rootTrees(using Context): List[Tree] =
@@ -1480,6 +1481,8 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
 
   /** A key to be used in a context property that tracks the number of inlined trees */
   private val InlinedTrees = Property.Key[Counter]()
+  // one outermost inlined call's count, in its context
+  @scratch @confined
   final class Counter {
     var count: Int = 0
   }

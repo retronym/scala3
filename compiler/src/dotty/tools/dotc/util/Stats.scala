@@ -2,12 +2,14 @@ package dotty.tools
 package dotc
 package util
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, interned, sharable}
 
 import core.Contexts.*
 import collection.mutable
 
-@sharable object Stats {
+// Diagnostic counters, compiled out while `enabled` is the constant false; switched on, concurrent readers lose counts.
+@sharable @interned @benignRace("diagnostic counters, compiled out unless Stats.enabled")
+object Stats {
 
   // when false, Stats.record and Stats.trackTime are elided.
   inline val enabled = false

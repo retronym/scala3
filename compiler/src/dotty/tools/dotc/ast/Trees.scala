@@ -12,7 +12,7 @@ import printing.Texts.Text
 import util.{Stats, Attachment, Property, SourceFile, NoSource, SrcPos, SourcePosition}
 import config.Config
 import config.Printers.overload
-import annotation.internal.sharable
+import annotation.internal.{benignRace, interned, publishedBy, sharable, treeState}
 import annotation.unchecked.uncheckedVariance
 import annotation.constructorOnly
 import compiletime.uninitialized
@@ -24,7 +24,8 @@ object Trees {
   type Untyped = Type | Null
 
   /** The total number of created tree nodes, maintained if Stats.enabled */
-  @sharable var ntrees: Int = 0
+  // counts only while `Stats.enabled`, a constant false
+  @sharable @interned @benignRace("diagnostic count, compiled out unless Stats.enabled") var ntrees: Int = 0
 
   /** Property key for trees with documentation strings attached */
   val DocComment: Property.StickyKey[Comments.Comment] = Property.StickyKey()
@@ -52,6 +53,9 @@ object Trees {
    *   - Type checking an untyped tree should remove all embedded `TypedSplice`
    *     nodes.
    */
+  // Its type is set when the tree is made or typed, on a tree the typer still owns (`overwriteType`, `withTypeUnchecked`
+  // on one without a type; a typed tree is copied, not changed), and not after it is published.
+  @treeState @publishedBy("init")
   abstract class Tree[+T <: Untyped](implicit @constructorOnly src: SourceFile)
   extends Positioned, SrcPos, Product, Attachment.Container, printing.Showable {
 
@@ -292,7 +296,10 @@ object Trees {
   trait DefTree[+T <: Untyped] extends DenotingTree[T] {
     type ThisTree[+T <: Untyped] <: DefTree[T]
 
-    private var myMods: untpd.Modifiers | Null = null
+    // Set when the tree is made, and once more by the completer of its symbol (`addAnnotations`, `mergeIfSynthetic`),
+    // on the untyped original that other readers may be reading: Modifiers is immutable, so a reader sees them before
+    // or after, but not the same ones.
+    @treeState private var myMods: untpd.Modifiers | Null = null
 
     private[dotc] def rawMods: untpd.Modifiers = myMods match
       case null => untpd.EmptyModifiers
@@ -944,7 +951,7 @@ object Trees {
   }
 
   /** mods val name: tpt = rhs */
-  case class ValDef[+T <: Untyped] private[ast] (name: TermName, tpt: Tree[T], private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
+  case class ValDef[+T <: Untyped] private[ast] (name: TermName, tpt: Tree[T], @(treeState @scala.annotation.meta.field) private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
     extends ValOrDefDef[T], ValOrTypeDef[T] {
     type ThisTree[+T <: Untyped] = ValDef[T]
     assert(isEmpty || (tpt ne genericEmptyTree))
@@ -956,7 +963,7 @@ object Trees {
 
   /** mods def name[tparams](vparams_1)...(vparams_n): tpt = rhs */
   case class DefDef[+T <: Untyped] private[ast] (name: TermName,
-      paramss: List[ParamClause[T]], tpt: Tree[T], private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
+      paramss: List[ParamClause[T]], tpt: Tree[T], @(treeState @scala.annotation.meta.field) private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
     extends ValOrDefDef[T] {
     type ThisTree[+T <: Untyped] = DefDef[T]
     assert(tpt ne genericEmptyTree)
@@ -999,7 +1006,7 @@ object Trees {
    *                             if this is of class untpd.DerivingTemplate.
    *                             Typed templates only have parents.
    */
-  case class Template[+T <: Untyped] private[ast] (constr: DefDef[T], private var preParentsOrDerived: LazyTreeList[T], self: ValDef[T], private var preBody: LazyTreeList[T])(implicit @constructorOnly src: SourceFile)
+  case class Template[+T <: Untyped] private[ast] (constr: DefDef[T], @(treeState @scala.annotation.meta.field) private var preParentsOrDerived: LazyTreeList[T], self: ValDef[T], @(treeState @scala.annotation.meta.field) private var preBody: LazyTreeList[T])(implicit @constructorOnly src: SourceFile)
     extends DefTree[T] with WithLazyFields {
     type ThisTree[+T <: Untyped] = Template[T]
 
