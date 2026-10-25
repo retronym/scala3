@@ -2380,10 +2380,9 @@ object Types extends TypeUtils {
         else if ctx.erasedTypes then atPhase(erasurePhase)(computeSignature)
         else symbol.asSeenFrom(prefix).signature
 
-      if ctx.runId != mySignatureRunId then
-        mySignature = computeSignature
-        if !mySignature.isUnderDefined && !isProvisional then mySignatureRunId = ctx.runId
-      mySignature
+      Caching.stampedIf(mySignatureRunId, mySignature)(mySignatureRunId = _, mySignature = _)(
+          ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
+        computeSignature
     end signature
 
     /** The signature computed from the current denotation with `sigFromDenot` if it is
@@ -2393,8 +2392,7 @@ object Types extends TypeUtils {
      *  some symbols change their signature at erasure.
      */
     private def currentSignature(using Context): Signature =
-      if ctx.runId == mySignatureRunId then mySignature
-      else
+      Caching.peek(mySignatureRunId, mySignature)(ctx.runId):
         val lastd = lastDenotation
         if lastd != null then sigFromDenot(lastd)
         else if ctx.erasedTypes then atPhase(erasurePhase)(currentSignature)
@@ -3022,12 +3020,9 @@ object Types extends TypeUtils {
      *  based tests.
      */
     def canDropAlias(using Context) =
-      if myCanDropAliasPeriod != ctx.period then
-        myCanDropAlias =
-          !symbol.canMatchInheritedSymbols
-          || !prefix.baseClasses.exists(_.info.decls.lookup(name).is(Deferred))
-        myCanDropAliasPeriod = ctx.period
-      myCanDropAlias
+      Caching.stamped(myCanDropAliasPeriod, myCanDropAlias)(myCanDropAliasPeriod = _, myCanDropAlias = _)(ctx.period):
+        !symbol.canMatchInheritedSymbols
+        || !prefix.baseClasses.exists(_.info.decls.lookup(name).is(Deferred))
 
     override def designator: Designator = myDesignator
     override protected def designator_=(d: Designator): Unit = myDesignator = d
@@ -3529,8 +3524,8 @@ object Types extends TypeUtils {
     private var myBaseClassesPeriod: Period = Nowhere
     private var myBaseClasses: List[ClassSymbol] = uninitialized
     /** Base classes are the merge of the operand base classes. */
-    override final def baseClasses(using Context): List[ClassSymbol] = {
-      if (myBaseClassesPeriod != ctx.period) {
+    override final def baseClasses(using Context): List[ClassSymbol] =
+      Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
         val bcs1 = tp1.baseClasses
         val bcs1set = BaseClassSet(bcs1)
         def recur(bcs2: List[ClassSymbol]): List[ClassSymbol] = bcs2 match {
@@ -3541,11 +3536,7 @@ object Types extends TypeUtils {
             else bc2 :: recur(bcs2rest)
           case nil => bcs1
         }
-        myBaseClasses = recur(tp2.baseClasses)
-        myBaseClassesPeriod = ctx.period
-      }
-      myBaseClasses
-    }
+        recur(tp2.baseClasses)
 
     def derivedAndType(tp1: Type, tp2: Type)(using Context): Type =
       if ((tp1 eq this.tp1) && (tp2 eq this.tp2)) this
@@ -3619,8 +3610,8 @@ object Types extends TypeUtils {
     private var myBaseClassesPeriod: Period = Nowhere
     private var myBaseClasses: List[ClassSymbol] = uninitialized
     /** Base classes are the intersection of the operand base classes. */
-    override final def baseClasses(using Context): List[ClassSymbol] = {
-      if (myBaseClassesPeriod != ctx.period) {
+    override final def baseClasses(using Context): List[ClassSymbol] =
+      Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
         val bcs1 = tp1.baseClasses
         val bcs1set = BaseClassSet(bcs1)
         def recur(bcs2: List[ClassSymbol]): List[ClassSymbol] = bcs2 match {
@@ -3631,38 +3622,29 @@ object Types extends TypeUtils {
           case nil =>
             bcs2
         }
-        myBaseClasses = recur(tp2.baseClasses)
-        myBaseClassesPeriod = ctx.period
-      }
-      myBaseClasses
-    }
+        recur(tp2.baseClasses)
 
     private var myJoin: Type = uninitialized
     private var myJoinPeriod: Period = Nowhere
 
     /** Replace or type by the closest non-or type above it */
-    def join(using Context): Type = {
-      if (myJoinPeriod != ctx.period) {
-        myJoin = TypeOps.orDominator(this)
-        core.println(i"join of $this == $myJoin")
-        assert(myJoin != this)
-        myJoinPeriod = ctx.period
-      }
-      myJoin
-    }
+    def join(using Context): Type =
+      Caching.stamped(myJoinPeriod, myJoin)(myJoinPeriod = _, myJoin = _)(ctx.period):
+        val join = TypeOps.orDominator(this)
+        core.println(i"join of $this == $join")
+        assert(join != this)
+        join
 
     private var myUnion: Type = uninitialized
     private var myUnionPeriod: Period = Nowhere
 
     override def widenUnionWithoutNull(using Context): Type =
-      if myUnionPeriod != ctx.period then
+      Caching.stampedIf(myUnionPeriod, myUnion)(myUnionPeriod = _, myUnion = _)(ctx.period, _ => !isProvisional):
         val union = TypeComparer.lub(
           tp1.widenUnionWithoutNull, tp2.widenUnionWithoutNull, canConstrain = isSoft, isSoft = isSoft)
-        myUnion = union match
+        union match
           case union: OrType if isSoft => union.join
           case _ => union
-        if !isProvisional then myUnionPeriod = ctx.period
-      myUnion
 
     private var atomsRunId: RunId = NoRunId
     private var widenedRunId: RunId = NoRunId
@@ -3682,18 +3664,14 @@ object Types extends TypeUtils {
       if ((tp1 eq tp1w) && (tp2 eq tp2w)) this else TypeComparer.lub(tp1w, tp2w, isSoft = isSoft)
 
     override def atoms(using Context): Atoms =
-      if atomsRunId != ctx.runId then
-        myAtoms = computeAtoms()
-        if !isProvisional then atomsRunId = ctx.runId
-      myAtoms
+      Caching.stampedIf(atomsRunId, myAtoms)(atomsRunId = _, myAtoms = _)(ctx.runId, _ => !isProvisional):
+        computeAtoms()
 
     override def widenSingletons(skipSoftUnions: Boolean)(using Context): Type =
       if !isSoft || skipSoftUnions then this
       else
-        if widenedRunId != ctx.runId then
-          myWidened = computeWidenSingletons()
-          if !isProvisional then widenedRunId = ctx.runId
-        myWidened
+        Caching.stampedIf(widenedRunId, myWidened)(widenedRunId = _, myWidened = _)(ctx.runId, _ => !isProvisional):
+          computeWidenSingletons()
 
     def derivedOrType(tp1: Type, tp2: Type, soft: Boolean = isSoft)(using Context): Type =
       if ((tp1 eq this.tp1) && (tp2 eq this.tp2) && soft == isSoft) this
@@ -3999,20 +3977,17 @@ object Types extends TypeUtils {
 
       sourceLanguage match
         case SourceLanguage.Java =>
-          if ctx.runId != myJavaSignatureRunId then
-            myJavaSignature = computeSignature
-            if !myJavaSignature.isUnderDefined && !isProvisional then myJavaSignatureRunId = ctx.runId
-          myJavaSignature
+          Caching.stampedIf(myJavaSignatureRunId, myJavaSignature)(myJavaSignatureRunId = _, myJavaSignature = _)(
+              ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
+            computeSignature
         case SourceLanguage.Scala2 =>
-          if ctx.runId != myScala2SignatureRunId then
-            myScala2Signature = computeSignature
-            if !myScala2Signature.isUnderDefined && !isProvisional then myScala2SignatureRunId = ctx.runId
-          myScala2Signature
+          Caching.stampedIf(myScala2SignatureRunId, myScala2Signature)(myScala2SignatureRunId = _, myScala2Signature = _)(
+              ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
+            computeSignature
         case SourceLanguage.Scala3 =>
-          if ctx.runId != mySignatureRunId then
-            mySignature = computeSignature
-            if !mySignature.isUnderDefined && !isProvisional then mySignatureRunId = ctx.runId
-          mySignature
+          Caching.stampedIf(mySignatureRunId, mySignature)(mySignatureRunId = _, mySignature = _)(
+              ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
+            computeSignature
     end signature
 
     /** The Scala signature of this method. Note that two distinct Java method
@@ -4657,7 +4632,7 @@ object Types extends TypeUtils {
   extends CachedProxyType with ValueType {
 
     private var validSuper: Period = Nowhere
-    private var cachedSuper: Type | Null = null
+    private var cachedSuper: Type = uninitialized
 
     // Boolean caches: 0 = uninitialized, -1 = false, 1 = true
     private var myStableHash: Byte = 0
@@ -4670,7 +4645,7 @@ object Types extends TypeUtils {
     private var myEvalued: Type = uninitialized
 
     private var validUnderlyingNormalizable: Period = Nowhere
-    private var cachedUnderlyingNormalizable: Type | Null = null
+    private var cachedUnderlyingNormalizable: Type = uninitialized
 
     def isGround(acc: TypeAccumulator[Boolean])(using Context): Boolean =
       if myGround == 0 then myGround = if acc.foldOver(true, this) then 1 else -1
@@ -4682,17 +4657,10 @@ object Types extends TypeUtils {
       // run. See docs/_docs/internals/periods.md for more information. We do
       // not need to check the phase because once a type is not provisional, its
       // stability should not change anymore.
-      if myIsStableRunId != ctx.runId then
-        val res: Boolean = computeIsStable
-        // We don't cache if the type is provisional because `Type#isStable`
-        // calls `Type#stripTypeVar` which might return different results later.
-        if !isProvisional then
-          // the value before the run id that publishes it (independent readers)
-          myIsStable = res
-          myIsStableRunId = ctx.runId
-        res
-      else
-        myIsStable
+      // We don't cache if the type is provisional because `Type#isStable`
+      // calls `Type#stripTypeVar` which might return different results later.
+      Caching.stampedIf(myIsStableRunId, myIsStable)(myIsStableRunId = _, myIsStable = _)(ctx.runId, _ => !isProvisional):
+        computeIsStable
 
     private def computeIsStable(using Context): Boolean = tycon match
       case tycon: TypeRef if defn.isCompiletimeAppliedType(tycon.symbol) && args.forall(_.isStable) => true
@@ -4700,27 +4668,25 @@ object Types extends TypeUtils {
 
     override def underlying(using Context): Type = tycon
 
-    // with concurrent readers another reader's period can be visible before its
-    // result: the result is the local one, and a cached one not seen yet is
-    // computed again (I78: a null `underlyingNormalizable`)
     override def superType(using Context): Type =
-      val cached = cachedSuper
-      if ctx.period != validSuper || cached == null then
-        var superIsProvisional = tycon.isProvisional
-        val result = tycon match
+      Caching.stampedIf(validSuper, cachedSuper)(validSuper = _, cachedSuper = _)(ctx.period, _ => !superTypeIsProvisional):
+        tycon match
           case tycon: HKTypeLambda => defn.AnyType
           case tycon: TypeRef if tycon.symbol.isClass => tycon
-          case tycon: TypeProxy =>
-            superIsProvisional ||= args.exists(_.isProvisional)
-              // applyIfParameterized may perform eta-reduction leading to different
-              // variance annotations depending on the instantiation of type params
-              // see tests/pos/typeclass-encoding3b.scala:348 for an example
-            tycon.superType.applyIfParameterized(args)
+          case tycon: TypeProxy => tycon.superType.applyIfParameterized(args)
           case _ => defn.AnyType
-        cachedSuper = result
-        validSuper = if superIsProvisional then Nowhere else ctx.period
-        result
-      else cached
+
+    /** Is `superType` provisional, and so not cached? */
+    private def superTypeIsProvisional(using Context): Boolean =
+      tycon.isProvisional || tycon.match
+        case tycon: HKTypeLambda => false
+        case tycon: TypeRef if tycon.symbol.isClass => false
+        case tycon: TypeProxy =>
+          // applyIfParameterized may perform eta-reduction leading to different
+          // variance annotations depending on the instantiation of type params
+          // see tests/pos/typeclass-encoding3b.scala:348 for an example
+          args.exists(_.isProvisional)
+        case _ => false
 
     override def translucentSuperType(using Context): Type = tycon match {
       case tycon: TypeRef if tycon.symbol.isOpaqueAlias =>
@@ -4747,18 +4713,14 @@ object Types extends TypeUtils {
      *  HKTypeLambda applications before the underlying normalizable type is reached.
      */
     override def underlyingNormalizable(using Context): Type =
-      val cached = cachedUnderlyingNormalizable
-      if ctx.period != validUnderlyingNormalizable || cached == null then tycon match
-        case tycon: TypeRef if defn.isCompiletimeAppliedType(tycon.symbol) =>
-          cachedUnderlyingNormalizable = this
-          validUnderlyingNormalizable = ctx.period
-          this
-        case _ =>
-          val result = superType.underlyingNormalizable
-          cachedUnderlyingNormalizable = result
-          validUnderlyingNormalizable = validSuper
-          result
-      else cached
+      def isCompiletimeApplied = tycon match
+        case tycon: TypeRef => defn.isCompiletimeAppliedType(tycon.symbol)
+        case _ => false
+      // otherwise cached when `superType` is (when it is not provisional)
+      Caching.stampedIf(validUnderlyingNormalizable, cachedUnderlyingNormalizable)(
+          validUnderlyingNormalizable = _, cachedUnderlyingNormalizable = _)(
+          ctx.period, _ => isCompiletimeApplied || !superTypeIsProvisional):
+        if isCompiletimeApplied then this else superType.underlyingNormalizable
 
     override def tryNormalize(using Context): Type =
       if isMatchAlias && MatchTypeTrace.isRecording then
@@ -4778,14 +4740,8 @@ object Types extends TypeUtils {
         && !(args.sizeIs == 1 && defn.isCompiletime_S(tycon.typeSymbol)) // S is a pseudo Match Alias
 
     def tryCompiletimeConstantFold(using Context): Type =
-      if myEvalRunId == ctx.runId then myEvalued
-      else
-        val res = TypeEval.tryCompiletimeConstantFold(this)
-        if !isProvisional then
-          // the value before the run id that publishes it (independent readers)
-          myEvalued = res
-          myEvalRunId = ctx.runId
-        res
+      Caching.stampedIf(myEvalRunId, myEvalued)(myEvalRunId = _, myEvalued = _)(ctx.runId, _ => !isProvisional):
+        TypeEval.tryCompiletimeConstantFold(this)
 
     def lowerBound(using Context): Type = tycon.stripTypeVar match {
       case tycon: TypeRef =>
