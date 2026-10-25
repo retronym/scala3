@@ -1239,7 +1239,7 @@ class Namer { typer: Typer =>
 
   class TypeDefCompleter(original: TypeDef)(ictx0: Context)
   extends Completer(original)(ictx0) with TypeParamsCompleter {
-    private var myTypeParams: List[TypeSymbol] | Null = null
+    @volatile private var myTypeParams: List[TypeSymbol] | Null = null
     private var nestedCtx: Context | Null = null
     assert(!original.isClassDef)
 
@@ -1262,27 +1262,43 @@ class Namer { typer: Typer =>
       }
 
     override def completerTypeParams(sym: Symbol)(using Context): List[TypeSymbol] =
-      initialize(myTypeParams, myTypeParams = _, {
-        //println(i"completing type params of $sym in ${sym.owner}")
-        val newScope = localContext(sym).setNewScope
-        nestedCtx = newScope
-        given Context = newScope
+      val known = myTypeParams
+      if known != null then known
+      else
+        // The parameters are indexed once, under the monitor: two readers asking
+        // at once would index them twice and the second indexing fails on the
+        // symbols the first attached to the trees. Typing the parameters ahead
+        // is outside it, since it can complete other symbols, and the symbols
+        // are published before it, as a cycle through a parameter needs them.
+        var toType: List[TypeDef] = Nil
+        val res = synchronized {
+          val known = myTypeParams
+          if known != null then known
+          else
+            //println(i"completing type params of $sym in ${sym.owner}")
+            val newScope = localContext(sym).setNewScope
+            nestedCtx = newScope
+            given Context = newScope
 
-        def typeParamTrees(tdef: Tree): List[TypeDef] = tdef match
-          case TypeDef(_, original) =>
-            original match
-              case LambdaTypeTree(tparams, _) => tparams
-              case original: DerivedFromParamTree => typeParamTrees(original.watched)
+            def typeParamTrees(tdef: Tree): List[TypeDef] = tdef match
+              case TypeDef(_, original) =>
+                original match
+                  case LambdaTypeTree(tparams, _) => tparams
+                  case original: DerivedFromParamTree => typeParamTrees(original.watched)
+                  case _ => Nil
               case _ => Nil
-          case _ => Nil
 
-        val tparams = typeParamTrees(original)
-        index(tparams)
-        val res = tparams.map(symbolOfTree(_).asType)
-        myTypeParams = res
-        for param <- tparams do typedAheadExpr(param)
+            val tparams = typeParamTrees(original)
+            index(tparams)
+            val res = tparams.map(symbolOfTree(_).asType)
+            toType = tparams
+            myTypeParams = res
+            res
+        }
+        if toType.nonEmpty then
+          given Context = nestedCtx.nn
+          for param <- toType do typedAheadExpr(param)
         res
-      })
     end completerTypeParams
 
     override final def typeSig(sym: Symbol): Type =
