@@ -48,8 +48,8 @@ object Sharing:
 
   /** Evidence that the code it is given to is the one writer of the lazy facts keyed by `key: K`: it runs in
    *  `exclusive(key)`. A capability in the manner of Clang's `REQUIRES`: state that only the writer may touch is
-   *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `exclusive`
-   *  and `unguarded` make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
+   *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `exclusive`,
+   *  `claimed` and `unguarded` make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
    *  instance serves every key: a holder allocates nothing.
    */
   sealed abstract class Holds[K]
@@ -72,7 +72,9 @@ object Sharing:
   /** `op` holding the claim on `key` when readers are parallel, as is otherwise (serialised readers need no
    *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
    *  another reader must wait for rather than take for a cycle. */
-  inline def claimed[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(using Context): T =
+  inline def claimed[K <: AnyRef, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
+      inline op: Holds[K] ?=> T)(using Context): T =
+    given Holds[K] = held.asInstanceOf[Holds[K]]
     if ctx.base.parallel then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
 
   /** `op` in `c0`, or, when readers are parallel, in a private child of `c0`'s typer state, settled when it ends

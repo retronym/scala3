@@ -3230,30 +3230,40 @@ object Types extends TypeUtils {
               || ctx.mode.is(Mode.Printing)
               || ctx.reporter.errorsReported)
           throw CyclicReference(NoDenotation)
-      else if ctx.base.parallel then
-        // the computation has an owner, as a completion does
-        ctx.base.completionRoots.locked(this, CompletionLock.lazyRef, () => CompletionRoots.backOff(this)) {
+      else
+        // with parallel readers the computation has an owner, as a completion does
+        Sharing.claimed[this.type, Unit](this, CompletionLock.lazyRef, this) {
           if !computed then compute()
         }
-        return ref
-      else compute()
       myRef.nn
 
-    private def compute()(using Context): Unit =
-      computed = true
+    // `myRef`, `computed` and `refFn` are written only by the holder of this reference's claim (a `Sharing.Holds`),
+    // and read without it: a reader that finds `computed` and no `myRef` waits on the claim
+    private def set(ref: Type | Null, done: Boolean)(using Sharing.Holds[this.type]): Unit =
+      myRef = ref
+      computed = done
+    private def dropFn()(using Sharing.Holds[this.type]): Unit = refFn = null
+
+    private def compute()(using Context, Sharing.Holds[this.type]): Unit =
+      set(myRef, done = true)
       val result = refFn.nn(ctx)
-      refFn = null
-      if result != null then myRef = result
+      dropFn()
+      if result != null then set(result, done = true)
       else assert(myRef != null)  // must have been `update`d
 
     /** Update the value of the lazyref, discarding the compute function `refFn`
      *  Can be called only as long as the ref is still undefined.
      */
     def update(tp: Type)(using Context) =
-      assert(myRef == null || ctx.reporter.errorsReported)
-      myRef = tp
-      computed = true
-      refFn = null
+      // under this reference's claim: usually re-entered from its own computation (`refFn` completes an opaque
+      // alias, whose completer updates it); with parallel readers, another reader that completed the alias first
+      // has set the same value
+      Sharing.claimed[this.type, Unit](this, CompletionLock.lazyRef, this) {
+        if myRef == null || !ctx.base.parallel then
+          assert(myRef == null || ctx.reporter.errorsReported)
+          set(tp, done = true)
+          dropFn()
+      }
 
     def evaluating: Boolean = computed && myRef == null
     def completed: Boolean = myRef != null

@@ -733,7 +733,10 @@ object Denotations {
     /** Invalidate all caches and fields that depend on base classes and their contents */
     def invalidateInheritedInfo(): Unit = ()
 
-    private def updateValidity()(using Context): this.type = {
+    // `updateValidity` and `bringForward` run under the claim of every bring-forward (`toNewRun`): they write each
+    // member's validity and its inherited caches, not the ring, which only phases after typer change
+    // (`insertAfter`, `replaceWith`)
+    private def updateValidity()(using Context, Sharing.Holds[CompletionLock.bringForward.type]): this.type = {
       assert(
         ctx.runId >= validFor.runId
         || ctx.settings.YtestPickler.value // mixing test pickler with debug printing can travel back in time
@@ -764,7 +767,7 @@ object Denotations {
      *   - If the symbol was first defined in one of the transform phases (after pickling), it should not
      *     be visible in new runs, so also return a NoDenotation.
      */
-    private def bringForward()(using Context): SingleDenotation = {
+    private def bringForward()(using Context, Sharing.Holds[CompletionLock.bringForward.type]): SingleDenotation = {
       this match {
         case symd: SymDenotation =>
           if (stillValid(symd)) return updateValidity()
@@ -830,8 +833,8 @@ object Denotations {
           // flock's validity, one writer at a time; with parallel readers
           // one root for every bring-forward, so that cycles with completions
           // are detected
-          Sharing.exclusive(CompletionLock.bringForward, CompletionLock.bringForward,
-            symbol)(initial.bringForward().current)
+          Sharing.exclusive[CompletionLock.bringForward.type, SingleDenotation](CompletionLock.bringForward,
+            CompletionLock.bringForward, symbol)(initial.bringForward().current)
         else this
 
       def goForward =
