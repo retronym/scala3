@@ -114,7 +114,7 @@ class InteractiveDriver(
         // A whole-file run on the content of the session completes the session
         // instead of replacing it, so the requests after it are served from the
         // run that holds the whole file typed.
-        s.complete()
+        logged(s"run ${fileNameOf(s.uri)} (completes the session)")(s.complete())(sessionSummary(uri))
       case _ => run(uri, source, NoSpan)
 
   /** The state of a targeted run (see `runUpTo`): the run, the unit with
@@ -497,6 +497,51 @@ class InteractiveDriver(
     case s: Session => s.run.runContext.runId
     case null => -1
 
+  /** `-Yinteractive-log`: one line per request on stderr (the Metals log), with
+   *  what the run did, so that the session can be observed from an editor.
+   */
+  val logRequests: Boolean = myInitCtx.settings.YinteractiveLog.value(using myInitCtx)
+
+  /** The last segment of `uri`, for the log; a `jar:` URI (a source in a
+   *  sources jar, opened by a jump into the library) has no path.
+   */
+  private def fileNameOf(uri: URI): String =
+    val p = uri.getPath
+    (if p == null then uri.toString else p).split('/').last
+
+  /** What the session of `uri` did, for the log. */
+  private def sessionSummary(uri: URI): String =
+    val trees = sessionOf(uri) match
+      case s: Session => s" trees=${s.run.typedTrees}"
+      case null => ""
+    s"run=${runIdOf(uri)} typedTop=${typedTopLevelCount(uri)} skipped=${untypedSpans(uri).size}$trees"
+
+  private def logged[T](what: String)(body: => T)(outcome: => String): T =
+    if !logRequests then body
+    else
+      val t0 = System.nanoTime()
+      // the presentation-compiler provider that made the request, for the log
+      val by = Thread.currentThread.getStackTrace.iterator.map(_.getClassName.nn)
+        .find(c => c.startsWith("dotty.tools.pc.") && !c.contains("CachingDriver") && !c.contains("CompilerAccess") && !c.contains("CompilerWrapper"))
+        .map(c => " by " + c.stripPrefix("dotty.tools.pc.").takeWhile(_ != '$')).getOrElse("")
+      try body
+      catch case scala.util.control.NonFatal(ex) =>
+        // the editor's report keeps the message only: the stack goes to the log
+        System.err.println(s"[dotc-session] $what failed$by: $ex\n" + ex.getStackTrace.nn.take(24).map("    at " + _).mkString("\n"))
+        throw ex
+      finally System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms")
+
+  /** Under `-Yinteractive-log`, the time a whole request took in the caller
+   *  (a presentation-compiler provider), the driver's own work included: what
+   *  the editor waits for once the request is handed over.
+   */
+  def timedRequest[T](what: String)(body: => T): T =
+    if !logRequests then body
+    else
+      val t0 = System.nanoTime()
+      try body
+      finally System.err.println(f"[dotc-session] $what: whole request ${(System.nanoTime() - t0) / 1e6}%.1f ms in the presentation compiler")
+
   /** Type `source` only along the path to `target`: of the statements of
    *  the outermost package and of each template on the path, only the one
    *  containing the target, as scalac's `typedStats` does for its target
@@ -510,6 +555,19 @@ class InteractiveDriver(
    *  tree use `run` instead.
    */
   def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    val before = mySession
+    val skippedBefore = if before == null then -1 else before.skipped.size
+    logged(s"runUpTo ${fileNameOf(uri)}@${target.start}")(runUpTo0(uri, source, target)) {
+      val s = mySession
+      val how =
+        if s eq null then "whole-file"
+        else if !(s eq before) then "fresh"
+        else if s.skipped.size != skippedBefore then "resumed"
+        else "served"
+      s"$how ${sessionSummary(uri)}"
+    }
+
+  private def runUpTo0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     if !targetedRequests then run(uri, source)
     else mySession match
       case s: Session if s.isOn(uri, source) =>
@@ -541,7 +599,12 @@ class InteractiveDriver(
         true
       case _ => false
 
-  private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
+  private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
+    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
+      sessionSummary(uri)
+    }
+
+  private def run0(uri: URI, source: SourceFile, target: Span): List[Diagnostic] = {
     import typer.ImportInfo.*
 
     val previousCtx = myCtx
