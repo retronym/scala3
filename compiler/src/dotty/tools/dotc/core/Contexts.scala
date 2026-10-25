@@ -959,9 +959,16 @@ object Contexts {
   /** A context base defines state and associated methods that exist once per
    *  logical compiler instance.
    */
-  class ContextBase extends ContextState
+  class ContextBase(sharing: Sharing) extends ContextState(sharing)
                        with Phases.PhasesBase
                        with Plugins {
+
+    /** A base for batch compilation (and Java callers: the sbt bridge). */
+    def this() = this(Sharing.Batch)
+
+    // several readers need a reader per thread, which only the interactive driver's base binds (it overrides `reader`)
+    assert(!sharing.concurrent || getClass != classOf[ContextBase], s"$sharing on a base that does not bind readers to threads")
+
 
     val settings: ScalaSettings = ScalaSettings
 
@@ -1057,7 +1064,11 @@ object Contexts {
       super.fresh().setTyperState(ts)
 
   /** The essential mutable state of a context base, collected into a common class */
-  class ContextState {
+  class ContextState(final val sharing: Sharing) {
+    /** `sharing.concurrent` and `sharing.independent`, copied to the base: a hot test reads one field of it. */
+    final val concurrent: Boolean = sharing.concurrent
+    final val independent: Boolean = sharing.independent
+
     // Symbols state
 
     /** Counter for unique symbol ids */
