@@ -223,7 +223,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcDefinitionProvider(driver, params, search).definitions()
+      driver.timedRequest("definition")(PcDefinitionProvider(driver, params, search).definitions())
     }(using params.toQueryContext)
 
   override def typeDefinition(
@@ -234,7 +234,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      PcDefinitionProvider(driver, params, search).typeDefinitions()
+      driver.timedRequest("typeDefinition")(PcDefinitionProvider(driver, params, search).typeDefinitions())
     }(using params.toQueryContext)
 
   def documentHighlight(
@@ -524,7 +524,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      HoverProvider.hover(params, driver, search, config.hoverContentType())
+      driver.timedRequest("hover")(HoverProvider.hover(params, driver, search, config.hoverContentType()))
     }(using params.toQueryContext)
   end hover
 
@@ -584,7 +584,7 @@ case class ScalaPresentationCompiler(
       params.token()
     ) { access =>
       val driver = access.compiler()
-      SignatureHelpProvider.signatureHelp(driver, params, search)
+      driver.timedRequest("signatureHelp")(SignatureHelpProvider.signatureHelp(driver, params, search))
     }(using params.toQueryContext)
 
   override def didChange(
