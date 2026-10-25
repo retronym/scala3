@@ -294,6 +294,22 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     targetingTyperState = null
     skippedStats.clear()
 
+  /** Interactive mode only: the symbols whose completion was prevented as a
+   *  cyclic reference during this run (`SymDenotation.completeFrom` found
+   *  `Touched` set), and the completions an exception other than a cyclic
+   *  reference unwound through. A request that met either has a degraded
+   *  result somewhere (an error type, a dropped item), and what was computed
+   *  on top of it must not outlive the request: `InteractiveDriver.runUpTo`
+   *  starts a fresh run instead of resuming a run that recorded one (the
+   *  session is tainted). IntelliJ's `RecursionManager` has the same rule
+   *  (`markStack` / `mayCacheNow`). Of the three lists only `completionsUnwound`
+   *  drives behaviour (`isTainted`); `cyclesPrevented` and `leaksHealed` are
+   *  for tests and the x-ray, and not used by the compiler.
+   */
+  val cyclesPrevented: ListBuffer[Symbol] = ListBuffer.empty
+  val completionsUnwound: ListBuffer[(Symbol, Throwable)] = ListBuffer.empty
+  val leaksHealed: ListBuffer[Symbol] = ListBuffer.empty
+
   /** The symbols whose completion a `CancelledCompilation` unwound through
    *  (recorded by `SymDenotation.completeFrom`), innermost first. A Namer
    *  completer that was unwound can not be run again: a method's completer
@@ -305,6 +321,34 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  poisons the session (`InteractiveDriver.replaceUnwound`).
    */
   val cancelledCompletions: ListBuffer[Symbol] = ListBuffer.empty
+
+  /** The symbols whose completion is in progress (interactive mode only): a
+   *  `Touched` flag on a symbol not in this set is a leak from an earlier
+   *  unwind, not a cycle, and `completeFrom` clears it instead of reporting
+   *  a cyclic reference.
+   */
+  val completing: mutable.HashSet[Symbol] = mutable.HashSet.empty
+
+  /** A run with a degraded completion whose state is unknown (an exception
+   *  other than a cyclic reference or a cancellation unwound through it) is
+   *  not resumed: the next request on the same content starts fresh. A
+   *  prevented cyclic reference does not taint: the symbols it unwound
+   *  through are left recomputable (`Touched` cleared), the request's own
+   *  answer degrades at its handlers, and the run's state is as before.
+   */
+  def isTainted: Boolean = completionsUnwound.nonEmpty
+
+  def recordCyclePrevented(sym: Symbol)(using Context): Unit =
+    cyclesPrevented += sym
+    Run.CycleStats.prevented(sym)
+
+  def recordLeakHealed(sym: Symbol)(using Context): Unit =
+    leaksHealed += sym
+    Run.CycleStats.healed(sym)
+
+  def recordCompletionUnwound(sym: Symbol, ex: Throwable)(using Context): Unit =
+    completionsUnwound += ((sym, ex))
+    Run.CycleStats.unwound(sym, ex)
 
   private var typedTreeCount = 0
 
@@ -745,6 +789,36 @@ object Run {
    *  cancellation land inside small statements; a run reads it when created.
    */
   @sharable @volatile var typerCheckpointMask: Int = 1023
+
+  /** Process-wide counts of the cyclic references prevented and the
+   *  completions unwound in interactive mode, printed at exit when
+   *  `-Ddotty.interactive.cycleStats=true`: the measurement behind the
+   *  graceful-degradation design. Measurement scaffolding, read by no one
+   *  else: a candidate to drop before upstreaming.
+   */
+  object CycleStats:
+    private val enabled = java.lang.Boolean.getBoolean("dotty.interactive.cycleStats")
+    @sharable private val preventedBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
+    @sharable private val unwoundBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
+    @sharable private val preventedCount = new java.util.concurrent.atomic.AtomicInteger
+    @sharable private val unwoundCount = new java.util.concurrent.atomic.AtomicInteger
+    @sharable private val healedCount = new java.util.concurrent.atomic.AtomicInteger
+    if enabled then
+      Runtime.getRuntime.addShutdownHook(new Thread(() => {
+        val top = (m: java.util.concurrent.ConcurrentHashMap[String, Integer]) =>
+          m.entrySet.toArray(Array.empty[java.util.Map.Entry[String, Integer]]).sortBy(-_.getValue.intValue).take(12).map(e => s"${e.getKey}=${e.getValue}").mkString(", ")
+        System.err.println(s"[interactive cycleStats] cyclic references prevented: ${preventedCount.get} (${top(preventedBy)}); leaked Touched flags healed: ${healedCount.get}; completions unwound by other exceptions: ${unwoundCount.get} (${top(unwoundBy)})")
+      }))
+    def prevented(sym: Symbol)(using Context): Unit =
+      if enabled then
+        preventedCount.incrementAndGet()
+        preventedBy.merge(sym.name.toString, 1, (a, b) => a + b)
+    def healed(sym: Symbol)(using Context): Unit =
+      if enabled then healedCount.incrementAndGet()
+    def unwound(sym: Symbol, ex: Throwable)(using Context): Unit =
+      if enabled then
+        unwoundCount.incrementAndGet()
+        unwoundBy.merge(s"${sym.name}:${ex.getClass.getSimpleName}", 1, (a, b) => a + b)
 
   /** A statement left untyped by a targeted run (see `typingTarget`). */
   case class SkippedStat(stat: ast.untpd.Tree, ctx: Context, owner: Symbol, inBlock: Boolean = false)
