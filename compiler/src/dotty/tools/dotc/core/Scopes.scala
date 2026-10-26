@@ -260,14 +260,14 @@ object Scopes {
       val e = new ScopeEntry(name, sym, this)
       e.prev = lastEntry
       lastEntry = e
-      if (hashTable != null) enterInHash(e)
+      val ht = hashTable
+      if (ht != null) enterInHash(e, ht)
       _size += 1
       elemsCache = null
       e
     }
 
-    private def enterInHash(e: ScopeEntry)(using Context): Unit = {
-      val ht = hashTable.nn // cannot be null here
+    private def enterInHash(e: ScopeEntry, ht: Array[ScopeEntry | Null])(using Context): Unit = {
       val idx = e.name.hashCode & (ht.length - 1)
       e.tail = ht(idx)
       assert(e.tail != e)
@@ -299,16 +299,19 @@ object Scopes {
     private def createHash(tableSize: Int)(using Context): Unit =
       if (size > tableSize * FillFactor) createHash(tableSize * 2)
       else {
-        hashTable = new Array[ScopeEntry | Null](tableSize)
-        enterAllInHash(lastEntry)
+        // filled, then published: a lookup on another reader finds the old table or the new one, never one that is
+        // still being filled
+        val ht = new Array[ScopeEntry | Null](tableSize)
+        enterAllInHash(lastEntry, ht)
+        hashTable = ht
         // checkConsistent() // DEBUG
       }
 
-    private def enterAllInHash(e: ScopeEntry | Null, n: Int = 0)(using Context): Unit =
+    private def enterAllInHash(e: ScopeEntry | Null, ht: Array[ScopeEntry | Null], n: Int = 0)(using Context): Unit =
       if (e != null)
         if (n < MaxRecursions) {
-          enterAllInHash(e.prev, n + 1)
-          enterInHash(e)
+          enterAllInHash(e.prev, ht, n + 1)
+          enterInHash(e, ht)
         }
         else {
           var entries: List[ScopeEntry] = List()
@@ -317,7 +320,7 @@ object Scopes {
             entries = ee :: entries
             ee = ee.prev
           }
-          entries foreach enterInHash
+          entries.foreach(enterInHash(_, ht))
         }
 
     /** Remove entry from this scope (which is required to be present) */
