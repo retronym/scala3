@@ -107,6 +107,14 @@ object Symbols extends SymUtils {
     @cache @publishedBy("Publish") private var lastDenot: SymDenotation = uninitialized
     private var checkedPeriod: Period = Nowhere
 
+    /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
+     *  the period is loaded with acquire semantics first, so that a denotation stored before the period that
+     *  published it is seen whole (`util.Publish`), as in `denot`.
+     */
+    private def latestDenot: SymDenotation =
+      util.Publish.symbolCheckedPeriod(this)
+      lastDenot
+
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
 
     /** Set the denotation of this symbol
@@ -165,14 +173,14 @@ object Symbols extends SymUtils {
 
     /** The original denotation of this symbol, without forcing anything */
     final def originDenotation: SymDenotation =
-      lastDenot.initial
+      latestDenot.initial
 
     /** The last known denotation of this symbol, without going through `current` */
     final def lastKnownDenotation: SymDenotation =
-      lastDenot
+      latestDenot
 
     private[dotc] def defRunId: RunId =
-      lastDenot.validFor.runId
+      latestDenot.validFor.runId
 
     private inline def associatedFileMatches(inline filter: AbstractFile => Boolean)(using Context): Boolean =
       try
@@ -199,15 +207,14 @@ object Symbols extends SymUtils {
 
     /** Is symbol valid in current run? */
     final def isValidInCurrentRun(using Context): Boolean =
-      (lastDenot.validFor.runId == ctx.runId || stillValid(lastDenot)) &&
-      (lastDenot.symbol eq this)
+      { val d = latestDenot; (d.validFor.runId == ctx.runId || stillValid(d)) && (d.symbol eq this) }
         // the last condition is needed because under ctx.staleOK overwritten
         // members keep denotations pointing to the new symbol, so the validity
         // periods check out OK. But once a package member is overridden it is not longer
         // valid. If the option would be removed, the check would be no longer needed.
 
-    final def isTerm(using Context): Boolean = lastDenot.isTerm
-    final def isType(using Context): Boolean = lastDenot.isType
+    final def isTerm(using Context): Boolean = latestDenot.isTerm
+    final def isType(using Context): Boolean = latestDenot.isType
     final def asTerm(using Context): TermSymbol = {
       assert(isTerm, s"asTerm called on not-a-Term $this")
       asInstanceOf[TermSymbol]
@@ -227,14 +234,14 @@ object Symbols extends SymUtils {
 
     /** The symbol's signature if it is completed or a method, NotAMethod otherwise. */
     final def signature(using Context): Signature =
-      if lastDenot.isCompleted || lastDenot.is(Method) then
+      if latestDenot.isCompleted || latestDenot.is(Method) then
         denot.signature
       else
         Signature.NotAMethod
 
     /** Special cased here, because it may be used on naked symbols in substituters */
     final def isStatic(using Context): Boolean =
-      lastDenot.initial.isStatic
+      latestDenot.initial.isStatic
 
     /** This symbol entered into owner's scope (owner must be a class). */
     final def entered(using Context): this.type = {
@@ -311,7 +318,7 @@ object Symbols extends SymUtils {
      *  Overridden in ClassSymbol
      */
     def compilationUnitInfo(using Context): CompilationUnitInfo | Null =
-      lastDenot.topLevelClass.compilationUnitInfo
+      latestDenot.topLevelClass.compilationUnitInfo
 
     /** The info of the TASTy from which this symbol was loaded, None if not applicable. */
     def tastyInfo(using Context): Option[TastyInfo] =
@@ -450,7 +457,7 @@ object Symbols extends SymUtils {
     protected def prefixString: String = "Symbol"
 
     override def toString: String =
-      lastDenot.toString // + "#" + id // !!! DEBUG
+      latestDenot.toString // + "#" + id // !!! DEBUG
 
     def toText(printer: Printer): Text = printer.toText(this)
 
