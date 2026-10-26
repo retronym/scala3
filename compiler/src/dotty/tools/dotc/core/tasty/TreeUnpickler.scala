@@ -45,7 +45,7 @@ import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 
 import scala.annotation.constructorOnly
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{guardedBy, sharable, treeState}
 import scala.compiletime.uninitialized
 
 /** Unpickler for typed trees
@@ -136,7 +136,16 @@ class TreeUnpickler(reader: TastyReader,
   }
 
   /** The unpickled trees */
-  def unpickle(mode: UnpickleMode)(using Context): List[Tree] = {
+  def unpickle(mode: UnpickleMode)(using Context): List[Tree] =
+    // the address maps are the file's, as for the completers and the lazy reads: the file's claim
+    Sharing.exclusive(claimKey, CompletionLock.lazyTastyRead, this)(unpickle0(mode))
+
+  /** The file's root, as the completers claim it: the associated file of a root class, or this. */
+  def claimKey(using Context): AnyRef =
+    val f = if roots == null then null else roots.iterator.map(_.symbol.associatedFile).find(_ != null).orNull
+    if f == null then this else f
+
+  private def unpickle0(mode: UnpickleMode)(using Context): List[Tree] = {
     if mode != UnpickleMode.TopLevel then rootOwner = ctx.owner
     assert(roots != null, "unpickle without previous enterTopLevel")
     val rdr = new TreeReader(reader)
@@ -1895,8 +1904,25 @@ class TreeUnpickler(reader: TastyReader,
       // reads; with several readers (interactive mode) a lazy read runs under
       // the base's completion lock like a completion (finding I35).
       // with parallel readers, the file's root, as the unpickler's completers claim it
-      Sharing.exclusive(rootKey, CompletionLock.lazyTastyRead, owner)(complete0)
+      Sharing.exclusive(rootKey, CompletionLock.lazyTastyRead, owner) {
+        // A second read of the same bytes would create the local symbols of the tree again and register them over
+        // the first ones in `symAtAddr`, so with several readers the first read's tree is kept and every reader
+        // that forces the field gets it. A batch base forces a field once, and keeps nothing.
+        if ctx.base.concurrent then
+          val r = result
+          if r != null then r
+          else
+            val t = complete0
+            result = t
+            t
+        else complete0
+      }
     }
+
+    // read and written only under the file's claim; a reader that gets it from here has acquired the claim the tree
+    // was built under
+    @guardedBy("completionLock")
+    private var result: T | Null = null
 
     private def rootKey(using Context): AnyRef = {
       val f = owner.associatedFile

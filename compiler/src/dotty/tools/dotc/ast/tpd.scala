@@ -14,7 +14,7 @@ import util.{Property, SourceFile, Spans}
 import Spans.*
 
 import scala.annotation.tailrec
-import scala.annotation.internal.{cache, confined, scratch}
+import scala.annotation.internal.{cache, confined, guardedBy, scratch}
 import scala.collection.{immutable, mutable}
 
 /** Some creators for typed trees */
@@ -1390,12 +1390,19 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
   trait TreeProvider {
     protected def computeRootTrees(using Context): List[Tree]
 
-    @cache private var myTrees: List[Tree] | Null = null
+    // the trees are read under the file's claim (`rootTreesClaim`), and kept under it, so that readers share one
+    // reading: a second one creates the local symbols again. Only with -Yretain-trees, which Metals sets.
+    @cache @guardedBy("completionLock") private var myTrees: List[Tree] | Null = null
+
+    /** The claim the trees are read and kept under: the one the unpickler's completers take. */
+    protected def rootTreesClaim(using Context): AnyRef = this
 
     /** Get trees defined by this provider. Cache them if -Yretain-trees is set. */
     def rootTrees(using Context): List[Tree] =
       if (ctx.settings.YretainTrees.value) {
-        initialize(myTrees, myTrees = _, computeRootTrees)
+        Sharing.exclusive(rootTreesClaim, CompletionLock.lazyTastyRead, this) {
+          initialize(myTrees, myTrees = _, computeRootTrees)
+        }
       }
       else computeRootTrees
 
