@@ -350,6 +350,16 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   def checkCancelledTyping()(using Context): Unit =
     typedTreeCount += 1
     if (typedTreeCount & checkpointMask) == 0 then pollCancellation()
+    else if typedTreeCount == cancelAtTypedTree then cancelHere()
+
+  /** Tests: the request is cancelled at exactly this typed tree of this reader (`InteractiveDriver.withCancelAtTree`),
+   *  as its checker would at the next poll, so that a cancellation's landing can be enumerated rather than sampled. */
+  var cancelAtTypedTree: Int = -1
+
+  private def cancelHere()(using Context): Unit =
+    if ctx.mode.is(Mode.Interactive) then
+      cancelledByChecker = true
+      throw CompilationUnit.CancelledCompilation(s"cancelled at typed tree $typedTreeCount of ${Thread.currentThread.getName}")
 
   private def pollCancellation()(using Context): Unit =
     if ctx.mode.is(Mode.Interactive) then

@@ -177,9 +177,12 @@ object CompilationUnit {
    *  The cause is a `CancellationException` so that clients which classify
    *  exceptions by their cause chain (e.g. Metals) treat it as a cancellation.
    */
-  class CancelledCompilation extends ControlThrowable:
+  class CancelledCompilation(reason: String = "") extends ControlThrowable:
     @scratch @publishedBy("init") private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
     override def getCause: Throwable = myCause
+    /** Why: a checker, a pending writer, or a completion an earlier cancellation unwound (`UnwoundCompletion`), for
+     *  the one who meets it where no checker was installed. */
+    override def getMessage: String = if reason.isEmpty then "compilation cancelled" else reason
 
   /** Make a compilation unit for top class `clsd` with the contents of the `unpickled` tree */
   def apply(clsd: ClassDenotation, unpickled: Tree, forceTrees: Boolean)(using Context): CompilationUnit =

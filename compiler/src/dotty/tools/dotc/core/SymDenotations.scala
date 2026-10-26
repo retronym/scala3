@@ -270,6 +270,10 @@ object SymDenotations {
     private def cyclicWait()(using Context): Nothing =
       // a cycle between Namer completions on several readers: the single-reader answer (I74)
       ctx.reader.cyclesRaised += 1
+      // `-Ddotc.interactive.failOnCycle`: the tests fail here, where the cycle is, not where a provider's catch
+      // turns the `CyclicReference` into an empty answer
+      if failOnCycle then
+        throw AssertionError(s"a wait for the completion of $this on ${Thread.currentThread.getName} would close a wait-for cycle between readers; claims held: ${ctx.base.completionRoots.holdersNow}")
       throw CyclicReference(this)(using ctx.withOwner(symbol))
 
     /** Make `myInfo` an `InProgress` owned by this thread for the duration of
@@ -390,7 +394,7 @@ object SymDenotations {
           // fresh run.
           if ctx.base.parallel
              && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
-          then info_=(UnwoundCompletion(completer, ctx.runId))
+          then info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>
@@ -3385,7 +3389,10 @@ object SymDenotations {
    *  reaches it is pre-empted, and the run is not resumed, so that the retry
    *  is a fresh run with fresh symbols.
    */
-  final class UnwoundCompletion(original: LazyType, runId: Int) extends LazyType with SymbolLoaders.SecondCompleter:
+  /** Tests: a wait-for cycle between readers fails the request with an `AssertionError` (see `cyclicWait`). */
+  private val failOnCycle: Boolean = System.getProperty("dotc.interactive.failOnCycle") != null
+
+  final class UnwoundCompletion(original: LazyType, runId: Int, val origin: String) extends LazyType with SymbolLoaders.SecondCompleter:
     def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       if ctx.runId != runId then
         // a later run: the original completer degrades the stale symbol
@@ -3395,7 +3402,16 @@ object SymDenotations {
       else
         val run = ctx.run
         if run != null then run.markTainted()
-        throw CompilationUnit.CancelledCompilation()
+        throw CompilationUnit.CancelledCompilation(s"the completion of $denot was unwound by a cancellation on $origin; met again in run $runId by ${Thread.currentThread.getName}")
+
+  object UnwoundCompletion:
+    /** Where the cancellation unwound: the thread and the compiler frames of the completion it left (for the one who
+     *  meets the completer later, whose own stack says nothing about it). Taken on a cancellation only. */
+    def originHere(): String =
+      val frames = Thread.currentThread.getStackTrace.iterator
+        .filter(f => f.getClassName.startsWith("dotty.tools") && !f.getClassName.contains("SymDenotations"))
+        .take(8).map(f => s"${f.getClassName.stripPrefix("dotty.tools.dotc.")}.${f.getMethodName}:${f.getLineNumber}").mkString(" < ")
+      s"${Thread.currentThread.getName} at $frames"
 
   /** The info of a denotation whose completion is in progress on a reader,
    *  with parallel readers (`-Yinteractive-parallel`): `current` is what

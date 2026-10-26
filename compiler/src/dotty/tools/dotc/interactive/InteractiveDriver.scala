@@ -348,6 +348,15 @@ class InteractiveDriver(
         myScopeDepth.remove()
         base.unbindThread()
 
+  /** Tests: `body` as a request whose typing is cancelled at exactly its `n`th typed tree (`Reader.cancelAtTypedTree`),
+   *  deterministically, where a checker is sampled at the typer's polls.
+   */
+  def withCancelAtTree[T](n: Int)(body: => T): T =
+    withCancelChecker(() => false) {
+      base.reader.cancelAtTypedTree = n
+      body
+    }
+
   /** The number of write actions so far: a request's result stamp (`Reader.resultStamp`). After freezing, a change to
    *  a published scope is made only in a write action (`MutableScope.changed`), so the count covers the structure
    *  epoch as well as the runs and the splices; the epoch itself also moves when a reader invalidates a class's own
@@ -1518,7 +1527,13 @@ class InteractiveDriver(
         case Some(t) => return t
         case None =>
           val s = sessionOf(uri)
-          if s != null && s.hasPendingAbandons then abandonPending(s)
+          if s != null && s.hasPendingAbandons then
+            // the re-index may meet a completion an earlier cancellation unwound (`UnwoundCompletion`, a
+            // cancellation that is nobody's checker): the session is poisoned, the next round starts fresh,
+            // and the cancellation does not reach a caller that installed no checker
+            try abandonPending(s)
+            catch case ex: CompilationUnit.CancelledCompilation if !base.reader.cancelledByChecker && !myCancelled =>
+              s.poisoned = true
           else writtenAndRead(uri, run(uri, source, target), read) match
             case Some(t) => return t
             case None => // the run failed fatally (no unit): as before, again
