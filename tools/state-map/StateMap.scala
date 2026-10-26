@@ -28,7 +28,7 @@ object Rules:
     Rule("B.unpickler", "B", "a field of a class in `core.tasty`, `core.classfile` or `core.unpickleScala2`: lazy TASTy/classfile reads (`symAtAddr`, `treeAtAddr`)"),
     Rule("B.scope", "B", "a field of `Scopes.MutableScope`: completions enter into shared scopes that rehash on `enter`"),
     Rule("C.caching", "C", "read or written in a stamp, value or setter argument of a `core.Caching` helper (the lint of `StampedCachesTest`)"),
-    Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
+    Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
     Rule("C.publish", "C", "named by a `VarHandle` in `util/Publish.java`, or read or written in a method that calls `util.Publish` on the same object (the value the stamp publishes)"),
     Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
     Rule("D.designator", "D", "`myDesignator` of a `NamedType`: part of the interned key, rewritten by `setDenot` (§3 D)"),
@@ -142,7 +142,9 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
     def baseNames(tp: TypeRepr): List[String] =
       tp.baseClasses.map(s => s.fullName.replace("$", ""))
 
-    val mutablePrefixes = List("scala.collection.mutable.", "scala.collection.concurrent.", "java.util.",
+    // java.util's collections and maps, not every class there (`Comparator`, which `Ordering` extends, is not state)
+    val mutablePrefixes = List("scala.collection.mutable.", "scala.collection.concurrent.", "java.util.Collection",
+      "java.util.Map", "java.util.BitSet", "java.util.concurrent.",
       "java.lang.ThreadLocal", "java.lang.StringBuilder", "scala.Array",
       "dotty.tools.dotc.util.MutableMap", "dotty.tools.dotc.util.MutableSet", "dotty.tools.dotc.util.GenericHashMap",
       "dotty.tools.dotc.util.GenericHashSet", "dotty.tools.dotc.util.WeakHashSet", "dotty.tools.dotc.util.ConcurrentWeakHashSet",
@@ -516,8 +518,8 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
 
   private def isStamp(f: FieldInfo) =
     val t = f.tpe.replace(" | Null", "")
-    Set("Period", "RunId", "Validity")(t) || f.name.endsWith("Period") || f.name.endsWith("RunId")
-      || raw"(valid|checked)[A-Z]\w*".r.matches(f.name)
+    Set("Period", "RunId", "Validity")(t) || f.mutableCollection.isEmpty && (f.name.endsWith("Period") || f.name.endsWith("RunId")
+      || raw"(valid|checked)[A-Z]\w*".r.matches(f.name))
 
   private val denotOwn = Set("myFlags", "myInfo", "myAnnotations", "myParamss", "myPrivateWithin", "myCompanion",
     "myDecls", "mySourceModule", "myModuleClass")
