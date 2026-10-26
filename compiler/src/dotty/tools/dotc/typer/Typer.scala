@@ -2136,7 +2136,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
                 untpd.TypeTree()
               case _ => InferredTypeTree()
             val paramTpt = untpd.TypedSplice(
-                untpdTpt.withType(paramType.translateFromRepeated(toArray = false))
+                untpdTpt.withType(new RepositionAnnotations(param.span.endPos)(paramType.translateFromRepeated(toArray = false)))
                   .withSpan(param.span.endPos)
               )
             cpy.ValDef(param)(tpt = paramTpt).withAddedFlags(param.mods.flags & Erased)

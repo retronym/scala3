@@ -16,6 +16,21 @@ import scala.annotation.internal.sharable
 
 object Annotations {
 
+  /** `tree` with all its nodes cloned into the current source file at `span`. */
+  private def reposition(tree: Tree, span: Span)(using Context): Tree =
+    val source = ctx.source
+    new TreeMap:
+      override def transform(t: Tree)(using Context): Tree =
+        super.transform(t).cloneIn(source).withSpan(span)
+    .transform(tree)
+
+  /** Replaces the annotations in a type by copies positioned at `span`, see `Annotation.repositioned`. */
+  class RepositionAnnotations(span: Span)(using Context) extends TypeMap:
+    def apply(tp: Type): Type = tp match
+      case tp: AnnotatedType =>
+        derivedAnnotatedType(tp, apply(tp.parent), tp.annot.repositioned(span))
+      case _ => mapOver(tp)
+
   def annotClass(tree: Tree)(using Context) =
     val sym = tree.symbol
     if (sym.isConstructor) sym.owner
@@ -119,6 +134,18 @@ object Annotations {
     def toText(printer: Printer): Text = printer.annotText(this)
 
     def ensureCompleted(using Context): Unit = tree
+
+    /** A copy of this annotation whose tree belongs to the current source file and
+     *  has `span` throughout, for use when the annotation is copied to a definition
+     *  that did not have it in the source, e.g. by `export` or by an inferred result type.
+     *  Without this, the copy carries the positions of the file it came from, and
+     *  its TASTy depends on the layout of that file.
+     *  The tree is not forced here, since the annotation may still be being typed.
+     */
+    def repositioned(span: Span)(using Context): Annotation = this match
+      case _: ConcreteAnnotation | _: LazyAnnotation =>
+        new DeferredSymAndTree(symbol, Annotations.reposition(tree, span))
+      case _ => this
 
     def sameAnnotation(that: Annotation)(using Context): Boolean =
       symbol == that.symbol && tree.sameTree(that.tree)

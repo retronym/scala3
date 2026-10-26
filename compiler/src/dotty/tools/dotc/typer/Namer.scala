@@ -1427,7 +1427,7 @@ class Namer { typer: Typer =>
             && annot.symbol != defn.TailrecAnnot
             && annot.symbol != defn.MainAnnot
             && !annot.symbol.derivesFrom(defn.MacroAnnotationClass)
-          })
+          }.map(_.repositioned(span)))
 
           if forwarder.isType then
             buf += tpd.TypeDef(forwarder.asType).withSpan(span)
@@ -1464,7 +1464,7 @@ class Namer { typer: Typer =>
               for (orig, forwarded) <- sym.paramSymss.lazyZip(forwarder.paramSymss)
                   (origParameter, exportedParameter) <- orig.lazyZip(forwarded)
               do
-                exportedParameter.addAnnotations(origParameter.annotations)
+                exportedParameter.addAnnotations(origParameter.annotations.map(_.repositioned(span)))
                 if exportedParameter.isTerm then
                   exportedParameter.setFlag(origParameter.flags & RetainedExportTermParamFlags)
       end addForwarder
@@ -2327,8 +2327,12 @@ class Namer { typer: Typer =>
     def lhsType = fullyDefinedType(cookedRhsType, "right-hand side", mdef.srcPos)
       .deskolemized
     //if (sym.name.toString == "y") println(i"rhs = $rhsType, cooked = $cookedRhsType")
+    // The annotations of an inferred type may have been written, or synthesized, in the
+    // definition that the type was copied from, possibly in another file.
+    val repositionAnnots = new RepositionAnnotations(mdef.span)
+
     if (inherited.exists)
-      if sym.isInlineVal || isTracked then lhsType else inherited
+      repositionAnnots(if sym.isInlineVal || isTracked then lhsType else inherited)
     else {
       if (sym.is(Implicit))
         mdef match {
@@ -2336,7 +2340,7 @@ class Namer { typer: Typer =>
           case _: ValDef if sym.owner.isType => missingType(sym, "")
           case _ =>
         }
-      lhsType `orElse` WildcardType
+      repositionAnnots(lhsType) `orElse` WildcardType
     }
   end inferredResultType
 

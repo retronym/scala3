@@ -3,7 +3,7 @@ package dotty.tools.dotc.core.tasty
 import java.nio.file.{Files, Path}
 
 import org.junit.Test
-import org.junit.Assert.{assertArrayEquals, assertFalse, assertTrue}
+import org.junit.Assert.{assertFalse, assertTrue}
 
 import dotty.tools.dotc.Main
 import dotty.tools.dotc.interfaces.Diagnostic.ERROR
@@ -110,8 +110,9 @@ class ForeignPositionsPicklingTest {
   @Test def parentLayoutDoesNotAffectChildTasty(): Unit =
     val before = compile("")
     val after = compile("// a comment\n\n")
-    for (c, b, a) <- childClasses.lazyZip(before).lazyZip(after) do
-      assertArrayEquals(s"$c.tasty", b, a)
+    val differing = for (c, b, a) <- childClasses.lazyZip(before).lazyZip(after).toList
+                        if !java.util.Arrays.equals(b, a) yield c
+    assertTrue(s"TASTy depends on the layout of P.scala for: ${differing.mkString(", ")}", differing.isEmpty)
 
   @Test def parentLayoutDoesNotAffectExportForwarderTasty(): Unit =
     val before = compile("", exportParent, exportChild, exportChildClasses)
