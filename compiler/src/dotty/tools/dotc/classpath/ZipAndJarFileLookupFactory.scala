@@ -18,7 +18,9 @@ import FileUtils.*
  * when there are a lot of projects having a lot of common dependencies.
  */
 sealed trait ZipAndJarFileLookupFactory {
-  private val cache = new FileBasedCache[ClassPath]
+  // Keyed by `-release` as well as the path: the cached classpath views a multi-release jar through the
+  // `META-INF/versions` of that release.
+  private val cache = new FileBasedCache[String, ClassPath]
 
   def create(zipFile: AbstractFile)(using Context): ClassPath =
     val release = ctx.settings.javaOutputVersion.value
@@ -26,7 +28,7 @@ sealed trait ZipAndJarFileLookupFactory {
     if ctx.settings.YdisableFlatCpCaching.value || jFile == null then
       createForZipFile(zipFile, jFile, release)
     else
-      cache.getOrCreate(jFile.toPath, () => createForZipFile(zipFile, jFile, release))
+      cache.getOrCreate(release, jFile.toPath, () => createForZipFile(zipFile, jFile, release))
 
   protected def createForZipFile(zipFile: AbstractFile, jFile: File | Null, release: String): ClassPath
 
@@ -73,21 +75,22 @@ object ZipAndJarSourcePathFactory extends ZipAndJarFileLookupFactory {
     ZipArchiveSourcePath(jFile, release)
 }
 
-final class FileBasedCache[T] {
-  private case class Stamp(lastModified: FileTime, fileKey: Object)
-  private val cache = collection.mutable.Map.empty[java.nio.file.Path, (Stamp, T)]
+final class FileBasedCache[K, T] {
+  private case class Stamp(lastModified: FileTime, size: Long, fileKey: Object)
+  private val cache = collection.mutable.Map.empty[(K, java.nio.file.Path), (Stamp, T)]
 
-  def getOrCreate(path: java.nio.file.Path, create: () => T): T = cache.synchronized {
+  def getOrCreate(k: K, path: java.nio.file.Path, create: () => T): T = cache.synchronized {
     val attrs = Files.readAttributes(path, classOf[BasicFileAttributes])
     val lastModified = attrs.lastModifiedTime()
-    // only null on some platforms, but that's okay, we just use the last modified timestamp as our stamp
+    // only null on some platforms, but that's okay, we just use the last modified timestamp and size as our stamp
     val fileKey = attrs.fileKey()
-    val stamp = Stamp(lastModified, fileKey)
-    cache.get(path) match {
+    val stamp = Stamp(lastModified, attrs.size(), fileKey)
+    val key = (k, path)
+    cache.get(key) match {
       case Some((cachedStamp, cached)) if cachedStamp == stamp => cached
       case _ =>
         val value = create()
-        cache.put(path, (stamp, value))
+        cache.put(key, (stamp, value))
         value
     }
   }
