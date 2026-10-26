@@ -1243,25 +1243,13 @@ object Contexts {
     @cache @publishedBy("init")
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
 
-    /** Flag to suppress inlining, set after overflow.
-     *  Finding: this is a reader's scratch (it is set and reset around one call's expansion) on the base all readers
-     *  share, so a reader that overflows makes the others stop inlining until it backs out. It belongs in `Reader`.
-     */
-    @scratch
-    private[dotc] var stopInlining: Boolean = false
-
     /** Cached -Yno-double-bindings setting. This is accessed from `setDenot`, which
      *  is fairly hot, so we don't want to lookup the setting each time it is called.
      */
     @cache @benignRace("set to true from the -Yno-double-bindings setting as a run begins, never reset")
     private[dotc] var checkNoDoubleBindings = false
 
-    // Reporters state
-    // Finding: the margin of `trace` output, changed around each traced call on the base all readers share; with
-    // several readers tracing, a lost update leaves the margin off by the difference. It belongs in `Reader`.
-    @scratch
-    private[dotc] var indent: Int = 0
-
+    // Reporters state (the margin of `trace` output is `Reader.indent`)
     protected[dotc] val indentTab: String = "  "
 
     @cache @benignRace("every writer stores an equal (setting, WConf) pair, an immutable value")

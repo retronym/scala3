@@ -457,8 +457,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var ccEnabledSomewhere = Feature.ccEnabledBySetting(using ictx)
 
-  /** If -explain-cycles is set, a trace of cyclic reference dependencies, otherwise null */
-  @scratch @guardedBy("writer") var cyclicReferenceTrace: CyclicReference.Trace | Null = null
+  /** If -explain-cycles is set, readers trace cyclic reference dependencies (each on its own `Reader.cyclicReferenceTrace`) */
+  @cache @guardedBy("writer") var traceCycles: Boolean = false
 
   @scratch @benignRace("only ever set to true: it stops a second enrichment of the same message")
   private var myEnrichedErrorMessage = false
@@ -585,7 +585,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
     val fusedPhases = runCtx.base.allPhases
     if ctx.settings.explainCyclic.value then
-      cyclicReferenceTrace = new CyclicReference.Trace()
+      traceCycles = true
     runCtx.withProgressCallback: cb =>
       _progress = Progress(cb, this, fusedPhases.map(_.traversals).sum)
     val cancelAsyncTasty: () => Unit =

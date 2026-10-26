@@ -101,7 +101,7 @@ object Inlines:
         || (ctx.inlineTraitState.inlineTraitsPhase == InlineTraitState.InlineContext.SpecializedTraits && !tree.symbol.is(Macro) && (tree.symbol.isSpecializedTraitImplementationClass || tree.symbol.isSpecializedTraitInterface) )
       )
       && !ctx.typer.hasInliningErrors
-      && !ctx.base.stopInlining
+      && !ctx.reader.stopInlining
 
     tree match
       case Block(_, expr) =>
@@ -265,7 +265,7 @@ object Inlines:
             throw CyclicReference(ctx.owner)
         new InlineCall(tree0).expand(body)
       else
-        ctx.base.stopInlining = true
+        ctx.reader.stopInlining = true
         val (reason, setting) =
           if reachedInlinedTreesLimit then ("inlined trees", ctx.settings.XmaxInlinedTrees)
           else ("successive inlines", ctx.settings.XmaxInlines)
@@ -280,8 +280,8 @@ object Inlines:
     // attach the method name to the tree2 (expanded tree)
     val tree3 =
       if symbol0.is(Transparent) then tree2.withAttachment(TransparentInlinedCall, symbol0.show) else tree2
-    if ctx.base.stopInlining && enclosingInlineds.isEmpty then
-      ctx.base.stopInlining = false
+    if ctx.reader.stopInlining && enclosingInlineds.isEmpty then
+      ctx.reader.stopInlining = false
         // we have completely backed out of the call that overflowed;
         // reset so that further inline calls can be expanded
     tree3

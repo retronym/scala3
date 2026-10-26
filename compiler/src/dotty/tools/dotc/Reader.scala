@@ -51,6 +51,23 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   private[dotc] val comparers = new mutable.ArrayBuffer[TypeComparer]
   private[dotc] var comparersInUse: Int = 0
 
+  // ---- Inlining overflow (`Inlines.inlineCall`, `Implicits.tryImplicit`) ----
+
+  /** Flag to suppress inlining, set after an overflow and reset when this reader has backed out of the call that
+   *  overflowed. It is the reader's own: another reader's inline calls are not affected.
+   */
+  private[dotc] var stopInlining: Boolean = false
+
+  // ---- Debug output (`reporting.trace`, `-explain-cycles`) ----
+
+  /** The margin of `trace` output. */
+  private[dotc] var indent: Int = 0
+
+  /** The cyclic references being completed by this reader, pushed and popped by `CyclicReference.trace` when
+   *  `Run.traceCycles` is set.
+   */
+  private[dotc] val cyclicReferenceTrace: CyclicReference.Trace = new CyclicReference.Trace()
+
   // ---- Fuel for recursive operations (`Context.handleRecursive`) ----
 
   // `recursiveOperations` is preallocated with `maxFuel` slots, so that
@@ -326,6 +343,9 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   private[dotc] def reset(): Unit =
     comparers.clear()
     comparersInUse = 0
+    stopInlining = false
+    indent = 0
+    cyclicReferenceTrace.clear()
 
 object Reader:
   /** A wait on the completion lock and what the holder was doing. */
