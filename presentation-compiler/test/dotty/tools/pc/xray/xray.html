@@ -131,8 +131,11 @@
   #log { flex: 1; overflow: auto; font-size: 12px; } #log[hidden] { display: none; }
   #log table { border-collapse: collapse; width: 100%; } #log td, #log th { padding: 4px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: nowrap; }
   #log th { color: var(--dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
-  #log tr.cancelled td { color: var(--cancelu); } #log tr:first-child td { font-weight: 600; }
+  #log tr.cancelled td { color: var(--cancelu); } #log tr:first-child td { font-weight: 600; } #log tr.background td { color: var(--dim); font-style: italic; }
   #log .none { padding: 16px; }
+  #timeline { flex: 1; overflow: auto; } #timeline[hidden] { display: none; } #timeline .none { padding: 16px; } #tlSvg { display: block; width: 100%; }
+  #tlSvg text { font-size: 10px; fill: var(--dim); } #tlSvg .lane { fill: var(--panel); } #tlSvg .tick { stroke: var(--line); stroke-width: 1; }
+  #tlSvg .bar { rx: 2; } #tlSvg .bar.served { fill: #4a90e2; } #tlSvg .bar.resumed { fill: #2f9e44; } #tlSvg .bar.fresh { fill: #e8a317; } #tlSvg .bar.cancelled { fill: #e03131; } #tlSvg .bar.background { fill: #7c6bd6; } #tlSvg .bar.other { fill: #8b95a7; }
   #story { flex: 1; overflow: auto; padding: 8px 14px; } #story[hidden] { display: none; }
   #story h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; } #story ol { margin: 0; padding-left: 22px; } #story li { margin: 0 0 6px; padding-left: 2px; }
   #story .do { font-weight: 500; } #story .exp { color: var(--dim); } #story .res { margin-top: 1px; }
@@ -305,10 +308,11 @@
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
   <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th><th title="times the request was aborted on a wait-for cycle and was retried (-Yinteractive-parallel): a livelock shows here as a growing number">cycleAborts</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
   <div id="problems" hidden><div class="none dim">No diagnostics: every request and the background pass fill this list.</div></div>
+  <div id="timeline" hidden><div class="none dim">No requests yet. Each lane is a thread: the page's requests (foreground), the background reader's passes; a bar runs from a request's start to its answer, coloured by outcome; hover for the details.</div><svg id="tlSvg"></svg></div>
   <div id="throughput" hidden><div id="tpPanel"><div id="tpPlot"></div><div id="tpSide"><table id="tpTable"><thead><tr><th>N</th><th>wall s</th><th>speed-up</th><th>worker CPU s</th><th>root waits</th><th title="files whose errors differ from N=1's (N=1: from the single-reader whole-set run)">files differ</th><th>cycleAborts</th><th>cycles raised</th><th title="the open: parse, index and skip every statement, serial">open s</th><th title="from the end of the open until the first thread ran out of files">typing s</th><th title="from the first thread running out of files until the last one did">tail s</th></tr></thead><tbody></tbody></table><div id="tpProg"></div><div id="tpTimeline"></div></div></div></div>
   <div id="replay" hidden><div class="none dim">Run the replay (the ▶︎ view in the activity bar): the findings per mode and request kind appear here, then the requests as they finish.</div><div id="rpFindings"></div><h4>Requests, newest first</h4><table><thead><tr><th class="l">#</th><th class="l">mode</th><th class="l">request</th><th>due ms</th><th>queued</th><th>latency</th><th>lock wait</th><th>stmt wait</th><th>trees</th><th class="l">how</th><th>diags</th><th class="l">answer</th></tr></thead><tbody id="rpRows"></tbody></table></div>
 </section>
@@ -433,7 +437,7 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput'].forEach((n) => { $(n).hidden = name !== n; }); document.body.classList.toggle('tpWide', name === 'throughput'); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput', 'timeline'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('tpWide', name === 'throughput'); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
   const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
@@ -563,6 +567,7 @@
     return r;
   }
   async function send(kind, cancelAfterMs) {
+    const sentAt = performance.now();
     for (let i = 0; i < 300 && busy; i++) await sleep(100); // a demo started while a request runs waits for it
     if (busy) return null;
     if (hover.inFlight) { await cancelInFlight(); for (let i = 0; i < 100 && hover.inFlight; i++) await sleep(30); } setBusy(true, `… ${kind === 'full' ? 'typing the whole file' : 'completing'}${cancelAfterMs >= 0 ? ` (cancel after ${cancelAfterMs} ms)` : ''}`);
@@ -572,6 +577,7 @@
     try { r = await (await fetch('/request', { method: 'POST', body })).json(); }
     catch (e) { r = { outcome: 'error', error: String(e) }; }
     setBusy(false);
+    r.wallMs = performance.now() - sentAt;
     return finish(r, code, cancelAfterMs);
   }
   // A latched request: the server runs it on its own thread, the typer blocks at the macro, the page polls until it is done.
@@ -844,7 +850,7 @@
     clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 250);
   }
   async function backgroundPass() {
-    const mine = ++bgSeq, code = cm.getValue();
+    const mine = ++bgSeq, code = cm.getValue(), started = performance.now();
     $('bgState').querySelector('.spin').hidden = false; $('bgText').textContent = 'background: completing the session (another reader)…';
     // the visible lines first: the editor's viewport as an offset range
     const vp = cm.getViewport(), visibleFrom = cm.indexFromPos({ line: vp.from, ch: 0 }), visibleTo = cm.indexFromPos({ line: Math.min(vp.to, cm.lineCount() - 1), ch: 0 });
@@ -869,10 +875,11 @@
     $('bgProgress').hidden = true;
     if (mine !== bgSeq) return; // a newer pass took over
     $('bgState').querySelector('.spin').hidden = true;
-    if (st.state === 'error') { $('bgText').textContent = 'background: ' + st.error; return; }
+    if (st.state === 'error') { $('bgText').textContent = 'background: ' + st.error; logBackground(st, 'error: ' + st.error, started); return; }
     // the text moved on (the server cancelled a pass on stale text, `superseded`): again, right away
-    if (st.state === 'superseded' || st.code !== cm.getValue()) { clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 0); return; }
+    if (st.state === 'superseded' || st.code !== cm.getValue()) { logBackground(st, 'superseded by an edit', started); clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 0); return; }
     paintBackground(st);
+    logBackground(st, st.outcome, started);
     const errs = (st.diagnostics || []).filter((d) => d.level === 'error').length, warns = (st.diagnostics || []).length - errs;
     $('bgText').textContent = `background: ${st.outcome} in ${st.ms} ms (visible lines first, ${st.visibleFirstMs} ms) on run ${st.runId} (${st.tokens.length} tokens, ${errs} error${errs === 1 ? '' : 's'}, ${warns} warning${warns === 1 ? '' : 's'}` +
       `${st.oracleDiagnosticCount !== undefined ? (st.diagnosticsMatch ? `; ${st.diagnosticCount} diagnostics = a whole-file run ✓` : `; ${st.diagnosticCount} diagnostics ≠ ${st.oracleDiagnosticCount} of a whole-file run ✗`) : ''}` +
@@ -1110,6 +1117,45 @@
       for (let l = from; l <= to; l++) { if (skippedLines.has(l)) continue; cm.addLineClass(l, 'background', cls); lineMarks.push({ line: l, cls }); }
     });
   }
+  // ---- the timeline: a lane per thread, a bar per request or pass from its start to its end (page clock, ms)
+  const tl = { events: [], lanes: ['foreground', 'background'] };
+  function tlAdd(lane, start, end, label, cls) {
+    if (!tl.lanes.includes(lane)) tl.lanes.push(lane);
+    tl.events.push({ lane, start, end: Math.max(end, start + 1), label, cls });
+    if (tl.events.length > 400) tl.events.shift();
+    if (!$('timeline').hidden) tlRender();
+  }
+  function tlRender() {
+    const svg = $('tlSvg'), none = $('timeline').querySelector('.none');
+    if (!tl.events.length) { none.hidden = false; svg.innerHTML = ''; return; }
+    none.hidden = true;
+    const W = Math.max(600, $('timeline').clientWidth - 8), L = 92, H = 26, top = 18;
+    const t1 = Math.max(...tl.events.map((e) => e.end)), t0 = Math.min(...tl.events.map((e) => e.start), t1 - 1000);
+    const span = Math.max(1, t1 - t0), x = (t) => L + (t - t0) / span * (W - L - 8);
+    const step = span > 60000 ? 10000 : span > 20000 ? 5000 : span > 5000 ? 1000 : span > 1000 ? 250 : 100;
+    let g = '';
+    tl.lanes.forEach((lane, i) => { g += `<rect class="lane" x="0" y="${top + i * H}" width="${W}" height="${H - 2}"/><text x="4" y="${top + i * H + 16}">${esc(lane)}</text>`; });
+    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step)
+      g += `<line class="tick" x1="${x(t)}" y1="${top - 4}" x2="${x(t)}" y2="${top + tl.lanes.length * H}"/><text x="${x(t) + 2}" y="${top - 6}">${((t - t0) / 1000).toFixed(span > 5000 ? 0 : 1)} s</text>`;
+    tl.events.forEach((e) => {
+      const i = tl.lanes.indexOf(e.lane), w = Math.max(2, x(e.end) - x(e.start));
+      g += `<rect class="bar ${e.cls}" x="${x(e.start)}" y="${top + i * H + 4}" width="${w}" height="${H - 10}"><title>${esc(e.label)} (${Math.round(e.end - e.start)} ms)</title></rect>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${top + tl.lanes.length * H + 4}`); svg.setAttribute('height', top + tl.lanes.length * H + 4); svg.innerHTML = g;
+  }
+  const tlClassOf = (outcome) => outcome.startsWith('cancelled') || outcome.startsWith('error') ? 'cancelled' : outcome === 'served' ? 'served' : outcome === 'resumed' ? 'resumed' : outcome === 'fresh' || outcome === 'full' ? 'fresh' : 'other';
+
+  // a background pass in the request log, as the rows of the requests it ran beside (the driver's readAll on another reader)
+  function logBackground(st, outcome, started) {
+    if (started != null) tlAdd('background', started, performance.now(), `background pass: ${outcome}${st.ms != null ? `, ${st.ms} ms in the driver` : ''}`, 'background');
+    const tr = document.createElement('tr'); tr.className = 'background';
+    const errs = (st.diagnostics || []).filter((d) => d.level === 'error').length;
+    tr.innerHTML = `<td>bg</td><td>background pass: complete the session${st.statements ? ` (${st.statements} statements, visible lines first)` : ''}</td><td>${esc(outcome)}</td>
+      <td>${st.runId ?? '–'}</td><td>–</td><td>${st.typedTrees ?? '–'}</td><td>–</td><td>${st.ms ?? '–'}</td>
+      <td>${st.lockWaitCount ? `${st.lockWaitMs} ms <span class="dim">×${st.lockWaitCount}</span>` : '<span class="dim">–</span>'}</td><td>${st.cycleAborts || 0}</td>
+      <td class="dim">${st.tokens ? `${st.tokens.length} tokens, ${errs} errors` : ''}${st.foregroundDuring ? `, ${st.foregroundDuring} foreground meanwhile` : ''}</td>`;
+    $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
+  }
   function logRow(r) {
     const tr = document.createElement('tr'); tr.className = r.outcome.startsWith('cancelled') ? 'cancelled' : '';
     const req = r.kind === 'full' ? 'type whole file' : `${r.kind === 'typeAt' ? 'typeAt' : r.kind === 'definition' ? 'definition' : 'complete'} @${r.offset}` + (r.cursorStatement >= 0 ? ` (${r.statements[r.cursorStatement].name})` : '');
@@ -1117,6 +1163,7 @@
       <td>${r.runId}${r.runChanged ? ' <span class="changed">new</span>' : ''}</td><td>${r.prefixBefore === -1 ? '–' : r.prefixBefore}→${r.prefix === -1 ? '–' : r.prefix}</td><td>${r.typedTrees}</td><td>${r.touched}</td><td>${r.ms}</td>
       <td title="${esc((r.lockWaits || []).map((w) => `${w.ms} ms behind ${w.holder}: ${w.root}${w.current !== w.root ? ' / ' + w.current : ''}`).join('\n'))}">${r.lockWaitCount ? `${r.lockWaitMs} ms <span class="dim">×${r.lockWaitCount}${r.lockWaits && r.lockWaits[0] ? ' · ' + esc(r.lockWaits[0].root) : ''}</span>` : '<span class="dim">–</span>'}${r.concurrentWithBackground ? ' <span class="pill o-served" style="font-size:10px;padding:0 6px">beside bg</span>' : ''}</td><td>${r.cycleAborts ? `<span class="changed">${r.cycleAborts}</span>` : '<span class="dim">–</span>'}</td>`;
     $('logbody').prepend(tr); $('log').querySelector('.none').hidden = true;
+    tlAdd('foreground', performance.now() - (r.wallMs || r.ms || 0), performance.now(), `#${r.seq} ${req}: ${r.outcome}, ${r.ms} ms`, tlClassOf(r.outcome));
     stripAdd(r.ms, `#${r.seq} ${req}: ${r.ms} ms, ${r.outcome}`, r.outcome.startsWith('cancelled') ? 'cancelled' : '');
     // a request on edited content: did the edit keep the run?
     if (r.lastEdit && !r.lastEdit.startsWith('edit refused') && !r.lastEdit.startsWith('no edit')) editBadge('kept', r.lastEdit + ` · ${r.ms} ms`);
