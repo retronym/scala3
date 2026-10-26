@@ -280,7 +280,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      Sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
+      base.locked(base.sources().getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
     }
 
     /** SourceFile with given path, memoized */
@@ -290,11 +290,11 @@ object Contexts {
 
     /** AbstractFile with given path, memoized */
     def getFile(path: String): Option[AbstractFile] =
-      Sharing.serialised(base)(base.files.get(path))(using this).orElse(
+      base.locked(base.files().get(path))(using this).orElse(
         try
           val file = new PlainFile(Path(path))
           // readers that miss at once store equal files
-          Sharing.serialised(base)(base.files(path) = file)(using this)
+          base.locked(base.files()(path) = file)(using this)
           Some(file)
         catch
           case ex: InvalidPathException =>
@@ -1119,7 +1119,7 @@ object Contexts {
      *  driver's (see `Sharing` and docs/_docs/internals/interactive-multi-reader.md). It picks the interners, the
      *  caches that are maps and the symbol id counter below, and whether completions take `completionLock`
      *  (serialised readers) or claim `completionRoots` (parallel readers). */
-    final val sharing: Sharing) {
+    final val sharing: Sharing) extends Sharing.Guard {
 
     /** `sharing.concurrent` and `sharing.parallel`, copied to the base: a hot test reads one field of it. */
     final val concurrent: Boolean = sharing.concurrent
@@ -1168,11 +1168,9 @@ object Contexts {
      *  the evidence of this base's monitor (`Sharing.serialised`, `locking`).
      */
     @interned @guardedBy("this")
-    private val mySources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
+    private[core] val sources = guarded(util.HashMap[AbstractFile, SourceFile]())
     @cache @guardedBy("this")
-    private val myFiles: util.HashMap[String, AbstractFile] = util.HashMap()
-    private[core] def sources(using Sharing.Monitor[this.type]): util.HashMap[AbstractFile, SourceFile] = mySources
-    private[core] def files(using Sharing.Monitor[this.type]): util.HashMap[String, AbstractFile] = myFiles
+    private[core] val files = guarded(util.HashMap[String, AbstractFile]())
 
     /** Cache for magic offset header lookups, scoped to this compiler instance
      *  so that concurrent compilers in the same classloader don't share stale entries. */
@@ -1277,9 +1275,9 @@ object Contexts {
       emptyTypeBounds = null
       emptyWildcardBounds = null
       errorTypeMsg.clear()
-      Sharing.locking(this) {
-        sources.clear()
-        files.clear()
+      alwaysLocked {
+        sources().clear()
+        files().clear()
       }
       initialReader.reset()  // forces re-evaluation of top and bottom classes in TypeComparer
 

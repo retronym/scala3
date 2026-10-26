@@ -72,7 +72,7 @@ object Sharing:
    *  it runs alone), as `Holds` is of a claim: state a monitor guards is reached only through methods that take one.
    *  Made by `serialised`, `locking` and `unlocked`; a claim's evidence is not a monitor's, nor the reverse.
    */
-  @implicitNotFound("this code must hold the monitor of ${K}: inside Sharing.serialised or Sharing.locking on it")
+  @implicitNotFound("this code must hold the monitor of ${K}: inside its `locked` or `alwaysLocked`, if it is a Sharing.Guard, or Sharing.serialised or Sharing.locking on it")
   sealed abstract class Monitor[K]
   private object monitorHeld extends Monitor[Any]
 
@@ -118,6 +118,23 @@ object Sharing:
     given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
     lock.synchronized(op)
 
+  /** A variable of a `Guard` reached only with the evidence of the monitor of `K`, the guard: `v()` and `v() = x`. */
+  final class GuardedVar[K, T](private var value: T):
+    inline def apply()(using Monitor[K]): T = value
+    inline def update(v: T)(using Monitor[K]): Unit = value = v
+
+  /** An object whose monitor guards the state it makes with `guarded` and `guardedVar`: the state lives in the
+   *  guard, and is reached only inside `locked` (with concurrent readers; a batch base runs alone) or `alwaysLocked`
+   *  (on every base, for code without a context).
+   */
+  abstract class Guard:
+    protected final def guarded[T](init: T): Guarded[this.type, T] = Guarded.wrap(init)
+    protected final def guardedVar[T](init: T): GuardedVar[this.type, T] = GuardedVar(init)
+    final inline def locked[T](inline op: Monitor[this.type] ?=> T)(using Context): T =
+      serialised(this)(op)
+    final inline def alwaysLocked[T](inline op: Monitor[this.type] ?=> T): T =
+      locking(this)(op)
+
   /** The end of a typer state `c1.typerState` that was a child of `into`'s, on a concurrent base: with parallel
    *  readers settled and dropped (I76), with serialised readers committed under the completion lock. */
   def endState(c1: Context, into: Context): Unit = interactive.SharingImpl.endState(c1, into)
@@ -125,3 +142,12 @@ object Sharing:
   val Batch: Sharing = new Sharing(concurrent = false, parallel = false)
   val Serialised: Sharing = new Sharing(concurrent = true, parallel = false)
   val Parallel: Sharing = new Sharing(concurrent = true, parallel = true)
+
+/** A value of a `Sharing.Guard` reached only with the evidence of the monitor of `K`, the guard: `g()` takes it. The
+ *  value itself, so a field of this type costs what the field did. Outside `object Sharing`: an opaque type is seen
+ *  through in the result types of the members of classes defined in its scope, `Guard.guarded`'s among them.
+ */
+opaque type Guarded[K, T] = T
+object Guarded:
+  private[core] inline def wrap[K, T](t: T): Guarded[K, T] = t
+  extension [K, T](g: Guarded[K, T]) inline def apply()(using Sharing.Monitor[K]): T = g

@@ -26,12 +26,12 @@ object Comments {
   /** Context for Docstrings, contains basic functionality for getting
     * docstrings via `Symbol` and expanding templates
     */
-  class ContextDocstrings {
+  class ContextDocstrings extends Sharing.Guard {
 
     // Written by the namer of any reader (`addDocstring`) and by the expander of a comment, so with concurrent
     // readers the map is reached only holding this object's monitor.
     @scala.annotation.internal.treeState
-    private val _docstrings: MutableSymbolMap[Comment] = MutableSymbolMap(512)
+    private val _docstrings = guarded(MutableSymbolMap[Comment](512))
 
     val templateExpander: CommentExpander = new CommentExpander
 
@@ -39,17 +39,12 @@ object Comments {
      *  interactive driver's edits, which run with no reader.
      */
     def docstrings: ReadOnlyMap[Symbol, Comment] =
-      given Sharing.Monitor[this.type] = Sharing.unlocked("read after the typer, or by the driver's edits with no reader")
-      docstringMap
+      _docstrings()(using Sharing.unlocked("read after the typer, or by the driver's edits with no reader"))
 
-    private def docstringMap(using Sharing.Monitor[this.type]): ReadOnlyMap[Symbol, Comment] = _docstrings
-    private def lookupDocstring(sym: Symbol)(using Sharing.Monitor[this.type]): Option[Comment] = _docstrings.get(sym)
-    private def putDocstring(sym: Symbol, doc: Comment)(using Sharing.Monitor[this.type]): Unit = _docstrings.update(sym, doc)
-
-    def docstring(sym: Symbol): Option[Comment] = Sharing.locking(this)(lookupDocstring(sym))
+    def docstring(sym: Symbol): Option[Comment] = alwaysLocked(_docstrings().get(sym))
 
     def addDocstring(sym: Symbol, doc: Option[Comment]): Unit =
-      doc.foreach(d => Sharing.locking(this)(putDocstring(sym, d)))
+      doc.foreach(d => alwaysLocked(_docstrings().update(sym, d)))
   }
 
   /**
@@ -157,7 +152,7 @@ object Comments {
    * @author Martin Odersky
    * @author Felix Mulder
    */
-  class CommentExpander {
+  class CommentExpander extends Sharing.Guard {
     import dotc.config.Printers.scaladoc
     import scala.collection.mutable
 
@@ -207,10 +202,7 @@ object Comments {
     // cooks the comments it inherits from, and may type a usecase), so two readers may cook one comment, and the
     // second to finish stores an equal string.
     @scala.annotation.internal.cache
-    private val cookedDocComments = MutableSymbolMap[String]()
-
-    private def lookupCooked(sym: Symbol)(using Sharing.Monitor[this.type]): String | Null = cookedDocComments.lookup(sym)
-    private def putCooked(sym: Symbol, doc: String)(using Sharing.Monitor[this.type]): Unit = cookedDocComments.update(sym, doc)
+    private val cookedDocComments = guarded(MutableSymbolMap[String]())
 
     /** The raw doc comment of symbol `sym`, minus usecase and define sections, augmented by
      *  missing sections of an inherited doc comment.
@@ -218,13 +210,13 @@ object Comments {
      *  the doc comment of the overridden version is copied instead.
      */
     def cookedDocComment(sym: Symbol, docStr: String = "")(using Context): String =
-      val known = Sharing.locking(this)(lookupCooked(sym))
+      val known = alwaysLocked(cookedDocComments().lookup(sym))
       if known != null then known
       else
         // not `getOrElseUpdate`: cooking a comment cooks the ones it inherits from, which adds to the map
         // underneath it, and `getOrElseUpdate` stores at the slot it found before the computation
         val cooked = cook(sym, docStr)
-        Sharing.locking(this)(putCooked(sym, cooked))
+        alwaysLocked(cookedDocComments().update(sym, cooked))
         cooked
 
     private def cook(sym: Symbol, docStr: String)(using Context): String = {
@@ -466,14 +458,11 @@ object Comments {
      *  in their doc comments
      */
     @scala.annotation.internal.cache
-    private val defs = mutable.HashMap[Symbol, Map[String, String]]() withDefaultValue Map()
-
     // With concurrent readers, reached only holding this object's monitor.
-    private def lookupDefs(sym: Symbol)(using Sharing.Monitor[this.type]): Option[Map[String, String]] = defs.get(sym)
-    private def putDefs(sym: Symbol, vars: Map[String, String])(using Sharing.Monitor[this.type]): Unit = defs(sym) = vars
+    private val defs = guarded(mutable.HashMap[Symbol, Map[String, String]]() withDefaultValue Map())
     private val Trim = "(?s)^[\\s&&[^\n\r]]*(.*?)\\s*$".r
     private def getDefs(symbol: Symbol)(using Context): Map[String, String] =
-      Sharing.locking(this)(lookupDefs(symbol)) match
+      alwaysLocked(defs().get(symbol)) match
       case Some(m) => m
       case None =>
         val raw = ctx.docCtx.flatMap(_.docstring(symbol).map(_.raw)).getOrElse("")
@@ -482,7 +471,7 @@ object Comments {
           val (key, Trim(value: String)) = str.splitAt(skipVariable(str, start)): @unchecked
           variableName(key.drop(start)) -> value.replaceAll("\\s+\\*+$", "")
         ).toMap
-        Sharing.locking(this)(putDefs(symbol, vars))
+        alwaysLocked(defs()(symbol) = vars)
         vars
 
     /** Lookup definition of variable.

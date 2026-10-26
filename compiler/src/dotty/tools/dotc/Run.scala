@@ -78,46 +78,39 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   // that finds the units it asks for finds their files with them
   @cache @publishedBy("packed") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
-  // `@nowarn` annotations by source file, populated during typer
-  @scratch private val mySuppressions: mutable.LinkedHashMap[SourceFile, ListBuffer[Suppression]] = mutable.LinkedHashMap.empty
-  // source files whose `@nowarn` annotations are processed
-  @scratch private val mySuppressionsComplete: mutable.Set[SourceFile] = mutable.Set.empty
-  // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
-  @scratch private val mySuspendedMessages: mutable.LinkedHashMap[SourceFile, mutable.LinkedHashSet[Warning]] = mutable.LinkedHashMap.empty
-
   // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
-  // collections, so they are reached only with the evidence of the monitor of `suppressions` (`Sharing.serialised`:
-  // with concurrent readers only, as the batch compiler is one thread). Nothing issues a message while holding it.
-  object suppressions:
-    private type Held = Sharing.Monitor[suppressions.type]
-    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised(this)(op)
-
-    private def bySource(using Held) = mySuppressions
-    private def complete(using Held) = mySuppressionsComplete
-    private def suspended(using Held) = mySuspendedMessages
+  // collections, so they are reached only holding the monitor of `suppressions` (`locked`: with concurrent readers
+  // only, as the batch compiler is one thread). Nothing issues a message while holding it.
+  object suppressions extends Sharing.Guard:
+    // `@nowarn` annotations by source file, populated during typer
+    @scratch private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
+    // source files whose `@nowarn` annotations are processed
+    @scratch private val complete = guarded(mutable.Set.empty[SourceFile])
+    // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
+    @scratch private val suspended = guarded(mutable.LinkedHashMap.empty[SourceFile, mutable.LinkedHashSet[Warning]])
 
     // When the REPL creates a new run (ReplDriver.compile), parsing is already done in the old context, with the
     // previous Run. Parser warnings were suspended in the old run and need to be copied over so they are not lost.
     // Same as scala/scala/commit/79ca1408c7.
     def initSuspendedMessages(oldRun: Run | Null) =
       // the REPL: one thread, this run is not yet shared and the old one is finished
-      given Held = Sharing.unlocked("the REPL is one thread, and neither run is shared")
-      suspended.clear()
+      given Sharing.Monitor[this.type] = Sharing.unlocked("the REPL is one thread, and neither run is shared")
+      suspended().clear()
       if oldRun != null then
         val old = oldRun
-        suspended ++= old.suppressions.suspendedOf(using Sharing.unlocked[old.suppressions.type]("the old run is finished"))
+        suspended() ++= old.suppressions.suspendedOf(using Sharing.unlocked("the old run is finished"))
 
-    private def suspendedOf(using Held) = suspended
+    private def suspendedOf(using Sharing.Monitor[this.type]) = suspended()
 
     def suppressionsComplete(source: SourceFile)(using Context) =
-      source == NoSource || held(complete(source))
+      source == NoSource || locked(complete()(source))
 
     def addSuspendedMessage(warning: Warning)(using Context) =
-      held(suspended.getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning)
+      locked(suspended().getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning)
 
     def nowarnAction(dia: Diagnostic)(using Context): Action.Warning.type | Action.Verbose.type | Action.Silent.type =
-      held:
-        bySource.get(dia.pos.source) match
+      locked:
+        bySource().get(dia.pos.source) match
         case Some(suppressions) =>
           val matching = suppressions.iterator.filter(_.matches(dia))
           if matching.hasNext then
@@ -153,8 +146,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
       addSuppression(sup)
 
     def addSuppression(sup: Suppression)(using Context): Unit =
-      held:
-        val suppressions = bySource.getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
+      locked:
+        val suppressions = bySource().getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
         if sup.start != sup.end then
           suppressions += sup
 
@@ -162,8 +155,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
      *  the file replaced by `f`'s result, or removed where it is null.
      */
     def editSuppressions(source: SourceFile)(f: Suppression => Suppression | Null)(using Context): Unit =
-      held:
-        bySource.get(source).foreach { sups =>
+      locked:
+        bySource().get(source).foreach { sups =>
           val kept = sups.flatMap(sup => f(sup) match
             case null => None
             case s: Suppression => Some(s))
@@ -172,25 +165,25 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
         }
 
     def reportSuspendedMessages(source: SourceFile)(using Context): Unit = {
-      val messages = held:
+      val messages = locked:
         // sort suppressions. they are not added in any particular order because of lazy type completion
-        for (sups <- bySource.get(source))
-          bySource(source) = sups.sortBy(sup => 0 - sup.start)
-        complete += source
-        suspended.remove(source)
+        for (sups <- bySource().get(source))
+          bySource()(source) = sups.sortBy(sup => 0 - sup.start)
+        complete() += source
+        suspended().remove(source)
       messages.foreach(_.foreach(ctx.reporter.issueIfNotSuppressed))
     }
 
     def runFinished()(using Context): Unit =
       val hasErrors = ctx.reporter.hasErrors
       // report suspended messages (in case the run finished before typer)
-      held(suspended.keysIterator.toList).foreach(reportSuspendedMessages)
+      locked(suspended().keysIterator.toList).foreach(reportSuspendedMessages)
       // report unused nowarns only if all all phases are done
       if !hasErrors && ctx.settings.WunusedHas.nowarn then
-        val removed = held:
+        val removed = locked:
           for
-            source <- bySource.keysIterator.toList
-            sups   <- bySource.remove(source)
+            source <- bySource().keysIterator.toList
+            sups   <- bySource().remove(source)
           yield sups
         for
           sups <- removed
@@ -218,35 +211,29 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   // driver compiles the suspended units again in a new run once this one has finished (`Driver.finish`). The three
   // collections below are reached only with the evidence of the monitor of `suspension` (`Sharing.serialised`: with
   // concurrent readers only, as the batch compiler is one thread); the readers outside get a snapshot.
-  @scratch private val mySuspendedUnits: ListBuffer[CompilationUnit] = ListBuffer.empty
-  @scratch private val mySuspendedHints: mutable.Map[CompilationUnit, (String, Boolean)] = mutable.HashMap()
-  // Were any units suspended in the typer phase? if so then pipeline tasty can not complete.
-  @scratch private var mySuspendedAtTyperPhase: Boolean = false
-
-  object suspension:
-    private type Held = Sharing.Monitor[suspension.type]
-    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised(this)(op)
-
-    private def units(using Held) = mySuspendedUnits
-    private def hints(using Held) = mySuspendedHints
+  object suspension extends Sharing.Guard:
+    @scratch private val units = guarded(ListBuffer.empty[CompilationUnit])
+    @scratch private val hints = guarded(mutable.HashMap.empty[CompilationUnit, (String, Boolean)])
+    // Were any units suspended in the typer phase? if so then pipeline tasty can not complete.
+    @scratch private val atTyper = guardedVar(false)
 
     /** Record `unit` as suspended, unless it is already: two readers may suspend it at once, and only the first
      *  records it. The flags of the unit are set under the same monitor. Returns normally; the caller unwinds. */
     def add(unit: CompilationUnit, hint: => String, isInliningPhase: Boolean)(using Context): Unit =
-      held:
+      locked:
         if !unit.suspended then
           unit.suspended = true
-          units += unit
+          units() += unit
           if ctx.settings.XprintSuspension.value then
-            hints += (unit -> (hint, isInliningPhase))
+            hints() += (unit -> (hint, isInliningPhase))
           if isInliningPhase then
             unit.suspendedAtInliningPhase = true
           else
-            mySuspendedAtTyperPhase = true
+            atTyper() = true
 
-    def snapshotUnits(using Context): List[CompilationUnit] = held(units.toList)
-    def snapshotHints(using Context): List[(CompilationUnit, (String, Boolean))] = held(hints.toList)
-    def atTyperPhase(using Context): Boolean = held(mySuspendedAtTyperPhase)
+    def snapshotUnits(using Context): List[CompilationUnit] = locked(units().toList)
+    def snapshotHints(using Context): List[(CompilationUnit, (String, Boolean))] = locked(hints().toList)
+    def atTyperPhase(using Context): Boolean = locked(atTyper())
   end suspension
 
   /** The units suspended so far, in the order they were suspended. */
@@ -292,16 +279,13 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   /** The source files of all late entered symbols, as a set. A completion of a source-loaded class enters one, and
    *  completions of different roots run in parallel, so it is reached only with the evidence of its monitor.
    */
-  private object lateFiles:
-    @scratch private val files = mutable.Set[AbstractFile]()
-    private def held(using Sharing.Monitor[lateFiles.type]) = files
+  private object lateFiles extends Sharing.Guard:
+    @scratch private val files = guarded(mutable.Set[AbstractFile]())
 
     /** Is `file` newly entered? */
-    def enter(file: AbstractFile)(using Context): Boolean =
-      Sharing.serialised(this)(held.add(file))
+    def enter(file: AbstractFile)(using Context): Boolean = locked(files().add(file))
 
-    def size(using Context): Int =
-      Sharing.serialised(this)(held.size)
+    def size(using Context): Int = locked(files().size)
 
   /** A cache for static references to packages and classes */
   @cache val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
