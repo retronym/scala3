@@ -55,6 +55,26 @@ What it leaves open:
 - **Whether an `ImportInfo` from the Namer is the one typing expects**: it is built from the import symbol, and the typer's comes from the typed tree; they should agree on what they import, but selectors are checked only by `typedImport`.
 - **What else the skipping typecheck does per file** that readers rely on (`cleanup`, `topLevelTrees` for `openedTrees`), which must stay in the open.
 
-## Testing
+## Iterating
 
-`presentation-compiler/test/dotty/tools/pc/xray/Throughput.scala` as a main on the test classpath, in its loop mode, is the test: `-Dtp.root=<sources> -Dtp.loop=N -Dtp.ks=1,8 -Dtp.policies=rr,big`, with `-Dtp.showErrors=3` to print what differs. On the 130 files of `transform/` a loop takes about 16 s. The largest-first assignment (`big`), which the X-ray's Throughput tab uses, found what round-robin missed.
+From the worktree root, with `JH` a JDK 21 (`export JH=/path/to/jdk-21`).
+
+Once:
+
+- Build without the optimizer, so an edit recompiles in seconds: an untracked `.sbt` file at the root holding `LocalProject("scala3-compiler-bootstrapped") / Compile / compile / scalacOptions --= Seq("-opt", "-opt-inline:dotty.**")` (a separate `.sbt` file cannot name the backticked vals of `build.sbt`).
+- A snapshot of the sources to type, so that edits do not move the input: `mkdir -p out/xray-sources && git archive HEAD compiler/src/dotty/tools/dotc | tar -x -C out/xray-sources`.
+- The test classpath: `SBT_OPTS=-Xmx8g timeout 1200 sbt -batch -java-home $JH "export scala3-presentation-compiler/Test/fullClasspath" | grep '^/' | tail -1 > out/pc-test-classpath.txt`.
+
+Each change:
+
+1. Build: `SBT_OPTS=-Xmx8g timeout 1200 sbt -batch -java-home $JH "scala3-presentation-compiler/Test/compile"` (seconds for an edit in one file, a few minutes when much of the compiler recompiles).
+2. Check on the 130 files of `transform/`, about 16 s: `timeout 300 $JH/bin/java -Xmx16g -Xss16m -Ddotc.openTiming=1 -Dtp.root=out/xray-sources/compiler/src/dotty/tools/dotc/transform -Dtp.loop=10 -Dtp.ks=1,8 -Dtp.policies=rr,big -Dtp.showErrors=3 -cp "$(cat out/pc-test-classpath.txt)" dotty.tools.pc.xray.Throughput > local/tp.log 2>&1`, then `grep -E '^\[tp\] loop|DIVERGENCE|FAILED' local/tp.log | grep -v '     at'`. It passes when every `loop` line says `0 files differ` and none says `FAILED` or `UNWOUND`; a `DIVERGENCE` line shows the first diagnostics that differ from the reference run.
+3. Check on all 490 files, a few minutes: the same with `-Dtp.root=out/xray-sources/compiler/src/dotty/tools/dotc -Dtp.loop=3 -Dtp.ks=4,8`. Some faults show only at this scale (both of those under Tried).
+4. The `[open]` lines in the same log (`-Ddotc.openTiming`) give the time of each step of the open.
+5. To see it, the X-ray: `$JH/bin/java -Xms20g -Xmx20g -XX:+UseParallelGC -Xss16m -Ddotc.openTiming=1 -Dxray.port=8801 -cp "$(cat out/pc-test-classpath.txt)" dotty.tools.pc.xray.XrayServer`, then Replay, Run throughput at http://127.0.0.1:8801/; its header shows the commit it runs. One run of the demo is not a measurement (the same build gave 4.75× and 5.56×): measure with the harness.
+
+What cost time:
+
+- **Both orders of assignment.** Round-robin (`rr`) passed where largest-first (`big`), the X-ray's, found the lazy headers' wrong errors.
+- **An experimental path behind a `-D` flag**, so that one build runs the old path and the new side by side.
+- **sbt.** A change to `*.sbt` or `project/`, or a `reload`, through `sbt --client` can leave the server waiting at its load-failed prompt for a client that is gone, and every later client then hangs without a word: use `sbt -batch` for those. Every sbt and harness command under `timeout`. When something hangs, `jcmd <pid> Thread.print` before a kill; a worktree's server is the one listening on the socket `project/target/active.json` names (`lsof -U | grep <hash>`).
