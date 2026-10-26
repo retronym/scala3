@@ -38,7 +38,7 @@ class StampedCachesTest:
         |  private var myFooPeriod: Period = Nowhere
         |  private var myFoo: Int = 0
         |  def foo(using Context) =
-        |    Caching.stamped(myFooPeriod, myFoo)(myFooPeriod = _, myFoo = _)(ctx.period):
+        |    Caching.stamped(myFooPeriod, myFoo)(ctx.period):
         |      42
         |  def reset() = myFooPeriod = Nowhere
         |  def peek(using Context) = if myFooPeriod == ctx.period then myFoo else 0
@@ -84,8 +84,8 @@ object StampedCachesTest:
       case m if m.group(2) == "Period" || m.group(2) == "RunId" || m.group(2) == "Validity" || isStampName(m.group(1).nn) => m.group(1).nn
     }.toList.distinct
 
-  /** The extents of the argument lists of each `Caching.<helper>` call before its block: the stamp, the value, their
-   *  setters and the validity test.
+  /** The extents of the argument lists of each `Caching.<helper>` call before its block: the stamp, the value and the
+   *  validity test.
    */
   private def cachingArguments(text: String): List[(Int, Int)] =
     raw"Caching\.\w+\(".r.findAllMatchIn(text).map { m =>

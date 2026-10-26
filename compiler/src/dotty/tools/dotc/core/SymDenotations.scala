@@ -2257,14 +2257,14 @@ object SymDenotations {
     private var memberNamesCache: MemberNames = MemberNames.None
 
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
-      Caching.stamped(myMemberCachePeriod, myMemberCache)(myMemberCachePeriod = _, myMemberCache = _)(ctx.period):
+      Caching.stamped(myMemberCachePeriod, myMemberCache)(ctx.period):
         ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
       .nn
 
     // `invalidateBaseTypeCache` nulls the cache: with several readers, after
     // another reader found the period current (I67)
     private def baseTypeCache(using Context): BaseTypeMap =
-      Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(myBaseTypeCachePeriod = _, myBaseTypeCache = _)(
+      Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(
           (period, cache) => cache != null && currentHasSameBaseTypesAs(period), ctx.period):
         ctx.base.sharing.newEqHashMap()
       .nn
