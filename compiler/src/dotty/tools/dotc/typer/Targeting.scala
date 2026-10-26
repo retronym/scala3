@@ -22,7 +22,8 @@ import collection.mutable
  *
  *   - always typed: imports and exports shape later contexts; package clauses
  *     are containers; zero-extent and synthetic definitions are what the next
- *     statement is built from. A synthetic definition at the package level
+ *     statement is built from. (An open of several files skips the package-level
+ *     imports too, `skipImport`: the Namer's import context stands in.) A synthetic definition at the package level
  *     (the `<src>$package` object holding a file's top-level definitions, a
  *     case class's companion) is skipped like any other: nothing after it is
  *     built from its typed tree, and typed whole it is the whole file.
@@ -100,6 +101,30 @@ import collection.mutable
         if stat.span.touches(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
       case _ =>
     skipped
+
+  /** Is the package-level import `imp` skipped (`Reader.deferImports`, the
+   *  open of several files)? If so it is recorded like a statement, and the
+   *  statements after it are typed in the import context the Namer built from
+   *  the untyped import and its symbol, which is the context `typedStats`
+   *  builds from the typed import. The first request on the file types it,
+   *  and with it completes what its qualifier names: on the open that was
+   *  most of the serial cost, loading packages and completing the objects
+   *  the files import, which readers then do side by side.
+   */
+  def skipImport(imp: untpd.Import)(using Context): Boolean =
+    reader.deferImports && !inBlock && exprOwner.is(PackageClass)
+    && imp.span.exists && !imp.span.touches(target) && imp.hasAttachment(typer.SymOfTree)
+    && {
+      // The import's symbol is completed here, by the one thread of the open, not left to the readers: a
+      // reader completing it holds it while it types the qualifier, and another reader's completion of an
+      // object resolves that object's parents through the imports of its file, so readers on files that
+      // import each other's objects close a wait-for cycle (eight readers on the largest files first:
+      // `Cyclic reference involving module class Symbols$` on an import line, then names resolving wrongly in
+      // a hundred files). Completed before any reader runs, the symbol is never waited on.
+      imp.attachment(typer.SymOfTree).ensureCompleted()
+      reader.skippedStats += Run.SkippedStat(imp, ctx, exprOwner, inBlock)
+      true
+    }
 
   /** A skipped definition of a block leaves a typed stub in the block: its
    *  name and symbol, no right-hand side, an untyped type tree, so that a

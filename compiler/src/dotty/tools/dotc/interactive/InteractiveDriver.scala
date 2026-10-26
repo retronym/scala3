@@ -512,18 +512,27 @@ class InteractiveDriver(
 
     def skippedAt(target: Span): Option[Run.SkippedStat] = synchronized(skipped.find(_.stat.span.contains(target)))
 
+    /** Does a request at `target` need `sk` typed: it touches it, or `sk` is
+     *  an import the open skipped (`Targeting.skipImport`), which every request
+     *  on the file needs typed and in the typed tree, wherever it lands (the
+     *  providers build the context of a path from the tree's imports).
+     */
+    private def neededAt(sk: Run.SkippedStat, target: Span): Boolean =
+      sk.stat.span.touches(target) || sk.stat.isInstanceOf[untpd.Import]
+
     /** What a request at `target` finds: the statements it touches typed
      *  already, skipped statements to resume into (the one a point lands in,
-     *  every one a range touches; claimed for this reader together: removed
-     *  from `skipped`, in `typing`), or one that another reader is typing.
+     *  every one a range touches, the imports the open skipped; claimed for
+     *  this reader together: removed from `skipped`, in `typing`), or one that
+     *  another reader is typing.
      */
     def claim(target: Span): Session.Claim = synchronized {
       // a statement whose typing a cancellation unwound is neither typed nor
       // skipped until a write replaces it: it is not "typed" (finding I56,
       // a read of a unit without the statement, an empty answer)
-      if pendingAbandons.exists(_.stat.span.touches(target)) then Session.Claim.Abandoned
-      else if typing.keySet.iterator().asScala.exists(_.stat.span.touches(target)) then Session.Claim.Wait
-      else skipped.filter(_.stat.span.touches(target)) match
+      if pendingAbandons.exists(neededAt(_, target)) then Session.Claim.Abandoned
+      else if typing.keySet.iterator().asScala.exists(neededAt(_, target)) then Session.Claim.Wait
+      else skipped.filter(neededAt(_, target)) match
         case Nil => Session.Claim.Typed
         case sks =>
           skipped = skipped.filterNot(sk => sks.exists(_ eq sk))
@@ -542,12 +551,12 @@ class InteractiveDriver(
 
     private def awaitTyping0(target: Span): Unit = {
       val since = System.nanoTime()
-      while typing.keySet.iterator().asScala.exists(_.stat.span.touches(target)) do
+      while typing.keySet.iterator().asScala.exists(neededAt(_, target)) do
         if reader.cancelChecker() then
           reader.cancelledByChecker = true
           throw CompilationUnit.CancelledCompilation()
         if writerPending then throw CompilationUnit.CancelledCompilation()
-        giveUpOnLeakedClaims(_.stat.span.touches(target), since)
+        giveUpOnLeakedClaims(neededAt(_, target), since)
         wait(20)
     }
 
@@ -1573,6 +1582,9 @@ class InteractiveDriver(
       // a point past the end of every file: every top-level statement is skipped
       val target = if typeAll then NoSpan else Span(Spans.MaxOffset - 1)
       reader.typingTarget = target
+      // the package-level imports are skipped too (`Targeting.skipImport`): the first request on each file
+      // types them, and with them completes what they name, in parallel with the requests on other files
+      reader.deferImports = !typeAll
       reader.runsStarted += 1
       if typeAll then reader.wholeFileRunsStarted += 1
       run.isTargeted = target.exists
@@ -1584,9 +1596,11 @@ class InteractiveDriver(
         finally reader.clearTargeting()
       val tCompiled = System.nanoTime()
       if myCancelled || reader.cancelChecker() then throw CompilationUnit.CancelledCompilation()
+      // each file's skipped statements, once (a filter per file over every statement of every file was quadratic)
+      val skippedBySource = skipped.groupBy(sk => sk.ctx.source: SourceFile)
       val sessions = ctx.run.nn.units.zipWithIndex.map { (unit, i) =>
         val uri = files.collectFirst { case (u, src) if src eq unit.source => u }.getOrElse(URI.create("file:///" + unit.source.path).nn)
-        val own = skipped.filter(_.ctx.source eq unit.source)
+        val own = skippedBySource.getOrElse(unit.source, Nil)
         val t = unit.tpdTree
         cleanup(t, errorOutCompleters = own.isEmpty)
         myOpenedTrees.synchronized { myOpenedTrees(uri) = topLevelTrees(t, unit.source) }
