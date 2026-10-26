@@ -546,6 +546,22 @@ object Phases {
         finally ctx.run.advanceUnit()
       }
 
+    /** `body` on each of `unitContexts`, in parallel on a pool of at most one thread per processor named
+     *  `threadName`; the contexts for which it returned true, in order. The first failure is rethrown here, after
+     *  every call has ended.
+     */
+    protected final def inParallel(threadName: String, unitContexts: List[Context])(body: Context ?=> Boolean): List[Context] =
+      import java.util.concurrent.{Callable, Executors}
+      val threads = math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)
+      val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, threadName); t.setDaemon(true); t }).nn
+      try
+        val futures = unitContexts.map(c => pool.submit((() => body(using c)): Callable[Boolean]).nn)
+        val done = futures.map(f =>
+          try f.get().nn.booleanValue
+          catch case ex: java.util.concurrent.ExecutionException => throw ex.getCause.nn)
+        unitContexts.zip(done).collect { case (c, true) => c }
+      finally pool.shutdown()
+
     inline def runSubPhase[T](id: Run.SubPhase)(inline body: (Run.SubPhase, Context) ?=> T)(using Context): T =
       given Run.SubPhase = id
       try

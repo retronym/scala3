@@ -2563,6 +2563,14 @@ object SymDenotations {
       }
     }
 
+    /** Enter `syms` in order, as `enter` does each, as one change: on a concurrent base built aside and published
+     *  with one store (`extendAside`), so that the definitions of the files of an open cost one copy of a
+     *  package's scope, not one each (`Namer.IndexSlice`).
+     */
+    def enterAll(syms: Iterable[Symbol])(using Context): Unit =
+      val scope = unforcedDecls.openForMutations
+      scope.writing(scope.extendAside(aside => syms.foreach(enter(_, aside))))
+
     /** Enter a symbol in given `scope` without potentially replacing the old copy. */
     def enterNoReplace(sym: Symbol, scope: MutableScope)(using Context): Unit =
       scope.enter(sym)
@@ -3182,7 +3190,9 @@ object SymDenotations {
         if sym.defRunId != ctx.runId && sym.isClass && sym.asClass.compUnitInfo != null then
           val file = sym.asClass.compUnitInfo.nn.associatedFile
           if file != null && file.path == path then
-            scope.unlink(sym, sym.lastKnownDenotation.name)
+            // as the scope's one writer, the entry found and removed together: the files of an open unlink their
+            // own symbols in parallel (`Namer.createPackageSymbol`), and a new package replaces the entries whole
+            scope.writing(scope.unlink(sym, sym.lastKnownDenotation.name))
     }
   }
 

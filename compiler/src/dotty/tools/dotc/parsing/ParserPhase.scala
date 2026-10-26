@@ -67,16 +67,7 @@ class Parser extends Phase {
    *  is rethrown here, after every parse has ended.
    */
   private def parseInParallel(unitContexts: List[Context]): List[Context] =
-    import java.util.concurrent.{Callable, Executors}
-    val threads = math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)
-    val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, "dotc-parse"); t.setDaemon(true); t }).nn
-    try
-      val futures = unitContexts.map(c => pool.submit((() => parse(using c)): Callable[Boolean]).nn)
-      val parsed = futures.map(f =>
-        try f.get().nn.booleanValue
-        catch case ex: java.util.concurrent.ExecutionException => throw ex.getCause.nn)
-      unitContexts.zip(parsed).collect { case (c, true) => c }
-    finally pool.shutdown()
+    inParallel("dotc-parse", unitContexts)(parse)
 
   protected def run(using Context): Unit = unsupported("run")
 }
