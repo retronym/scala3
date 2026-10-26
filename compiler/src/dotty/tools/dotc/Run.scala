@@ -213,19 +213,57 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   private def units_=(us: List[CompilationUnit]): Unit =
     myUnits = us
 
-  @scratch var suspendedUnits: ListBuffer[CompilationUnit] = ListBuffer.empty
-  @scratch var suspendedHints: mutable.Map[CompilationUnit, (String, Boolean)] = mutable.HashMap()
+  // A unit is suspended when a macro interpretation or an inline expansion needs a definition in a unit that is not yet
+  // compiled (`CompilationUnit.suspend`), from whichever reader hits it; the reader unwinds, the run goes on, and the
+  // driver compiles the suspended units again in a new run once this one has finished (`Driver.finish`). The three
+  // collections below are reached only with the evidence of the monitor of `suspension` (`Sharing.serialised`: with
+  // concurrent readers only, as the batch compiler is one thread); the readers outside get a snapshot.
+  @scratch private val mySuspendedUnits: ListBuffer[CompilationUnit] = ListBuffer.empty
+  @scratch private val mySuspendedHints: mutable.Map[CompilationUnit, (String, Boolean)] = mutable.HashMap()
+  // Were any units suspended in the typer phase? if so then pipeline tasty can not complete.
+  @scratch private var mySuspendedAtTyperPhase: Boolean = false
+
+  object suspension:
+    private type Held = Sharing.Monitor[suspension.type]
+    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised[suspension.type, T](this)(op)
+
+    private def units(using Held) = mySuspendedUnits
+    private def hints(using Held) = mySuspendedHints
+
+    /** Record `unit` as suspended, unless it is already: two readers may suspend it at once, and only the first
+     *  records it. The flags of the unit are set under the same monitor. Returns normally; the caller unwinds. */
+    def add(unit: CompilationUnit, hint: => String, isInliningPhase: Boolean)(using Context): Unit =
+      held:
+        if !unit.suspended then
+          unit.suspended = true
+          units += unit
+          if ctx.settings.XprintSuspension.value then
+            hints += (unit -> (hint, isInliningPhase))
+          if isInliningPhase then
+            unit.suspendedAtInliningPhase = true
+          else
+            mySuspendedAtTyperPhase = true
+
+    def snapshotUnits(using Context): List[CompilationUnit] = held(units.toList)
+    def snapshotHints(using Context): List[(CompilationUnit, (String, Boolean))] = held(hints.toList)
+    def atTyperPhase(using Context): Boolean = held(mySuspendedAtTyperPhase)
+  end suspension
+
+  /** The units suspended so far, in the order they were suspended. */
+  def suspendedUnits(using Context): List[CompilationUnit] = suspension.snapshotUnits
+  def suspendedHints(using Context): List[(CompilationUnit, (String, Boolean))] = suspension.snapshotHints
 
   /** Were any units suspended in the typer phase? if so then pipeline tasty can not complete. */
-  @scratch var suspendedAtTyperPhase: Boolean = false
+  def suspendedAtTyperPhase(using Context): Boolean = suspension.atTyperPhase
 
   def checkSuspendedUnits(newUnits: List[CompilationUnit])(using Context): Unit =
-    if newUnits.isEmpty && suspendedUnits.nonEmpty && !ctx.reporter.errorsReported then
+    val suspended = suspendedUnits
+    if newUnits.isEmpty && suspended.nonEmpty && !ctx.reporter.errorsReported then
       val where =
-        if suspendedUnits.size == 1 then i"in ${suspendedUnits.head}."
+        if suspended.size == 1 then i"in ${suspended.head}."
         else i"""among
                 |
-                |  ${suspendedUnits.toList}%, %
+                |  ${suspended}%, %
                 |"""
       val enableXprintSuspensionHint =
         if ctx.settings.XprintSuspension.value then ""
@@ -245,7 +283,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     val us = myUnits
     if us eq cached._1 then cached._2
     else
-      val fs = (us ++ suspendedUnits).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
+      // `files` has no context of its own; the run's shares the base, which says whether readers are concurrent
+      val fs = (us ++ suspendedUnits(using runContext)).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
       myFilesOf = (us, fs)
       fs
   }

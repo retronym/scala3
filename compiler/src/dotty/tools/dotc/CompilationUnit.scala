@@ -108,11 +108,11 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   /** Will be set to true if the unit contains an inlineTrait language import */
   @treeState @publishedBy("init") var knowsInlineTraits: Boolean = false
 
-  // Only ever set to true, under the run's `suspendedUnits` monitor (`suspend`); the typer phase reads it as a hint, and
+  // Only ever set to true, under the run's `suspension` monitor (`suspend`); the typer phase reads it as a hint, and
   // a new run resets it with no reader.
-  @scratch @benignRace("set true only, under the monitor of the run's suspended units; a hint when read")
+  @scratch @benignRace("set true only, under the monitor of the run's `suspension`; a hint when read")
   var suspended: Boolean = false
-  @scratch @benignRace("set true only, under the monitor of the run's suspended units")
+  @scratch @benignRace("set true only, under the monitor of the run's `suspension`")
   var suspendedAtInliningPhase: Boolean = false
 
   /** Can this compilation unit be suspended */
@@ -136,19 +136,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
     // when this unit is unsuspended.
     depRecorder.clear()
     if !suspended then
-      val currRun = ctx.run.nn
-      // the check and the run's lists together: with concurrent readers, two may suspend the unit at once
-      currRun.suspendedUnits.synchronized:
-        if !suspended then
-          suspended = true
-          currRun.suspendedUnits += this
-          val isInliningPhase = ctx.phase == Phases.inliningPhase
-          if ctx.settings.XprintSuspension.value then
-            currRun.suspendedHints += (this -> (hint, isInliningPhase))
-          if isInliningPhase then
-            suspendedAtInliningPhase = true
-          else
-            currRun.suspendedAtTyperPhase = true
+      ctx.run.nn.suspension.add(this, hint, ctx.phase == Phases.inliningPhase)
     throw CompilationUnit.SuspendException()
 
   @cache @benignRace("any reader derives an equal immutable map from the unit's untyped tree")
