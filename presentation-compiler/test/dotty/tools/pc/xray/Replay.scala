@@ -62,6 +62,7 @@ object Replay:
     Mode("default", "default: targeting, the session, several readers serialised (step 3)", Nil),
     Mode("readers", "-Yinteractive-parallel: parallel readers (step 4)", List("-Yinteractive-parallel")),
     Mode("bodyEdits", "-Yinteractive-body-edits: the session survives an edit inside a body (§12)", List("-Yinteractive-body-edits")),
+    Mode("readersEdits", "-Yinteractive-parallel -Yinteractive-body-edits: parallel readers, and the session survives an edit inside a body", List("-Yinteractive-parallel", "-Yinteractive-body-edits")),
     Mode("noCache", "-Yno-targeted-requests without CachingDriver: every request types the whole file (not what Metals does)", List("-Yno-targeted-requests"), inRunAll = false))
 
   def modeNamed(key: String): Mode = modes.find(_.key == key).get

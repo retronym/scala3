@@ -870,7 +870,8 @@
     if (mine !== bgSeq) return; // a newer pass took over
     $('bgState').querySelector('.spin').hidden = true;
     if (st.state === 'error') { $('bgText').textContent = 'background: ' + st.error; return; }
-    if (st.code !== cm.getValue()) { scheduleBackground(); return; } // the text moved on: again
+    // the text moved on (the server cancelled a pass on stale text, `superseded`): again, right away
+    if (st.state === 'superseded' || st.code !== cm.getValue()) { clearTimeout(bgTimer); bgTimer = setTimeout(backgroundPass, 0); return; }
     paintBackground(st);
     const errs = (st.diagnostics || []).filter((d) => d.level === 'error').length, warns = (st.diagnostics || []).length - errs;
     $('bgText').textContent = `background: ${st.outcome} in ${st.ms} ms (visible lines first, ${st.visibleFirstMs} ms) on run ${st.runId} (${st.tokens.length} tokens, ${errs} error${errs === 1 ? '' : 's'}, ${warns} warning${warns === 1 ? '' : 's'}` +
