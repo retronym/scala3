@@ -229,6 +229,7 @@ class Definitions {
   @tu lazy val ScalaPackageClass: ClassSymbol = {
     val cls = ScalaPackageVal.moduleClass.asClass
     cls.info.decls.openForMutations.useSynthesizer(
+      name => name.isTypeName && (name.isSyntheticFunction || name == tpnme.Null))(
       name =>
         if (name.isTypeName && name.isSyntheticFunction) newFunctionNType(name.asTypeName)
         else if (name == tpnme.Null) synthesizeNullClass()

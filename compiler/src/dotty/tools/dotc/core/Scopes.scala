@@ -229,8 +229,14 @@ object Scopes {
      */
     private var synthesized: java.util.concurrent.ConcurrentHashMap[Name, ScopeEntry] | Null = null
 
-    /** Use specified synthesize for this scope */
-    def useSynthesizer(s: SymbolSynthesizer): Unit =
+    /** Which names the synthesizer can make: a lookup that misses consults the map of synthesized entries only for
+     *  those, so a miss on any other name costs what it did before the map.
+     */
+    private var synthesizable: (Name => Context ?=> Boolean) | Null = null
+
+    /** Use specified synthesize for this scope, for the names `canSynthesize` accepts */
+    def useSynthesizer(canSynthesize: Name => Context ?=> Boolean)(s: SymbolSynthesizer): Unit =
+      synthesizable = canSynthesize
       synthesize = s
       synthesized = new java.util.concurrent.ConcurrentHashMap
 
@@ -250,6 +256,7 @@ object Scopes {
         val e = entries(i)
         scope.newScopeEntry(e.name, e.sym)
       }
+      scope.synthesizable = synthesizable
       scope.synthesize = synthesize
       scope.synthesized = synthesized
       scope
@@ -418,7 +425,7 @@ object Scopes {
       if e != null then e
       else synthesize match
         case null => null
-        case s => synthesizedEntry(s, name)
+        case s => if synthesizable.nn(name) then synthesizedEntry(s, name) else null
     }
 
     /** The synthesized entry for `name`, made once: a reader that loses the race to make it takes the winner's, and
