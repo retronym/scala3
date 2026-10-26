@@ -98,10 +98,11 @@ object Sharing:
    */
   inline def claim[K <: AnyRef & Singleton, T](inline key: K, inline cycleSubject: AnyRef | Null = null)(
       inline op: Holds[K] ?=> T)(using inline kind: ClaimKind[K])(using Context): T =
-    given Holds[K] = held.asInstanceOf[Holds[K]]
+    // the evidence a local value, not a given alias, which would be a lazy one: a `scala.runtime.LazyRef` per call
+    val h = held.asInstanceOf[Holds[K]]
     if ctx.base.concurrent then
-      interactive.SharingImpl.claim(key, kind, if cycleSubject == null then key else cycleSubject.nn, () => op)
-    else op
+      interactive.SharingImpl.claim(key, kind, if cycleSubject == null then key else cycleSubject.nn, () => op(using h))
+    else op(using h)
 
   /** `claim` on a key computed per call (a file's root, found from its symbols), which no state is reached by: it
    *  hands out no evidence, and `key` is evaluated only on a concurrent base, as in `claim`.
@@ -149,13 +150,12 @@ object Sharing:
 
   /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
   inline def serialised[K <: AnyRef & Singleton, T](lock: K)(inline op: Monitor[K] ?=> T)(using Context): T =
-    given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
-    if ctx.base.concurrent then lock.synchronized(op) else op
+    val m = monitorHeld.asInstanceOf[Monitor[K]] // not a given alias, as in `claim`
+    if ctx.base.concurrent then lock.synchronized(op(using m)) else op(using m)
 
   /** `op` holding `lock`'s monitor on every base, with the evidence of it. */
   inline def locking[K <: AnyRef & Singleton, T](lock: K)(inline op: Monitor[K] ?=> T): T =
-    given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
-    lock.synchronized(op)
+    lock.synchronized(op(using monitorHeld.asInstanceOf[Monitor[K]]))
 
   /** A variable of a `Guard` reached only with the evidence of the monitor of `K`, the guard: `v()` and `v() = x`. */
   final class GuardedVar[K, T](private var value: T):

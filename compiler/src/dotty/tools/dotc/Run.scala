@@ -94,7 +94,8 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     // Same as scala/scala/commit/79ca1408c7.
     def initSuspendedMessages(oldRun: Run | Null) =
       // the REPL: one thread, this run is not yet shared and the old one is finished
-      given Sharing.Monitor[this.type] = Sharing.unlocked("the REPL is one thread, and neither run is shared")
+      val m: Sharing.Monitor[this.type] = Sharing.unlocked("the REPL is one thread, and neither run is shared")
+      given Sharing.Monitor[this.type] = m // an alias of a value: not a lazy given
       suspended().clear()
       if oldRun != null then
         val old = oldRun
