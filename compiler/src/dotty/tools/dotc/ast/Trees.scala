@@ -3,6 +3,7 @@ package dotc
 package ast
 
 import core.*
+import scala.annotation.internal.confined
 import Types.*, Names.*, NameOps.*, Flags.*, util.Spans.*, Contexts.*, Constants.*
 import typer.{ ConstFold, ProtoTypes }
 import SymDenotations.*, Symbols.*, Denotations.*, StdNames.*, Comments.*
@@ -300,7 +301,9 @@ object Trees {
     // Set when the tree is made, and once more by the completer of its symbol (`addAnnotations`, `mergeIfSynthetic`),
     // on the untyped original that other readers may be reading: Modifiers is immutable, so a reader sees them before
     // or after, but not the same ones.
-    @treeState private var myMods: untpd.Modifiers | Null = null
+    // a definition's tree belongs to its completer (under the completion lock), then to the one reader that claims its
+    // statement (`Session.claim`)
+    @treeState @confined private var myMods: untpd.Modifiers | Null = null
 
     private[dotc] def rawMods: untpd.Modifiers = myMods match
       case null => untpd.EmptyModifiers

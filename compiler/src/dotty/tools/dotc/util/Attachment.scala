@@ -2,7 +2,7 @@ package dotty.tools.dotc
 package util
 
 import core.Contexts.Context
-import scala.annotation.internal.treeState
+import scala.annotation.internal.{confined, treeState}
 
 /** A class inheriting from Attachment.Container supports
  *  adding, removing and lookup of attachments. Attachments are typed key/value pairs.
@@ -17,7 +17,9 @@ object Attachment {
    *  Clients should inherit from Container instead.
    */
   trait LinkSource {
-    @treeState private[Attachment] var next: Link[?] | Null
+    // a tree's attachments are its owner's: the completer of its definition, then the one reader that claims its
+    // statement (`Session.claim`)
+    @treeState @confined private[Attachment] var next: Link[?] | Null
 
     /** Optionally get attachment corresponding to `key` */
     final def getAttachment[V](key: Key[V]): Option[V] = {
@@ -96,12 +98,12 @@ object Attachment {
 
   /** A private, concrete implementation class linking attachments.
    */
-  private[Attachment] class Link[+V](val key: Key[V], val value: V, @(treeState @scala.annotation.meta.field) var next: Link[?] | Null)
+  private[Attachment] class Link[+V](val key: Key[V], val value: V, @(treeState @scala.annotation.meta.field) @(confined @scala.annotation.meta.field) var next: Link[?] | Null)
       extends LinkSource
 
   /** A trait for objects that can contain attachments */
   trait Container extends LinkSource {
-    @treeState private[Attachment] var next: Link[?] | Null = null
+    @treeState @confined private[Attachment] var next: Link[?] | Null = null
 
     /** Copy the sticky attachments from `container` to this container. */
     final def withAttachmentsFrom(container: Container): this.type = {

@@ -72,6 +72,13 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    */
   private[dotc] var resultStamp: Long = -1
 
+  // ---- Rec types opened by `findMember` (`Type.goRec`), on a concurrent base ----
+
+  /** The prefix each rec type is opened with in this reader's `findMember`s in progress: the re-entry guard that a
+   *  batch base keeps in `RecType.openedWithPrefix`, where another reader would set and reset it.
+   */
+  private[dotc] val openedRecTypes = java.util.IdentityHashMap[core.Types.RecType, core.Types.Type]()
+
   // ---- Debug output (`reporting.trace`, `-explain-cycles`) ----
 
   /** The margin of `trace` output. */

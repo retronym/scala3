@@ -25,7 +25,8 @@ import typer.ProtoTypes.NoViewsAllowed
 import reporting.Message
 import collection.mutable.ListBuffer
 
-import scala.annotation.internal.{guardedBy, lazyFact}
+import scala.annotation.internal.{benignRace, guardedBy, lazyFact}
+import java.lang.invoke.VarHandle
 import scala.compiletime.uninitialized
 
 /** Denotations represent the meaning of symbols and named types.
@@ -716,6 +717,9 @@ object Denotations {
      *  2) the union of all validity periods is a contiguous
      *     interval.
      */
+    // changed only under the completion lock (a bring-forward, a transformation) or by a batch base's transformers;
+    // a reader walks the ring with no lock, and each new denotation is linked in by one store after its own link
+    @benignRace("linked in by one store after a release fence on a concurrent base; a reader sees the ring before or after")
     protected var nextInRun: SingleDenotation = this
 
     /** The version of this SingleDenotation that was valid in the first phase
@@ -983,8 +987,10 @@ object Denotations {
     }
 
     /** Insert this denotation so that it follows `prev`. */
-    private def insertAfter(prev: SingleDenotation) = {
+    private def insertAfter(prev: SingleDenotation)(using Context) = {
       this.nextInRun = prev.nextInRun
+      // a reader walking the ring with no lock reaches this denotation only once its link is set
+      if ctx.base.concurrent then VarHandle.releaseFence()
       prev.nextInRun = this
     }
 
@@ -997,12 +1003,14 @@ object Denotations {
      *  The code to achieve this is subtle in that it works correctly
      *  whether the replaced denotation is the only one in its cycle or not.
      */
-    private[dotc] def replaceWith(newd: SingleDenotation): Unit = {
+    private[dotc] def replaceWith(newd: SingleDenotation)(using Context): Unit = {
       var prev = this
       while (prev.nextInRun ne this) prev = prev.nextInRun
-      // order of next two assignments is important!
+      // `newd` is linked in only once its own link is set, so that a reader walking the ring with no lock never
+      // meets it pointing at itself; when `this` is alone in its ring, so is `newd`
+      newd.nextInRun = if prev eq this then newd else nextInRun
+      if ctx.base.concurrent then VarHandle.releaseFence()
       prev.nextInRun = newd
-      newd.nextInRun = nextInRun
       validFor = Nowhere
       nextInRun = newd
     }

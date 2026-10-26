@@ -2246,7 +2246,11 @@ object SymDenotations {
     private var myBaseTypeCache: BaseTypeMap | Null = null
     private var myBaseTypeCachePeriod: Period = Nowhere
 
+    // read once into a local; a reader that finds one invalid stores a fresh one, and a lost store is a lost memo:
+    // validity is the cache's own (its run and phase group, and on a concurrent base the structure epoch)
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var baseDataCache: BaseData = BaseData.None
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var memberNamesCache: MemberNames = MemberNames.None
 
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] =

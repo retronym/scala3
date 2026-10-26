@@ -659,7 +659,7 @@ object Contexts {
     private var _outer: Context = uninitialized
     def outer: Context = _outer
 
-    private var _period: Period = uninitialized
+    @publishedBy("init") private var _period: Period = uninitialized // set while the context is built, before it is shared
     final def period: Period = _period
 
     @publishedBy("init")

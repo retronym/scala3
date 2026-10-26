@@ -895,14 +895,17 @@ object Types extends TypeUtils {
           // of the recursive type if the new prefix `pre` is neq the prefix with which the
           // type was previously opened.
 
-          val openedPre = tp.openedWithPrefix
+          // The guard is about re-entry on this thread: with several readers a rec type (interned, shared) would carry
+          // another reader's prefix, or have it reset under this reader's nested opening, so it is the reader's own.
+          val openedPre =
+            if ctx.base.concurrent then ctx.reader.openedRecTypes.getOrDefault(tp, NoType).nn else tp.openedWithPrefix
           val rt =
             if openedPre.exists && (openedPre ne pre) then // defensive copy
               RecType(rt => tp.parent.substRecThis(tp, rt.recThis))
             else tp
-          rt.openedWithPrefix = pre
+          if ctx.base.concurrent then ctx.reader.openedRecTypes.put(rt, pre) else rt.openedWithPrefix = pre
           try go(rt.parent).mapInfo(_.substRecThis(rt, pre))
-          finally rt.openedWithPrefix = NoType
+          finally if ctx.base.concurrent then ctx.reader.openedRecTypes.remove(rt) else rt.openedWithPrefix = NoType
       end goRec
 
       def goRefined(tp: RefinedType) = {
@@ -3399,6 +3402,8 @@ object Types extends TypeUtils {
   class RecType(parentExp: RecType => Type) extends RefinedOrRecType with BindingType {
 
     // See discussion in findMember#goRec why this field is needed
+    // the prefix this rec type is opened with in a `findMember` in progress; batch only: a concurrent base keeps it per
+    // reader (`Reader.openedRecTypes`)
     private[Types] var openedWithPrefix: Type = NoType
 
     val parent: Type = parentExp(this: @unchecked)
