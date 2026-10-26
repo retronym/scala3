@@ -838,9 +838,11 @@ object SymDenotations {
           if carrier.isCompleting // annotations have been set already in this case
           then carrier.unforcedAnnotation(defn.TargetNameAnnot)
           else carrier.getAnnotation(defn.TargetNameAnnot)
-        myTargetName = computeTargetName(targetNameAnnot)
-        if name.is(SuperAccessorName) then
-          myTargetName = myTargetName.nn.unmangle(List(ExpandedName, SuperAccessorName, ExpandPrefixName))
+        val computed = computeTargetName(targetNameAnnot)
+        // stored once, finished: another reader must not see the name before it is unmangled
+        myTargetName =
+          if name.is(SuperAccessorName) then computed.unmangle(List(ExpandedName, SuperAccessorName, ExpandPrefixName))
+          else computed
 
       myTargetName.nn
 
