@@ -3488,13 +3488,18 @@ object SymDenotations {
   private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
+    // This cache's monitor, on a concurrent base (a batch base runs alone): what `dependent`, and the subclasses'
+    // stores and invalidations, are reached under, with the evidence of it.
+    protected inline final def monitored[T](inline op: Sharing.Monitor[this.type] ?=> T): T =
+      if concurrent then Sharing.locking(this)(op) else op(using Sharing.unlocked("a batch base runs on one thread"))
+
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
+
+    // a memo of "valid in this period", stored after the check
+    @benignRace("any reader that finds the cache valid stores the period it checked in; a stale one only repeats the check")
     private var checkedPeriod: Period = Nowhere
 
-    protected def invalidateDependents() =
-      if concurrent then synchronized(invalidateDependents0()) else invalidateDependents0()
-
-    private def invalidateDependents0() = {
+    protected def invalidateDependents()(using Sharing.Monitor[this.type]) = {
       if (dependent != null) {
         val it = dependent.nn.keySet.iterator()
         while (it.hasNext()) it.next().invalidate()
@@ -3502,10 +3507,7 @@ object SymDenotations {
       dependent = null
     }
 
-    protected def addDependent(dep: InheritedCache): Unit =
-      if concurrent then synchronized(addDependent0(dep)) else addDependent0(dep)
-
-    private def addDependent0(dep: InheritedCache): Unit = {
+    protected def addDependent(dep: InheritedCache): Unit = monitored {
       if (dependent == null) dependent = new WeakHashMap
       dependent.nn.put(dep, ())
     }
@@ -3515,11 +3517,13 @@ object SymDenotations {
     // hands out.
     private var lockedBy: Thread | Null = null
     private var myProvisional = false
-    protected final def isLocked(using Sharing.Holds[this.type]): Boolean = lockedBy != null
+    protected final def isLocked(using Sharing.Holds[this.type]): Boolean = lockedByUnguarded != null
     protected final def setLocked(b: Boolean)(using Sharing.Holds[this.type]): Unit =
       lockedBy = if b then Thread.currentThread else null
     /** Is this thread inside the computation? Needs no claim: a thread is only ever itself. */
-    protected final def isLockedHere: Boolean = lockedBy eq Thread.currentThread
+    protected final def isLockedHere: Boolean =
+      lockedByUnguarded(using Sharing.unguarded("compares with this thread: only its own store can make it true")) eq Thread.currentThread
+    private def lockedByUnguarded(using Sharing.Holds[this.type]): Thread | Null = lockedBy
     protected final def isProvisional(using Sharing.Holds[this.type]): Boolean = myProvisional
     protected final def setProvisional(b: Boolean)(using Sharing.Holds[this.type]): Unit = myProvisional = b
 
@@ -3546,33 +3550,38 @@ object SymDenotations {
   }
 
   private class MemberNamesImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with MemberNames {
+    // written under this cache's monitor, read once without it: the map is immutable, and a stale one is a miss or a
+    // cache another reader has just invalidated (I46, I92)
     private var cache: SimpleIdentityMap[NameFilter, Set[Name]] | Null = SimpleIdentityMap.empty
+    private def cacheHeld(using Sharing.Monitor[this.type]): SimpleIdentityMap[NameFilter, Set[Name]] | Null = cache
+    private def setCache(c: SimpleIdentityMap[NameFilter, Set[Name]] | Null)(using Sharing.Monitor[this.type]): Unit = cache = c
+    private def cacheNow: SimpleIdentityMap[NameFilter, Set[Name]] | Null =
+      cacheHeld(using Sharing.unlocked("read once; the map is immutable and a stale one only misses"))
 
     final def isValid(using Context): Boolean =
-      cache != null && isValidAt(ctx.phase)
+      cacheNow != null && isValidAt(ctx.phase)
 
     /** Computing parent member names might force parents, which could invalidate
      *  the cache itself. In that case we should cancel invalidation and
      *  proceed as usual. However, all cache entries should be cleared.
      */
-    def invalidate(): Unit =
-      if concurrent then synchronized(invalidate0()) else invalidate0()
-
     // Re-entry from this thread's own computation clears; another reader's computation in progress is no reason to
     // keep the cache, which a plain `locked` could not tell apart. With several readers `invalidate` and the
     // computation's store take this cache's monitor, so that the store does not undo an invalidation between its
     // check and its write (lock order: an invalidation goes from a class's cache to its subclasses').
-    private def invalidate0(): Unit =
-      if (cache != null)
-        if (isLockedHere) cache = SimpleIdentityMap.empty
+    def invalidate(): Unit = monitored {
+      if (cacheHeld != null)
+        if (isLockedHere) setCache(SimpleIdentityMap.empty)
         else {
-          cache = null
+          setCache(null)
           invalidateDependents()
         }
+    }
 
-    private def store(keepOnly: NameFilter, computed: Set[Name]): Unit =
-      val c2 = cache
-      if c2 != null then cache = c2.updated(keepOnly, computed) // invalidated meanwhile: not stored
+    private def store(keepOnly: NameFilter, computed: Set[Name]): Unit = monitored {
+      val c2 = cacheHeld
+      if c2 != null then setCache(c2.updated(keepOnly, computed)) // invalidated meanwhile: not stored
+    }
 
     def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = {
       // with several readers another one may invalidate this cache after the caller found it valid (I92): the
@@ -3580,12 +3589,12 @@ object SymDenotations {
       assert(concurrent || isValid)
       // `cache` read once per use: another reader may invalidate it (null)
       // between a check and a use (finding I46)
-      val c0 = cache
+      val c0 = cacheNow
       val cached = if c0 == null then null else c0(keepOnly)
       try
         if (cached != null) cached
         else computing(clsd) {
-          val c1 = cache
+          val c1 = cacheNow
           val cached1 = if c1 == null then null else c1(keepOnly) // computed meanwhile by the thread that held the lock?
           if cached1 != null then cached1
           else
@@ -3593,7 +3602,7 @@ object SymDenotations {
             val computed =
               try clsd.computeMemberNames(keepOnly)(using this, ctx)
               finally setLocked(false)
-            if concurrent then synchronized(store(keepOnly, computed)) else store(keepOnly, computed)
+            store(keepOnly, computed)
             computed
         }
       finally addDependent(onBehalf)
@@ -3603,26 +3612,33 @@ object SymDenotations {
   }
 
   private class BaseDataImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with BaseData {
+    // written under this cache's monitor, read once without it: a tuple of immutable values, and a stale read is a
+    // cache another reader has just invalidated (I92)
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
-
     private var valid = true
 
+    private def cacheHeld(using Sharing.Monitor[this.type]): (List[ClassSymbol], BaseClassSet) | Null = cache
+    private def validHeld(using Sharing.Monitor[this.type]): Boolean = valid
+    private def invalidated()(using Sharing.Monitor[this.type]): Unit = { cache = null; valid = false }
+    private def store(computed: (List[ClassSymbol], BaseClassSet)): Unit = monitored { if !concurrent || validHeld then cache = computed } // a batch base stores unconditionally, as before
+    private def cacheNow: (List[ClassSymbol], BaseClassSet) | Null =
+      cacheHeld(using Sharing.unlocked("read once; a stale cache is one another reader has just invalidated"))
+    private def validNow: Boolean =
+      validHeld(using Sharing.unlocked("read once; a stale answer is a cache another reader has just invalidated"))
+
     final def isValid(using Context): Boolean =
-      valid && createdAt.runId == ctx.runId
+      validNow && createdAt.runId == ctx.runId
         // Note: We rely on the fact that whenever base types of classes change,
         // the affected classes will get new denotations with new basedata caches.
         // So basedata caches can become invalid only if the run changes.
 
-    def invalidate(): Unit =
-      if concurrent then synchronized(invalidate0()) else invalidate0()
-
-    // as `MemberNamesImpl.invalidate0`: only this thread's computation in progress keeps the cache
-    private def invalidate0(): Unit =
-      if (valid && !isLockedHere) {
-        cache = null
-        valid = false
+    // as `MemberNamesImpl.invalidate`: only this thread's computation in progress keeps the cache
+    def invalidate(): Unit = monitored {
+      if (validHeld && !isLockedHere) {
+        invalidated()
         invalidateDependents()
       }
+    }
 
     def signalProvisional() =
       // the dependent cache's computation is on this thread's stack, so its claim is held further up; threading the
@@ -3633,9 +3649,9 @@ object SymDenotations {
         : (List[ClassSymbol], BaseClassSet) = {
       assert(concurrent || isValid) // as in `MemberNamesImpl.apply` (I92)
       CyclicReference.trace("compute the base classes of ", clsd.symbol):
-        cache match
+        cacheNow match
           case null => computing(clsd) {
-            cache match
+            cacheNow match
               case null =>
                 if (isLocked) throw CyclicReference(clsd)
                 setLocked(true)
@@ -3643,8 +3659,7 @@ object SymDenotations {
                 val computed =
                   try clsd.computeBaseData(using this, ctx)
                   finally setLocked(false)
-                if (!isProvisional)
-                  if concurrent then synchronized { if valid then cache = computed } else cache = computed
+                if (!isProvisional) store(computed)
                 else onBehalf.signalProvisional()
                 computed
               case mc => mc // computed meanwhile by the thread that held the lock
