@@ -998,6 +998,9 @@ object Contexts {
       // See `Context.handleRecursive` for an explanation of these values
       recursiveOperations = Array.fill[RecursiveOperation](ctx.settings.XmaxFuel.value)(RecursiveOperation.blank())
       recursiveDepth = if ctx.settings.XnoEnrichErrorMessages.value then Int.MinValue else 0
+      spineThreshold = ctx.settings.YspineThreshold.value match
+        case -1 => Int.MaxValue
+        case n => n
       definitions.init()
     }
 
@@ -1075,6 +1078,8 @@ object Contexts {
     // before the compiler has really started
     private[dotc] var recursiveDepth: Int = 0
     private[dotc] var recursiveOperations: Array[RecursiveOperation] = Array.fill(10)(RecursiveOperation.blank())
+    // `Typer.typed` switches to its spine loop once `recursiveDepth` reaches this
+    private[dotc] var spineThreshold: Int = Int.MaxValue
 
     // Types state
     /** A table for hash consing unique types */

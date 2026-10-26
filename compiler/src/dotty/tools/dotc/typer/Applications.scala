@@ -1314,211 +1314,9 @@ trait Applications extends Compatibility {
    */
   def typedApply(tree: untpd.Apply, pt: Type)(using Context): Tree = {
 
-    def realApply(using Context): Tree = {
-      val resultProto = tree.fun match
-        case Select(New(tpt), _) if pt.isInstanceOf[ValueType] =>
-          if tpt.isType && typedAheadType(tpt).tpe.typeSymbol.typeParams.isEmpty then
-            IgnoredProto(pt)
-          else
-            pt // Don't ignore expected value types of `new` expressions with parameterized type.
-                // If we have a `new C()` with expected type `C[T]` we want to use the type to
-                // instantiate `C` immediately. This is necessary since `C` might _also_ have using
-                // clauses that we want to instantiate with the best available type. See i15664.scala.
-        case _ => IgnoredProto(pt)
-          // Do ignore other expected result types, since there might be an implicit conversion
-          // on the result. We could drop this if we disallow unrestricted implicit conversions.
-      val originalProto =
-        new FunProto(tree.args, resultProto)(this, tree.applyKind)(using argCtx(tree))
-      record("typedApply")
-      val fun1 = typedExpr(tree.fun, originalProto)
-
-      // If adaptation created a tupled dual of `originalProto`, pick the right version
-      // (tupled or not) of originalProto to proceed.
-      val proto =
-        if originalProto.hasTupledDual && needsTupledDual(fun1.tpe, originalProto)
-        then originalProto.tupledDual
-        else originalProto
-
-      /* TODO (*) Get rid of this case. It is still syntax-based, therefore unreliable.
-       * It is necessary for things like `someDynamic[T](...)`, because in that case,
-       * somehow typedFunPart returns a tree that was typed as `TryDynamicCallType`,
-       * so clearly with the view that an apply insertion was necessary, but doesn't
-       * actually insert the apply!
-       * This is probably something wrong in apply insertion, but I (@sjrd) am out of
-       * my depth there.
-       * In the meantime, this makes tests pass.
-       */
-      def isInsertedApply = fun1 match
-        case Select(_, nme.apply) => fun1.span.isSynthetic
-        case TypeApply(sel @ Select(_, nme.apply), _) => sel.span.isSynthetic
-        case TypeApply(fun, _) => !fun.isInstanceOf[Select] // (*) see explanatory comment
-        case _ => false
-
-      /** Type application where arguments come from prototype, and no implicits are inserted */
-      def simpleApply(fun1: Tree, proto: FunProto)(using Context): Tree =
-        methPart(fun1).tpe match {
-          case funRef: TermRef if funRef.symbol.isSignaturePolymorphic =>
-            // synthesize a method type based on the types at the call site.
-            // one can imagine the original signature-polymorphic method as
-            // being infinitely overloaded, with each individual overload only
-            // being brought into existence as needed
-            val originalResultType = funRef.symbol.info.resultType.stripNull()
-            val resultType =
-              if !originalResultType.isRef(defn.ObjectClass) then originalResultType
-              else AvoidWildcardsMap()(proto.resultType.deepenProtoTrans) match
-                case SelectionProto(nme.asInstanceOf_, PolyProto(_, resTp), _, _, _) => resTp
-                case resTp if isFullyDefined(resTp, ForceDegree.all) => resTp
-                case _ => defn.ObjectType
-            val methType = MethodType(proto.typedArgs().map(_.tpe.widen), resultType)
-            val fun2 = Applications.retypeSignaturePolymorphicFn(fun1, methType)
-            simpleApply(fun2, proto)
-          case funRef: TermRef =>
-            if isAcceptedSpuriousApply(fun1, tree.args) then
-              fun1
-            else
-              val app = ApplyTo(tree, fun1, funRef, proto, pt)
-              convertNewGenericArray(
-                widenEnumCase(
-                  postProcessByNameArgs(funRef, app).computeNullable(),
-                  pt))
-          case _ =>
-            handleUnexpectedFunType(tree, fun1)
-        }
-
-      /** Try same application with an implicit inserted around the qualifier of the function
-       *  part. Return an optional value to indicate success.
-       */
-      def tryWithImplicitOnQualifier(fun1: Tree, proto: FunProto)(using Context): Option[Tree] =
-        if ctx.mode.is(Mode.SynthesizeExtMethodReceiver) || proto.hasErrorArg then
-          // Suppress insertion of apply or implicit conversion on extension method receiver
-          // or if argument is erroneous by itself.
-          None
-        else
-          tryInsertImplicitOnQualifier(fun1, proto, ctx.typerState.ownedVars) flatMap { fun2 =>
-            tryEither {
-              Some(simpleApply(fun2, proto)): Option[Tree]
-            } {
-              (_, _) => None
-            }
-          }
-
-      def tryWithUsing(fun1: Tree, proto: FunProto)(using Context): Option[Tree] =
-        tryEither(Option(simpleApply(fun1, proto.withApplyKind(ApplyKind.Using)))): (_, _) =>
-          None
-
-       /** If the applied function is an automatically inserted `apply`
-        *  method and one of its arguments has a type mismatch , append
-        *  a note to the error message that explains where the required
-        *  type comes from. See #19680 and associated test case.
-        */
-      def maybeAddInsertedApplyNote(failedState: TyperState, fun1: Tree)(using Context): Unit =
-        if fun1.symbol.name == nme.apply && fun1.span.isSynthetic then
-          fun1 match
-          case Select(qualifier, _) =>
-            failedState.reporter.mapBufferedMessages:
-              case dia: Diagnostic.Error =>
-                dia.msg match
-                case msg: TypeMismatch =>
-                  msg.inTree match
-                  case Some(arg) if tree.args.exists(_.span == arg.span) =>
-                    val noteText =
-                      i"""The required type comes from a parameter of the automatically
-                          |inserted `apply` method of `${qualifier.tpe}`.""".stripMargin
-                    Diagnostic.Error(msg.appendExplanation("\n\n" + noteText), dia.pos)
-                  case _ => dia
-                case msg => dia
-              case dia => dia
-          case _ => ()
-        end if
-
-      def maybePatchBadParensForImplicit(failedState: TyperState)(using Context): Boolean =
-        def rewrite(): Unit =
-          val replace =
-            if isInsertedApply then ".apply" // x() -> x.apply
-            else "" // f() -> f where fun1.span.end == tree.span.point
-          rewrites.Rewrites.patch(tree.span.withStart(fun1.span.end), replace)
-        var retry = false
-        failedState.reporter.mapBufferedMessages:
-          case err: Diagnostic.Error =>
-            err.msg match
-            case msg: MissingImplicitParameterInEmptyArguments =>
-              val mv = MigrationVersion.ImplicitParamsWithoutUsing
-              if mv.needsPatch then
-                retry = true
-                rewrite()
-                Diagnostic.Warning(err.msg, err.pos)
-              else err
-            case _ => err
-          case dia => dia
-        retry
-
-      val result = fun1.tpe match {
-        case err: ErrorType => cpy.Apply(tree)(fun1, proto.typedArgs()).withType(err)
-        case TryDynamicCallType =>
-          val tree1 = fun1 match
-            case Select(_, nme.apply) => tree
-            case _ => untpd.Apply(fun1, tree.args)
-          typedDynamicApply(tree1, isInsertedApply, pt)
-        case _ =>
-          if (originalProto.isDropped) fun1
-          else if (fun1.symbol == defn.Compiletime_summonFrom)
-            // Special handling of `summonFrom { ... }`.
-            // We currently cannot use a macro for that since unlike other inline methods
-            // summonFrom needs to expand lazily. For instance, in
-            //
-            //    summonFrom {
-            //      case given A[t] =>
-            //        summonFrom:
-            //          case given `t` => ...
-            //    }
-            //
-            // the second `summonFrom` should expand only once the first `summonFrom` is
-            // evaluated and `t` is bound. But normal inline expansion does not behave that
-            // way: arguments to inline function are expanded before the function call.
-            // To make this work using regular inlining, we'd need a way to annotate
-            // an inline function that it should expand only if there are no enclosing
-            // applications of inline functions.
-            tree.args match {
-              case (arg @ Match(EmptyTree, cases)) :: Nil =>
-                cases.foreach {
-                  case CaseDef(Typed(_: untpd.Ident, _), _, _) => // OK
-                  case CaseDef(Bind(_, Typed(_: untpd.Ident, _)), _, _) => // OK
-                  case CaseDef(Ident(name), _, _) if name == nme.WILDCARD => // Ok
-                  case CaseDef(pat, _, _) =>
-                    report.error(UnexpectedPatternForSummonFrom(pat), pat.srcPos)
-                }
-                typed(untpd.InlineMatch(EmptyTree, cases).withSpan(tree.span), pt)
-              case _ =>
-                errorTree(tree, em"argument to summonFrom must be a pattern matching closure")
-            }
-          else
-            tryEither(simpleApply(fun1, proto)): (failedVal, failedState) =>
-              // a bug allowed empty parens to expand to implicit args, offer rewrite only on migration,
-              // then retry with using to emulate the bug since rewrites are ignored on error.
-              if proto.args.isEmpty && maybePatchBadParensForImplicit(failedState) then
-                tryWithUsing(fun1, proto).getOrElse:
-                  failedState.commit()
-                  failedVal
-              else
-                def fail =
-                  maybeAddInsertedApplyNote(failedState, fun1)
-                  failedState.commit()
-                  failedVal
-
-                // Try once with original prototype and once (if different) with tupled one.
-                // The reason we need to try both is that the decision whether to use tupled
-                // or not was already taken but might have to be revised when an implicit
-                // is inserted on the qualifier.
-                tryWithImplicitOnQualifier(fun1, originalProto).getOrElse:
-                  if (proto eq originalProto) fail
-                  else tryWithImplicitOnQualifier(fun1, proto).getOrElse(fail)
-      }
-
-      if result.tpe.isNothingType then
-        val nnInfo = result.notNullInfo
-        result.withNotNullInfo(nnInfo.terminatedInfo)
-      else result
-    }
+    def realApply(using Context): Tree =
+      val originalProto = realApplyProto(tree, pt)
+      realApplyRest(tree, pt, originalProto, typedExpr(tree.fun, originalProto))
 
     /** Convert expression like
      *
@@ -1561,15 +1359,231 @@ trait Applications extends Compatibility {
             typedAppliedSpliceWithTypes(tree, pt)
           case _: untpd.SplicePattern => typedAppliedSplice(tree, pt)
           case _ => realApply
-        app match {
-          case Apply(fn @ Select(left, _), right :: Nil) if fn.hasType =>
-            val op = fn.symbol
-            if (op == defn.Any_== || op == defn.Any_!=)
-              checkCanEqual(left, right.tpe.widen, app.span)
-          case _ =>
-        }
+        checkCanEqualApp(app)
         app
       }
+    typedApplyFinish(app1)
+  }
+
+  /** The prototype against which `realApply` types the function part of `tree` */
+  def realApplyProto(tree: untpd.Apply, pt: Type)(using Context): FunProto = {
+    val resultProto = tree.fun match
+      case Select(New(tpt), _) if pt.isInstanceOf[ValueType] =>
+        if tpt.isType && typedAheadType(tpt).tpe.typeSymbol.typeParams.isEmpty then
+          IgnoredProto(pt)
+        else
+          pt // Don't ignore expected value types of `new` expressions with parameterized type.
+              // If we have a `new C()` with expected type `C[T]` we want to use the type to
+              // instantiate `C` immediately. This is necessary since `C` might _also_ have using
+              // clauses that we want to instantiate with the best available type. See i15664.scala.
+      case _ => IgnoredProto(pt)
+        // Do ignore other expected result types, since there might be an implicit conversion
+        // on the result. We could drop this if we disallow unrestricted implicit conversions.
+    record("typedApply")
+    new FunProto(tree.args, resultProto)(this, tree.applyKind)(using argCtx(tree))
+  }
+
+  /** The rest of `realApply`, once the function part of `tree` has been typed to `fun1` */
+  def realApplyRest(tree: untpd.Apply, pt: Type, originalProto: FunProto, fun1: Tree)(using Context): Tree = {
+    // If adaptation created a tupled dual of `originalProto`, pick the right version
+    // (tupled or not) of originalProto to proceed.
+    val proto =
+      if originalProto.hasTupledDual && needsTupledDual(fun1.tpe, originalProto)
+      then originalProto.tupledDual
+      else originalProto
+
+    /* TODO (*) Get rid of this case. It is still syntax-based, therefore unreliable.
+     * It is necessary for things like `someDynamic[T](...)`, because in that case,
+     * somehow typedFunPart returns a tree that was typed as `TryDynamicCallType`,
+     * so clearly with the view that an apply insertion was necessary, but doesn't
+     * actually insert the apply!
+     * This is probably something wrong in apply insertion, but I (@sjrd) am out of
+     * my depth there.
+     * In the meantime, this makes tests pass.
+     */
+    def isInsertedApply = fun1 match
+      case Select(_, nme.apply) => fun1.span.isSynthetic
+      case TypeApply(sel @ Select(_, nme.apply), _) => sel.span.isSynthetic
+      case TypeApply(fun, _) => !fun.isInstanceOf[Select] // (*) see explanatory comment
+      case _ => false
+
+    /** Type application where arguments come from prototype, and no implicits are inserted */
+    def simpleApply(fun1: Tree, proto: FunProto)(using Context): Tree =
+      methPart(fun1).tpe match {
+        case funRef: TermRef if funRef.symbol.isSignaturePolymorphic =>
+          // synthesize a method type based on the types at the call site.
+          // one can imagine the original signature-polymorphic method as
+          // being infinitely overloaded, with each individual overload only
+          // being brought into existence as needed
+          val originalResultType = funRef.symbol.info.resultType.stripNull()
+          val resultType =
+            if !originalResultType.isRef(defn.ObjectClass) then originalResultType
+            else AvoidWildcardsMap()(proto.resultType.deepenProtoTrans) match
+              case SelectionProto(nme.asInstanceOf_, PolyProto(_, resTp), _, _, _) => resTp
+              case resTp if isFullyDefined(resTp, ForceDegree.all) => resTp
+              case _ => defn.ObjectType
+          val methType = MethodType(proto.typedArgs().map(_.tpe.widen), resultType)
+          val fun2 = Applications.retypeSignaturePolymorphicFn(fun1, methType)
+          simpleApply(fun2, proto)
+        case funRef: TermRef =>
+          if isAcceptedSpuriousApply(fun1, tree.args) then
+            fun1
+          else
+            val app = ApplyTo(tree, fun1, funRef, proto, pt)
+            convertNewGenericArray(
+              widenEnumCase(
+                postProcessByNameArgs(funRef, app).computeNullable(),
+                pt))
+        case _ =>
+          handleUnexpectedFunType(tree, fun1)
+      }
+
+    /** Try same application with an implicit inserted around the qualifier of the function
+     *  part. Return an optional value to indicate success.
+     */
+    def tryWithImplicitOnQualifier(fun1: Tree, proto: FunProto)(using Context): Option[Tree] =
+      if ctx.mode.is(Mode.SynthesizeExtMethodReceiver) || proto.hasErrorArg then
+        // Suppress insertion of apply or implicit conversion on extension method receiver
+        // or if argument is erroneous by itself.
+        None
+      else
+        tryInsertImplicitOnQualifier(fun1, proto, ctx.typerState.ownedVars) flatMap { fun2 =>
+          tryEither {
+            Some(simpleApply(fun2, proto)): Option[Tree]
+          } {
+            (_, _) => None
+          }
+        }
+
+    def tryWithUsing(fun1: Tree, proto: FunProto)(using Context): Option[Tree] =
+      tryEither(Option(simpleApply(fun1, proto.withApplyKind(ApplyKind.Using)))): (_, _) =>
+        None
+
+     /** If the applied function is an automatically inserted `apply`
+      *  method and one of its arguments has a type mismatch , append
+      *  a note to the error message that explains where the required
+      *  type comes from. See #19680 and associated test case.
+      */
+    def maybeAddInsertedApplyNote(failedState: TyperState, fun1: Tree)(using Context): Unit =
+      if fun1.symbol.name == nme.apply && fun1.span.isSynthetic then
+        fun1 match
+        case Select(qualifier, _) =>
+          failedState.reporter.mapBufferedMessages:
+            case dia: Diagnostic.Error =>
+              dia.msg match
+              case msg: TypeMismatch =>
+                msg.inTree match
+                case Some(arg) if tree.args.exists(_.span == arg.span) =>
+                  val noteText =
+                    i"""The required type comes from a parameter of the automatically
+                        |inserted `apply` method of `${qualifier.tpe}`.""".stripMargin
+                  Diagnostic.Error(msg.appendExplanation("\n\n" + noteText), dia.pos)
+                case _ => dia
+              case msg => dia
+            case dia => dia
+        case _ => ()
+      end if
+
+    def maybePatchBadParensForImplicit(failedState: TyperState)(using Context): Boolean =
+      def rewrite(): Unit =
+        val replace =
+          if isInsertedApply then ".apply" // x() -> x.apply
+          else "" // f() -> f where fun1.span.end == tree.span.point
+        rewrites.Rewrites.patch(tree.span.withStart(fun1.span.end), replace)
+      var retry = false
+      failedState.reporter.mapBufferedMessages:
+        case err: Diagnostic.Error =>
+          err.msg match
+          case msg: MissingImplicitParameterInEmptyArguments =>
+            val mv = MigrationVersion.ImplicitParamsWithoutUsing
+            if mv.needsPatch then
+              retry = true
+              rewrite()
+              Diagnostic.Warning(err.msg, err.pos)
+            else err
+          case _ => err
+        case dia => dia
+      retry
+
+    val result = fun1.tpe match {
+      case err: ErrorType => cpy.Apply(tree)(fun1, proto.typedArgs()).withType(err)
+      case TryDynamicCallType =>
+        val tree1 = fun1 match
+          case Select(_, nme.apply) => tree
+          case _ => untpd.Apply(fun1, tree.args)
+        typedDynamicApply(tree1, isInsertedApply, pt)
+      case _ =>
+        if (originalProto.isDropped) fun1
+        else if (fun1.symbol == defn.Compiletime_summonFrom)
+          // Special handling of `summonFrom { ... }`.
+          // We currently cannot use a macro for that since unlike other inline methods
+          // summonFrom needs to expand lazily. For instance, in
+          //
+          //    summonFrom {
+          //      case given A[t] =>
+          //        summonFrom:
+          //          case given `t` => ...
+          //    }
+          //
+          // the second `summonFrom` should expand only once the first `summonFrom` is
+          // evaluated and `t` is bound. But normal inline expansion does not behave that
+          // way: arguments to inline function are expanded before the function call.
+          // To make this work using regular inlining, we'd need a way to annotate
+          // an inline function that it should expand only if there are no enclosing
+          // applications of inline functions.
+          tree.args match {
+            case (arg @ Match(EmptyTree, cases)) :: Nil =>
+              cases.foreach {
+                case CaseDef(Typed(_: untpd.Ident, _), _, _) => // OK
+                case CaseDef(Bind(_, Typed(_: untpd.Ident, _)), _, _) => // OK
+                case CaseDef(Ident(name), _, _) if name == nme.WILDCARD => // Ok
+                case CaseDef(pat, _, _) =>
+                  report.error(UnexpectedPatternForSummonFrom(pat), pat.srcPos)
+              }
+              typed(untpd.InlineMatch(EmptyTree, cases).withSpan(tree.span), pt)
+            case _ =>
+              errorTree(tree, em"argument to summonFrom must be a pattern matching closure")
+          }
+        else
+          tryEither(simpleApply(fun1, proto)): (failedVal, failedState) =>
+            // a bug allowed empty parens to expand to implicit args, offer rewrite only on migration,
+            // then retry with using to emulate the bug since rewrites are ignored on error.
+            if proto.args.isEmpty && maybePatchBadParensForImplicit(failedState) then
+              tryWithUsing(fun1, proto).getOrElse:
+                failedState.commit()
+                failedVal
+            else
+              def fail =
+                maybeAddInsertedApplyNote(failedState, fun1)
+                failedState.commit()
+                failedVal
+
+              // Try once with original prototype and once (if different) with tupled one.
+              // The reason we need to try both is that the decision whether to use tupled
+              // or not was already taken but might have to be revised when an implicit
+              // is inserted on the qualifier.
+              tryWithImplicitOnQualifier(fun1, originalProto).getOrElse:
+                if (proto eq originalProto) fail
+                else tryWithImplicitOnQualifier(fun1, proto).getOrElse(fail)
+    }
+
+    if result.tpe.isNothingType then
+      val nnInfo = result.notNullInfo
+      result.withNotNullInfo(nnInfo.terminatedInfo)
+    else result
+  }
+
+  def checkCanEqualApp(app: Tree)(using Context): Unit =
+    app match {
+      case Apply(fn @ Select(left, _), right :: Nil) if fn.hasType =>
+        val op = fn.symbol
+        if (op == defn.Any_== || op == defn.Any_!=)
+          checkCanEqual(left, right.tpe.widen, app.span)
+      case _ =>
+    }
+
+  /** Post-processing shared by all paths of `typedApply` */
+  def typedApplyFinish(app1: Tree)(using Context): Tree = {
     val app2 = app1 match {
       case Apply(Block(stats, fn), args) =>
         tpd.cpy.Block(app1)(stats, tpd.cpy.Apply(app1)(fn, args))
