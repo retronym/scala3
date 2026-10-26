@@ -7,6 +7,7 @@ package dotty.tools
 package dotc
 package core
 
+import scala.annotation.internal.{benignRace, cache, confined, frozenAfter, interned, publishedBy}
 import Symbols.*
 import Types.{TermRef, NoPrefix}
 import Flags.*
@@ -78,15 +79,16 @@ object Scopes {
 
   class ScopeEntry private[Scopes] (val name: Name, _sym: Symbol, val owner: Scope) {
 
-    var sym: Symbol = _sym
+    // the scope's one writer changes an entry of a published scope (`MutableScope.writing`), or a write action
+    @frozenAfter("completion") var sym: Symbol = _sym
 
     /** the next entry in the hash bucket
      */
-    var tail: ScopeEntry | Null = null
+    @frozenAfter("completion") var tail: ScopeEntry | Null = null
 
     /** the preceding entry in this scope
      */
-    var prev: ScopeEntry | Null = null
+    @frozenAfter("completion") var prev: ScopeEntry | Null = null
 
     override def toString: String = sym.toString
   }
@@ -236,38 +238,43 @@ object Scopes {
 
     def this(nestingLevel: Int) = this(null, 0, nestingLevel)
 
-    private[dotc] var lastEntry: ScopeEntry | Null = initElems
+    // filled while hidden, then frozen: after its owner's completion publishes the scope (`published`) only its one
+    // writer (`writing`) or a write action changes it, building the new entries aside (`extendAside`)
+    @frozenAfter("completion") private[dotc] var lastEntry: ScopeEntry | Null = initElems
 
     /** The size of the scope */
-    private var _size = initSize
+    @frozenAfter("completion") private var _size = initSize
 
     override final def size: Int = _size
 
     /** the hash table
      */
-    private var hashTable: Array[ScopeEntry | Null] | Null = null
+    @frozenAfter("completion") private var hashTable: Array[ScopeEntry | Null] | Null = null
 
     /** a cache for all elements, to be used by symbol iterator.
      */
+    @cache @benignRace("an immutable list of the entries; a reader that misses builds the same list, and a change nulls it. After the scope is published a change runs only in a write action, with no reader to store an older list after it")
     private var elemsCache: List[Symbol] | Null = null
 
     /** The synthesizer to be used, or `null` if no synthesis is done on this scope */
-    private var synthesize: SymbolSynthesizer | Null = null
+    @publishedBy("init") private var synthesize: SymbolSynthesizer | Null = null
 
     /** The entries the synthesizer made, by the name looked up: kept beside the scope, never entered into it, so that
      *  what enumerates the scope (`toList`, member names, `-Wshadow`) does not depend on which synthetic names earlier
      *  code happened to mention, and one name has one symbol however many readers ask for it at once. Shared with
      *  the scope's clones.
      */
-    private var synthesized: java.util.concurrent.ConcurrentHashMap[Name, ScopeEntry] | Null = null
+    @interned private var synthesized: java.util.concurrent.ConcurrentHashMap[Name, ScopeEntry] | Null = null
 
     /** Which names the synthesizer can make: a lookup that misses consults the map of synthesized entries only for
      *  those, so a miss on any other name costs what it did before the map.
      */
-    private var synthesizable: (Name => Context ?=> Boolean) | Null = null
+    @publishedBy("init") private var synthesizable: (Name => Context ?=> Boolean) | Null = null
 
     /** Use specified synthesize for this scope, for the names `canSynthesize` accepts */
-    def useSynthesizer(canSynthesize: Name => Context ?=> Boolean)(s: SymbolSynthesizer): Unit =
+    def useSynthesizer(canSynthesize: Name => Context ?=> Boolean)(s: SymbolSynthesizer)(using Context): Unit =
+      // the package's own loader may have published the scope already, but no reader exists until `init` returns
+      assert(!ctx.definitions.initialized, "a synthesizer is installed while the base is set up, before any reader")
       synthesizable = canSynthesize
       synthesize = s
       synthesized = new java.util.concurrent.ConcurrentHashMap
@@ -295,13 +302,13 @@ object Scopes {
     }
 
     // the scope whose entries this one makes, when it is built aside to extend that scope (`extendAside`)
-    private var extending: MutableScope | Null = null
+    @confined private var extending: MutableScope | Null = null
 
     /** Set when the owner's completion publishes this scope (`SymDenotation.lockAndComplete0`). A change after
      *  that bumps the base's `structureEpoch`, and on a concurrent base must be made by a write action: a scope is
      *  filled while it is hidden and then frozen (`changed`).
      */
-    private[dotc] var published = false
+    @frozenAfter("completion") private[dotc] var published = false
 
     /** `op`'s changes to this scope as one: on a batch base the flat classes of a package are entered in place, one
      *  structural change however many classes they are, as `extendAside` publishes them on a concurrent base.
@@ -315,6 +322,7 @@ object Scopes {
         changed("extend")
 
     // the thread changing this scope as its one writer (`writing`)
+    @benignRace("written by the writer under the scope's claim; read only to compare with this thread, which only its own store can make equal")
     private var writer: Thread | Null = null
 
     /** `op` as this scope's one writer: on a concurrent base, holding a claim keyed by the scope, which is how a

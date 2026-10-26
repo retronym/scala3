@@ -1153,7 +1153,7 @@ object Contexts {
     /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
      *  may change a published scope (`MutableScope.changed`).
      */
-    @volatile private[dotc] var writeActionThread: Thread | Null = null
+    @scratch @publishedBy("volatile") @volatile private[dotc] var writeActionThread: Thread | Null = null
 
     // Symbols state
 
