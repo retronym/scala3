@@ -122,6 +122,22 @@ svg a text:hover { text-decoration: underline; }
 #guide pre.code .hljs-type, #guide pre.code .hljs-title { color: var(--c-ty); }
 #guide pre.code .hljs-number, #guide pre.code .hljs-literal { color: var(--c-num); }
 #guide pre.code .hljs-meta { color: var(--c-ann); }
+#guide figure.swim { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+#guide .swimwrap { overflow-x: auto; }
+#guide .swimwrap svg { display: block; min-width: 600px; width: 100%; height: auto; }
+#guide .swim svg text { font-family: -apple-system, system-ui, sans-serif; fill: var(--fg); }
+#guide .swim .sl { fill: var(--node-head); }
+#guide .swim .sn { font-size: 11px; font-weight: 600; fill: var(--muted); }
+#guide .swim .sb { fill: var(--node); stroke: var(--edge); stroke-width: 1; }
+#guide .swim .sb.hold { stroke: var(--hl); stroke-width: 1.6; }
+#guide .swim .sb.wait { fill: none; stroke-dasharray: 4 3; }
+#guide .swim .sb.write { stroke: var(--warn); stroke-width: 1.6; }
+#guide .swim .st { font-size: 11px; }
+#guide .swim .sm { stroke: var(--hl); stroke-width: 1.5; }
+#guide .swim .sml { font-size: 10px; fill: var(--hl); }
+#guide .swim .sa { stroke: var(--hl); stroke-width: 1.3; fill: none; }
+#guide .swim .sal { font-size: 10px; fill: var(--hl); }
+#guide .swim figcaption { font-size: 12px; color: var(--muted); }
 #guide pre.code { margin: 0; overflow-x: auto; background: var(--node-head); border-radius: 4px; padding: 8px 10px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; max-width: 100%; }
 #guide details.code summary { font-weight: 500; font-size: 11.5px; color: var(--hl); margin: 4px 0; }
 #guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
@@ -709,6 +725,85 @@ val parents =
   if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil   // not AnyValType
   else ObjectType :: Nil`,
 };
+// Swim lanes: one lane per thread, time left to right (0-10). bars: [lane, from, to, label, style] with style act (working),
+// hold (holding a lock or claim), wait (blocked), write (a write action); marks: [lane, t, label]; arrows: [lane, t, lane, t, label]
+const SWIM = {
+  'thread-confined': { lanes: ['reader 1', 'reader 2'], bars: [[0, 0, 9, 'prints a type with its own limiter', 'act'], [1, 1, 10, 'prints a type with its own limiter', 'act']],
+    note: 'Nothing is shared, so nothing is guarded: neither reader sees the other\'s depth.' },
+  'completion-lock': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0.5, 5.5, 'holds the claim: completes C', 'hold'], [1, 1.5, 5.5, 'forces C: waits', 'wait'], [0, 5.8, 9.5, 'uses C', 'act'], [1, 5.8, 9.5, 'uses the completed C', 'act']],
+    arrows: [[0, 5.5, 1, 5.8, 'released: C published']], note: 'One completer; the other reader waits and then sees only the finished fact.' },
+  'root-claim': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0.5, 6.5, 'claims the annotation, evaluates it', 'hold'], [1, 1.5, 6.5, 'asks for its tree: waits on the claim', 'wait'], [1, 6.8, 9.5, 'gets the tree', 'act']],
+    marks: [[0, 3.5, 're-entry meets the sentinel']], arrows: [[0, 6.5, 1, 6.8, 'tree']],
+    note: 'Re-entry on the claim\'s own thread is a cycle; another thread waits, and the wait is in the wait-for graph.' },
+  'frozen-after-completion': { lanes: ['completer', 'reader', 'write action'],
+    bars: [[0, 0, 3.5, 'fills the scope, hidden', 'hold'], [1, 3.8, 5.6, 'looks up, no lock', 'act'], [1, 5.6, 6.2, 'unwinds', 'wait'], [2, 6.2, 8.4, 'builds aside, publishes', 'write'], [1, 8.7, 10, 'sees the new table', 'act']],
+    marks: [[0, 3.5, 'published']], arrows: [[0, 3.5, 1, 3.8, ''], [2, 8.4, 1, 8.7, '']],
+    note: 'Filled while no reader can see it, frozen once its completion returns; after that only a write action changes it.' },
+  'writer-action': { lanes: ['reader 1', 'reader 2', 'writer'],
+    bars: [[0, 0, 4.4, 'typing', 'act'], [1, 0, 5, 'typing', 'act'], [2, 5.2, 7.8, 'runs alone', 'write'], [0, 8, 10, 'served again', 'act'], [1, 8, 10, 'served again', 'act'], [2, 3.8, 5.2, 'pending', 'wait']],
+    marks: [[0, 4.4, 'checkpoint'], [1, 5, 'checkpoint']],
+    note: 'A pending writer cancels readers at their next checkpoint; they retry once it is done.' },
+  Caching: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 4, 'computes the value', 'act'], [1, 5, 7, 'reads stamp, fence, value', 'act']],
+    marks: [[0, 4.3, 'value, fence, stamp']], arrows: [[0, 4.3, 1, 5, 'stamp = period']],
+    note: 'A reader that sees the new stamp sees the value stored before it; one that misses computes an equal value.' },
+  'benign-race': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 4, 'misses: builds the list', 'act'], [1, 0.6, 4.6, 'misses: builds the same list', 'act']],
+    marks: [[0, 4, 'stores'], [1, 4.6, 'stores, equal']],
+    note: 'Both store an equal value; losing either store only repeats work.' },
+  synchronized: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 1, 3.5, 'in the monitor: records a warning', 'hold'], [1, 2, 3.5, 'waits', 'wait'], [1, 3.5, 5.5, 'in the monitor', 'hold']],
+    note: 'Short critical sections; the evidence (Monitor) is needed to reach the collections at all.' },
+  concurrent: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 2.5, 'makes AppliedType(List, Int)', 'act'], [1, 0.4, 2.9, 'makes AppliedType(List, Int)', 'act'], [0, 2.9, 9, 'uses the interned type', 'act'], [1, 3.3, 9, 'uses the same type', 'act']],
+    marks: [[0, 2.5, 'interned'], [1, 2.9, 'finds it']],
+    note: 'A concurrent interner: one type per structure, whoever gets there first.' },
+  pull: { lanes: ['reader', 'writer'],
+    bars: [[0, 0, 2.5, 'member names cached at epoch 5', 'act'], [1, 3.5, 5.5, 'changes a published scope: epoch 6', 'write'], [0, 6.5, 9.5, 'epoch 5 ≠ 6: recomputes', 'act']],
+    arrows: [[1, 5.5, 0, 6.5, 'epoch']],
+    note: 'Nobody invalidates the cache; the reader compares stamps when it reads.' },
+  aside: { lanes: ['scope\'s writer', 'reader'],
+    bars: [[0, 0, 5, 'fills a fresh table aside', 'hold'], [1, 0, 5.5, 'looks up in the old table', 'act'], [1, 5.8, 10, 'looks up in the new table', 'act']],
+    marks: [[0, 5.2, 'release fence, publish']], arrows: [[0, 5.2, 1, 5.8, 'acquire']],
+    note: 'A reader sees the old table whole or the new one whole, never one being filled.' },
+  memo: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 3, 'Function23: synthesizes', 'act'], [1, 0.4, 3.4, 'Function23: synthesizes', 'act'], [0, 3.6, 9, 'the symbol', 'act'], [1, 3.6, 9, 'the same symbol', 'act']],
+    marks: [[0, 3, 'putIfAbsent wins'], [1, 3.4, 'loses: takes the winner\'s']],
+    note: 'One symbol per name, and the scope\'s enumeration never changes.' },
+  local: { lanes: ['reader', 'other reader'],
+    bars: [[0, 0, 1, 'reads the field once', 'act'], [0, 1, 6, 'computes from the local, returns it', 'act'], [1, 2, 3, 'replaces the field', 'act']],
+    note: 'The other reader\'s store cannot change an answer already read into a local.' },
+  stamp: { lanes: ['request', 'writer'],
+    bars: [[0, 0, 2.5, 'runUpTo: stamp 7', 'act'], [0, 2.5, 5.5, 'provider reads the tree, no lock', 'act'], [1, 3.5, 4.8, 'write: count 8', 'write'], [0, 6.2, 9.5, 'again, on a fresh reader', 'act']],
+    marks: [[0, 5.8, '7 ≠ 8']],
+    note: 'A result read after a write is not handed over; the request is served again, at most three times.' },
+};
+
+function swim(d) {
+  const L = 104, W = 560, lh = 40, bh = 20, top = 8, x = t => L + t * W / 10, y = i => top + i * lh;
+  const h = top + d.lanes.length * lh + 8;
+  const cls = { act: 'sb', hold: 'sb hold', wait: 'sb wait', write: 'sb write' };
+  let s = `<svg viewBox="0 0 ${L + W + 16} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+  d.lanes.forEach((ln, i) => {
+    s += `<rect class="sl" x="0" y="${y(i)}" width="${L + W + 16}" height="${lh - 4}" rx="3"/><text class="sn" x="8" y="${y(i) + lh / 2 + 2}">${esc(ln)}</text>`;
+  });
+  for (const [i, a, b, label, st] of d.bars || []) {
+    s += `<rect class="${cls[st] || 'sb'}" x="${x(a)}" y="${y(i) + (lh - 4 - bh) / 2}" width="${Math.max(4, x(b) - x(a))}" height="${bh}" rx="3"/>`;
+    s += `<text class="st" x="${x(a) + 5}" y="${y(i) + (lh - 4) / 2 + 4}">${esc(label)}</text>`;
+  }
+  for (const [i, t, label] of d.marks || []) {
+    s += `<line class="sm" x1="${x(t)}" x2="${x(t)}" y1="${y(i) + 2}" y2="${y(i) + lh - 6}"/><text class="sml" x="${x(t) + 3}" y="${y(i) + 9}">${esc(label)}</text>`;
+  }
+  for (const [i, t, j, u, label] of d.arrows || []) {
+    const y1 = y(i) + (lh - 4) / 2 + (j > i ? bh / 2 : -bh / 2), y2 = y(j) + (lh - 4) / 2 + (j > i ? -bh / 2 : bh / 2);
+    s += `<path class="sa" d="M${x(t)},${y1} L${x(u)},${y2}" marker-end="url(#swa)"/>` + (label ? `<text class="sal" x="${(x(t) + x(u)) / 2 + 4}" y="${(y1 + y2) / 2 + 3}">${esc(label)}</text>` : '');
+  }
+  s += `<defs><marker id="swa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--hl)"/></marker></defs></svg>`;
+  return `<figure class="swim"><div class="swimwrap">${s}</div><figcaption>${esc(d.note || '')}</figcaption></figure>`;
+}
+
 // what the design stands on: explained in interactive-session.md, only motivated here
 const PREREQS = [
   { name: 'Cancellation', where: '`Reader.checkCancelledTyping`, `CancelledCompilation`',
@@ -829,6 +924,7 @@ function renderGuide() {
       ${x.use ? `<p><b>For:</b> ${md(x.use)}</p>` : ''}${x.where ? `<p><b>Where:</b> ${md(x.where)}</p>` : ''}
       ${x.cures.length ? `<div class="cures"><span class="eyebrow">answers</span>${x.cures.map(h => tag('h', hById.get(h))).join('')}</div>` : ''}
       ${kind === 's' ? `<p class="found">${n} field${n === 1 ? '' : 's'}${n ? ` <button data-prot="${esc(id)}">show on map</button>` : ''}</p>` : ''}
+      ${SWIM[id] ? swim(SWIM[id]) : ''}
       ${CODE[id] ? `<pre class="code">${scala(CODE[id])}</pre>` : '<p class="found">No excerpt yet.</p>'}`;
     wire(panel);
   }
