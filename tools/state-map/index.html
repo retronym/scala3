@@ -94,6 +94,8 @@ svg a text:hover { text-decoration: underline; }
 #guide .tag:hover, #guide .tag:focus-visible { border-color: var(--hl); outline: none; }
 #guide .card.flash { border-color: var(--hl); box-shadow: 0 0 0 2px var(--hl); }
 #guide .tablewrap { overflow-x: auto; }
+#guide table.prereq td { min-width: 180px; line-height: 1.5; }
+#guide table.prereq td:first-child { min-width: 160px; }
 #guide table { font-size: 12px; }
 #guide td, #guide th { text-align: left; vertical-align: top; padding: 4px 6px; }
 #guide td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -707,6 +709,18 @@ val parents =
   if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil   // not AnyValType
   else ObjectType :: Nil`,
 };
+// what the design stands on: explained in interactive-session.md, only motivated here
+const PREREQS = [
+  { name: 'Cancellation', where: '`Reader.checkCancelledTyping`, `CancelledCompilation`',
+    what: 'The typer polls a checkpoint and unwinds with `CancelledCompilation`. A completion that unwinds leaves its fact unpublished, and the session survives it.',
+    why: 'A write action needs readers to stop at a known point. A pending writer is one more reason to cancel, and a reader that unwound is served again after it. Without it a writer waits for the slowest request, or stops a reader halfway through a fact.' },
+  { name: 'Targeted typing', where: '`InteractiveDriver.runUpTo`, `Reader.typingTarget`',
+    what: 'A request types the statements on the path to its target and skips the rest.',
+    why: 'Each reader\'s work is small and local, so readers of one file overlap in what they force (completions, caches) rather than in what they type, and a request a writer cancelled is cheap to serve again.' },
+  { name: 'Resumable statements', where: '`Reader.skippedStats`, the session\'s splice',
+    what: 'A skipped statement stays in the session, and a later request types it in place.',
+    why: 'Requests share one session\'s run instead of each starting a fresh run, which is a write. Several readers resume into different statements at once; only a change to the source of truth needs a write action.' },
+];
 const STRATEGIES = [
   { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
   { id: 'completion-lock', name: 'Completion lock, with evidence', how: 'The base\'s completion lock, or the root\'s claim with parallel readers (`Sharing.exclusive`). The state behind it is reached only with a `Sharing.Holds[K]` in scope, which only `exclusive`, `claimed` and `completing` hand out, so an access outside the lock does not compile.', use: 'A lazy fact with a black hole: a completion, an inherited cache\'s computation, a scope\'s one writer.', cures: ['sentinel', 'peek', 'cycle'], example: 'core.Scopes.MutableScope#writer' },
@@ -765,6 +779,11 @@ function renderGuide() {
     <h1>Mutable state in the Scala 3 compiler</h1>
     <p class="lede">The presentation compiler serves several requests at once over one symbol table. Each mutable field of the compiler is either private to one request, protected by one of a few disciplines, or a hazard. This page maps all ${byOwner.size} classes with mutable fields and ${M.fields.length} fields: the guide below explains the hazards and the disciplines, and the map shows where each field stands.</p>
     ${PICTURE}
+    <h2>Prerequisites</h2>
+    <p>The design rests on three features the presentation compiler already had for one reader. They are described in <code>docs/_docs/internals/interactive-session.md</code>; here is only why each one matters.</p>
+    <div class="tablewrap"><table class="prereq"><tr><th>prerequisite</th><th>what it is</th><th>why the design needs it</th></tr>
+    ${PREREQS.map(r => `<tr><td><b>${esc(r.name)}</b><br><span class="found">${md(r.where)}</span></td><td>${md(r.what)}</td><td>${md(r.why)}</td></tr>`).join('')}
+    </table></div>
     <h1>How the map is made</h1>
     <p>The map is extracted from the compiled compiler, not written by hand. <code>tools/state-map/StateMap.scala</code> is a TASTy inspector over the non-bootstrapped compiler's classes; <code>run.sh</code> compiles and extracts, <code>check-cluster.sh &lt;files&gt;</code> reports a few files' fields with their unprotected accesses. This extraction: ${M.fields.length} fields in ${byOwner.size} classes at <code>${esc(M.header.tip.slice(0, 10))}</code>.</p>
     <div class="pipeline">
