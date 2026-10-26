@@ -3249,7 +3249,7 @@ object Types extends TypeUtils {
           throw CyclicReference(NoDenotation)
       else
         // with parallel readers the computation has an owner, as a completion does
-        Sharing.claimed[this.type, Unit](this, CompletionLock.lazyRef, this) {
+        Sharing.claimed(this, CompletionLock.lazyRef, this) {
           if !computed then compute()
         }
       myRef.nn
@@ -3275,7 +3275,7 @@ object Types extends TypeUtils {
       // under this reference's claim: usually re-entered from its own computation (`refFn` completes an opaque
       // alias, whose completer updates it); with parallel readers, another reader that completed the alias first
       // has set the same value
-      Sharing.claimed[this.type, Unit](this, CompletionLock.lazyRef, this) {
+      Sharing.claimed(this, CompletionLock.lazyRef, this) {
         if myRef == null || !ctx.base.parallel then
           assert(myRef == null || ctx.reporter.errorsReported)
           set(tp, done = true)

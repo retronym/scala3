@@ -280,7 +280,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      Sharing.serialised[base.type, SourceFile](base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
+      Sharing.serialised(base)(base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
     }
 
     /** SourceFile with given path, memoized */
@@ -290,11 +290,11 @@ object Contexts {
 
     /** AbstractFile with given path, memoized */
     def getFile(path: String): Option[AbstractFile] =
-      Sharing.serialised[base.type, Option[AbstractFile]](base)(base.files.get(path))(using this).orElse(
+      Sharing.serialised(base)(base.files.get(path))(using this).orElse(
         try
           val file = new PlainFile(Path(path))
           // readers that miss at once store equal files
-          Sharing.serialised[base.type, Unit](base)(base.files(path) = file)(using this)
+          Sharing.serialised(base)(base.files(path) = file)(using this)
           Some(file)
         catch
           case ex: InvalidPathException =>
@@ -1277,7 +1277,7 @@ object Contexts {
       emptyTypeBounds = null
       emptyWildcardBounds = null
       errorTypeMsg.clear()
-      Sharing.locking[this.type, Unit](this) {
+      Sharing.locking(this) {
         sources.clear()
         files.clear()
       }

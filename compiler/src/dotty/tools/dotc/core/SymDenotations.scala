@@ -3567,7 +3567,7 @@ object SymDenotations {
      */
     protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
       // the cache is its own root: its black hole `locked` has one owner
-      Sharing.exclusive[this.type, T](this, CompletionLock.inheritedCache, clsd)(op)
+      Sharing.exclusive(this, CompletionLock.inheritedCache, clsd)(op)
 
     def isValidAt(phase: Phase)(using Context) =
       epochCurrent && checkedPeriod == ctx.period ||

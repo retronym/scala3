@@ -241,7 +241,7 @@ object Annotations {
     override def symbol(using parentCtx: Context): Symbol =
       val sym = mySym
       if sym.isInstanceOf[Symbol] && sym.asInstanceOf[Symbol].defRunId == parentCtx.runId then sym.asInstanceOf[Symbol]
-      else Sharing.claimed[this.type, Symbol](this, CompletionLock.lazyAnnotation, this)(symbol0)
+      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(symbol0)
 
     private def symbol0(using parentCtx: Context, holds: Sharing.Holds[this.type]): Symbol =
       assert(mySym != null)
@@ -266,7 +266,7 @@ object Annotations {
     def tree(using Context): Tree =
       val t = myTree
       if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
-      else Sharing.claimed[this.type, Tree](this, CompletionLock.lazyAnnotation, this)(tree0)
+      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(tree0)
 
     private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)
@@ -314,7 +314,7 @@ object Annotations {
     def tree(using Context): Tree =
       val t = myTree
       if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
-      else Sharing.claimed[this.type, Tree](this, CompletionLock.lazyAnnotation, this)(tree0)
+      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(tree0)
 
     private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)

@@ -848,7 +848,7 @@ object Denotations {
           // flock's validity, one writer at a time; with parallel readers
           // one root for every bring-forward, so that cycles with completions
           // are detected
-          Sharing.exclusive[CompletionLock.bringForward.type, SingleDenotation](CompletionLock.bringForward,
+          Sharing.exclusive(CompletionLock.bringForward,
             CompletionLock.bringForward, symbol)(initial.bringForward().current)
         else this
 

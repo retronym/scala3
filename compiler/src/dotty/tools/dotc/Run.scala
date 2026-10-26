@@ -90,7 +90,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   // with concurrent readers only, as the batch compiler is one thread). Nothing issues a message while holding it.
   object suppressions:
     private type Held = Sharing.Monitor[suppressions.type]
-    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised[suppressions.type, T](this)(op)
+    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised(this)(op)
 
     private def bySource(using Held) = mySuppressions
     private def complete(using Held) = mySuppressionsComplete
@@ -225,7 +225,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   object suspension:
     private type Held = Sharing.Monitor[suspension.type]
-    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised[suspension.type, T](this)(op)
+    private inline def held[T](inline op: Held ?=> T)(using Context): T = Sharing.serialised(this)(op)
 
     private def units(using Held) = mySuspendedUnits
     private def hints(using Held) = mySuspendedHints
@@ -298,10 +298,10 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
     /** Is `file` newly entered? */
     def enter(file: AbstractFile)(using Context): Boolean =
-      Sharing.serialised[lateFiles.type, Boolean](this)(held.add(file))
+      Sharing.serialised(this)(held.add(file))
 
     def size(using Context): Int =
-      Sharing.serialised[lateFiles.type, Int](this)(held.size)
+      Sharing.serialised(this)(held.size)
 
   /** A cache for static references to packages and classes */
   @cache val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)

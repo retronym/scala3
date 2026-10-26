@@ -46,10 +46,10 @@ object Comments {
     private def lookupDocstring(sym: Symbol)(using Sharing.Monitor[this.type]): Option[Comment] = _docstrings.get(sym)
     private def putDocstring(sym: Symbol, doc: Comment)(using Sharing.Monitor[this.type]): Unit = _docstrings.update(sym, doc)
 
-    def docstring(sym: Symbol): Option[Comment] = Sharing.locking[this.type, Option[Comment]](this)(lookupDocstring(sym))
+    def docstring(sym: Symbol): Option[Comment] = Sharing.locking(this)(lookupDocstring(sym))
 
     def addDocstring(sym: Symbol, doc: Option[Comment]): Unit =
-      doc.foreach(d => Sharing.locking[this.type, Unit](this)(putDocstring(sym, d)))
+      doc.foreach(d => Sharing.locking(this)(putDocstring(sym, d)))
   }
 
   /**
@@ -218,13 +218,13 @@ object Comments {
      *  the doc comment of the overridden version is copied instead.
      */
     def cookedDocComment(sym: Symbol, docStr: String = "")(using Context): String =
-      val known = Sharing.locking[this.type, String | Null](this)(lookupCooked(sym))
+      val known = Sharing.locking(this)(lookupCooked(sym))
       if known != null then known
       else
         // not `getOrElseUpdate`: cooking a comment cooks the ones it inherits from, which adds to the map
         // underneath it, and `getOrElseUpdate` stores at the slot it found before the computation
         val cooked = cook(sym, docStr)
-        Sharing.locking[this.type, Unit](this)(putCooked(sym, cooked))
+        Sharing.locking(this)(putCooked(sym, cooked))
         cooked
 
     private def cook(sym: Symbol, docStr: String)(using Context): String = {
@@ -473,7 +473,7 @@ object Comments {
     private def putDefs(sym: Symbol, vars: Map[String, String])(using Sharing.Monitor[this.type]): Unit = defs(sym) = vars
     private val Trim = "(?s)^[\\s&&[^\n\r]]*(.*?)\\s*$".r
     private def getDefs(symbol: Symbol)(using Context): Map[String, String] =
-      Sharing.locking[this.type, Option[Map[String, String]]](this)(lookupDefs(symbol)) match
+      Sharing.locking(this)(lookupDefs(symbol)) match
       case Some(m) => m
       case None =>
         val raw = ctx.docCtx.flatMap(_.docstring(symbol).map(_.raw)).getOrElse("")
@@ -482,7 +482,7 @@ object Comments {
           val (key, Trim(value: String)) = str.splitAt(skipVariable(str, start)): @unchecked
           variableName(key.drop(start)) -> value.replaceAll("\\s+\\*+$", "")
         ).toMap
-        Sharing.locking[this.type, Unit](this)(putDefs(symbol, vars))
+        Sharing.locking(this)(putDefs(symbol, vars))
         vars
 
     /** Lookup definition of variable.

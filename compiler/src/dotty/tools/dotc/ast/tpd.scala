@@ -1400,7 +1400,7 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
     /** Get trees defined by this provider. Cache them if -Yretain-trees is set. */
     def rootTrees(using Context): List[Tree] =
       if (ctx.settings.YretainTrees.value) {
-        Sharing.exclusive(rootTreesClaim, CompletionLock.lazyTastyRead, this) {
+        Sharing.exclusiveAt(rootTreesClaim, CompletionLock.lazyTastyRead, this) {
           initialize(myTrees, myTrees = _, computeRootTrees)
         }
       }

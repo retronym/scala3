@@ -332,7 +332,7 @@ object Scopes {
      */
     private[core] final def writing[T](op: => T)(using Context): T =
       if !ctx.base.concurrent then op
-      else Sharing.exclusive[this.type, T](this, CompletionLock.scopeWrite, this):
+      else Sharing.exclusive(this, CompletionLock.scopeWrite, this):
         val was = writer
         writer = Thread.currentThread
         try op finally writer = was

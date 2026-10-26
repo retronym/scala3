@@ -3,6 +3,7 @@ package dotc
 package core
 
 import scala.collection.mutable
+import scala.annotation.implicitNotFound
 
 import Contexts.*
 
@@ -52,6 +53,7 @@ object Sharing:
    *  `claimed`, `unguarded` and a completion (`completing`) make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
    *  instance serves every key: a holder allocates nothing.
    */
+  @implicitNotFound("this code must run as the one writer of ${K}: inside Sharing.exclusive or Sharing.claimed on it, or a completion of it")
   sealed abstract class Holds[K]
   private object held extends Holds[Any]
 
@@ -70,6 +72,7 @@ object Sharing:
    *  it runs alone), as `Holds` is of a claim: state a monitor guards is reached only through methods that take one.
    *  Made by `serialised`, `locking` and `unlocked`; a claim's evidence is not a monitor's, nor the reverse.
    */
+  @implicitNotFound("this code must hold the monitor of ${K}: inside Sharing.serialised or Sharing.locking on it")
   sealed abstract class Monitor[K]
   private object monitorHeld extends Monitor[Any]
 
@@ -80,15 +83,21 @@ object Sharing:
    *  holding the claim on `key` when they are parallel, where a wait that would close a wait-for cycle backs off
    *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
    *  `cycleSubject` are evaluated only on a concurrent base. For bring-forwards, lazy TASTy reads, inherited caches. */
-  inline def exclusive[K <: AnyRef, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
+  inline def exclusive[K <: AnyRef & Singleton, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
       inline op: Holds[K] ?=> T)(using Context): T =
     given Holds[K] = held.asInstanceOf[Holds[K]]
+    if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
+
+  /** `exclusive` on a key computed per call (a file's root, found from its symbols), which no state is reached by:
+   *  it hands out no evidence, and `key` is evaluated only on a concurrent base, as in `exclusive`. */
+  inline def exclusiveAt[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(
+      using Context): T =
     if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
 
   /** `op` holding the claim on `key` when readers are parallel, as is otherwise (serialised readers need no
    *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
    *  another reader must wait for rather than take for a cycle. */
-  inline def claimed[K <: AnyRef, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
+  inline def claimed[K <: AnyRef & Singleton, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
       inline op: Holds[K] ?=> T)(using Context): T =
     given Holds[K] = held.asInstanceOf[Holds[K]]
     if ctx.base.parallel then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
@@ -100,12 +109,12 @@ object Sharing:
     if c0.base.parallel then interactive.SharingImpl.privately(c0, c => op(using c)) else op(using c0)
 
   /** `op` holding `lock`'s monitor when readers are concurrent, as is otherwise. */
-  inline def serialised[K <: AnyRef, T](lock: K)(inline op: Monitor[K] ?=> T)(using Context): T =
+  inline def serialised[K <: AnyRef & Singleton, T](lock: K)(inline op: Monitor[K] ?=> T)(using Context): T =
     given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
     if ctx.base.concurrent then lock.synchronized(op) else op
 
   /** `op` holding `lock`'s monitor on every base, with the evidence of it. */
-  inline def locking[K <: AnyRef, T](lock: K)(inline op: Monitor[K] ?=> T): T =
+  inline def locking[K <: AnyRef & Singleton, T](lock: K)(inline op: Monitor[K] ?=> T): T =
     given Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
     lock.synchronized(op)
 
