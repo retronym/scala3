@@ -1146,7 +1146,9 @@ object Contexts {
      *  completion published it (`MutableScope.published`). A cache computed from scopes can record it, and is
      *  current while it has not moved.
      */
-    @volatile private[dotc] var structureEpoch: Int = 0
+    private val myStructureEpoch = java.util.concurrent.atomic.AtomicInteger()
+    private[dotc] def structureEpoch: Int = myStructureEpoch.get
+    private[dotc] def bumpStructureEpoch(): Unit = myStructureEpoch.incrementAndGet()
 
     /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
      *  may change a published scope (`MutableScope.changed`).

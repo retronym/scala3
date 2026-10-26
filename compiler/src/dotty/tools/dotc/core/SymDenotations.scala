@@ -3480,7 +3480,7 @@ object SymDenotations {
     implicit val None: MemberNames = new InvalidCache with MemberNames {
       def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = ???
     }
-    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base.concurrent)
+    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base)
   }
 
   /** A cache for baseclasses, as a sequence in linearization order and as a set that
@@ -3497,16 +3497,19 @@ object SymDenotations {
       def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context) = ???
       def signalProvisional() = ()
     }
-    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base.concurrent)
+    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base)
   }
 
-  private abstract class InheritedCacheImpl(val createdAt: Period, concurrent: Boolean) extends InheritedCache { self =>
+  private abstract class InheritedCacheImpl(val createdAt: Period, base: ContextBase) extends InheritedCache { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
-    // This cache's monitor, on a concurrent base (a batch base runs alone): what `dependent`, and the subclasses'
-    // stores and invalidations, are reached under, with the evidence of it.
-    protected inline final def monitored[T](inline op: Sharing.Monitor[this.type] ?=> T): T =
-      if concurrent then Sharing.locking(this)(op) else op(using Sharing.unlocked("a batch base runs on one thread"))
+    // A batch base pushes: an invalidation walks the caches computed from this one (`dependent`). A concurrent base
+    // pulls: a cache records the base's structure epoch when it is made, and is valid while the epoch has not moved.
+    // A change to a published scope moves it (`MutableScope.changed`), and so does an invalidation of a class's own
+    // cache, the one that a batch base would push to its dependents.
+    protected final val concurrent: Boolean = base.concurrent
+    private val epoch: Int = if concurrent then base.structureEpoch else 0
+    protected final def epochCurrent: Boolean = !concurrent || epoch == base.structureEpoch
 
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
 
@@ -3514,18 +3517,20 @@ object SymDenotations {
     @benignRace("any reader that finds the cache valid stores the period it checked in; a stale one only repeats the check")
     private var checkedPeriod: Period = Nowhere
 
-    protected def invalidateDependents()(using Sharing.Monitor[this.type]) = {
-      if (dependent != null) {
-        val it = dependent.nn.keySet.iterator()
-        while (it.hasNext()) it.next().invalidate()
-      }
-      dependent = null
-    }
+    /** The invalidation of this cache reaches the caches computed from it. */
+    protected def invalidateDependents(): Unit =
+      if concurrent then base.bumpStructureEpoch()
+      else
+        if (dependent != null) {
+          val it = dependent.nn.keySet.iterator()
+          while (it.hasNext()) it.next().invalidate()
+        }
+        dependent = null
 
-    protected def addDependent(dep: InheritedCache): Unit = monitored {
-      if (dependent == null) dependent = new WeakHashMap
-      dependent.nn.put(dep, ())
-    }
+    protected def addDependent(dep: InheritedCache): Unit =
+      if !concurrent then
+        if (dependent == null) dependent = new WeakHashMap
+        dependent.nn.put(dep, ())
 
     // The computation's black hole (the thread inside it) and its provisional mark, written only by the holder of
     // this cache's claim: reached only with its evidence, a `Sharing.Holds` for this cache, which only `computing`
@@ -3551,7 +3556,8 @@ object SymDenotations {
       Sharing.exclusive[this.type, T](this, CompletionLock.inheritedCache, clsd)(op)
 
     def isValidAt(phase: Phase)(using Context) =
-      checkedPeriod == ctx.period ||
+      epochCurrent && checkedPeriod == ctx.period ||
+        epochCurrent &&
         createdAt.runId == ctx.runId &&
         createdAt.lastPhaseId < unfusedPhases.length &&
         sameGroup(unfusedPhases(createdAt.lastPhaseId), phase) &&
@@ -3564,14 +3570,12 @@ object SymDenotations {
     def invalidate(): Unit = ()
   }
 
-  private class MemberNamesImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with MemberNames {
-    // written under this cache's monitor, read once without it: the map is immutable, and a stale one is a miss or a
-    // cache another reader has just invalidated (I46, I92)
+  private class MemberNamesImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with MemberNames {
+    // read once per use: the map is immutable, and a stale one is a miss or a cache another reader has just
+    // invalidated (I46, I92)
+    @benignRace("a lost store is a lost memo entry; a store after an invalidation is in a cache whose epoch has moved")
     private var cache: SimpleIdentityMap[NameFilter, Set[Name]] | Null = SimpleIdentityMap.empty
-    private def cacheHeld(using Sharing.Monitor[this.type]): SimpleIdentityMap[NameFilter, Set[Name]] | Null = cache
-    private def setCache(c: SimpleIdentityMap[NameFilter, Set[Name]] | Null)(using Sharing.Monitor[this.type]): Unit = cache = c
-    private def cacheNow: SimpleIdentityMap[NameFilter, Set[Name]] | Null =
-      cacheHeld(using Sharing.unlocked("read once; the map is immutable and a stale one only misses"))
+    private def cacheNow: SimpleIdentityMap[NameFilter, Set[Name]] | Null = cache
 
     final def isValid(using Context): Boolean =
       cacheNow != null && isValidAt(ctx.phase)
@@ -3581,22 +3585,19 @@ object SymDenotations {
      *  proceed as usual. However, all cache entries should be cleared.
      */
     // Re-entry from this thread's own computation clears; another reader's computation in progress is no reason to
-    // keep the cache, which a plain `locked` could not tell apart. With several readers `invalidate` and the
-    // computation's store take this cache's monitor, so that the store does not undo an invalidation between its
-    // check and its write (lock order: an invalidation goes from a class's cache to its subclasses').
-    def invalidate(): Unit = monitored {
-      if (cacheHeld != null)
-        if (isLockedHere) setCache(SimpleIdentityMap.empty)
+    // keep the cache, which a plain `locked` could not tell apart. With several readers a store may follow an
+    // invalidation it raced with, but the invalidation has moved the epoch, so the cache is no longer valid.
+    def invalidate(): Unit =
+      if (cache != null)
+        if (isLockedHere) cache = SimpleIdentityMap.empty
         else {
-          setCache(null)
+          cache = null
           invalidateDependents()
         }
-    }
 
-    private def store(keepOnly: NameFilter, computed: Set[Name]): Unit = monitored {
-      val c2 = cacheHeld
-      if c2 != null then setCache(c2.updated(keepOnly, computed)) // invalidated meanwhile: not stored
-    }
+    private def store(keepOnly: NameFilter, computed: Set[Name]): Unit =
+      val c2 = cache
+      if c2 != null then cache = c2.updated(keepOnly, computed) // invalidated meanwhile: not stored
 
     def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = {
       // with several readers another one may invalidate this cache after the caller found it valid (I92): the
@@ -3626,34 +3627,30 @@ object SymDenotations {
     def sameGroup(p1: Phase, p2: Phase) = p1.sameMembersStartId == p2.sameMembersStartId
   }
 
-  private class BaseDataImpl(createdAt: Period, concurrent: Boolean) extends InheritedCacheImpl(createdAt, concurrent) with BaseData {
-    // written under this cache's monitor, read once without it: a tuple of immutable values, and a stale read is a
-    // cache another reader has just invalidated (I92)
+  private class BaseDataImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with BaseData {
+    // read once per use: a tuple of immutable values, and a stale read is a cache another reader has just
+    // invalidated (I92)
+    @benignRace("a store after an invalidation is in a cache whose epoch has moved")
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
+    @benignRace("a stale `true` is a cache another reader has just invalidated, and its epoch has moved")
     private var valid = true
 
-    private def cacheHeld(using Sharing.Monitor[this.type]): (List[ClassSymbol], BaseClassSet) | Null = cache
-    private def validHeld(using Sharing.Monitor[this.type]): Boolean = valid
-    private def invalidated()(using Sharing.Monitor[this.type]): Unit = { cache = null; valid = false }
-    private def store(computed: (List[ClassSymbol], BaseClassSet)): Unit = monitored { if !concurrent || validHeld then cache = computed } // a batch base stores unconditionally, as before
-    private def cacheNow: (List[ClassSymbol], BaseClassSet) | Null =
-      cacheHeld(using Sharing.unlocked("read once; a stale cache is one another reader has just invalidated"))
-    private def validNow: Boolean =
-      validHeld(using Sharing.unlocked("read once; a stale answer is a cache another reader has just invalidated"))
+    private def store(computed: (List[ClassSymbol], BaseClassSet)): Unit = if !concurrent || valid then cache = computed // a batch base stores unconditionally, as before
+    private def cacheNow: (List[ClassSymbol], BaseClassSet) | Null = cache
 
     final def isValid(using Context): Boolean =
-      validNow && createdAt.runId == ctx.runId
+      valid && epochCurrent && createdAt.runId == ctx.runId
         // Note: We rely on the fact that whenever base types of classes change,
         // the affected classes will get new denotations with new basedata caches.
         // So basedata caches can become invalid only if the run changes.
 
     // as `MemberNamesImpl.invalidate`: only this thread's computation in progress keeps the cache
-    def invalidate(): Unit = monitored {
-      if (validHeld && !isLockedHere) {
-        invalidated()
+    def invalidate(): Unit =
+      if (valid && !isLockedHere) {
+        cache = null
+        valid = false
         invalidateDependents()
       }
-    }
 
     def signalProvisional() =
       // the dependent cache's computation is on this thread's stack, so its claim is held further up; threading the

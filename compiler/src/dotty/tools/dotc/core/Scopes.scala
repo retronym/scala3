@@ -333,7 +333,7 @@ object Scopes {
     private def changed(kind: String)(using Context): Unit =
       if published then
         val base = ctx.base
-        base.structureEpoch += 1
+        base.bumpStructureEpoch()
         if ScopeWrites.tracing then ScopeWrites.record(kind)
         if base.concurrent && (writer ne Thread.currentThread) && (base.writeActionThread ne Thread.currentThread)
             && ctx.definitions.initialized then
