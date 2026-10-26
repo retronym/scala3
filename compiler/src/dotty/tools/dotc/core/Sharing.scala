@@ -48,16 +48,16 @@ object Sharing:
   // from the base at each call site, not two.
 
   /** Evidence that the code it is given to is the one writer of the lazy facts keyed by `key: K`: it runs in
-   *  `exclusive(key)`. A capability in the manner of Clang's `REQUIRES`: state that only the writer may touch is
-   *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `exclusive`,
-   *  `claimed`, `unguarded` and a completion (`completing`) make one; it is invariant in `K`, so the evidence for one key is not evidence for another. One
-   *  instance serves every key: a holder allocates nothing.
+   *  `claim(key)`. A capability in the manner of Clang's `REQUIRES`: state that only the writer may touch is
+   *  reachable only through a method that takes one, so a touch outside the claim does not compile. Only `claim`,
+   *  `once`, `unguarded` and a completion (`completing`) make one; it is invariant in `K`, so the evidence for one
+   *  key is not evidence for another. One instance serves every key: a holder allocates nothing.
    */
-  @implicitNotFound("this code must run as the one writer of ${K}: inside Sharing.exclusive or Sharing.claimed on it, or a completion of it")
+  @implicitNotFound("this code must run as the one writer of ${K}: inside Sharing.claim or Sharing.once on it, or a completion of it")
   sealed abstract class Holds[K]
   private object held extends Holds[Any]
 
-  /** Evidence of `exclusive(key)` without its claim, for an access that races on purpose; `why` says why it is safe
+  /** Evidence of `claim(key)` without it, for an access that races on purpose; `why` says why it is safe
    *  (Clang's `NO_THREAD_SAFETY_ANALYSIS`, scoped to one access).
    */
   inline def unguarded[K](inline why: String): Holds[K] = held.asInstanceOf[Holds[K]]
@@ -79,40 +79,48 @@ object Sharing:
   /** Evidence of `lock`'s monitor without it, for an access that races on purpose; `why` says why it is safe. */
   inline def unlocked[K](inline why: String): Monitor[K] = monitorHeld.asInstanceOf[Monitor[K]]
 
-  /** `op` as the one writer of the lazy facts keyed by `key`: under the completion lock when readers are serialised;
-   *  holding the claim on `key` when they are parallel, where a wait that would close a wait-for cycle backs off
-   *  (`CompletionRoots.backOff(cycleSubject)`); as is otherwise. `key`, `what` (its name in lock-wait reports) and
-   *  `cycleSubject` are evaluated only on a concurrent base. For bring-forwards, lazy TASTy reads, inherited caches. */
-  inline def exclusive[K <: AnyRef & Singleton, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
-      inline op: Holds[K] ?=> T)(using Context): T =
-    given Holds[K] = held.asInstanceOf[Holds[K]]
-    if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
+  /** How the claim on a key of type `K` is taken (a given for each kind of key, beside its class): its name in
+   *  lock-wait reports, and whether serialised readers take the completion lock for it, as for a completion (a
+   *  bring-forward, an inherited cache, a change to a published scope, a lazy TASTy read), or need no claim, since
+   *  their reads are serialised and the computation is not a completion (a lazy reference, a lazy annotation).
+   */
+  @implicitNotFound("no Sharing.ClaimKind for ${K}: a key's class says how it is claimed with a given ClaimKind beside it")
+  final class ClaimKind[-K](val what: CompletionLock.What, val lockWhenSerialised: Boolean)
+  object ClaimKind:
+    /** A TASTy file's root (`claimAt`): its address maps are filled by its completers and its lazy reads. */
+    val lazyTastyRead: ClaimKind[Any] = ClaimKind(CompletionLock.lazyTastyRead, lockWhenSerialised = true)
 
-  /** `exclusive` on a key computed per call (a file's root, found from its symbols), which no state is reached by:
-   *  it hands out no evidence, and `key` is evaluated only on a concurrent base, as in `exclusive`. */
-  inline def exclusiveAt[T](inline key: AnyRef, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(inline op: T)(
+  /** `op` as the one writer of the lazy facts keyed by `key`, with the evidence of it: holding the claim on `key` when
+   *  readers are parallel, where a wait that would close a wait-for cycle backs off
+   *  (`CompletionRoots.backOff(cycleSubject)`); under the completion lock, or as is, when they are serialised, as the
+   *  key's `ClaimKind` says; as is on a batch base. `key`, its kind and `cycleSubject` are evaluated only on a
+   *  concurrent base.
+   */
+  inline def claim[K <: AnyRef & Singleton, T](inline key: K, inline cycleSubject: AnyRef | Null = null)(
+      inline op: Holds[K] ?=> T)(using inline kind: ClaimKind[K])(using Context): T =
+    given Holds[K] = held.asInstanceOf[Holds[K]]
+    if ctx.base.concurrent then
+      interactive.SharingImpl.claim(key, kind, if cycleSubject == null then key else cycleSubject.nn, () => op)
+    else op
+
+  /** `claim` on a key computed per call (a file's root, found from its symbols), which no state is reached by: it
+   *  hands out no evidence, and `key` is evaluated only on a concurrent base, as in `claim`.
+   */
+  inline def claimAt[T](inline key: AnyRef, inline kind: ClaimKind[Nothing], inline cycleSubject: AnyRef)(inline op: T)(
       using Context): T =
-    if ctx.base.concurrent then interactive.SharingImpl.exclusive(key, what, cycleSubject, () => op) else op
-
-  /** `op` holding the claim on `key` when readers are parallel, as is otherwise (serialised readers need no
-   *  claim: the computation is not a completion). For lazy references and lazy annotations, whose computations
-   *  another reader must wait for rather than take for a cycle. */
-  inline def claimed[K <: AnyRef & Singleton, T](inline key: K, inline what: CompletionLock.What, inline cycleSubject: AnyRef)(
-      inline op: Holds[K] ?=> T)(using Context): T =
-    given Holds[K] = held.asInstanceOf[Holds[K]]
-    if ctx.base.parallel then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
+    if ctx.base.concurrent then interactive.SharingImpl.claim(key, kind, cycleSubject, () => op) else op
 
   /** A lazy fact keyed by `key`, computed once: the value `peek` finds, or, when it finds none, `compute`d as the
-   *  one writer of `key` (`claimed`), with `peek` asked again inside first, since another reader may have computed it
+   *  one writer of `key` (`claim`), with `peek` asked again inside first, since another reader may have computed it
    *  meanwhile. `peek` must find the value only once it is complete; `compute` stores it. Another reader waits for an
    *  owner's computation at the claim, so `compute` is entered again only by its owner, re-entering its own
    *  computation: that is the cycle test's place. On a batch base `peek ?: compute`.
    */
-  inline def once[K <: AnyRef & Singleton, T <: AnyRef](inline key: K, inline what: CompletionLock.What)(
-      inline peek: T | Null)(inline compute: Holds[K] ?=> T)(using Context): T =
+  inline def once[K <: AnyRef & Singleton, T <: AnyRef](inline key: K, inline cycleSubject: AnyRef | Null = null)(
+      inline peek: T | Null)(inline compute: Holds[K] ?=> T)(using inline kind: ClaimKind[K])(using Context): T =
     val v = peek
     if v != null then v.asInstanceOf[T]
-    else claimed(key, what, key):
+    else claim(key, cycleSubject):
       val v1 = peek
       if v1 != null then v1.asInstanceOf[T] else compute
 

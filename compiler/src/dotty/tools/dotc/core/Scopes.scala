@@ -24,6 +24,8 @@ import java.lang.invoke.VarHandle
 
 object Scopes {
 
+  given Sharing.ClaimKind[MutableScope] = Sharing.ClaimKind(CompletionLock.scopeWrite, lockWhenSerialised = true)
+
   /** Maximal fill factor of hash table */
   private inline val FillFactor = 2.0/3.0
 
@@ -328,7 +330,7 @@ object Scopes {
      */
     private[core] final def writing[T](op: => T)(using Context): T =
       if !ctx.base.concurrent then op
-      else Sharing.exclusive(this, CompletionLock.scopeWrite, this)(inside(op))
+      else Sharing.claim(this)(inside(op))
 
     // a change during the base's setup (`Definitions.init`) has no reader
     private def changed(kind: String)(using Context): Unit =

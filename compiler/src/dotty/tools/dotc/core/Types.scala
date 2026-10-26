@@ -3236,7 +3236,7 @@ object Types extends TypeUtils {
       // with parallel readers the computation has an owner, as a completion does, and another reader waits for it
       // at the claim, not taking it for a cycle (finding I57: a false "Cyclic reference", and a completion described
       // with `...`)
-      Sharing.once(this, CompletionLock.lazyRef)(myRef):
+      Sharing.once(this)(myRef):
         if computed then
           // the owner re-entering its own computation. If errors were reported previously handle this by throwing a
           // CyclicReference instead of crashing immediately. A test case is neg/i6057.scala.
@@ -3268,7 +3268,7 @@ object Types extends TypeUtils {
       // under this reference's claim: usually re-entered from its own computation (`refFn` completes an opaque
       // alias, whose completer updates it); with parallel readers, another reader that completed the alias first
       // has set the same value
-      Sharing.claimed(this, CompletionLock.lazyRef, this) {
+      Sharing.claim(this) {
         if myRef == null || !ctx.base.parallel then
           assert(myRef == null || ctx.reporter.errorsReported)
           set(tp, done = true)
@@ -3283,6 +3283,7 @@ object Types extends TypeUtils {
     override def hashCode: Int = System.identityHashCode(this)
   }
   object LazyRef:
+    given Sharing.ClaimKind[LazyRef] = Sharing.ClaimKind(CompletionLock.lazyRef, lockWhenSerialised = false)
     def of(refFn: Context ?=> (Type | Null)): LazyRef = LazyRef(refFn(using _))
 
   // --- Refined Type and RecType ------------------------------------------------

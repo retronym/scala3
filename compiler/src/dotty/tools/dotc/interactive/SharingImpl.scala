@@ -10,13 +10,11 @@ import Contexts.*
  */
 object SharingImpl:
 
-  def exclusive[T](key: AnyRef, what: CompletionLock.What, cycleSubject: AnyRef, op: () => T)(using Context): T =
+  def claim[T](key: AnyRef, kind: Sharing.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T)(using Context): T =
     val base = ctx.base
-    if base.parallel then base.completionRoots.locked(key, what, () => CompletionRoots.backOff(cycleSubject))(op())
-    else base.completionLock.locked(what)(op())
-
-  def claimed[T](key: AnyRef, what: CompletionLock.What, cycleSubject: AnyRef, op: () => T)(using Context): T =
-    ctx.base.completionRoots.locked(key, what, () => CompletionRoots.backOff(cycleSubject))(op())
+    if base.parallel then base.completionRoots.locked(key, kind.what, () => CompletionRoots.backOff(cycleSubject))(op())
+    else if kind.lockWhenSerialised then base.completionLock.locked(kind.what)(op())
+    else op()
 
   def privately[T](c0: Context, op: Context => T): T =
     val c1 = c0.fresh.setNewTyperState()

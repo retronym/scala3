@@ -31,6 +31,9 @@ import dotty.tools.dotc.transform.Specialization
 
 object SymDenotations {
 
+  private given Sharing.ClaimKind[InheritedCacheImpl] =
+    Sharing.ClaimKind(CompletionLock.inheritedCache, lockWhenSerialised = true)
+
   /** A sym-denotation represents the contents of a definition
    *  during a period.
    */
@@ -3559,7 +3562,7 @@ object SymDenotations {
      */
     protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
       // the cache is its own root: its black hole `locked` has one owner
-      Sharing.exclusive(this, CompletionLock.inheritedCache, clsd)(op)
+      Sharing.claim(this, clsd)(op)
 
     def isValidAt(phase: Phase)(using Context) =
       epochCurrent && checkedPeriod == ctx.period ||

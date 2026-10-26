@@ -16,6 +16,9 @@ import scala.annotation.internal.sharable
 
 object Annotations {
 
+  private given Sharing.ClaimKind[LazyAnnotation | LazyBodyAnnotation] =
+    Sharing.ClaimKind(CompletionLock.lazyAnnotation, lockWhenSerialised = false)
+
   def annotClass(tree: Tree)(using Context) =
     val sym = tree.symbol
     if (sym.isConstructor) sym.owner
@@ -226,7 +229,7 @@ object Annotations {
     tp.existsPart(isLambdaParam(_, tl), stopAt = StopAt.Static)
 
   // With parallel readers (`-Yinteractive-parallel`), a lazy annotation's thunk is evaluated by one reader, holding
-  // the annotation's claim (`Sharing.claimed`): another one waits for it rather than meeting the evaluation's `null`
+  // the annotation's claim (`Sharing.once`): another one waits for it rather than meeting the evaluation's `null`
   // (a cycle on one reader). Re-entry on the owner still meets it. The fields are written only by the holder of the
   // claim (a `Sharing.Holds`), and read without it: they are volatile, so a reader that finds a symbol or a tree finds
   // it complete, and one that finds the thunk or the evaluation's `null` takes the claim.
@@ -239,7 +242,7 @@ object Annotations {
     private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
 
     override def symbol(using parentCtx: Context): Symbol =
-      Sharing.once(this, CompletionLock.lazyAnnotation)(currentSym)(symbol0)
+      Sharing.once(this)(currentSym)(symbol0)
 
     // the symbol if it is evaluated, and of this run
     private def currentSym(using Context): Symbol | Null = mySym match
@@ -267,7 +270,7 @@ object Annotations {
       mySym.asInstanceOf[Symbol]
 
     def tree(using Context): Tree =
-      Sharing.once(this, CompletionLock.lazyAnnotation)(evaluatedTree)(tree0)
+      Sharing.once(this)(evaluatedTree)(tree0)
 
     private def evaluatedTree: Tree | Null = myTree match
       case t: Tree @unchecked => t
@@ -317,7 +320,7 @@ object Annotations {
     private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
 
     def tree(using Context): Tree =
-      Sharing.once(this, CompletionLock.lazyAnnotation)(evaluatedTree)(tree0)
+      Sharing.once(this)(evaluatedTree)(tree0)
 
     private def evaluatedTree: Tree | Null = myTree match
       case t: Tree @unchecked => t
