@@ -229,7 +229,7 @@ object Scopes {
    *  Note: constructor is protected to force everyone to use the factory methods instead.
    */
   class MutableScope protected[Scopes](initElems: ScopeEntry | Null, initSize: Int, val nestingLevel: Int)
-      extends Scope {
+      extends Scope, Sharing.BlackHole {
 
     /** Scope shares elements with `base` */
     protected[Scopes] def this(base: Scope)(using Context) =
@@ -321,21 +321,14 @@ object Scopes {
         published = was
         changed("extend")
 
-    // the thread changing this scope as its one writer (`writing`)
-    @benignRace("written by the writer under the scope's claim; read only to compare with this thread, which only its own store can make equal")
-    private var writer: Thread | Null = null
-
-    /** `op` as this scope's one writer: on a concurrent base, holding a claim keyed by the scope, which is how a
-     *  published scope may change outside a write action (a package's flat classes, a classfile completer's deletion
-     *  of the symbols it found absent). Readers stay lock free: an entry is added by `extendAside`, which replaces the
+    /** `op` as this scope's one writer (the thread inside its `Sharing.BlackHole`): on a concurrent base, holding a
+     *  claim keyed by the scope, which is how a published scope may change outside a write action (a package's flat
+     *  classes, a classfile completer's deletion of the symbols it found absent). Readers stay lock free: an entry is added by `extendAside`, which replaces the
      *  scope whole, or removed by `unlink`, which leaves the removed entry's own links as they were.
      */
     private[core] final def writing[T](op: => T)(using Context): T =
       if !ctx.base.concurrent then op
-      else Sharing.exclusive(this, CompletionLock.scopeWrite, this):
-        val was = writer
-        writer = Thread.currentThread
-        try op finally writer = was
+      else Sharing.exclusive(this, CompletionLock.scopeWrite, this)(inside(op))
 
     // a change during the base's setup (`Definitions.init`) has no reader
     private def changed(kind: String)(using Context): Unit =
@@ -343,7 +336,7 @@ object Scopes {
         val base = ctx.base
         base.bumpStructureEpoch()
         if ScopeWrites.tracing then ScopeWrites.record(kind)
-        if base.concurrent && (writer ne Thread.currentThread) && (base.writeActionThread ne Thread.currentThread)
+        if base.concurrent && !isInsideHere && (base.writeActionThread ne Thread.currentThread)
             && ctx.definitions.initialized then
           ScopeWrites.unfrozen(kind)
 
@@ -410,7 +403,7 @@ object Scopes {
     // a change to this scope must be made by its one writer (`writing`): it is published, the base concurrent, and
     // the change is not made by a write action or by the writer already
     private def needsWriter(using Context): Boolean =
-      published && ctx.base.concurrent && (writer ne Thread.currentThread)
+      published && ctx.base.concurrent && !isInsideHere
         && (ctx.base.writeActionThread ne Thread.currentThread) && ctx.definitions.initialized
 
     /** enter a symbol, asserting that no symbol with same name exists in scope */

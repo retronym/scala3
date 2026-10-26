@@ -3233,26 +3233,19 @@ object Types extends TypeUtils {
     private var computed = false
 
     def ref(using Context): Type =
-      if computed then
-        if myRef == null then
-          if ctx.base.parallel && !ctx.base.completionRoots.ownedHere(this) then
-            // being computed by another reader (parallel readers): wait for
-            // it, not a cycle (finding I57: a false "Cyclic reference", and a
-            // completion described with `...`)
-            ctx.base.completionRoots.locked(this, CompletionLock.lazyRef, () => CompletionRoots.backOff(this))(())
-            return ref
-          // if errors were reported previously handle this by throwing a CyclicReference
-          // instead of crashing immediately. A test case is neg/i6057.scala.
+      // with parallel readers the computation has an owner, as a completion does, and another reader waits for it
+      // at the claim, not taking it for a cycle (finding I57: a false "Cyclic reference", and a completion described
+      // with `...`)
+      Sharing.once(this, CompletionLock.lazyRef)(myRef):
+        if computed then
+          // the owner re-entering its own computation. If errors were reported previously handle this by throwing a
+          // CyclicReference instead of crashing immediately. A test case is neg/i6057.scala.
           assert(ctx.mode.is(Mode.CheckCyclic)
               || ctx.mode.is(Mode.Printing)
               || ctx.reporter.errorsReported)
           throw CyclicReference(NoDenotation)
-      else
-        // with parallel readers the computation has an owner, as a completion does
-        Sharing.claimed(this, CompletionLock.lazyRef, this) {
-          if !computed then compute()
-        }
-      myRef.nn
+        compute()
+        myRef.nn
 
     // `myRef`, `computed` and `refFn` are written only by the holder of this reference's claim (a `Sharing.Holds`),
     // and read without it: a reader that finds `computed` and no `myRef` waits on the claim

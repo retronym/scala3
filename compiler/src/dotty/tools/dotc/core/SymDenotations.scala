@@ -3514,7 +3514,7 @@ object SymDenotations {
     def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base)
   }
 
-  private abstract class InheritedCacheImpl(val createdAt: Period, base: ContextBase) extends InheritedCache { self =>
+  private abstract class InheritedCacheImpl(val createdAt: Period, base: ContextBase) extends InheritedCache, Sharing.BlackHole { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
     // A batch base pushes: an invalidation walks the caches computed from this one (`dependent`). A concurrent base
@@ -3546,18 +3546,10 @@ object SymDenotations {
         if (dependent == null) dependent = new WeakHashMap
         dependent.nn.put(dep, ())
 
-    // The computation's black hole (the thread inside it) and its provisional mark, written only by the holder of
-    // this cache's claim: reached only with its evidence, a `Sharing.Holds` for this cache, which only `computing`
-    // hands out.
-    private var lockedBy: Thread | Null = null
+    // The computation's provisional mark, written only by the holder of this cache's claim: reached only with its
+    // evidence, a `Sharing.Holds` for this cache, which only `computing` hands out. The thread inside the computation
+    // is the cache's `Sharing.BlackHole`.
     private var myProvisional = false
-    protected final def isLocked(using Sharing.Holds[this.type]): Boolean = lockedByUnguarded != null
-    protected final def setLocked(b: Boolean)(using Sharing.Holds[this.type]): Unit =
-      lockedBy = if b then Thread.currentThread else null
-    /** Is this thread inside the computation? Needs no claim: a thread is only ever itself. */
-    protected final def isLockedHere: Boolean =
-      lockedByUnguarded(using Sharing.unguarded("compares with this thread: only its own store can make it true")) eq Thread.currentThread
-    private def lockedByUnguarded(using Sharing.Holds[this.type]): Thread | Null = lockedBy
     protected final def isProvisional(using Sharing.Holds[this.type]): Boolean = myProvisional
     protected final def setProvisional(b: Boolean)(using Sharing.Holds[this.type]): Unit = myProvisional = b
 
@@ -3603,7 +3595,7 @@ object SymDenotations {
     // invalidation it raced with, but the invalidation has moved the epoch, so the cache is no longer valid.
     def invalidate(): Unit =
       if (cache != null)
-        if (isLockedHere) cache = SimpleIdentityMap.empty
+        if (isInsideHere) cache = SimpleIdentityMap.empty
         else {
           cache = null
           invalidateDependents()
@@ -3628,10 +3620,7 @@ object SymDenotations {
           val cached1 = if c1 == null then null else c1(keepOnly) // computed meanwhile by the thread that held the lock?
           if cached1 != null then cached1
           else
-            setLocked(true)
-            val computed =
-              try clsd.computeMemberNames(keepOnly)(using this, ctx)
-              finally setLocked(false)
+            val computed = inside(clsd.computeMemberNames(keepOnly)(using this, ctx))
             store(keepOnly, computed)
             computed
         }
@@ -3660,7 +3649,7 @@ object SymDenotations {
 
     // as `MemberNamesImpl.invalidate`: only this thread's computation in progress keeps the cache
     def invalidate(): Unit =
-      if (valid && !isLockedHere) {
+      if (valid && !isInsideHere) {
         cache = null
         valid = false
         invalidateDependents()
@@ -3679,12 +3668,9 @@ object SymDenotations {
           case null => computing(clsd) {
             cacheNow match
               case null =>
-                if (isLocked) throw CyclicReference(clsd)
-                setLocked(true)
+                if (isInside) throw CyclicReference(clsd)
                 setProvisional(false)
-                val computed =
-                  try clsd.computeBaseData(using this, ctx)
-                  finally setLocked(false)
+                val computed = inside(clsd.computeBaseData(using this, ctx))
                 if (!isProvisional) store(computed)
                 else onBehalf.signalProvisional()
                 computed

@@ -102,6 +102,37 @@ object Sharing:
     given Holds[K] = held.asInstanceOf[Holds[K]]
     if ctx.base.parallel then interactive.SharingImpl.claimed(key, what, cycleSubject, () => op) else op
 
+  /** A lazy fact keyed by `key`, computed once: the value `peek` finds, or, when it finds none, `compute`d as the
+   *  one writer of `key` (`claimed`), with `peek` asked again inside first, since another reader may have computed it
+   *  meanwhile. `peek` must find the value only once it is complete; `compute` stores it. Another reader waits for an
+   *  owner's computation at the claim, so `compute` is entered again only by its owner, re-entering its own
+   *  computation: that is the cycle test's place. On a batch base `peek ?: compute`.
+   */
+  inline def once[K <: AnyRef & Singleton, T <: AnyRef](inline key: K, inline what: CompletionLock.What)(
+      inline peek: T | Null)(inline compute: Holds[K] ?=> T)(using Context): T =
+    val v = peek
+    if v != null then v.asInstanceOf[T]
+    else claimed(key, what, key):
+      val v1 = peek
+      if v1 != null then v1.asInstanceOf[T] else compute
+
+  /** The black hole of a computation that the holder of the claim on this object runs: which thread is inside it.
+   *  Entered and left only with the claim's evidence; whether this thread is inside needs none, since only its own
+   *  store can make that true. A field of the object it is mixed into, so it allocates nothing.
+   */
+  trait BlackHole:
+    @scala.annotation.internal.benignRace("written under the claim; read without it only to compare with this thread")
+    private var insideThread: Thread | Null = null
+    /** `op` with this thread inside, restoring who was inside before (a nested entry by the same thread). */
+    protected final inline def inside[T](inline op: T)(using Holds[this.type]): T =
+      val was = insideThread
+      insideThread = Thread.currentThread
+      try op finally insideThread = was
+    /** Is some thread inside? */
+    protected final def isInside(using Holds[this.type]): Boolean = insideThread != null
+    /** Is this thread inside? */
+    protected final def isInsideHere: Boolean = insideThread eq Thread.currentThread
+
   /** `op` in `c0`, or, when readers are parallel, in a private child of `c0`'s typer state, settled when it ends
    *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by
    *  one of them (I62, I66, I70, I76). */

@@ -239,9 +239,12 @@ object Annotations {
     private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
 
     override def symbol(using parentCtx: Context): Symbol =
-      val sym = mySym
-      if sym.isInstanceOf[Symbol] && sym.asInstanceOf[Symbol].defRunId == parentCtx.runId then sym.asInstanceOf[Symbol]
-      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(symbol0)
+      Sharing.once(this, CompletionLock.lazyAnnotation)(currentSym)(symbol0)
+
+    // the symbol if it is evaluated, and of this run
+    private def currentSym(using Context): Symbol | Null = mySym match
+      case sym: Symbol if sym.defRunId == ctx.runId => sym
+      case _ => null
 
     private def symbol0(using parentCtx: Context, holds: Sharing.Holds[this.type]): Symbol =
       assert(mySym != null)
@@ -264,9 +267,11 @@ object Annotations {
       mySym.asInstanceOf[Symbol]
 
     def tree(using Context): Tree =
-      val t = myTree
-      if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
-      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(tree0)
+      Sharing.once(this, CompletionLock.lazyAnnotation)(evaluatedTree)(tree0)
+
+    private def evaluatedTree: Tree | Null = myTree match
+      case t: Tree @unchecked => t
+      case _ => null
 
     private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)
@@ -312,9 +317,11 @@ object Annotations {
     private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
 
     def tree(using Context): Tree =
-      val t = myTree
-      if t.isInstanceOf[Tree @unchecked] then t.asInstanceOf[Tree]
-      else Sharing.claimed(this, CompletionLock.lazyAnnotation, this)(tree0)
+      Sharing.once(this, CompletionLock.lazyAnnotation)(evaluatedTree)(tree0)
+
+    private def evaluatedTree: Tree | Null = myTree match
+      case t: Tree @unchecked => t
+      case _ => null
 
     private def tree0(using Context, Sharing.Holds[this.type]): Tree =
       assert(myTree != null)
