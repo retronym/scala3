@@ -134,7 +134,10 @@ class InteractiveDriver(
       val reader = base.reader
       reader.cancelledByChecker = false
       val cancelled =
-        try return body
+        try
+          val result = body
+          reader.resultStamp = myWrites
+          return result
         catch case ex: CompilationUnit.CancelledCompilation => ex
         finally lock.unlock()
       afterCancel()
@@ -155,7 +158,10 @@ class InteractiveDriver(
       try
         writerPending = false
         base.writeActionThread = Thread.currentThread
-        body
+        myWrites += 1 // only the writer writes it
+        val result = body
+        base.reader.resultStamp = myWrites
+        result
       finally
         base.writeActionThread = null
         lock.unlock()
@@ -333,7 +339,7 @@ class InteractiveDriver(
     bindReader(check)
     val depth = myScopeDepth.get.nn.intValue
     myScopeDepth.set(depth + 1)
-    try body
+    try if depth == 0 && parallelReaders then servedCurrent(check)(body) else body
     finally
       if depth > 0 then
         myScopeDepth.set(depth)
@@ -341,6 +347,39 @@ class InteractiveDriver(
       else
         myScopeDepth.remove()
         base.unbindThread()
+
+  /** The number of write actions so far: a request's result stamp (`Reader.resultStamp`). After freezing, a change to
+   *  a published scope is made only in a write action (`MutableScope.changed`), so the count covers the structure
+   *  epoch as well as the runs and the splices; the epoch itself also moves when a reader invalidates a class's own
+   *  member caches, which would serve requests again for nothing.
+   */
+  @scratch @publishedBy("volatile") @volatile private var myWrites: Int = 0
+
+  /** Requests served again because a write action ran after what they read, and requests handed their result after
+   *  `MaxStaleRetries` such tries (for the tests and the log).
+   */
+  val staleRetries = java.util.concurrent.atomic.AtomicInteger()
+  val staleServed = java.util.concurrent.atomic.AtomicInteger()
+  private val MaxStaleRetries = 3
+
+  /** A provider reads the typed tree after `runUpTo` or `run` has left the read lock (through `currentCtx` and
+   *  `compilationUnits`), so with parallel readers a write action may replace what it read before its result goes to
+   *  the editor. The result carries the write count of the last lock its request left (`resultStamp`), and is
+   *  computed again, on a fresh reader, while a write ran after it.
+   */
+  private def servedCurrent[T](check: () => Boolean)(body: => T): T =
+    var tries = 0
+    while true do
+      val result = body
+      val stamp = base.reader.resultStamp
+      if stamp < 0 || stamp == myWrites then return result
+      if tries == MaxStaleRetries then
+        staleServed.incrementAndGet()
+        return result
+      tries += 1
+      staleRetries.incrementAndGet()
+      bindReader(check)
+    throw new IllegalStateException("unreachable")
 
   /** The reader of the request that starts: the scope's, or a fresh one. */
   private def requestReader(): Reader =

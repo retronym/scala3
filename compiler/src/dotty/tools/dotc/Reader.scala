@@ -65,6 +65,13 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    */
   private[dotc] val messageLimiter: printing.DefaultMessageLimiter = printing.DefaultMessageLimiter()
 
+  // ---- The stamp of what the request read (`InteractiveDriver.withCancelChecker`) ----
+
+  /** The driver's write count when this reader last left the read or write lock, or -1: what the request's result
+   *  was computed from. The request is served again if a write action ran after it.
+   */
+  private[dotc] var resultStamp: Long = -1
+
   // ---- Debug output (`reporting.trace`, `-explain-cycles`) ----
 
   /** The margin of `trace` output. */
