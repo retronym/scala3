@@ -182,11 +182,12 @@ object XrayServer:
     // `-Dxray.readers=parallel`: `-Yinteractive-parallel` (step 4); otherwise serialised (step 3)
 
   /** The flags of the driver the page drives by hand (freeform mode), set by
-   *  `/reset?mode=` to one of the replay's modes. `-Dxray.readers=parallel`
-   *  starts it with `-Yinteractive-parallel` (step 4); otherwise serialised (step 3).
+   *  `/reset?mode=` to one of the replay's modes. The fastest, `readersEdits`
+   *  (parallel readers, the session surviving body edits), unless `-Dxray.mode=`
+   *  names another.
    */
   @volatile private[xray] var freeformMode: Replay.Mode =
-    if sys.props.get("xray.readers").contains("parallel") then Replay.modeNamed("readers") else Replay.modeNamed("default")
+    Replay.modeNamed(sys.props.getOrElse("xray.mode", "readersEdits"))
   private def settings: List[String] = baseSettings ++ freeformMode.flags
 
   @volatile private[xray] var driver = new InteractiveDriver(settings, CachedLogicalPackage.none)
@@ -283,9 +284,17 @@ object XrayServer:
    *  visible skipped statements before the rest), on its own thread and
    *  reader, while the page's requests are served by another.
    */
+  // set when a pass is asked for on other text than the running pass's: the running one is cancelled (its reader
+  // unwinds at its next checkpoint, as a pending writer's cancellation does) and reports `superseded`, and the page
+  // asks again; without it the page waited for the stale pass to complete the whole session before the new one
+  private val backgroundSuperseded = new java.util.concurrent.atomic.AtomicBoolean(false)
+
   private def startBackground(code: String, file: String, visibleFrom: Int, visibleTo: Int): Map[String, Any] =
-    if backgroundState("state") == "running" then backgroundStatus()
+    if backgroundState("state") == "running" then
+      if backgroundState.get("code").exists(_ != code) then backgroundSuperseded.set(true)
+      backgroundStatus()
     else
+      backgroundSuperseded.set(false)
       val uri = uriOf(file)
       val source = SourceFile.virtual(uri, code)
       val visible = if visibleFrom >= 0 && visibleTo > visibleFrom then Span(visibleFrom, visibleTo) else dotty.tools.dotc.util.Spans.NoSpan
@@ -297,7 +306,7 @@ object XrayServer:
         val t0 = System.nanoTime()
         val before = foregroundCount.get
         try
-          backgroundState = driver.withCancelChecker(() => false) {
+          backgroundState = driver.withCancelChecker(() => backgroundSuperseded.get) {
            backgroundReader = driver.readerOfThisThread
            // the visible lines first: a targeted request at their start (a
            // fresh targeted run, or served/resumed in the session)
@@ -334,7 +343,8 @@ object XrayServer:
           backgroundState = backgroundState ++ Map("oracleDiagnosticCount" -> oracle.size,
             "diagnosticsMatch" -> (missing.isEmpty && extra.isEmpty), "missingDiagnostics" -> missing, "extraDiagnostics" -> extra)
         catch
-          case ex: CompilationUnit.CancelledCompilation => backgroundState = Map("state" -> "error", "error" -> "cancelled")
+          case ex: CompilationUnit.CancelledCompilation =>
+            backgroundState = Map("state" -> (if backgroundSuperseded.get then "superseded" else "error"), "error" -> "cancelled", "code" -> code)
           case scala.util.control.NonFatal(ex) => backgroundState = Map("state" -> "error", "error" -> ex.toString)
       }): Runnable, "xray-background")
       t.setDaemon(true); t.start()

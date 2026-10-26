@@ -36,8 +36,10 @@ import dotty.tools.dotc.util.Spans.Span
  *  Baselines per round: the batch compiler on the same files up to the
  *  typer (`-Ystop-after:typer`), a whole-set run in the driver with one
  *  reader and nothing skipped, and k=1 round-robin in the serialised mode.
- *  Each measurement on a fresh driver; the diagnostics of every file
- *  compared with the whole-set run's.
+ *  The measured cells share one driver, as the requests of an IDE session
+ *  do: the first open on it is cold (reported apart), the rest warm, with
+ *  the classpath loaded; `-Dtp.fresh` gives every cell a fresh driver. The
+ *  diagnostics of every file are compared with the whole-set run's.
  *
  *    -Dtp.ks=1,2,4,8 -Dtp.policies=rr,pkg,islands,warm -Dtp.rounds=3 -Dtp.warmup=1
  *    -Dtp.limit=<files> (the first N, for a quick check) -Dtp.out=<results.json>
@@ -165,6 +167,20 @@ object Throughput:
     d.run(XrayServer.generatedUri, SourceFile.virtual(XrayServer.generatedUri, XrayServer.generatedSource("warmup", 5)))
     d
 
+  /** The driver of a measured cell. As in an IDE session, one driver serves
+   *  every cell (its symbol table, and so the classpath it loaded, kept
+   *  across opens): the first cell on it is the cold open after a start,
+   *  reported apart (`what` suffixed "cold"), the rest are warm. `-Dtp.fresh`
+   *  gives every cell a driver of its own, every open cold.
+   */
+  private val freshPerCell = sys.props.contains("tp.fresh")
+  private val sharedDrivers = mutable.Map.empty[Boolean, InteractiveDriver] // by `readers`: the flags differ
+  private def driverFor(readers: Boolean): (InteractiveDriver, Boolean) =
+    if freshPerCell then (freshDriver(readers), true)
+    else sharedDrivers.get(readers) match
+      case Some(d) => System.gc(); (d, false)
+      case None => val d = freshDriver(readers); sharedDrivers(readers) = d; (d, true)
+
   /** A file's errors, as `line: first line of the message`, sorted. */
   private def errorsOf(ds: List[dotty.tools.dotc.reporting.Diagnostic]): List[String] =
     ds.filter(_.level >= 2).map(d => s"${d.pos.line + 1}: ${d.msg.message.linesIterator.nextOption().getOrElse("").take(200)}").sorted
@@ -175,7 +191,8 @@ object Throughput:
   def measure(what: String, k: Int, lists: Array[List[FileJob]], readers: Boolean, warm: Boolean, files: List[FileJob], reference: Map[URI, List[String]],
       cancelled: () => Boolean = () => false, onProgress: (Int, Int) => Unit = (_, _) => (),
       diagnosticsOut: java.util.Map[URI, List[String]] | Null = null, timeline: Timeline | Null = null): Cell =
-    val driver = freshDriver(readers)
+    val (driver, cold) = driverFor(readers)
+    val what1 = if cold then s"$what cold" else what
     val cpu0 = os.getProcessCpuTime
     val t0 = System.nanoTime()
     driver.openAll(files.map(f => f.uri -> f.source))
@@ -252,7 +269,7 @@ object Throughput:
     val byKind = rs.flatMap(_.lockWaits.asScala).groupBy(w => kindOf(w.root)).view.mapValues(ws => (ws.size, ws.map(_.nanos).sum / 1e6)).toMap
     val differ = files.count(f => !Option(diags.get(f.uri)).contains(reference.getOrElse(f.uri, Nil)))
     if diagnosticsOut != null then diagnosticsOut.putAll(diags)
-    Cell(what, k, (t1 - t0) / 1e6, (tIndex - t0) / 1e6, (tWarm - tIndex) / 1e6, cpu.get / 1e6, (cpu1 - cpu0) / 1e6,
+    Cell(what1, k, (t1 - t0) / 1e6, (tIndex - t0) / 1e6, (tWarm - tIndex) / 1e6, cpu.get / 1e6, (cpu1 - cpu0) / 1e6,
       rs.map(_.lockWaitNanos).sum / 1e6, rs.map(_.lockWaitCount).sum, byKind, rs.map(_.statementWaitNanos).sum / 1e6,
       rs.map(_.waitCyclesAborted).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList, cyclesRaised = rs.map(_.cyclesRaised).sum)
 
@@ -300,7 +317,7 @@ object Throughput:
         try
           val c = measure(p, k, assign(p, k, files, graph), readers = true, warm = p == "warm", files, reference)
           divergent += c.diagnosticsDiffer
-          println(f"[tp] loop $i $p k=$k: wall ${c.wallMs}%.0f ms, ${c.diagnosticsDiffer} files differ, cycleAborts ${c.cycleAborts}, cycles raised ${c.cyclesRaised}, root waits ${c.rootWaits}")
+          println(f"[tp] loop $i ${c.what} k=$k: wall ${c.wallMs}%.0f ms (open ${c.indexMs}%.0f), ${c.diagnosticsDiffer} files differ, cycleAborts ${c.cycleAborts}, cycles raised ${c.cyclesRaised}, root waits ${c.rootWaits}")
         catch case ex: RuntimeException =>
           failed += 1
           // a backed-off Namer completion left an `UnwoundCompletion`: the run is tainted (I53's rule), see §8
