@@ -19,6 +19,7 @@ import printing.Printer
 import SymDenotations.NoDenotation
 
 import collection.mutable
+import java.lang.invoke.VarHandle
 
 object Scopes {
 
@@ -254,10 +255,13 @@ object Scopes {
       scope
     }
 
+    // the scope whose entries this one makes, when it is built aside to extend that scope (`extendAside`)
+    private var extending: MutableScope | Null = null
+
     /** create and enter a scope entry with given name and symbol */
     protected def newScopeEntry(name: Name, sym: Symbol)(using Context): ScopeEntry = {
       ensureCapacity(hashTable match { case null => MinHashedScopeSize; case ht => ht.length })
-      val e = new ScopeEntry(name, sym, this)
+      val e = new ScopeEntry(name, sym, if extending == null then this else extending.nn)
       e.prev = lastEntry
       lastEntry = e
       val ht = hashTable
@@ -273,6 +277,28 @@ object Scopes {
       assert(e.tail != e)
       ht(idx) = e
     }
+
+    /** With several readers: extend this scope as a whole, without changing what a reader may be walking. `fill`
+     *  enters into a scope built aside from copies of this scope's entries (owned by this scope); then the copies
+     *  and their table replace this scope's, the table last and after a release fence. A reader finds the old
+     *  table with its chains untouched, or the new one complete (`lookupEntry` pairs the load with an acquire on a
+     *  concurrent base). The caller makes it the only writer (`PackageLoader`: the loader's claim).
+     */
+    private[core] final def extendAside(fill: MutableScope => Unit)(using Context): Unit =
+      val aside = newScopeLikeThis()
+      aside.extending = this
+      val entries = new mutable.ArrayBuffer[ScopeEntry]
+      var e = lastEntry
+      while e != null && e.owner == this do
+        entries += e
+        e = e.prev
+      for i <- entries.length - 1 to 0 by -1 do aside.newScopeEntry(entries(i).name, entries(i).sym)
+      fill(aside)
+      lastEntry = aside.lastEntry
+      _size = aside._size
+      elemsCache = null
+      VarHandle.releaseFence()
+      hashTable = aside.hashTable
 
     /** enter a symbol in this scope. */
     final def enter[T <: Symbol](sym: T)(using Context): T = {
@@ -379,6 +405,7 @@ object Scopes {
       var e: ScopeEntry | Null = null
       val ht = hashTable
       if (ht != null) {
+        if ctx.base.concurrent then VarHandle.acquireFence() // a table published by `extendAside`
         e = ht(name.hashCode & (ht.length - 1))
         while ((e != null) && e.name != name)
           e = e.tail
