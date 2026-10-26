@@ -48,6 +48,7 @@ final class CompletionRoots(currentReader: () => Reader):
       if c == null then
         val mine = Claim(me, what, Thread.currentThread.nn.getName.nn)
         if claims.putIfAbsent(key, mine) == null then
+          util.Chaos.at("acquire", oneIn = 8)
           if waitedSince != 0L then
             val s = seen.nn
             me.recordLockWait(System.nanoTime() - waitedSince, s.what.render, "", s.ownerName)

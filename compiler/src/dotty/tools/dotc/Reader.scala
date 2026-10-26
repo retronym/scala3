@@ -349,6 +349,7 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    */
   def checkCancelledTyping()(using Context): Unit =
     typedTreeCount += 1
+    util.Chaos.at("checkpoint", oneIn = 64)
     if (typedTreeCount & checkpointMask) == 0 then pollCancellation()
     else if typedTreeCount == cancelAtTypedTree then cancelHere()
 

@@ -394,7 +394,9 @@ object SymDenotations {
           // fresh run.
           if ctx.base.parallel
              && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
-          then info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
+          then
+            util.Chaos.at("onUnwind")
+            info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>

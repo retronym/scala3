@@ -214,12 +214,14 @@ class InteractiveDriver(
    *  a write), before a pre-empted or cancelled reader is retried or unwinds.
    */
   private def abandonPending(s: Session): Unit =
-    if s.hasPendingAbandons then writing {
-      // only while `s` is still the session: a writer that ran meanwhile
-      // replaced it, and a re-index in the old run would meet denotations
-      // brought forward to the new one ("invalid in run")
-      if isCurrent(s) then s.abandonPending()
-    }
+    if s.hasPendingAbandons then
+      util.Chaos.at("abandonPending")
+      writing {
+        // only while `s` is still the session: a writer that ran meanwhile
+        // replaced it, and a re-index in the old run would meet denotations
+        // brought forward to the new one ("invalid in run")
+        if isCurrent(s) then s.abandonPending()
+      }
 
   private val myInitCtx: Context = {
     val rootCtx = initCtx.fresh.addMode(Mode.ReadPositions).addMode(Mode.Interactive)
@@ -546,6 +548,7 @@ class InteractiveDriver(
         case sks =>
           skipped = skipped.filterNot(sk => sks.exists(_ eq sk))
           sks.foreach(typing.put(_, Thread.currentThread))
+          util.Chaos.at("claim")
           Session.Claim.Claimed(sks)
     }
 
@@ -658,11 +661,13 @@ class InteractiveDriver(
         reporter.drop(unit.source, keys.toSet)
       if !replacePoisoned(sk) || !replaceUnwound(sk.stat.span)(using sk.ctx) then poisoned = true
 
-    private def deferAbandon(sk: Run.SkippedStat): Unit = synchronized {
-      typing.remove(sk)
-      pendingAbandons = sk :: pendingAbandons
-      notifyAll()
-    }
+    private def deferAbandon(sk: Run.SkippedStat): Unit =
+      util.Chaos.at("deferAbandon")
+      synchronized {
+        typing.remove(sk)
+        pendingAbandons = sk :: pendingAbandons
+        notifyAll()
+      }
 
     def abandonPending(): Unit =
       val sks = synchronized { val r = pendingAbandons; pendingAbandons = Nil; r }
