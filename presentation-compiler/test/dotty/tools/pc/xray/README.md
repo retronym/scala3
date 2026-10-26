@@ -62,7 +62,7 @@ Then the server:
 java -Xms20g -Xmx20g -XX:+UseParallelGC -XX:-UseAdaptiveSizePolicy -Xmn10g -XX:+AlwaysPreTouch -Xss16m -Dxray.port=8801 -Dxray.latch=/tmp/xray-latch-8801 -Dxray.replay.events=/Users/jzaugg-virtus/code/scratch/mr-measure/replay-events.json -Dxray.replay.bodyEditEvents=local/body-edit-scenario.json -cp "$(cat out/pc-test-classpath.txt)" dotty.tools.pc.xray.XrayServer
 ```
 
-The heap and the collector are the perflab campaigns' (a fixed heap with a large young generation and the parallel collector, pre-touched; sized here for a 48 GB machine), so that the throughput demo's numbers are comparable with them: each N of the demo types every file of the source set in a fresh driver. The page shows the flags the server runs with.
+The heap and the collector are the perflab campaigns' (a fixed heap with a large young generation and the parallel collector, pre-touched; sized here for a 48 GB machine), so that the throughput demo's numbers are comparable with them: the demo reuses one driver across its runs, as `Throughput` does across its cells (the first open cold, the rest warm; `-Dtp.fresh` for a fresh driver per cell). The page shows the flags the server runs with.
 
 **Throughput.** In the Replay view, *Run throughput* types every file of the source set in one fresh run (`openAll`, every statement skipped, `-Yinteractive-parallel`, the build's options) with N reader threads for each N in the list (1,2,4,6,8 by default), after one single-reader warm-up, and plots the speed-up against N=1 (or the wall time, with the batch typer's time on the same files as a reference line) in the *Throughput* tab of the bottom panel. Per N: wall, worker CPU, root waits, the files whose errors differ from N=1's (should be 0), cycleAborts, raised cycles, and the wall split into the open (serial), typing (until the first thread runs out of files) and the tail; and a timeline with one lane per thread: the open, each file typed (hover for its name), idle at the end.
 
@@ -84,6 +84,8 @@ The modes:
 | baseline | `-Yno-targeted-requests` | Metals today: `CachingDriver` over the driver, so the whole file is typed once per edit or file switch and same-content requests are served from it (the replay applies the same rule; the hand-driven driver is a `CachingDriver`) |
 | default | none | targeting, the session, several readers serialised by the completion lock (step 3) |
 | readers | `-Yinteractive-parallel` | parallel readers (step 4) |
+| bodyEdits | `-Yinteractive-body-edits` | the session survives an edit inside a body (§12) |
+| readersEdits | `-Yinteractive-parallel -Yinteractive-body-edits` | parallel readers, and the session survives an edit inside a body: the fastest, and the freeform driver's default (`-Dxray.mode=<key>` picks another) |
 | noCache | `-Yno-targeted-requests` | the plain driver without the cache: every request types the whole file; not what Metals does, and not part of *Run all modes* |
 
 Hover, definition and completion call `readUpTo`, as the providers' `runUpTo` does; document highlight, inlay hints and semantic tokens call `readAll`, as `run` does. The replay does not go through Metals' job queue, which serialises every request: *lanes* 1 is that one queue, 2 (the default) gives the cursor requests a lane of their own beside the whole-file ones, as a presentation compiler with several readers would. didClose drops the file's text only.
