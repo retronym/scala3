@@ -385,18 +385,25 @@ object SymDenotations {
           // info before it types the parents, and the class is then
           // `isCompleted` with that info (see `Reader.cancelledCompletions`)
           ctx.reader.cancelledCompletions += symbol
-          // Parallel readers: a Namer completer cannot run a second time
-          // (a method's had entered its parameters: a retry enters `xs$1`).
-          // With one reader the driver replaces the statement before anyone
-          // retries; with two, a reader waiting on the root would take over
-          // the completion (finding I53). The symbol is left with a completer
-          // that pre-empts any reader that reaches it, which retries on a
-          // fresh run.
-          if ctx.base.parallel
+          // A Namer completer cannot run a second time (a method's had
+          // entered its parameters: a retry enters `xs$1`). The driver
+          // replaces the statement before this reader retries, but another
+          // reader reaches the symbol first: with parallel readers one
+          // waiting on the root takes over the completion (finding I53), and
+          // with serialised readers one takes the completion lock the unwind
+          // released, in the window before the statement is abandoned (the
+          // soak under `-Ddotc.interactive.chaos`, `xs$1` in a completion).
+          // The symbol is left with a completer that pre-empts any reader
+          // that reaches it, which retries on a fresh run. Its info is lazy
+          // again, so `Touched` comes down with it (a class completer had set
+          // the temporary info and so kept the flag above), or the symbol
+          // reads as a completion in progress.
+          if interactive
              && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
           then
             util.Chaos.at("onUnwind")
             info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
+            myFlags &~= Touched
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>
@@ -3386,8 +3393,8 @@ object SymDenotations {
     def completionRoot(symd: SymDenotation)(using Context): AnyRef = symd.symbol
   }
 
-  /** The info of a symbol whose Namer completion a cancellation unwound, with
-   *  parallel readers (see `SymDenotation.onUnwind`): a reader that
+  /** The info of a symbol whose Namer completion a cancellation unwound in
+   *  interactive mode (see `SymDenotation.onUnwind`): a reader that
    *  reaches it is pre-empted, and the run is not resumed, so that the retry
    *  is a fresh run with fresh symbols.
    */

@@ -170,11 +170,11 @@ class CompletionSoakSuite extends BasePCSuite:
         if !ofFile(d) then Nil
         else
           val nested = if d.isClass then d.symbol.asClass.unforcedDecls.toList else Nil
-          // still completing (a leaked `Touched`), or left with the completer of a cancellation that unwound
-          // (`UnwoundCompletion`): either is state a fresh run cannot recover from
+          // still completing (a leaked `Touched`), state a fresh run cannot recover from. A symbol left with the
+          // completer of a cancellation that unwound (`UnwoundCompletion`) is not dirty: it pre-empts whoever reaches
+          // it in this run, which starts a fresh one, and degrades in a later run as a stale completer does.
           (s :: nested).map(_.lastKnownDenotation).collect {
             case d if { d.awaitOtherReader(); d.isCompleting } => d.symbol.show + " (Touched)"
-            case d if d.infoOrCompleter.isInstanceOf[dotty.tools.dotc.core.SymDenotations.UnwoundCompletion] => d.symbol.show + " (unwound)"
           }
       }
     }.distinct
