@@ -23,6 +23,29 @@ object Caching:
   /** The value of the cache in fields `stamp` and `value`, valid while the stamp is `now`; on a miss the value
    *  `compute`d, stored with stamp `now`, and returned. The value returned is the local one, never the field read
    *  again.
+   *  {{{
+   *  private var myBaseClassesPeriod: Period = Nowhere
+   *  private var myBaseClasses: List[ClassSymbol] = uninitialized
+   *  override final def baseClasses(using Context): List[ClassSymbol] =
+   *    Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
+   *      ... // the base classes, computed
+   *  }}}
+   *  Expands to (`cache`, with `isConcurrent` the base's `concurrent`, read once)
+   *  {{{
+   *  val s = myBaseClassesPeriod
+   *  if isConcurrent then VarHandle.acquireFence()
+   *  val v = myBaseClasses
+   *  if s == ctx.period then v
+   *  else
+   *    val v1 = compute
+   *    if isConcurrent then VarHandle.releaseFence()
+   *    myBaseClasses = v1
+   *    if isConcurrent then VarHandle.releaseFence()
+   *    myBaseClassesPeriod = ctx.period
+   *    v1
+   *  }}}
+   *  On a batch base, the plain read, compare, compute and store it replaced. The fields must be touched nowhere
+   *  else but by a reset of the stamp (`StampedCachesTest` checks it).
    */
   inline def stamped[S, T](inline stamp: S, inline value: T)(inline setStamp: S => Unit, inline setValue: T => Unit)(
       inline now: S)(inline compute: T)(using c: Context): T =
@@ -30,6 +53,12 @@ object Caching:
 
   /** `stamped`, storing the value computed only when `keep` holds of it (it is not provisional, say), and leaving
    *  the old pair otherwise: it is still a correct one, for its own stamp.
+   *  {{{
+   *  // AppliedType.isStable: a provisional type's stability may change, so it is not kept
+   *  Caching.stampedIf(myIsStableRunId, myIsStable)(myIsStableRunId = _, myIsStable = _)(ctx.runId, _ => !isProvisional):
+   *    computeIsStable
+   *  }}}
+   *  Expands as `stamped` does, the two stores under `if keep(v1)`.
    */
   inline def stampedIf[S, T](inline stamp: S, inline value: T)(inline setStamp: S => Unit, inline setValue: T => Unit)(
       inline now: S, inline keep: T => Boolean)(inline compute: T)(using c: Context): T =
@@ -37,6 +66,13 @@ object Caching:
 
   /** `stamped`, with a hit when `isCurrent(stamp, value)`, the stamp read first: for a validity wider than one
    *  period, or a value an invalidation may null.
+   *  {{{
+   *  // ClassDenotation.baseTypeCache: valid while the base types are the same, nulled by an invalidation
+   *  Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(myBaseTypeCachePeriod = _, myBaseTypeCache = _)(
+   *      (period, cache) => cache != null && currentHasSameBaseTypesAs(period), ctx.period):
+   *    ctx.base.sharing.newEqHashMap()
+   *  }}}
+   *  Expands as `stamped` does, with `isCurrent(s, v)` for `s == now`.
    */
   inline def stampedWhen[S, T](inline stamp: S, inline value: T)(inline setStamp: S => Unit, inline setValue: T => Unit)(
       inline isCurrent: (S, T) => Boolean, inline now: S)(inline compute: T)(using c: Context): T =
@@ -64,7 +100,15 @@ object Caching:
         setStamp(now)
       v1
 
-  /** The value of the cache in fields `stamp` and `value` if the stamp is `now`, `orElse` otherwise. */
+  /** The value of the cache in fields `stamp` and `value` if the stamp is `now`, `orElse` otherwise: a read that
+   *  neither computes nor stores.
+   *  {{{
+   *  // NamedType.currentSignature: the signature if known, without forcing a denotation
+   *  Caching.peek(mySignatureRunId, mySignature)(ctx.runId):
+   *    ... // the signature from what is known now
+   *  }}}
+   *  Expands to `val s = stamp; if concurrent then VarHandle.acquireFence(); if s == now then value else orElse`.
+   */
   inline def peek[S, T](inline stamp: S, inline value: T)(inline now: S)(inline orElse: T)(using Context): T =
     val s = stamp
     if ctx.base.concurrent then VarHandle.acquireFence()
