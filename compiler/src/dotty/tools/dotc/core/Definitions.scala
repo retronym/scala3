@@ -2288,6 +2288,10 @@ class Definitions {
       syntheticCoreMethods
       ScalaValueClasses()
       JavaEnumClass
+      // entered into published packages on first use otherwise, by whichever reader got there first, and listed by
+      // enumerations of the package only from then on
+      FlexibleTypeSymbol
+      ImplicitScrutineeTypeSym
       // end force initialization
       isInitialized = true
     }

@@ -2581,8 +2581,10 @@ object SymDenotations {
      */
     def delete(sym: Symbol)(using Context): Unit = {
       val scope = info.decls.openForMutations
-      scope.unlink(sym, sym.name)
-      if sym.name != sym.originalName then scope.unlink(sym, sym.originalName)
+      // a classfile completer deletes from its package's published scope: as the scope's one writer
+      scope.writing:
+        scope.unlink(sym, sym.name)
+        if sym.name != sym.originalName then scope.unlink(sym, sym.originalName)
       myMemberCache match
         case null => ()
         case mc => mc.remove(sym.name)

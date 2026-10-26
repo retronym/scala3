@@ -41,7 +41,8 @@ class TypeParamsInitSuite:
         case t => List(t)
       val typer = new Typer
       val ctx = ctx0.fresh.setSource(source).setOwner(defn.EmptyPackageClass).setScope(defn.EmptyPackageClass.info.decls)
-      typer.index(stats)(using ctx)
+      // indexing enters into the empty package's published scope: a write action, as the driver's own runs are
+      driver.asWriter(typer.index(stats)(using ctx))
       val cls = defn.EmptyPackageClass.info.decls.lookup(typeName(s"C$i"))
       val tsym = cls.info.decls.lookup(typeName("T"))
       tsym.infoOrCompleter match

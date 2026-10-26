@@ -115,4 +115,4 @@ object CompletionLock:
   val lazyRef: What = What("lazy reference", null)
   val lazyAnnotation: What = What("lazy annotation", null)
   val packageObjects: What = What("package objects", null)
-  val flatClasses: What = What("flat classes of a package", null)
+  val scopeWrite: What = What("change to a published scope", null)

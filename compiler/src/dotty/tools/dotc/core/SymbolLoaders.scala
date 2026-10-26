@@ -245,7 +245,7 @@ object SymbolLoaders {
     private def enterFlat()(using Context): Unit =
       if !ctx.base.concurrent then for (enter <- enterFlatClasses) enter()
       else if enterFlatClasses.isDefined && (flatEnterer ne Thread.currentThread) then
-        Sharing.exclusive[PackageLoader.this.type, Unit](this, CompletionLock.flatClasses, sourceModule):
+        currentDecls.writing:
           enterFlatClasses match
             case Some(enter) =>
               flatEnterer = Thread.currentThread

@@ -314,14 +314,29 @@ object Scopes {
         published = was
         changed("extend")
 
-    // `whole`: the scope was replaced as a whole by `extendAside`, under its owner's claim, which is how a published
-    // scope may change outside a write action; a change during the base's setup (`Definitions.init`) has no reader
-    private def changed(kind: String, whole: Boolean = false)(using Context): Unit =
+    // the thread changing this scope as its one writer (`writing`)
+    private var writer: Thread | Null = null
+
+    /** `op` as this scope's one writer: on a concurrent base, holding a claim keyed by the scope, which is how a
+     *  published scope may change outside a write action (a package's flat classes, a classfile completer's deletion
+     *  of the symbols it found absent). Readers stay lock free: an entry is added by `extendAside`, which replaces the
+     *  scope whole, or removed by `unlink`, which leaves the removed entry's own links as they were.
+     */
+    private[core] final def writing[T](op: => T)(using Context): T =
+      if !ctx.base.concurrent then op
+      else Sharing.exclusive[this.type, T](this, CompletionLock.scopeWrite, this):
+        val was = writer
+        writer = Thread.currentThread
+        try op finally writer = was
+
+    // a change during the base's setup (`Definitions.init`) has no reader
+    private def changed(kind: String)(using Context): Unit =
       if published then
         val base = ctx.base
         base.structureEpoch += 1
         if ScopeWrites.tracing then ScopeWrites.record(kind)
-        if base.concurrent && !whole && (base.writeActionThread ne Thread.currentThread) && ctx.definitions.initialized then
+        if base.concurrent && (writer ne Thread.currentThread) && (base.writeActionThread ne Thread.currentThread)
+            && ctx.definitions.initialized then
           ScopeWrites.unfrozen(kind)
 
     /** create and enter a scope entry with given name and symbol */
@@ -366,7 +381,7 @@ object Scopes {
       elemsCache = null
       VarHandle.releaseFence()
       hashTable = aside.hashTable
-      changed("extend", whole = true)
+      changed("extend")
 
     /** enter a symbol in this scope. */
     final def enter[T <: Symbol](sym: T)(using Context): T = {
@@ -377,9 +392,18 @@ object Scopes {
     }
 
     final def enter[T <: Symbol](name: Name, sym: T)(using Context): T = {
-      newScopeEntry(name, sym)
+      // a published scope on a concurrent base, outside a write action and its one writer: replaced whole, since an
+      // enter in place can rehash, which rewrites the chains a reader may be walking
+      if needsWriter then writing(extendAside(_.enter(name, sym)))
+      else newScopeEntry(name, sym)
       sym
     }
+
+    // a change to this scope must be made by its one writer (`writing`): it is published, the base concurrent, and
+    // the change is not made by a write action or by the writer already
+    private def needsWriter(using Context): Boolean =
+      published && ctx.base.concurrent && (writer ne Thread.currentThread)
+        && (ctx.base.writeActionThread ne Thread.currentThread) && ctx.definitions.initialized
 
     /** enter a symbol, asserting that no symbol with same name exists in scope */
     final def enterUnique(sym: Symbol)(using Context): Unit = {
@@ -418,7 +442,11 @@ object Scopes {
         }
 
     /** Remove entry from this scope (which is required to be present) */
-    final def unlink(e: ScopeEntry)(using Context): Unit = {
+    final def unlink(e: ScopeEntry)(using Context): Unit =
+      // in place, by single stores that leave `e`'s own links as they were: a reader at `e` goes on past it
+      if needsWriter then writing(unlink0(e)) else unlink0(e)
+
+    private def unlink0(e: ScopeEntry)(using Context): Unit = {
       if (lastEntry == e)
         lastEntry = e.prev
       else {
@@ -458,7 +486,10 @@ object Scopes {
     /** Replace symbol `prev` (if it exists in current scope) by symbol `replacement`.
      *  @pre `prev` and `replacement` have the same name.
      */
-    final def replace(prev: Symbol, replacement: Symbol)(using Context): Unit = {
+    final def replace(prev: Symbol, replacement: Symbol)(using Context): Unit =
+      if needsWriter then writing(replace0(prev, replacement)) else replace0(prev, replacement)
+
+    private def replace0(prev: Symbol, replacement: Symbol)(using Context): Unit = {
       require(prev.name == replacement.name)
       var e = lookupEntry(prev.name)
       while (e != null) {
