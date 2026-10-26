@@ -471,6 +471,52 @@ class CompletionSoakSuite extends BasePCSuite:
     if otherFailure.get != null then throw otherFailure.get
     org.junit.Assert.assertTrue(failures.mkString("\n"), failures.isEmpty)
 
+  /** The spike widened: for every point of the file, a request there is
+   *  cancelled at each of its typed trees, once inside a fresh run on the
+   *  content and once inside a resume (a session established by a request
+   *  at another point first), and after each the completion at the `show`
+   *  point must equal a whole-file run's and the file's symbols must be
+   *  clean. One reader. Prints, per point and mode, how many landings were
+   *  tried.
+   */
+  private def cancelEverywhereThenShow(name: String, file: String => String, targetLabel: String): Unit =
+    val (content, offsets) = points(file("a"))
+    val source = SourceFile.virtual(uri, content)
+    val oracle =
+      val d = newDriver()
+      d.run(uri, source)
+      offsets.map(o => o -> labels(d, source, o)).toMap
+    val show = offsets.find(o => oracle(o).exists(_.startsWith(targetLabel))).getOrElse(throw AssertionError(s"no point whose completions start with $targetLabel"))
+    val driver = new InteractiveDriver(settings :+ "-Yinteractive-parallel", CachedLogicalPackage.none)
+    val failures = mutable.ListBuffer.empty[String]
+    val tried = mutable.ListBuffer.empty[String]
+    for at <- offsets; resume <- List(false, true) do
+      val establishAt = if resume then offsets.find(_ != at) else None
+      var n = 1; var cancelled = true; var last = 0; var served = false
+      while cancelled do
+        val sourceN = SourceFile.virtual(uri, content + s"\n// cancel at $at tree $n resume=$resume")
+        establishAt.foreach(e => driver.withCancelChecker(() => false)(driver.runUpTo(uri, sourceN, Span(e))))
+        val runBefore = driver.runIdOf(uri)
+        cancelled =
+          try { driver.withCancelAtTree(n)(driver.runUpTo(uri, sourceN, Span(at))); false }
+          catch case _: CancelledCompilation => true
+        if cancelled then
+          last = n
+          val obtained =
+            try driver.readUpTo(uri, sourceN, Span(show))((ctx, unit, _) => labels(ctx, unit, sourceN, show))
+            catch case ex: CancelledCompilation => List(s"<cancellation reached the caller: ${ex.getMessage}>")
+          val dirty = touched(driver)
+          if obtained != oracle(show) || dirty.nonEmpty then
+            failures += s"cancel at $at tree $n ${if resume then "in a resume" else "in a fresh run"} (run $runBefore -> ${driver.runIdOf(uri)}, tainted=${driver.isTainted(uri)}): " +
+              (if obtained != oracle(show) then s"show expected ${oracle(show).take(3)} obtained ${obtained.take(3)}" else "") +
+              (if dirty.nonEmpty then s" dirty: ${dirty.mkString(", ")}" else "")
+        else if n == 1 then served = true
+        n += 1
+      tried += s"$at/${if resume then "resume" else "fresh"}: ${if served then "served" else s"$last trees"}"
+    println(s"[cancel-everywhere-then-show $name] show at $show; landings tried: ${tried.mkString(", ")}; ${failures.size} failures" + (if failures.nonEmpty then failures.mkString("\n  ", "\n  ", "") else ""))
+    org.junit.Assert.assertTrue(failures.mkString("\n"), failures.isEmpty)
+
+  @Test def `cancel-everywhere-then-show-shapes` = cancelEverywhereThenShow("shapes", shapesFile, "show (t: Int)")
   @Test def `cancel-at-every-tree-shapes` = cancelAtEveryTree("shapes", shapesFile, readers = false, "show (t: Int)")
   @Test def `cancel-at-every-tree-shapes-two-readers` = cancelAtEveryTree("shapes", shapesFile, readers = true, "show (t: Int)")
 
