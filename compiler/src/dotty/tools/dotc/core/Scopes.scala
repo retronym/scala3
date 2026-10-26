@@ -221,8 +221,17 @@ object Scopes {
     /** The synthesizer to be used, or `null` if no synthesis is done on this scope */
     private var synthesize: SymbolSynthesizer | Null = null
 
+    /** The entries the synthesizer made, by the name looked up: kept beside the scope, never entered into it, so that
+     *  what enumerates the scope (`toList`, member names, `-Wshadow`) does not depend on which synthetic names earlier
+     *  code happened to mention, and one name has one symbol however many readers ask for it at once. Shared with
+     *  the scope's clones.
+     */
+    private var synthesized: java.util.concurrent.ConcurrentHashMap[Name, ScopeEntry] | Null = null
+
     /** Use specified synthesize for this scope */
-    def useSynthesizer(s: SymbolSynthesizer): Unit = synthesize = s
+    def useSynthesizer(s: SymbolSynthesizer): Unit =
+      synthesize = s
+      synthesized = new java.util.concurrent.ConcurrentHashMap
 
     protected def newScopeLikeThis(): MutableScope = new MutableScope(nestingLevel)
 
@@ -241,6 +250,7 @@ object Scopes {
         scope.newScopeEntry(e.name, e.sym)
       }
       scope.synthesize = synthesize
+      scope.synthesized = synthesized
       scope
     }
 
@@ -378,10 +388,24 @@ object Scopes {
       if e != null then e
       else synthesize match
         case null => null
-        case s =>
-          val sym = s(name)
-          if (sym.exists) newScopeEntry(sym.name, sym) else e
+        case s => synthesizedEntry(s, name)
     }
+
+    /** The synthesized entry for `name`, made once: a reader that loses the race to make it takes the winner's, and
+     *  the loser's symbol is never seen. The entry is the scope's (`owner`) but in no chain of it, so
+     *  `lookupNextEntry` finds nothing after it.
+     */
+    private def synthesizedEntry(s: SymbolSynthesizer, name: Name)(using Context): ScopeEntry | Null =
+      val memo = synthesized.nn
+      val known = memo.get(name)
+      if known != null then known
+      else
+        val sym = s(name)
+        if !sym.exists then null
+        else
+          val fresh = new ScopeEntry(sym.name, sym, this)
+          val won = memo.putIfAbsent(name, fresh)
+          if won == null then fresh else won
 
     /** lookup next entry with same name as this one */
     override final def lookupNextEntry(entry: ScopeEntry)(using Context): ScopeEntry | Null = {
