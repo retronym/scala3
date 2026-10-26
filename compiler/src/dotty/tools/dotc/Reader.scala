@@ -58,6 +58,13 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    */
   private[dotc] var stopInlining: Boolean = false
 
+  /** The printer's recursion limit for this reader. The base's initial context holds one `DefaultMessageLimiter`,
+   *  which every context derived from it shares; its depth counter is a plain field, so readers printing at once
+   *  added up their depths in it, and a lost update left it high for good (labels printed with `...`). Used in its
+   *  place on a concurrent base (`PlainPrinter.limiter`).
+   */
+  private[dotc] val messageLimiter: printing.DefaultMessageLimiter = printing.DefaultMessageLimiter()
+
   // ---- Debug output (`reporting.trace`, `-explain-cycles`) ----
 
   /** The margin of `trace` output. */
