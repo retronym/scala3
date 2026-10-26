@@ -529,7 +529,10 @@ class Definitions {
     val completer = new LazyType {
       def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
-        val parents = if ctx.explicitNulls then AnyValType :: Nil else ObjectType :: Nil
+        // `AnyVal` by name: `Null` is completed during `init` (`requiredClass` merges it with the package object's
+        // members, which reads its target name), and `AnyValClass` taken then would be the classpath's even when
+        // the library's own `AnyVal` is being compiled
+        val parents = if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil else ObjectType :: Nil
         val decls = newScope
         denot.info = ClassInfo(scalaPackageClass.thisType, cls, parents, decls)
       }
