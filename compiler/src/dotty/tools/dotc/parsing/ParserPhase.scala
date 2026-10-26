@@ -47,7 +47,7 @@ class Parser extends Phase {
         report.inform(s"parsing ${unit.source}")
         ctx.fresh.setCompilationUnit(unit).withRootImports
 
-    val unitContexts0 =
+    val unitContexts0 = dotty.tools.dotc.interactive.OpenTiming.timed(s"parse ${unitContexts.length} files"):
       if ctx.base.parallel && unitContexts.lengthCompare(1) > 0 then parseInParallel(unitContexts)
       else
         for

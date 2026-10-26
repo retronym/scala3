@@ -1576,11 +1576,13 @@ class InteractiveDriver(
       reader.runsStarted += 1
       if typeAll then reader.wholeFileRunsStarted += 1
       run.isTargeted = target.exists
+      val tOpen = System.nanoTime()
       val skipped =
         try
           run.compileSources(files.map(_._2))
           reader.skippedStats.toList
         finally reader.clearTargeting()
+      val tCompiled = System.nanoTime()
       if myCancelled || reader.cancelChecker() then throw CompilationUnit.CancelledCompilation()
       val sessions = ctx.run.nn.units.zipWithIndex.map { (unit, i) =>
         val uri = files.collectFirst { case (u, src) if src eq unit.source => u }.getOrElse(URI.create("file:///" + unit.source.path).nn)
@@ -1598,6 +1600,8 @@ class InteractiveDriver(
       // from here on, readers settle their own typer states (I76)
       if parallelReaders then myCtx.typerState.readOnlyRoot = true
       myOtherSessions = sessions.toMap
+      if OpenTiming.on then
+        OpenTiming.log(f"open: ${files.size} files, compileSources ${(tCompiled - tOpen) / 1e6}%.1f ms, sessions ${(System.nanoTime() - tCompiled) / 1e6}%.1f ms")
       sessions.map((u, s) => u -> s.currentDiagnostics).toMap
     catch case ex: (CompilationUnit.CancelledCompilation | FatalError) =>
       myCtx = previousCtx
@@ -1784,3 +1788,12 @@ class InteractiveDriver(
   }
 }
 
+/** `-Ddotc.openTiming`: where `openAll`'s open goes, step by step, on stderr. A measurement aid. */
+object OpenTiming:
+  val on: Boolean = System.getProperty("dotc.openTiming") != null
+  def log(msg: String): Unit = System.err.println("[open] " + msg)
+  inline def timed[T](what: String)(inline op: T): T =
+    if !on then op
+    else
+      val t0 = System.nanoTime()
+      try op finally log(f"$what ${(System.nanoTime() - t0) / 1e6}%.1f ms")

@@ -105,7 +105,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
         else
           newCtx
 
-    val unitContexts0 = runSubPhase(Indexing) {
+    val unitContexts0 = interactive.OpenTiming.timed("index")(runSubPhase(Indexing) {
       if ctx.base.parallel && ctx.run.nn.isTargeted && unitContexts.lengthCompare(1) > 0 then
         indexInParallel(unitContexts)
       else
@@ -113,7 +113,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
           unitContext <- unitContexts
           if enterSyms(using unitContext)
         yield unitContext
-    }
+    })
 
     ctx.base.parserPhase match {
       case p: ParserPhase =>
@@ -125,12 +125,12 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
       case _ =>
     }
 
-    val unitContexts1 = runSubPhase(Typechecking) {
+    val unitContexts1 = interactive.OpenTiming.timed("typecheck (skipping)")(runSubPhase(Typechecking) {
       for
         unitContext <- unitContexts0
         if typeCheck(using unitContext)
       yield unitContext
-    }
+    })
 
     record("total trees after typer", ast.Trees.ntrees)
 
