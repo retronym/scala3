@@ -10,6 +10,7 @@
   --node: #ffffff; --node-head: #f0eee9; --hl: #1f6feb;
   --kA: #2f6fd0; --kB: #8a4fc7; --kC: #1f8a6a; --kD: #b7791f; --kE: #c2416e; --kU: #9a9a9f;
   --warn: #d1242f; --warn-bg: #fde7e9; --chip: #f0eee9; --chip-on: #1d1d1f; --chip-on-fg: #ffffff;
+  --c-kw: #8a2c9e; --c-str: #1f7a4d; --c-com: #7d7a73; --c-ty: #1f5fb4; --c-num: #a35a00; --c-ann: #a3361f;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -17,6 +18,7 @@
     --node: #212125; --node-head: #2b2b30; --hl: #58a6ff;
     --kA: #6ea2ff; --kB: #b98cf0; --kC: #4cc79e; --kD: #e0a94a; --kE: #ef7aa3; --kU: #8a8a90;
     --warn: #ff6b6b; --warn-bg: #3d1a1d; --chip: #2b2b30; --chip-on: #e8e6e3; --chip-on-fg: #151517;
+    --c-kw: #d49bf0; --c-str: #7fd3a0; --c-com: #8f8c86; --c-ty: #7ab3ff; --c-num: #f0b36a; --c-ann: #f08a73;
   }
 }
 :root[data-theme="dark"] {
@@ -24,6 +26,7 @@
   --node: #212125; --node-head: #2b2b30; --hl: #58a6ff;
   --kA: #6ea2ff; --kB: #b98cf0; --kC: #4cc79e; --kD: #e0a94a; --kE: #ef7aa3; --kU: #8a8a90;
   --warn: #ff6b6b; --warn-bg: #3d1a1d; --chip: #2b2b30; --chip-on: #e8e6e3; --chip-on-fg: #151517;
+    --c-kw: #d49bf0; --c-str: #7fd3a0; --c-com: #8f8c86; --c-ty: #7ab3ff; --c-num: #f0b36a; --c-ann: #f08a73;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, system-ui, sans-serif; }
@@ -111,6 +114,12 @@ svg a text:hover { text-decoration: underline; }
 #guide .tabpanel .ph h2 { margin: 0; }
 #guide .tabpanel .cures { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 @media (max-width: 700px) { #guide .tabs { grid-template-columns: 1fr; } #guide .tablist { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 0; } #guide .tabgroup { display: none; } #guide .tab { white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent; } #guide .tab[aria-selected="true"] { border-bottom-color: var(--hl); } }
+#guide pre.code .hljs-keyword, #guide pre.code .hljs-built_in { color: var(--c-kw); }
+#guide pre.code .hljs-string { color: var(--c-str); }
+#guide pre.code .hljs-comment { color: var(--c-com); font-style: italic; }
+#guide pre.code .hljs-type, #guide pre.code .hljs-title { color: var(--c-ty); }
+#guide pre.code .hljs-number, #guide pre.code .hljs-literal { color: var(--c-num); }
+#guide pre.code .hljs-meta { color: var(--c-ann); }
 #guide pre.code { margin: 0; overflow-x: auto; background: var(--node-head); border-radius: 4px; padding: 8px 10px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; max-width: 100%; }
 #guide details.code summary { font-weight: 500; font-size: 11.5px; color: var(--hl); margin: 4px 0; }
 #guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
@@ -162,6 +171,8 @@ button:focus-visible, .chip:focus-visible { outline: 2px solid var(--hl); outlin
 <div id="guide" hidden></div>
 <script src="state-map.data.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/scala.min.js"></script>
 <script>
 (() => {
 const M = window.STATE_MAP;
@@ -740,6 +751,8 @@ const HAZARDS = [
 function renderGuide() {
   const g = document.getElementById('guide');
   const md = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Scala highlighted by highlight.js when it loaded, else plain
+  const scala = c => { try { return window.hljs ? hljs.highlight(c, { language: 'scala', ignoreIllegals: true }).value : esc(c); } catch (e) { return esc(c); } };
   const nOf = id => M.fields.filter(f => protBase(f.protection) === id).length;
   const sById = new Map(STRATEGIES.map(s => [s.id, s])), tById = new Map(TECHNIQUES.map(t => [t.id, t])), hById = new Map(HAZARDS.map(h => [h.id, h]));
   const curesOf = h => [...STRATEGIES.filter(s => s.cures.includes(h)).map(s => ['s', s]), ...TECHNIQUES.filter(t => t.cures.includes(h)).map(t => ['t', t])];
@@ -778,9 +791,9 @@ function renderGuide() {
     <div class="tabs">
       <div class="tablist" role="tablist" aria-label="Strategies">
         <div class="tabgroup">Protections</div>
-        ${STRATEGIES.map(x => `<button role="tab" class="tab" id="s-${esc(x.id)}" data-tab="s:${esc(x.id)}" aria-selected="false"><span>${esc(x.name)}</span><span class="n">${nOf(x.id) || ''}</span></button>`).join('')}
+        ${STRATEGIES.map(x => `<button role="tab" class="tab" id="s-${esc(x.id)}" data-tab="s:${esc(x.id)}" aria-selected="false"><span>${md(x.name)}</span><span class="n">${nOf(x.id) || ''}</span></button>`).join('')}
         <div class="tabgroup">Techniques</div>
-        ${TECHNIQUES.map(x => `<button role="tab" class="tab" id="t-${esc(x.id)}" data-tab="t:${esc(x.id)}" aria-selected="false"><span>${esc(x.name)}</span></button>`).join('')}
+        ${TECHNIQUES.map(x => `<button role="tab" class="tab" id="t-${esc(x.id)}" data-tab="t:${esc(x.id)}" aria-selected="false"><span>${md(x.name)}</span></button>`).join('')}
       </div>
       <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
     </div>
@@ -792,12 +805,12 @@ function renderGuide() {
     const x = kind === 's' ? sById.get(id) : tById.get(id);
     g.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === key)));
     const n = kind === 's' ? nOf(id) : 0;
-    panel.innerHTML = `<div class="ph"><h2>${esc(x.name)}</h2>${kind === 's' ? `<span class="mono">${esc(id)}</span>` : '<span class="eyebrow">technique</span>'}</div>
+    panel.innerHTML = `<div class="ph"><h2>${md(x.name)}</h2>${kind === 's' ? `<span class="mono">${esc(id)}</span>` : '<span class="eyebrow">technique</span>'}</div>
       <p>${md(x.how)}</p>
       ${x.use ? `<p><b>For:</b> ${md(x.use)}</p>` : ''}${x.where ? `<p><b>Where:</b> ${md(x.where)}</p>` : ''}
       ${x.cures.length ? `<div class="cures"><span class="eyebrow">answers</span>${x.cures.map(h => tag('h', hById.get(h))).join('')}</div>` : ''}
       ${kind === 's' ? `<p class="found">${n} field${n === 1 ? '' : 's'}${n ? ` <button data-prot="${esc(id)}">show on map</button>` : ''}</p>` : ''}
-      ${CODE[id] ? `<pre class="code">${esc(CODE[id])}</pre>` : '<p class="found">No excerpt yet.</p>'}`;
+      ${CODE[id] ? `<pre class="code">${scala(CODE[id])}</pre>` : '<p class="found">No excerpt yet.</p>'}`;
     wire(panel);
   }
   g.querySelectorAll('.tab').forEach(t => t.onclick = () => selectTab(t.dataset.tab));
