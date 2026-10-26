@@ -756,7 +756,7 @@ function renderGuide() {
   const nOf = id => M.fields.filter(f => protBase(f.protection) === id).length;
   const sById = new Map(STRATEGIES.map(s => [s.id, s])), tById = new Map(TECHNIQUES.map(t => [t.id, t])), hById = new Map(HAZARDS.map(h => [h.id, h]));
   const curesOf = h => [...STRATEGIES.filter(s => s.cures.includes(h)).map(s => ['s', s]), ...TECHNIQUES.filter(t => t.cures.includes(h)).map(t => ['t', t])];
-  const tag = (kind, x) => `<button class="tag" data-jump="${kind}-${esc(x.id)}">${esc(x.name)}</button>`;
+  const tag = (kind, x) => `<button class="tag" data-jump="${kind}-${esc(x.id)}">${md(x.name)}</button>`;
   const rules = M.header.rules.map(r => `<tr><td class="mono">${esc(r.id)}</td><td>${esc(r.sets)}</td><td>${md(r.doc)}</td></tr>`).join('');
   const kinds = Object.entries(M.header.kinds).map(([k, d]) => `<li><b>${esc(k)}</b> ${md(d)}: ${count(f => f.kind === k)} fields</li>`).join('');
   g.innerHTML = `<div class="doc">
