@@ -2277,6 +2277,9 @@ class Definitions {
   @lazyFact @guardedBy("writer")
   private var isInitialized = false
 
+  /** Is the base set up (`init` has run)? Before that there is no reader, so a scope may change freely. */
+  private[dotc] def initialized: Boolean = isInitialized
+
   def init()(using Context): Unit = {
     this.initCtx = ctx
     if (!isInitialized) {

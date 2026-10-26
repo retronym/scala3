@@ -1142,6 +1142,17 @@ object Contexts {
     @interned @publishedBy("init")
     val completionRoots: CompletionRoots = CompletionRoots(this)
 
+    /** The stamp of the structure of published scopes: bumped by every change to a scope after its owner's
+     *  completion published it (`MutableScope.published`). A cache computed from scopes can record it, and is
+     *  current while it has not moved.
+     */
+    @volatile private[dotc] var structureEpoch: Int = 0
+
+    /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
+     *  may change a published scope (`MutableScope.changed`).
+     */
+    @volatile private[dotc] var writeActionThread: Thread | Null = null
+
     // Symbols state
 
     /** Counter for unique symbol ids */

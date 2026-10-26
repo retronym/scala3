@@ -549,6 +549,7 @@ private sealed trait YSettings:
   val YcheckAllPatmat: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-all-patmat", "Check exhaustivity and redundancy of all pattern matching (used for testing the algorithm).")
   val YcheckConstraintDeps: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-constraint-deps", "Check dependency tracking in constraints (used for testing the algorithm).")
   val YretainTrees: Setting[Boolean] = BooleanSetting(ForkSetting, "Yretain-trees", "Retain trees for top-level classes, accessible from ClassSymbol#tree")
+  val YcheckFrozenScopes: Setting[Boolean] = BooleanSetting(ForkSetting, "Ycheck-frozen-scopes", "On a concurrent base (interactive mode, several readers), fail a change to a published scope that is not made by a write action.")
   val YinteractiveLog: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-log", "In interactive mode, print one line per request to stderr: what was typed, in which run, how long it took.")
   val YinteractiveParallel: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-parallel", "In interactive mode, let requests type concurrently: each completion has an owner and other readers wait for it, instead of every request being serialised with every completion. Experimental.")
   val YinteractiveBodyEdits: Setting[Boolean] = BooleanSetting(ForkSetting, "Yinteractive-body-edits", "In interactive mode, keep the session's run across an edit inside the body of a definition with a declared type: only that definition is indexed and typed again.")

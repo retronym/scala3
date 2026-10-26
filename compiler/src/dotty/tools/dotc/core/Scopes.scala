@@ -44,6 +44,38 @@ object Scopes {
    */
   private type SymbolSynthesizer = Name => Context ?=> Symbol
 
+  /** Diagnostics of changes to published scopes. With `-Ddotc.scopeWrites=<file>`, each change is counted by phase
+   *  and writer, and the counts are written to the file when the JVM exits. A change outside a write action on a
+   *  concurrent base (`unfrozen`) is counted the same way, under `UNFROZEN`, and fails under `-Ycheck-frozen-scopes`.
+   */
+  object ScopeWrites:
+    private val path = System.getProperty("dotc.scopeWrites")
+    val tracing: Boolean = path != null
+    private val counts = new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]()
+
+    private def writer: String =
+      import scala.jdk.CollectionConverters.*
+      StackWalker.getInstance().nn.walk { s =>
+        s.nn.map(f => s"${f.nn.getClassName.nn.stripPrefix("dotty.tools.dotc.")}.${f.nn.getMethodName}")
+          .nn.filter(f => !f.nn.startsWith("core.Scopes"))
+          .nn.limit(8).nn.collect(java.util.stream.Collectors.toList())
+      }.nn.asScala.mkString(" <- ")
+
+    def record(kind: String)(using Context): Unit =
+      counts.computeIfAbsent(s"${ctx.phase.phaseName} $kind <- $writer", _ => new java.util.concurrent.atomic.LongAdder()).nn.increment()
+
+    def unfrozen(kind: String)(using Context): Unit =
+      if tracing then
+        counts.computeIfAbsent(s"UNFROZEN ${ctx.phase.phaseName} $kind <- $writer", _ => new java.util.concurrent.atomic.LongAdder()).nn.increment()
+      if ctx.settings.YcheckFrozenScopes.value then
+        throw AssertionError(s"a published scope changed ($kind) outside a write action: $writer")
+
+    if tracing then
+      Runtime.getRuntime.nn.addShutdownHook(Thread(() =>
+        import scala.jdk.CollectionConverters.*
+        val lines = counts.asScala.toList.map((k, v) => (v.sum, k)).sortBy(-_._1).map((n, k) => s"$n\t$k")
+        java.nio.file.Files.write(java.nio.file.Paths.get(path), lines.asJava): Unit))
+
   class ScopeEntry private[Scopes] (val name: Name, _sym: Symbol, val owner: Scope) {
 
     var sym: Symbol = _sym
@@ -265,6 +297,33 @@ object Scopes {
     // the scope whose entries this one makes, when it is built aside to extend that scope (`extendAside`)
     private var extending: MutableScope | Null = null
 
+    /** Set when the owner's completion publishes this scope (`SymDenotation.lockAndComplete0`). A change after
+     *  that bumps the base's `structureEpoch`, and on a concurrent base must be made by a write action: a scope is
+     *  filled while it is hidden and then frozen (`changed`).
+     */
+    private[dotc] var published = false
+
+    /** `op`'s changes to this scope as one: on a batch base the flat classes of a package are entered in place, one
+     *  structural change however many classes they are, as `extendAside` publishes them on a concurrent base.
+     */
+    private[core] final def asOneChange(op: => Unit)(using Context): Unit =
+      val was = published
+      published = false
+      try op
+      finally
+        published = was
+        changed("extend")
+
+    // `whole`: the scope was replaced as a whole by `extendAside`, under its owner's claim, which is how a published
+    // scope may change outside a write action; a change during the base's setup (`Definitions.init`) has no reader
+    private def changed(kind: String, whole: Boolean = false)(using Context): Unit =
+      if published then
+        val base = ctx.base
+        base.structureEpoch += 1
+        if ScopeWrites.tracing then ScopeWrites.record(kind)
+        if base.concurrent && !whole && (base.writeActionThread ne Thread.currentThread) && ctx.definitions.initialized then
+          ScopeWrites.unfrozen(kind)
+
     /** create and enter a scope entry with given name and symbol */
     protected def newScopeEntry(name: Name, sym: Symbol)(using Context): ScopeEntry = {
       ensureCapacity(hashTable match { case null => MinHashedScopeSize; case ht => ht.length })
@@ -275,6 +334,7 @@ object Scopes {
       if (ht != null) enterInHash(e, ht)
       _size += 1
       elemsCache = null
+      changed("enter")
       e
     }
 
@@ -306,6 +366,7 @@ object Scopes {
       elemsCache = null
       VarHandle.releaseFence()
       hashTable = aside.hashTable
+      changed("extend", whole = true)
 
     /** enter a symbol in this scope. */
     final def enter[T <: Symbol](sym: T)(using Context): T = {
@@ -378,6 +439,7 @@ object Scopes {
       }
       elemsCache = null
       _size -= 1
+      changed("unlink")
     }
 
     /** remove symbol from this scope if it is present */
@@ -404,6 +466,7 @@ object Scopes {
         e = lookupNextEntry(e)
       }
       elemsCache = null
+      changed("replace")
     }
 
     /** Lookup a symbol entry matching given name.

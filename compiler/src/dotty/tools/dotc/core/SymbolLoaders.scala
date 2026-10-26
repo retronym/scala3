@@ -350,7 +350,7 @@ object SymbolLoaders {
           enterFlatClasses = None
         else
           enterFlatClasses = None
-          inContext(ctx){enterClasses(root, packageName, flat = true)}
+          currentDecls.asOneChange(inContext(ctx){enterClasses(root, packageName, flat = true)})
       }
       enterClasses(root, packageName, flat = false)
       if (!root.isEmptyPackage)

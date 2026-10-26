@@ -154,8 +154,11 @@ class InteractiveDriver(
       lock.lock()
       try
         writerPending = false
+        base.writeActionThread = Thread.currentThread
         body
-      finally lock.unlock()
+      finally
+        base.writeActionThread = null
+        lock.unlock()
 
   /** Run `op` under the base's completion lock. A completer writes its type
    *  vars and constraints into its creation context's typer state, the run's

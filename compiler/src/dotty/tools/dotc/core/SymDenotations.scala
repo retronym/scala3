@@ -331,11 +331,22 @@ object SymDenotations {
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
       if reader != null then reader.completing += symbol
-      try atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
+      try
+        atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
+        publishScope()
       catch case ex =>
         onUnwind(ex, interactive, reader, completer)
         throw ex
       finally if reader != null then reader.completing -= symbol
+
+    /** The completion of a class has filled its scope: from now on readers may see it, and a change to it is a
+     *  change to published state (`MutableScope.published`).
+     */
+    private def publishScope()(using Context): Unit = infoOrCompleter match
+      case ci: ClassInfo => ci.decls match
+        case s: MutableScope => s.published = true
+        case _ =>
+      case _ =>
 
     /** `Touched` is set but, in interactive mode, no completion of this
      *  symbol is in progress: the flag is what an exception unwinding through
