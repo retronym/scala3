@@ -3256,7 +3256,13 @@ object Types extends TypeUtils {
 
     private def compute()(using Context, Sharing.Holds[this.type]): Unit =
       set(myRef, done = true)
-      val result = refFn.nn(ctx)
+      val result =
+        try refFn.nn(ctx)
+        catch case ex: Throwable if !ex.isInstanceOf[CyclicReference] =>
+          // an unwound computation (a cancellation, a back-off, a crash) publishes nothing, so the next reader
+          // computes again rather than taking `computed` for a cycle; a cycle is a fact of this run and stays
+          set(myRef, done = myRef != null)
+          throw ex
       dropFn()
       if result != null then set(result, done = true)
       else assert(myRef != null)  // must have been `update`d
