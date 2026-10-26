@@ -115,6 +115,13 @@ object Symbols extends SymUtils {
       util.Publish.symbolCheckedPeriod(this)
       lastDenot
 
+    /** `latestDenot` for a reader with a context: the acquire only when readers are concurrent, so that the batch
+     *  compiler's hottest readers (`isTerm`, `isType`) pay a field test, not a barrier.
+     */
+    private def latestDenotIn(using Context): SymDenotation =
+      if ctx.base.concurrent then util.Publish.symbolCheckedPeriod(this)
+      lastDenot
+
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
 
     /** Set the denotation of this symbol
@@ -207,14 +214,14 @@ object Symbols extends SymUtils {
 
     /** Is symbol valid in current run? */
     final def isValidInCurrentRun(using Context): Boolean =
-      { val d = latestDenot; (d.validFor.runId == ctx.runId || stillValid(d)) && (d.symbol eq this) }
+      { val d = latestDenotIn; (d.validFor.runId == ctx.runId || stillValid(d)) && (d.symbol eq this) }
         // the last condition is needed because under ctx.staleOK overwritten
         // members keep denotations pointing to the new symbol, so the validity
         // periods check out OK. But once a package member is overridden it is not longer
         // valid. If the option would be removed, the check would be no longer needed.
 
-    final def isTerm(using Context): Boolean = latestDenot.isTerm
-    final def isType(using Context): Boolean = latestDenot.isType
+    final def isTerm(using Context): Boolean = latestDenotIn.isTerm
+    final def isType(using Context): Boolean = latestDenotIn.isType
     final def asTerm(using Context): TermSymbol = {
       assert(isTerm, s"asTerm called on not-a-Term $this")
       asInstanceOf[TermSymbol]
@@ -234,7 +241,8 @@ object Symbols extends SymUtils {
 
     /** The symbol's signature if it is completed or a method, NotAMethod otherwise. */
     final def signature(using Context): Signature =
-      if latestDenot.isCompleted || latestDenot.is(Method) then
+      val d = latestDenotIn
+      if d.isCompleted || d.is(Method) then
         denot.signature
       else
         Signature.NotAMethod

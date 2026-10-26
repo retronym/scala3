@@ -3221,9 +3221,11 @@ object Types extends TypeUtils {
   // `refFn` can be null only if `computed` is true.
   case class LazyRef(@(lazyFact @field) @(guardedBy @field)("rootClaim") private var refFn: (Context => (Type | Null)) | Null) extends UncachedProxyType with ValueType {
     // Written under this reference's claim, read without it by a reader that finds `computed` and waits on the claim for
-    // the value. Volatile, so that the reader that sees the value sees the type it points to complete. `refFn` is read
+    // the value. A plain field: a type's structure is in final fields, which the JMM shows complete to a reader that
+    // sees the reference, so a volatile would only cost the batch compiler a barrier on every `ref`. `refFn` is read
     // without the claim only by the case class's own `_1` and `copy`, which nothing calls.
-    @lazyFact @publishedBy("volatile") @volatile private var myRef: Type | Null = null
+    @lazyFact @benignRace("one store of a type whose structure is final fields; a reader that finds no value waits on the claim")
+    private var myRef: Type | Null = null
     @lazyFact @benignRace("set once and never reset: a reader that sees it false takes the claim and checks again, one that sees it true and no value waits on the claim")
     private var computed = false
 
