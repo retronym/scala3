@@ -71,7 +71,7 @@ svg .edge { fill: none; stroke: var(--edge); opacity: .55; }
 svg .edge.hl { stroke: var(--hl); opacity: 1; }
 svg g.n { cursor: pointer; }
 svg a text:hover { text-decoration: underline; }
-#guide { position: absolute; inset: 0; overflow: auto; background: var(--bg); padding-block: 18px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+#guide { position: fixed; inset: 0; z-index: 5; overflow: auto; background: var(--bg); padding-top: calc(18px + env(safe-area-inset-top, 0px)); padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 #guide .doc { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
 #guide nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #guide nav a { font-size: 12px; color: var(--hl); text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; background: var(--panel); }
@@ -99,6 +99,17 @@ svg a text:hover { text-decoration: underline; }
 #guide .step b { font-size: 12px; }
 #guide .step span { font-size: 12px; color: var(--muted); line-height: 1.45; }
 #guide .found { font-size: 11.5px; color: var(--muted); }
+#guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
+#guide .figure { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+#guide .figure svg { display: block; min-width: 760px; width: 100%; height: auto; }
+#guide .figure svg text { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; fill: var(--fg); }
+#guide .figure svg .t { font-weight: 650; font-size: 13px; }
+#guide .figure svg .m { fill: var(--muted); font-size: 11px; }
+#guide .figure svg .box { fill: var(--node); stroke: var(--line); }
+#guide .figure svg .lane { fill: var(--node-head); stroke: none; }
+#guide .figure svg .ar { stroke: var(--edge); stroke-width: 1.4; fill: none; }
+#guide .figure svg .ar.w { stroke: var(--warn); }
+#guide .figure svg .lbl { font-size: 11px; fill: var(--hl); }
 button:focus-visible, .chip:focus-visible { outline: 2px solid var(--hl); outline-offset: 1px; }
 @media (max-width: 700px) { #app { grid-template-columns: 1fr; grid-template-rows: 1fr 40vh; } #side { border-left: 0; border-top: 1px solid var(--line); } }
 </style>
@@ -122,18 +133,19 @@ button:focus-visible, .chip:focus-visible { outline: 2px solid var(--hl); outlin
         <span id="status"></span>
       </div>
     </div>
-    <div id="stage"><svg id="svg"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs><g id="vp"></g></svg><div id="tip"></div><div id="guide" hidden></div></div>
+    <div id="stage"><svg id="svg"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs><g id="vp"></g></svg><div id="tip"></div></div>
   </div>
   <div id="side">
     <h2>Field</h2>
     <div id="detail"><span class="mono" style="color:var(--muted)">Hover a row for its rules; click it for its source on GitHub. Click a class header to add the classes its fields point to; alt-click to add the classes that point to it as well; shift-click to remove it. Alt-click a kind or protection chip to show it alone; a feature chip brings in the classes with fields in that area.</span></div>
     <h2>Shown, kind × protection</h2>
     <div id="counts"></div>
-    <details open><summary>Validation against §8</summary><div id="validation"></div></details>
+    <details><summary id="val-sum">Checks against the design notes</summary><div id="validation"></div></details>
     <details><summary>Rules</summary><div id="rules"></div></details>
     <div id="meta" class="mono" style="color:var(--muted); margin-top:10px"></div>
   </div>
 </div>
+<div id="guide" hidden></div>
 <script src="state-map.data.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
 <script>
@@ -215,6 +227,15 @@ function rowsOf(node) {
 }
 
 // ---- chips
+// a protection's name in plain words; the id is the chip's tooltip
+const PROT_LABELS = { 'thread-confined': 'one reader only', 'completion-lock': 'completion lock', 'root-claim': 'root claim',
+  'frozen-after-completion': 'frozen once published', 'writer-action': 'write actions only', 'Caching': 'stamped cache',
+  'packed-volatile': 'packed into one value', 'Publish': 'ordered publication', 'volatile': 'one volatile field',
+  'init-only': 'written during setup', 'concurrent': 'concurrent structure', 'synchronized': 'monitor',
+  'benign-race': 'benign race, argued', 'batch-only': 'batch compiler only', 'post-typer': 'after typer',
+  'static-safe (@sharable)': 'shared statically, safe', 'single-threaded (@unshared)': 'single-threaded', none: 'unprotected',
+  partial: 'partly protected', mixed: 'mixed', unknown: 'not seen' };
+const protLabel = p => PROT_LABELS[p] || p;
 function chips(el, items, set, opts = {}) {
   el.innerHTML = '';
   for (const it of items) {
@@ -231,7 +252,7 @@ function renderChips() {
   chips(document.getElementById('f-kind'), KINDS.map(k => ({ id: k, label: `${k === 'unclassified' ? 'unclassified' : k + ' ' + M.header.kinds[k]} (${count(f => f.kind === k)})`, color: KCOL[k] })), state.kind,
     { onclick: (it, e) => toggleOnly(state.kind, it.id, e, KINDS) });
   const protItems = [{ id: '__bad', label: 'unprotected only', warn: true, title: 'none and partial: no protection found at some access' }]
-    .concat(allProts.map(p => ({ id: p, label: `${p} (${count(f => protBase(f.protection) === p)})`, warn: p === 'none' || p === 'partial' })));
+    .concat(allProts.map(p => ({ id: p, label: `${protLabel(p)} (${count(f => protBase(f.protection) === p)})`, title: p, warn: p === 'none' || p === 'partial' })));
   const protSet = new Set(state.prot);
   if ([...state.prot].every(p => p === 'none' || p === 'partial') && state.prot.size > 0) protSet.add('__bad');
   chips(document.getElementById('f-prot'), protItems, protSet, {
@@ -446,7 +467,10 @@ function renderCounts() {
   document.getElementById('counts').innerHTML = h;
 }
 function renderStatic() {
-  document.getElementById('validation').innerHTML = M.validation.map(v => `<div class="val ${v.startsWith('MISMATCH') || v.startsWith('MISSING') ? 'mm' : ''}">${esc(v)}</div>`).join('');
+  const differs = M.validation.filter(v => v.startsWith('MISMATCH') || v.startsWith('MISSING')).length;
+  document.getElementById('val-sum').textContent = `Checks against the design notes (§8): ${differs} differ`;
+  document.getElementById('validation').innerHTML = '<div class="rule">Where the extracted placement differs from what §8 of the design notes says, usually because §8 predates a change.</div>' +
+    M.validation.map(v => `<div class="val ${v.startsWith('MISMATCH') || v.startsWith('MISSING') ? 'mm' : ''}">${esc(v.replace(/^MISMATCH /, 'differs: ').replace(/^MISSING /, 'missing: ').replace(/^INFO +/, ''))}</div>`).join('');
   document.getElementById('rules').innerHTML = M.header.rules.map(r => `<div class="rule"><b>${r.id}</b> → ${esc(r.sets)}: ${esc(r.doc)}</div>`).join('') +
     `<div class="rule">${esc(M.header.note)}</div>`;
   document.getElementById('meta').innerHTML = `generated by ${esc(M.header.generator)} at <a target="_blank" href="${M.header.github.replace('/blob', '/tree')}/${M.header.tip}">${M.header.tip.slice(0, 10)}</a>`;
@@ -490,6 +514,31 @@ svg.addEventListener('wheel', e => {
 
 // ---- guide: the extractor, the hazards it maps, and the strategies that answer them
 // Hazards and strategies cross-link by id; a strategy's count and "show on map" come from the extracted fields.
+const PICTURE = `<div class="figure" role="img" aria-label="Readers type under a read lock, each with its own scratch; they share the symbol table, where lazy facts are completed under the completion lock, scopes are frozen once published, caches are stamped and interned values go through concurrent interners. A write action runs alone: it cancels readers, changes published state and moves the structure epoch, and readers retry.">
+<svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ga" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker>
+<marker id="gw" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"/></marker></defs>
+<rect class="lane" x="10" y="10" width="220" height="310" rx="6"/>
+<text class="t" x="24" y="34">Readers</text><text class="m" x="24" y="52">one per request, under the read lock</text>
+<rect class="box" x="24" y="68" width="192" height="58" rx="5"/><text x="36" y="90">reader 1: its own scratch</text><text class="m" x="36" y="108">pools, comparers, limiter (A)</text>
+<rect class="box" x="24" y="138" width="192" height="58" rx="5"/><text x="36" y="160">reader 2: its own scratch</text><text class="m" x="36" y="178">confined, needs no lock</text>
+<text class="m" x="24" y="222">results carry the write count;</text><text class="m" x="24" y="238">served again if a write ran after</text>
+<rect class="lane" x="300" y="10" width="330" height="310" rx="6"/>
+<text class="t" x="314" y="34">Shared symbol table</text><text class="m" x="314" y="52">every reader reaches it</text>
+<rect class="box" x="314" y="66" width="302" height="54" rx="5"/><text x="326" y="88">lazy facts (B): completions, inherited caches</text><text class="m" x="326" y="106">one completer under the lock; others wait</text>
+<rect class="box" x="314" y="128" width="302" height="54" rx="5"/><text x="326" y="150">scopes: filled hidden, frozen when published</text><text class="m" x="326" y="168">synthesized members kept beside, interned</text>
+<rect class="box" x="314" y="190" width="302" height="54" rx="5"/><text x="326" y="212">caches (C): stamped by period and epoch</text><text class="m" x="326" y="230">read once; a stale one is recomputed</text>
+<rect class="box" x="314" y="252" width="302" height="54" rx="5"/><text x="326" y="274">interned types and names (D)</text><text class="m" x="326" y="292">concurrent interners on a concurrent base</text>
+<rect class="lane" x="700" y="10" width="190" height="310" rx="6"/>
+<text class="t" x="714" y="34">Writer</text><text class="m" x="714" y="52">a write action, alone</text>
+<rect class="box" x="714" y="68" width="162" height="76" rx="5"/><text x="726" y="90">new content, a re-index,</text><text x="726" y="108">a splice, a body edit</text><text class="m" x="726" y="128">changes published state</text>
+<text class="m" x="714" y="176">moves the structure epoch:</text><text class="m" x="714" y="192">every stamped cache is stale</text>
+<path class="ar" d="M216,97 L314,93" marker-end="url(#ga)"/><text class="lbl" x="232" y="86">complete</text>
+<path class="ar" d="M216,167 L314,217" marker-end="url(#ga)"/><text class="lbl" x="236" y="208">read, stamp</text>
+<path class="ar" d="M216,160 L314,155" marker-end="url(#ga)"/><text class="lbl" x="236" y="150">look up</text>
+<path class="ar w" d="M714,128 L616,155" marker-end="url(#gw)"/><text class="lbl" x="640" y="128">write</text>
+<path class="ar w" d="M800,144 L800,290 L230,290" marker-end="url(#gw)"/><text class="lbl" x="420" y="318">a pending writer cancels readers at their next checkpoint; they retry after it</text>
+</svg></div>`;
 const STRATEGIES = [
   { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
   { id: 'completion-lock', name: 'Completion lock, with evidence', how: 'The base\'s completion lock, or the root\'s claim with parallel readers (`Sharing.exclusive`). The state behind it is reached only with a `Sharing.Holds[K]` in scope, which only `exclusive`, `claimed` and `completing` hand out, so an access outside the lock does not compile.', use: 'A lazy fact with a black hole: a completion, an inherited cache\'s computation, a scope\'s one writer.', cures: ['sentinel', 'peek', 'cycle'], example: 'core.Scopes.MutableScope#writer' },
@@ -541,10 +590,13 @@ function renderGuide() {
   const rules = M.header.rules.map(r => `<tr><td class="mono">${esc(r.id)}</td><td>${esc(r.sets)}</td><td>${md(r.doc)}</td></tr>`).join('');
   const kinds = Object.entries(M.header.kinds).map(([k, d]) => `<li><b>${esc(k)}</b> ${md(d)}: ${count(f => f.kind === k)} fields</li>`).join('');
   g.innerHTML = `<div class="doc">
-  <nav><span class="eyebrow">Guide</span><a href="#g-made">How the map is made</a><a href="#g-hazards">Hazards</a><a href="#g-strategies">Strategies</a><button id="b-back">back to the map</button></nav>
+  <nav><span class="eyebrow">Guide</span><a href="#g-made">How the map is made</a><a href="#g-hazards">Hazards</a><a href="#g-strategies">Strategies</a><button id="b-back">open the map</button></nav>
   <section id="g-made">
+    <h1>Mutable state in the Scala 3 compiler</h1>
+    <p class="lede">The presentation compiler serves several requests at once over one symbol table. Each mutable field of the compiler is either private to one request, protected by one of a few disciplines, or a hazard. This page maps all ${byOwner.size} classes with mutable fields and ${M.fields.length} fields: the guide below explains the hazards and the disciplines, and the map shows where each field stands.</p>
+    ${PICTURE}
     <h1>How the map is made</h1>
-    <p>The map is extracted from the compiled compiler, not written by hand. <code>tools/state-map/StateMap.scala</code> is a TASTy inspector over the non-bootstrapped compiler's classes; <code>run.sh</code> compiles and extracts, <code>check-cluster.sh &lt;files&gt;</code> reports a few files' fields with their unprotected accesses. This extraction: ${M.fields.length} fields in ${M.classes.length} classes at <code>${esc(M.header.tip.slice(0, 10))}</code>.</p>
+    <p>The map is extracted from the compiled compiler, not written by hand. <code>tools/state-map/StateMap.scala</code> is a TASTy inspector over the non-bootstrapped compiler's classes; <code>run.sh</code> compiles and extracts, <code>check-cluster.sh &lt;files&gt;</code> reports a few files' fields with their unprotected accesses. This extraction: ${M.fields.length} fields in ${byOwner.size} classes at <code>${esc(M.header.tip.slice(0, 10))}</code>.</p>
     <div class="pipeline">
       <div class="step"><b>Fields</b><span>Every <code>var</code> and mutable collection in dotc's classes; lazy vals, modules and synthetics left out.</span></div>
       <div class="step"><b>Kind</b><span>A–E from an annotation (<code>@scratch</code>, <code>@lazyFact</code>, <code>@cache</code>, <code>@interned</code>, <code>@treeState</code>), else the K rules: owner, type and name.</span></div>
@@ -598,7 +650,7 @@ function showGuide(on) {
 document.getElementById('b-guide').onclick = () => showGuide(document.getElementById('guide').hidden);
 
 renderChips(); renderStatic(); render();
-if (location.hash === '#guide') showGuide(true);
+showGuide(location.hash !== '#map');
 })();
 </script>
 </body>

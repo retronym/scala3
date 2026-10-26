@@ -59,7 +59,7 @@ object Rules:
   )
 
   val reach: List[Rule] = List(
-    Rule("R.post-typer", "post-typer", "the owner is in `cc`, `backend` or `transform` (other than `SetRootTree`, `CookComments`), or is a `Phase` other than the interactive compiler's (`Parser`, `TyperPhase`, `SetRootTree`, `CookComments`, `InteractiveCompiler.phases`)"),
+    Rule("R.post-typer", "post-typer", "the owner is in `cc`, `backend` or `transform` (other than `SetRootTree`, `CookComments`), or is a `Phase` subclass (not `Phase` itself) other than the interactive compiler's (`Parser`, `TyperPhase`, `SetRootTree`, `CookComments`, `InteractiveCompiler.phases`)"),
     Rule("R.typer", "typer", "everything else: reachable from the interactive compiler's typer")
   )
 
@@ -575,7 +575,8 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     val interactivePhases = Set("parsing.Parser", "typer.TyperPhase", "transform.SetRootTree", "transform.CookComments")
     if p == "cc" || p.startsWith("cc.") || p.startsWith("backend") then "post-typer"
     else if p.startsWith("transform") && !interactivePhases(f.owner) then "post-typer"
-    else if derives(f.owner, "core.Phases.Phase") && !interactivePhases.exists(ph => derives(f.owner, ph)) then "post-typer"
+    // `Phase` itself is not a phase: its fields are every phase's, the typer's among them
+    else if f.owner != "core.Phases.Phase" && derives(f.owner, "core.Phases.Phase") && !interactivePhases.exists(ph => derives(f.owner, ph)) then "post-typer"
     else "typer"
 
   private def protOf(f: FieldInfo, kindRule: String, reach: String): (String, String, String) =
