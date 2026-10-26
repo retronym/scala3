@@ -54,8 +54,8 @@ object Rules:
     Rule("P.volatile", "volatile", "`@volatile`, a single value"),
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
-    Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.exclusive` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
-    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; in a `synchronized` block or `Sharing.serialised` → synchronized; in the `op` of `Sharing.exclusive`, `SharingImpl.exclusive` or `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `Sharing.claimed`, `SharingImpl.claimed` or `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
+    Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.claim` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
+    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
   )
 
   val reach: List[Rule] = List(
@@ -148,11 +148,17 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       "java.lang.ThreadLocal", "java.lang.StringBuilder", "scala.Array",
       "dotty.tools.dotc.util.MutableMap", "dotty.tools.dotc.util.MutableSet", "dotty.tools.dotc.util.GenericHashMap",
       "dotty.tools.dotc.util.GenericHashSet", "dotty.tools.dotc.util.WeakHashSet", "dotty.tools.dotc.util.ConcurrentWeakHashSet",
-      "dotty.tools.dotc.util.SyncEqHashMap", "dotty.tools.dotc.util.EqHashMap", "dotty.tools.dotc.core.Scopes.MutableScope")
+      "dotty.tools.dotc.util.SyncEqHashMap", "dotty.tools.dotc.util.EqHashMap", "dotty.tools.dotc.core.Scopes.MutableScope",
+      "dotty.tools.dotc.core.Sharing.GuardedVar")
     val concurrentPrefixes = List("java.util.concurrent.", "scala.collection.concurrent.",
       "dotty.tools.dotc.util.ConcurrentWeakHashSet", "dotty.tools.dotc.util.SyncEqHashMap")
 
-    def mutableCollection(tp: TypeRepr): Option[String] =
+    def mutableCollection(tp: TypeRepr): Option[String] = tp.dealias match
+      // a `Sharing.Guard`'s state: the value it guards
+      case AppliedType(tc, List(_, t)) if tc.typeSymbol.name == "Guarded" => mutableCollection(t)
+      case _ => mutableCollection0(tp)
+
+    def mutableCollection0(tp: TypeRepr): Option[String] =
       val top = classesOf(tp).filterNot(s => s.fullName == "scala.Null")
       top.headOption.flatMap { s =>
         val bs = baseNames(s.typeRef)
@@ -168,16 +174,41 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       (owner, fn.name) match
         case ("dotty.tools.dotc.core.Caching", "stamped" | "stampedIf" | "stampedWhen" | "peek") =>
           Some("Caching" -> Set("stamp", "value", "setStamp", "setValue"))
-        case ("dotty.tools.dotc.core.Sharing", "exclusive") => Some("completion-lock" -> Set("op"))
-        case ("dotty.tools.dotc.core.Sharing", "claimed") => Some("root-claim" -> Set("op"))
+        // a claim's protection is its key's kind (`claimProtection`), read where the call's `ClaimKind` is known
+        case ("dotty.tools.dotc.core.Sharing", "claim" | "claimAt") => Some("claim" -> Set("op"))
+        case ("dotty.tools.dotc.core.Sharing", "once") => Some("claim" -> Set("compute"))
         case ("dotty.tools.dotc.core.Sharing", "serialised" | "locking") => Some("synchronized" -> Set("op"))
-        case ("dotty.tools.dotc.interactive.SharingImpl", "exclusive") => Some("completion-lock" -> Set("op"))
-        case ("dotty.tools.dotc.interactive.SharingImpl", "claimed") => Some("root-claim" -> Set("op"))
+        case ("dotty.tools.dotc.core.Sharing.Guard", "locked" | "alwaysLocked") => Some("synchronized" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionLock", "locked") => Some("completion-lock" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionRoots", "locked") => Some("root-claim" -> Set("op"))
         case (_, "synchronized") if owner == "scala.Any" || owner == "java.lang.Object" || owner == "scala.AnyRef" =>
           Some("synchronized" -> Set("*"))
         case _ => inlineProtecting(fn)
+
+    // The protection of a claim, from its `ClaimKind` argument (the given beside the key's class, or `claimAt`'s
+    // explicit kind): `lockWhenSerialised = false` is a root's claim only, otherwise the completion lock as well.
+    def claimProtection(argss: List[List[Term]]): String =
+      def isKind(t: Term) = t.tpe.widen.typeSymbol.fullName.replace("$", "") == "dotty.tools.dotc.core.Sharing.ClaimKind"
+      def lockFlag(sym: Symbol): Option[Boolean] =
+        var flag: Option[Boolean] = None
+        if sym.exists then
+          try
+            val rhs = sym.tree match
+              case v: ValDef => v.rhs
+              case d: DefDef => d.rhs
+              case _ => None
+            rhs.foreach { r =>
+              new TreeTraverser:
+                override def traverseTree(t: Tree)(o: Symbol): Unit = t match
+                  case NamedArg("lockWhenSerialised", Literal(BooleanConstant(b))) => flag = Some(b)
+                  case _ => super.traverseTree(t)(o)
+              .traverseTree(r)(sym)
+            }
+          catch case _: Throwable => ()
+        flag
+      argss.flatten.find(isKind).flatMap(k => lockFlag(k.symbol)) match
+        case Some(false) => "root-claim"
+        case _ => "completion-lock"
 
     // an inline method that passes its parameter `p` to a protected argument of a protecting call protects `p`
     def inlineProtecting(fn: Symbol): Option[(String, Set[String])] =
@@ -198,7 +229,8 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
                       case _ => (t, Nil)
                     val (g, argss) = flat(app)
                     protectedCall(g.symbol) match
-                      case Some((prot, names)) =>
+                      case Some((prot0, names)) =>
+                        val prot = if prot0 == "claim" then claimProtection(argss) else prot0
                         val gp = g.symbol.paramSymss.filterNot(_.exists(_.isTypeParam))
                         for (args, i) <- argss.zipWithIndex; (a, j) <- args.zipWithIndex do
                           val pn = gp.lift(i).flatMap(_.lift(j)).map(_.name).getOrElse("")
@@ -338,7 +370,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           methodStack = dd.symbol :: methodStack
           val savedInit = initDepth
           if dd.name == "<init>" then initDepth += 1
-          // a method that takes the evidence of a claim (`Sharing.Holds`) runs inside `Sharing.exclusive`
+          // a method that takes the evidence of a claim (`Sharing.Holds`) runs inside `Sharing.claim`
           def takes(cls: String) = dd.termParamss.exists(_.params.exists(_.tpt.tpe.dealias.typeSymbol.fullName.replace("$", "") == cls))
           val evidence =
             if takes("dotty.tools.dotc.core.Sharing.Holds") then Some("completion-lock")
@@ -370,7 +402,8 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           if fsym.exists && fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.dotc.util.Publish" then
             publishingMethods += currentMethod
           protectedCall(fsym) match
-            case Some((prot, names)) =>
+            case Some((prot0, names)) =>
+              val prot = if prot0 == "claim" then claimProtection(argss) else prot0
               fn match
                 // the monitor of `x.synchronized(...)`: reading `x` to lock it is the lock, not an access outside it
                 case Select(q, "synchronized") => withProt(prot)(traverseTree(q)(owner))
