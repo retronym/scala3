@@ -99,6 +99,8 @@ svg a text:hover { text-decoration: underline; }
 #guide .step b { font-size: 12px; }
 #guide .step span { font-size: 12px; color: var(--muted); line-height: 1.45; }
 #guide .found { font-size: 11.5px; color: var(--muted); }
+#guide pre.code { margin: 0; overflow-x: auto; background: var(--node-head); border-radius: 4px; padding: 8px 10px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; max-width: 100%; }
+#guide details.code summary { font-weight: 500; font-size: 11.5px; color: var(--hl); margin: 4px 0; }
 #guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
 #guide .figure { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 #guide .figure svg { display: block; min-width: 760px; width: 100%; height: auto; }
@@ -539,6 +541,149 @@ const PICTURE = `<div class="figure" role="img" aria-label="Readers type under a
 <path class="ar w" d="M714,128 L616,155" marker-end="url(#gw)"/><text class="lbl" x="640" y="128">write</text>
 <path class="ar w" d="M800,144 L800,330 L120,330 L120,322" marker-end="url(#gw)"/><text class="lbl" x="300" y="348">a pending writer cancels readers at their next checkpoint; they retry after it</text>
 </svg></div>`;
+// Each strategy's and technique's code, as it is written in the compiler (abridged with …; file in the first line)
+const CODE = {
+'thread-confined': String.raw`// Reader.scala: the request's own printer limiter
+private[dotc] val messageLimiter: printing.DefaultMessageLimiter = printing.DefaultMessageLimiter()
+
+// printing/PlainPrinter.scala: used in place of the base's shared one
+protected final def limiter: MessageLimiter = ctx.property(MessageLimiter).get match
+  case _: DefaultMessageLimiter if ctx.base.concurrent => ctx.reader.messageLimiter
+  case l => l`,
+'completion-lock': String.raw`// core/SymDenotations.scala: state only the claim's holder may touch
+private var lockedBy: Thread | Null = null
+protected final def setLocked(b: Boolean)(using Sharing.Holds[this.type]): Unit =
+  lockedBy = if b then Thread.currentThread else null
+
+// the only way to get a Holds[this.type]
+protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
+  Sharing.exclusive[this.type, T](this, CompletionLock.inheritedCache, clsd)(op)
+
+computing(clsd) { setLocked(true); … }   // compiles
+setLocked(true)                           // does not: no Holds in scope`,
+'root-claim': String.raw`// core/Annotations.scala: a lazy annotation's evaluation is claimed per annotation
+private def setTree(tree: Tree | (Context ?=> Tree) | Null)(using Sharing.Holds[this.type]): Unit = myTree = tree
+
+override def tree(using Context): Tree =
+  …
+  else Sharing.claimed[this.type, Tree](this, CompletionLock.lazyAnnotation, this)(tree0)
+// re-entry on this thread still meets the sentinel; another reader waits for the claim`,
+'frozen-after-completion': String.raw`// core/Scopes.scala
+@frozenAfter("completion") private var hashTable: Array[ScopeEntry | Null] | Null = null
+@frozenAfter("completion") private[dotc] var published = false   // set when the owner's completion returns
+
+final def enter[T <: Symbol](name: Name, sym: T)(using Context): T =
+  // a published scope on a concurrent base: one writer, and the new entries built aside
+  if needsWriter then writing(extendAside(_.enter(name, sym))) else newScopeEntry(name, sym)
+  sym
+
+private[core] final def writing[T](op: => T)(using Context): T =
+  if !ctx.base.concurrent then op
+  else Sharing.exclusive[this.type, T](this, CompletionLock.scopeWrite, this):
+    val was = writer; writer = Thread.currentThread
+    try op finally writer = was`,
+'writer-action': String.raw`// interactive/InteractiveDriver.scala
+private def writing[T](body: => T): T =
+  val lock = regime.writeLock
+  if lock.isHeldByCurrentThread then body
+  else
+    writerPending = true            // readers unwind at their next checkpoint
+    lock.lock()
+    try
+      writerPending = false
+      base.writeActionThread = Thread.currentThread
+      myWrites += 1
+      body
+    finally
+      base.writeActionThread = null
+      lock.unlock()`,
+'Caching': String.raw`// core/Types.scala: AndType's base classes, valid for one period
+private var myBaseClassesPeriod: Period = Nowhere
+private var myBaseClasses: List[ClassSymbol] = uninitialized
+override final def baseClasses(using Context): List[ClassSymbol] =
+  Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
+    … // computed; on a concurrent base stored value, fence, stamp; read stamp, fence, value`,
+'synchronized': String.raw`// Run.scala: the suppressions, reached only with the monitor's evidence
+object suppressions:
+  private type Held = Sharing.Monitor[suppressions.type]
+  private inline def held[T](inline op: Held ?=> T)(using Context): T =
+    Sharing.serialised[suppressions.type, T](this)(op)   // a lock only on a concurrent base
+  private def bySource(using Held) = mySuppressions
+  …`,
+'concurrent': String.raw`// core/Sharing.scala: the seam picks the structure per mode; batch keeps the plain one
+def newUniques(): Uniques = if concurrent then ConcurrentUniques() else Uniques()
+def newEqHashMap[K, V](initialCapacity: Int = 8): util.EqHashMap[K, V] = …`,
+'init-only': String.raw`// core/Phases.scala: set by init when the base plans its phases, before any reader
+@publishedBy("init") private var mySameMembersStartId = NoPhaseId
+…
+mySameMembersStartId = if (changesMembers) id else prev.sameMembersStartId`,
+'benign-race': String.raw`// core/Scopes.scala: the reason is part of the annotation
+@cache @benignRace("an immutable list of the entries; a reader that misses builds the same list, and a change nulls it. …")
+private var elemsCache: List[Symbol] | Null = null
+
+// an escape hatch from the evidence is spelled out the same way
+Sharing.unguarded("compares with this thread: only its own store can make it true")`,
+pull: String.raw`// core/SymDenotations.scala: InheritedCacheImpl
+protected final val concurrent: Boolean = base.concurrent
+private val epoch: Int = if concurrent then base.structureEpoch else 0
+protected final def epochCurrent: Boolean = !concurrent || epoch == base.structureEpoch
+
+protected def invalidateDependents(): Unit =
+  if concurrent then base.bumpStructureEpoch()     // pull: every stamped cache is now stale
+  else …                                           // batch: walk the dependents, as before`,
+aside: String.raw`// core/Scopes.scala
+private[core] final def extendAside(fill: MutableScope => Unit)(using Context): Unit =
+  val aside = newScopeLikeThis()
+  … // copy this scope's entries into aside, then
+  fill(aside)
+  lastEntry = aside.lastEntry
+  _size = aside._size
+  elemsCache = null
+  VarHandle.releaseFence()       // a reader that sees the table sees what it holds
+  hashTable = aside.hashTable
+  changed("extend")`,
+memo: String.raw`// core/Scopes.scala: one entry per synthesized name, never entered into the scope
+private def synthesizedEntry(s: SymbolSynthesizer, name: Name)(using Context): ScopeEntry | Null =
+  val memo = synthesized.nn       // a ConcurrentHashMap
+  val known = memo.get(name)
+  if known != null then known
+  else
+    val sym = s(name)
+    if !sym.exists then null
+    else
+      val fresh = new ScopeEntry(sym.name, sym, this)
+      val won = memo.putIfAbsent(name, fresh)
+      if won == null then fresh else won`,
+local: String.raw`// core/SymDenotations.scala: the cache read once; the field is never read again
+private def baseData(implicit onBehalf: BaseData, ctx: Context): (List[ClassSymbol], BaseClassSet) = {
+  var cache = baseDataCache
+  if !cache.isValid then
+    cache = BaseData.newCache()
+    baseDataCache = cache
+  cache(this)
+}`,
+stamp: String.raw`// interactive/InteractiveDriver.scala
+private def servedCurrent[T](check: () => Boolean)(body: => T): T =
+  var tries = 0
+  while true do
+    val result = body
+    val stamp = base.reader.resultStamp       // the write count when it last left a lock
+    if stamp < 0 || stamp == myWrites then return result
+    if tries == MaxStaleRetries then { staleServed.incrementAndGet(); return result }
+    tries += 1; staleRetries.incrementAndGet()
+    bindReader(check)                         // again, on a fresh reader`,
+checkonly: String.raw`// inlines/PrepareInlineable.scala
+protected def checkOnly(using Context): Boolean = ctx.mode.is(Mode.Interactive)
+override protected def entersAccessors(using Context): Boolean = !checkOnly
+
+case tree: RefTree if needsAccessor(tree) =>
+  …
+  else if checkOnly && !ctx.settings.Whas.unstableInlineAccessors then tree   // the reference as written`,
+byname: String.raw`// core/Definitions.scala: Null is completed during init
+val parents =
+  if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil   // not AnyValType
+  else ObjectType :: Nil`,
+};
 const STRATEGIES = [
   { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
   { id: 'completion-lock', name: 'Completion lock, with evidence', how: 'The base\'s completion lock, or the root\'s claim with parallel readers (`Sharing.exclusive`). The state behind it is reached only with a `Sharing.Holds[K]` in scope, which only `exclusive`, `claimed` and `completing` hand out, so an access outside the lock does not compile.', use: 'A lazy fact with a black hole: a completion, an inherited cache\'s computation, a scope\'s one writer.', cures: ['sentinel', 'peek', 'cycle'], example: 'core.Scopes.MutableScope#writer' },
@@ -619,11 +764,11 @@ function renderGuide() {
     <h1>Strategies</h1>
     <p>A protection is how a field is kept safe; the map gives each field one. The count is of all extracted fields; "show on map" filters the diagram to that protection.</p>
     <div class="tablewrap"><table><tr><th>protection</th><th>how</th><th>for</th><th>answers</th><th class="n">fields</th><th></th></tr>
-    ${STRATEGIES.map(s => `<tr id="s-${esc(s.id)}"><td><b>${esc(s.name)}</b><br><span class="mono">${esc(s.id)}</span></td><td>${md(s.how)}</td><td>${md(s.use)}</td><td>${s.cures.map(h => tag('h', hById.get(h))).join(' ')}</td><td class="n">${nOf(s.id)}</td><td>${nOf(s.id) ? `<button data-prot="${esc(s.id)}">show on map</button>` : ''}</td></tr>`).join('')}
+    ${STRATEGIES.map(s => `<tr id="s-${esc(s.id)}"><td><b>${esc(s.name)}</b><br><span class="mono">${esc(s.id)}</span></td><td>${md(s.how)}${CODE[s.id] ? `<details class="code"><summary>in the code</summary><pre class="code">${esc(CODE[s.id])}</pre></details>` : ''}</td><td>${md(s.use)}</td><td>${s.cures.map(h => tag('h', hById.get(h))).join(' ')}</td><td class="n">${nOf(s.id)}</td><td>${nOf(s.id) ? `<button data-prot="${esc(s.id)}">show on map</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <h2>Techniques</h2>
     <p>Ways of writing the code that make a protection possible, or unnecessary.</p>
-    <div class="cards">${TECHNIQUES.map(t => `<div class="card" id="t-${t.id}"><h3>${esc(t.name)}</h3><p>${md(t.how)}</p><p class="meta">${md(t.where)}</p><div class="cures">${t.cures.map(h => tag('h', hById.get(h))).join('')}</div></div>`).join('')}</div>
+    <div class="cards">${TECHNIQUES.map(t => `<div class="card" id="t-${t.id}"><h3>${esc(t.name)}</h3><p>${md(t.how)}</p><p class="meta">${md(t.where)}</p>${CODE[t.id] ? `<pre class="code">${esc(CODE[t.id])}</pre>` : ''}<div class="cures">${t.cures.map(h => tag('h', hById.get(h))).join('')}</div></div>`).join('')}</div>
     <p class="found">Fields with no protection: ${nOf('none')} <code>none</code>, ${nOf('partial')} <code>partial</code>. <button data-prot="none">show on map</button></p>
   </section></div>`;
   g.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
