@@ -265,6 +265,44 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       org.junit.Assert.assertEquals(oracle.mkString("\n"), labels2.mkString("\n"))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  @Test def `top-level-definitions-are-skipped-too` =
+    // A file's top-level definitions are wrapped in a synthetic `<file>$package`
+    // object, which is skipped like any other statement (synthetic definitions
+    // are kept only inside blocks, where the next statement is built from
+    // them), and a target in one of its members resumes into it. A case class
+    // is one skipped statement with the synthetic companion its expansion
+    // makes, typed together when a target lands in the class.
+    val code =
+      """|package p
+         |def one(xs: List[Int]): Int = xs.map(_ + 1).sum
+         |def two(xs: List[Int]): Int = xs.map(_ + 2).filter(_ > 0).sum
+         |case class Pair(a: Int, b: Int)
+         |object Other { def o = one(Nil) }
+         |""".stripMargin
+    val uri = URI.create("file:///Top.scala")
+    val src = SourceFile.virtual(uri, code)
+    def spans(d: CachingDriver) = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 12)).trim).sorted
+    val (runIds, fresh, afterTwo, afterOne, afterPair) = withDriver { d =>
+      val ds1 = d.runUpTo(uri, src, Span(code.indexOf("def o =") + 5))
+      val fresh = spans(d)
+      val ds2 = d.runUpTo(uri, src, Span(code.indexOf(".filter(_ > 0)") + 4))
+      val afterTwo = spans(d)
+      val ds3 = d.runUpTo(uri, src, Span(code.indexOf("xs.map(_ + 1)") + 3))
+      val afterOne = spans(d)
+      val ds4 = d.runUpTo(uri, src, Span(code.indexOf("b: Int") + 1))
+      val afterPair = spans(d)
+      assert(List(ds1, ds2, ds3, ds4).forall(_.forall(_.level < 2)), s"no errors: ${List(ds1, ds2, ds3, ds4).flatten.map(_.msg.message)}")
+      (List.fill(4)(d.runIdOf(uri)), fresh, afterTwo, afterOne, afterPair)
+    }
+    println(s"[top-level-definitions-are-skipped-too] fresh: $fresh; after two: $afterTwo; after one: $afterOne; after Pair: $afterPair")
+    // the package object (its span begins at `one`) and the case class are skipped; `Other` is typed
+    assertEquals(List("case class P", "def one(xs:"), fresh, "the package object and the case class are skipped")
+    // the request in `two` resumed into the package object, where `one` is skipped
+    assertEquals(List("case class P", "def one(xs:"), afterTwo, "resumed into the package object, where `one` stays skipped")
+    assertEquals(List("case class P"), afterOne, "`one` resumed")
+    // the case class resumed (its parameter accessor `a`, a member not touched, is skipped as members are)
+    assert(!afterPair.exists(_.startsWith("case class")), s"the case class resumed: $afterPair")
+
   @Test def `block-statements-are-skipped-too` =
     // In a method body only the statement at the target is typed; a statement
     // before it is typed ahead only if the target's statement refers to it.
