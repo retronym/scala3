@@ -25,7 +25,7 @@ import reporting.Diagnostic.LoadingFailure
 import collection.mutable
 import cc.{CapturingType, derivedCapturingType, stripCapturing}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
 
@@ -805,6 +805,9 @@ object SymDenotations {
       builder.append(clsFlatName.mangledString)
       builder.toString
 
+    // a function of the annotations, stored whole (the name is an immutable value); `setTargetName` is the typer's
+    // own, on a symbol it makes
+    @cache @benignRace("a function of the symbol's annotations: any reader stores an equal Name")
     private var myTargetName: Name | Null = null
 
     private def computeTargetName(targetNameAnnot: Option[Annotation])(using Context): Name =
@@ -2209,14 +2212,24 @@ object SymDenotations {
 
     // ----- caches -------------------------------------------------------
 
+    // recomputed from the decls and reset by `info_=`; with parallel readers `typeParams` keeps a result only if no
+    // completion started or ended while it was computed
+    @cache @benignRace("a function of the decls: a reader stores an equal list, or none if the info changed meanwhile")
     private var myTypeParams: List[TypeSymbol] | Null = null
+    // an immutable map: a lost update loses one entry
+    @cache @benignRace("an immutable map of names a function of the class; a lost update drops an entry, recomputed on demand")
     private var fullNameCache: SimpleIdentityMap[QualifiedNameKind, Name] = SimpleIdentityMap.empty
 
+    // `Caching` stamps and stores it; the invalidations null the stamp and remove entries from the (synchronised, on a
+    // concurrent base) map, as `stamped` expects of an invalidation
+    @cache @publishedBy("Caching")
     private var myMemberCache: EqHashMap[Name, PreDenotation] | Null = null
     private var myMemberCachePeriod: Period = Nowhere
 
     /** A cache from types T to baseType(T, C) */
     type BaseTypeMap = EqHashMap[CachedType, Type]
+    // as `myMemberCache`: an invalidation nulls the value, which `stampedWhen`'s `isCurrent` tests
+    @cache @publishedBy("Caching")
     private var myBaseTypeCache: BaseTypeMap | Null = null
     private var myBaseTypeCachePeriod: Period = Nowhere
 
@@ -2378,6 +2391,8 @@ object SymDenotations {
 
    // ------ class-specific operations -----------------------------------
 
+    // a ThisType and a TypeRef are interned: any reader computes the same one, and neither field is ever reset
+    @cache @benignRace("the interned this-type of the class: any reader stores the same type")
     private var myThisType: Type | Null = null
 
     /** The this-type depends on the kind of class:
@@ -2395,6 +2410,7 @@ object SymDenotations {
       ThisType.raw(TypeRef(pre, cls))
     }
 
+    @cache @benignRace("the interned type reference to the class: any reader stores the same type")
     private var myTypeRef: TypeRef | Null = null
 
     override def typeRef(using Context): TypeRef = {
@@ -2967,6 +2983,8 @@ object SymDenotations {
 
     private var packageObjsCache: List[ClassDenotation] = uninitialized
     private var packageObjsRunId: RunId = NoRunId
+    // set only to true; a race issues the warning twice
+    @cache @benignRace("only ever set to true: readers that race on it both warn, once more than necessary")
     private var ambiguityWarningIssued: Boolean = false
 
     // with parallel readers, the package objects of a run as one value:
@@ -3656,7 +3674,7 @@ object SymDenotations {
   }
 
   /** A class to combine base data from parent types */
-  private final class BaseDataBuilder {
+  @scratch @confined private final class BaseDataBuilder {
     private var classes: List[ClassSymbol] = Nil
     private var length = 0
 
@@ -3682,5 +3700,7 @@ object SymDenotations {
 
   private val packageTypeName = ModuleClassName(nme.PACKAGE).toTypeName
 
+  // under `Config.showCompletions`, a constant that is off in every build
+  @interned @benignRace("indentation of a debug print only; a race skews it")
   @sharable private var indent = 0 // for completions printing
 }

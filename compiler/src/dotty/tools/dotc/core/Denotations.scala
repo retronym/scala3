@@ -25,6 +25,7 @@ import typer.ProtoTypes.NoViewsAllowed
 import reporting.Message
 import collection.mutable.ListBuffer
 
+import scala.annotation.internal.{guardedBy, lazyFact}
 import scala.compiletime.uninitialized
 
 /** Denotations represent the meaning of symbols and named types.
@@ -194,8 +195,12 @@ object Denotations {
    *
    *  @param symbol  The referencing symbol, or NoSymbol is none exists
    */
-  abstract class Denotation(val symbol: Symbol, protected var myInfo: Type, val isType: Boolean) extends PreDenotation with printing.Showable {
+  abstract class Denotation(val symbol: Symbol, initInfo: Type, val isType: Boolean) extends PreDenotation with printing.Showable {
     type AsSeenFromResult <: Denotation
+
+    // as `SymDenotation`'s other lazy facts: set by a completion under its claim (`InProgress` while it runs),
+    // and by the setters of a symbol that no other reader has yet
+    @lazyFact @guardedBy("completionLock") protected var myInfo: Type = initInfo
 
     /** The type info.
      *  The info is an instance of TypeType iff this is a type denotation
@@ -242,7 +247,10 @@ object Denotations {
     def current(using Context): Denotation
 
     /** The period during which this denotation is valid. */
-    private var myValidFor: Period = Nowhere
+    // Written under the bring-forward's claim (`updateValidity`), when a denotation is made, and by `goForward`
+    // for phases after the first transformer, which the interactive compiler (parser, typer) does not run. Read
+    // without the claim: a reader that sees the old period goes through `current`, which takes it.
+    @lazyFact @guardedBy("completionLock") private var myValidFor: Period = Nowhere
 
     final def validFor: Period = myValidFor
     final def validFor_=(p: Period): Unit = {
