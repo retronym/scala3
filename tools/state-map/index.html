@@ -515,7 +515,7 @@ svg.addEventListener('wheel', e => {
 // ---- guide: the extractor, the hazards it maps, and the strategies that answer them
 // Hazards and strategies cross-link by id; a strategy's count and "show on map" come from the extracted fields.
 const PICTURE = `<div class="figure" role="img" aria-label="Readers type under a read lock, each with its own scratch; they share the symbol table, where lazy facts are completed under the completion lock, scopes are frozen once published, caches are stamped and interned values go through concurrent interners. A write action runs alone: it cancels readers, changes published state and moves the structure epoch, and readers retry.">
-<svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 900 356" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="ga" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker>
 <marker id="gw" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"/></marker></defs>
 <rect class="lane" x="10" y="10" width="220" height="310" rx="6"/>
@@ -537,7 +537,7 @@ const PICTURE = `<div class="figure" role="img" aria-label="Readers type under a
 <path class="ar" d="M216,167 L314,217" marker-end="url(#ga)"/><text class="lbl" x="236" y="208">read, stamp</text>
 <path class="ar" d="M216,160 L314,155" marker-end="url(#ga)"/><text class="lbl" x="236" y="150">look up</text>
 <path class="ar w" d="M714,128 L616,155" marker-end="url(#gw)"/><text class="lbl" x="640" y="128">write</text>
-<path class="ar w" d="M800,144 L800,290 L230,290" marker-end="url(#gw)"/><text class="lbl" x="420" y="318">a pending writer cancels readers at their next checkpoint; they retry after it</text>
+<path class="ar w" d="M800,144 L800,330 L120,330 L120,322" marker-end="url(#gw)"/><text class="lbl" x="300" y="348">a pending writer cancels readers at their next checkpoint; they retry after it</text>
 </svg></div>`;
 const STRATEGIES = [
   { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
