@@ -558,7 +558,9 @@
   // while a request runs the action buttons are disabled; the frame's own buttons (.chrome) stay live
   const setBusy = (on, text) => { busy = on; $('busy').textContent = on ? text : ''; document.querySelectorAll('button:not(.chrome)').forEach((b) => { if (b.id !== 'release' && b.id !== 'cancelNow') b.disabled = on; }); navUpdate(); };
   function finish(r, code, cancelAfterMs) {
-    if (r && r.outcome !== 'error') scheduleBackground();
+    // a pass only when there is something new to paint: the text changed since the last pass, the run changed, or
+    // the request typed something (a hover served from the tree changes nothing, and a pass would only run the oracle)
+    if (r && r.outcome !== 'error' && (code !== bgPainted.code || r.runId !== bgPainted.runId || r.typedTrees > 0 || r.runChanged)) scheduleBackground();
     if (r && r.problems && code === cm.getValue()) paintDiagnostics(r.problems);
     r.seq = ++seq; r.cancelRequested = cancelAfterMs; r.code = code;
     render(r); logRow(r); last = r;
@@ -817,12 +819,13 @@
 
   // ---- the background pass: another reader completes the session (driver.readAll) while the page keeps hovering,
   // then paints semantic colours from the typed tree and diagnostics in the gutter
-  let semMarks = [], diagMarks = [], bgTimer = null, bgSeq = 0;
+  let semMarks = [], diagMarks = [], bgTimer = null, bgSeq = 0, bgPainted = { code: null, runId: -1 };
   function clearBackground() {
     semMarks.forEach((m) => m.clear()); semMarks = [];
     paintDiagnostics([]);
   }
   function paintBackground(r) {
+    bgPainted = { code: r.code, runId: r.runId };
     clearBackground();
     (r.tokens || []).forEach((t) => {
       const a = cm.posFromIndex(t.start), b = cm.posFromIndex(t.end);
