@@ -10,7 +10,7 @@ core\.Types\.MatchType#(myReduced|reductionContext)	C	batch-only	MatchType.reduc
 core\.SymDenotations\.PackageClassDenotation#sharedPackageObjs	C	packed-volatile|root-claim	PackageClassDenotation.packageObjs: packed, computed under a claim (I79)
 core\.SymDenotations\.PackageClassDenotation#(packageObjsCache|packageObjsRunId)	C	batch-only	packageObjs: the plain fields are batch only
 core\.Types\.LazyRef#(myRef|computed)	B	root-claim	LazyRef.myRef/computed: a claim per lazy reference with parallel readers (I57)
-core\.SymDenotations\.InheritedCacheImpl#dependent	B	synchronized	InheritedCacheImpl.dependent: under the cache's monitor
+core\.SymDenotations\.InheritedCacheImpl#dependent	B	batch-only	InheritedCacheImpl.dependent: batch only; a concurrent base pulls, by the structure epoch
 core\.SymDenotations\.InheritedCacheImpl#checkedPeriod	B	*	InheritedCacheImpl.checkedPeriod: a stamp without a value, a stale read only checks again
 core\.SymDenotations\.(MemberNamesImpl#cache|BaseDataImpl#(cache|valid|locked))	B	completion-lock	MemberNamesImpl.cache, BaseDataImpl.cache/valid/locked: computed under Sharing.exclusive
 core\.SymDenotations\.ClassDenotation#(myMemberCache|myMemberCachePeriod|myBaseTypeCache|myBaseTypeCachePeriod)	C	Caching	ClassDenotation's member and base-type caches: through Caching

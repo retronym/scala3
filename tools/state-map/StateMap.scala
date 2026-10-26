@@ -44,7 +44,7 @@ object Rules:
   )
 
   val protection: List[Rule] = List(
-    Rule("@guardedBy, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, synchronized, thread-confined, Caching, Publish, volatile, packed-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@confined`; `@publishedBy(\"Caching\" | \"Publish\" | \"volatile\" | \"packed\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
+    Rule("@guardedBy, @frozenAfter, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, frozen-after-completion, synchronized, thread-confined, Caching, Publish, volatile, packed-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@frozenAfter(\"completion\")` (filled while hidden, frozen once its owner's completion publishes it; checked at run time by `-Ycheck-frozen-scopes`); `@confined`; `@publishedBy(\"Caching\" | \"Publish\" | \"volatile\" | \"packed\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
     Rule("@sharable, @unshared", "static-safe (@sharable), single-threaded (@unshared)", "the markers of `-Ycheck-reentrant` on the field or its owner (reentrancy across compiler instances, not sharing within one base), when no annotation above is present"),
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
@@ -283,7 +283,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           .filter(n => n == "internal.sharable" || n == "internal.unshared").distinct
         // the state-map vocabulary on the owning class applies to each of its fields that does not say otherwise
         val vocabulary = Set("internal.scratch", "internal.lazyFact", "internal.cache", "internal.interned", "internal.treeState",
-          "internal.guardedBy", "internal.confined", "internal.publishedBy", "internal.benignRace", "internal.featureArea")
+          "internal.guardedBy", "internal.frozenAfter", "internal.confined", "internal.publishedBy", "internal.benignRace", "internal.featureArea")
         val ownerArgs = owner.annotations.filter(a => vocabulary(annotName(a))).map(a => annotName(a) -> annotArg(a)).toMap
         val tcs = classesOf(tpe).map(s => norm(s.fullName)).distinct
         val topCls = classesOf(tpe).filterNot(_.fullName == "scala.Null").headOption
@@ -619,7 +619,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     "internal.interned" -> "D", "internal.treeState" -> "E")
 
   // the kind and protection a field's annotations declare, which take precedence over the rules
-  private val protAnnots = Set("internal.guardedBy", "internal.confined", "internal.publishedBy", "internal.benignRace")
+  private val protAnnots = Set("internal.guardedBy", "internal.frozenAfter", "internal.confined", "internal.publishedBy", "internal.benignRace")
 
   // a field's own annotation, else its class's: (args, "" or " on the class")
   private def kindArgs(f: FieldInfo) =
@@ -641,7 +641,8 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
         case "writer" => "writer-action"
         case _ => "synchronized"
       (p, on(s"@guardedBy(\"$lock\")"))
-    }.orElse(a.get("internal.confined").map(_ => ("thread-confined", on("@confined"))))
+    }.orElse(a.get("internal.frozenAfter").map(ev => (s"frozen-after-$ev", on(s"@frozenAfter(\"$ev\")"))))
+     .orElse(a.get("internal.confined").map(_ => ("thread-confined", on("@confined"))))
      .orElse(a.get("internal.publishedBy").map { how =>
        val p = how match
          case "packed" => "packed-volatile"
@@ -677,6 +678,9 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     val protCheck =
       if ps != "annotated" || marker then None
       else if p == "benign-race" && ip == "none" then Some("protection agrees: rules find none")
+      // frozen after an event: the writes before it are the completer's, which no static rule tells apart, and the
+      // ones after are checked when the program runs (`-Ycheck-frozen-scopes`)
+      else if p.startsWith("frozen-after-") then Some("protection checked at run time (-Ycheck-frozen-scopes)")
       else if ip == "none" || ip == "unknown" then Some(s"protection unverified: rules find $ip")
       else if ip != p then Some(s"protection disagrees: rules say $ip ($ipr)")
       else Some("protection agrees")

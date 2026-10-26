@@ -71,6 +71,35 @@ svg .edge { fill: none; stroke: var(--edge); opacity: .55; }
 svg .edge.hl { stroke: var(--hl); opacity: 1; }
 svg g.n { cursor: pointer; }
 svg a text:hover { text-decoration: underline; }
+#guide { position: absolute; inset: 0; overflow: auto; background: var(--bg); padding-block: 18px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+#guide .doc { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+#guide nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#guide nav a { font-size: 12px; color: var(--hl); text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; background: var(--panel); }
+#guide h1 { font-size: 20px; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+#guide h2 { font-size: 15px; margin: 0 0 8px; text-wrap: balance; }
+#guide h3 { font-size: 13px; margin: 0; }
+#guide p, #guide li { font-size: 13px; line-height: 1.55; max-width: 72ch; margin: 0; }
+#guide section { display: flex; flex-direction: column; gap: 10px; }
+#guide ol, #guide ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+#guide code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+#guide .eyebrow { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+#guide .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+#guide .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#guide .card .meta { font-size: 11px; color: var(--muted); }
+#guide .card .cures { display: flex; flex-wrap: wrap; gap: 4px; }
+#guide .tag { font-size: 11px; border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; background: var(--chip); color: var(--fg); cursor: pointer; }
+#guide .tag:hover, #guide .tag:focus-visible { border-color: var(--hl); outline: none; }
+#guide .card.flash { border-color: var(--hl); box-shadow: 0 0 0 2px var(--hl); }
+#guide .tablewrap { overflow-x: auto; }
+#guide table { font-size: 12px; }
+#guide td, #guide th { text-align: left; vertical-align: top; padding: 4px 6px; }
+#guide td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#guide .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+#guide .step { border-top: 2px solid var(--edge); padding-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+#guide .step b { font-size: 12px; }
+#guide .step span { font-size: 12px; color: var(--muted); line-height: 1.45; }
+#guide .found { font-size: 11.5px; color: var(--muted); }
+button:focus-visible, .chip:focus-visible { outline: 2px solid var(--hl); outline-offset: 1px; }
 @media (max-width: 700px) { #app { grid-template-columns: 1fr; grid-template-rows: 1fr 40vh; } #side { border-left: 0; border-top: 1px solid var(--line); } }
 </style>
 </head>
@@ -89,10 +118,11 @@ svg a text:hover { text-decoration: underline; }
         <label class="chip" id="b-types">expand Type families</label>
         <input type="search" id="q" placeholder="add a class or field (Enter)">
         <button id="b-theme">theme</button>
+        <button id="b-guide">guide</button>
         <span id="status"></span>
       </div>
     </div>
-    <div id="stage"><svg id="svg"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs><g id="vp"></g></svg><div id="tip"></div></div>
+    <div id="stage"><svg id="svg"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs><g id="vp"></g></svg><div id="tip"></div><div id="guide" hidden></div></div>
   </div>
   <div id="side">
     <h2>Field</h2>
@@ -458,7 +488,117 @@ svg.addEventListener('wheel', e => {
   view.x = mx - (mx - view.x) * k / view.k; view.y = my - (my - view.y) * k / view.k; view.k = k; applyView();
 }, { passive: false });
 
+// ---- guide: the extractor, the hazards it maps, and the strategies that answer them
+// Hazards and strategies cross-link by id; a strategy's count and "show on map" come from the extracted fields.
+const STRATEGIES = [
+  { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
+  { id: 'completion-lock', name: 'Completion lock, with evidence', how: 'The base\'s completion lock, or the root\'s claim with parallel readers (`Sharing.exclusive`). The state behind it is reached only with a `Sharing.Holds[K]` in scope, which only `exclusive`, `claimed` and `completing` hand out, so an access outside the lock does not compile.', use: 'A lazy fact with a black hole: a completion, an inherited cache\'s computation, a scope\'s one writer.', cures: ['sentinel', 'peek', 'cycle'], example: 'core.Scopes.MutableScope#writer' },
+  { id: 'root-claim', name: 'Root claim', how: 'A claim in `CompletionRoots` keyed by the object (`Sharing.claimed`): re-entry on the owner still meets the sentinel, another reader waits, and the wait is in the wait-for graph.', use: 'A cycle-breaking sentinel on a shared object (`LazyRef`, `packageObjs`).', cures: ['sentinel', 'cycle'], example: null },
+  { id: 'frozen-after-completion', name: 'Fill hidden, then freeze', how: 'A scope is filled while its owner\'s completion hides it, published when the completion returns (`MutableScope.published`), and changed after that only by a write action or its one writer, building new entries aside (`extendAside`). `-Ycheck-frozen-scopes` fails any other change.', use: 'Structures every reader reads: scopes, flat classes, synthesized members.', cures: ['inplace', 'unfrozen', 'order'], example: 'core.Scopes.MutableScope#hashTable' },
+  { id: 'writer-action', name: 'Write action', how: 'The driver\'s write lock (`InteractiveDriver.writing`): a pending writer cancels readers at their next checkpoint, runs alone, and readers retry. State only writers touch needs nothing else.', use: 'Changes to the source of truth: a fresh run, a re-index, a splice, a body edit.', cures: ['unfrozen', 'stale'], example: null },
+  { id: 'Caching', name: 'Stamped cache (`Caching`)', how: 'A value and its period or run stamp, read stamp-then-value with an acquire fence and written value-then-stamp with release fences on a concurrent base; the local value is returned, never the field again. `StampedCachesTest` is its lint.', use: 'A memo valid for one period, whose writers in that period compute equal values.', cures: ['twofields', 'readtwice'], example: null },
+  { id: 'packed-volatile', name: 'Pack into one value', how: 'Key, stamp and value as one immutable object in one volatile field, so no reader pairs one writer\'s key with another\'s value.', use: 'A cache keyed by more than the stamp, or whose writers may store different values (`asSeenFrom`, `MatchType.reduced`).', cures: ['twofields'], example: null },
+  { id: 'Publish', name: 'Ordered publication (`util.Publish`)', how: 'Acquire/release handles on a period that guards other fields (`Symbol.checkedPeriod`, `NamedType.checkedPeriod`), where the shape is not two fields.', use: 'A validity period read first on a hot path.', cures: ['twofields'], example: null },
+  { id: 'volatile', name: 'One volatile field', how: 'A single field whose every value is complete on its own: a flag, a counter read for display, a reference to an immutable value.', use: 'One field, nothing paired with it.', cures: ['twofields'], example: null },
+  { id: 'init-only', name: 'Written before sharing', how: 'Set while the owner is built (`Definitions.init`, a constructor, a synthesizer installed before the scope is published) and only read after.', use: 'Configuration of shared objects.', cures: [], example: null },
+  { id: 'concurrent', name: 'Concurrent structure', how: 'A concurrent interner or map in interactive mode (`ConcurrentWeakHashSet`, `ConcurrentHashMap`), chosen per mode by the `Sharing` seam so batch keeps the plain one.', use: 'Interning and counters (kind D); one symbol per name.', cures: ['inplace', 'order'], example: null },
+  { id: 'synchronized', name: 'Monitor, with evidence', how: 'A `synchronized` block or `Sharing.serialised`; a method that takes a `Sharing.Monitor[K]` can only be called under it.', use: 'Bookkeeping maps with short critical sections (sources, files, suppressions).', cures: ['inplace'], example: null },
+  { id: 'benign-race', name: 'Benign race, argued', how: 'No protection, with the reason it is safe written in `@benignRace(why)`: idempotent values, read once into a local, or a lost store that only repeats work.', use: 'A memo whose every writer stores an equal value; never a pair of fields.', cures: ['readtwice'], example: 'core.Scopes.MutableScope#elemsCache' },
+  { id: 'batch-only', name: 'Batch only', how: 'Every access is in the batch branch of the seam (`if ctx.base.concurrent ... else ...`): readers never reach it.', use: 'The batch path\'s original code kept beside the concurrent one (the push invalidation of inherited caches).', cures: [], example: null },
+  { id: 'post-typer', name: 'After typer', how: 'Reached only from phases after typer, which the presentation compiler does not run.', use: 'Back-end and transform state.', cures: [], example: null },
+];
+const TECHNIQUES = [
+  { id: 'pull', name: 'Pull, do not push', how: 'A cache records the base\'s structure epoch when it is made and is valid while the epoch has not moved; a change to a published scope moves it. No invalidation walks other objects\' caches, so a store that races with one lands in a cache already stale.', cures: ['push'], where: '`InheritedCacheImpl` on a concurrent base' },
+  { id: 'aside', name: 'Build aside, publish once', how: 'Fill a fresh table or scope in a local, then publish it with one store after a release fence; readers load it with an acquire fence.', cures: ['inplace'], where: '`MutableScope.createHash`, `extendAside`, flat classes' },
+  { id: 'memo', name: 'Synthesize beside, not into', how: 'Members made on a lookup are kept in an interned memo beside the scope and never entered, so an enumeration does not depend on what earlier code mentioned; fixed members are entered with the package.', cures: ['order'], where: '`MutableScope.synthesized`, `scala.Null`' },
+  { id: 'local', name: 'Read once into a local', how: 'Read the field once, compute from the local, return the local.', cures: ['readtwice'], where: 'every `Caching` site, `memberNames`, `baseData`' },
+  { id: 'stamp', name: 'Stamp the result', how: 'A request\'s result carries the driver\'s write count when it last left a lock; the request is served again if a write ran after it, at most three times.', cures: ['stale'], where: '`Reader.resultStamp`, `InteractiveDriver.servedCurrent`' },
+  { id: 'checkonly', name: 'Check, do not generate', how: 'In the IDE nothing runs the code, so what exists only for code generation is not made: inline accessors are checked, not entered.', cures: ['unfrozen'], where: '`PrepareInlineable.checkOnly`' },
+  { id: 'byname', name: 'Refer by name during setup', how: 'An eagerly entered definition that is completed during `init` refers to others by name, so nothing binds before the sources being compiled are entered.', cures: ['early'], where: '`Definitions.synthesizeNullClass`' },
+];
+const HAZARDS = [
+  { id: 'scratch', name: 'Scratch on a shared object', what: 'Per-request state (pools, the comparer stack, depth counters) kept on the base or a run, so two readers interleave in it.', found: 'The printer\'s `DefaultMessageLimiter` on the base\'s initial context: readers printing at once added up their depths, and a lost update left labels printed as `...`.' },
+  { id: 'twofields', name: 'A cache in several fields', what: '§4.4 shape 1. A key or period and a value written one after the other: a reader pairs one writer\'s period with another\'s value, or sees the period before the value and returns null.', found: '`PreDenotation.asSeenFrom` took `Conversion#apply` seen from the wrong prefix (the `Formatting.Shown` divergences); `NamedType.denot` read the denotation before the period.' },
+  { id: 'sentinel', name: 'A sentinel during a computation', what: '§4.4 shape 2. A single-threaded cycle breaker (`Nil`, `null`, a provisional value) that another reader takes for the answer or for a cycle.', found: '`packageObjsCache = Nil` while package objects are collected: "Not found: type List".' },
+  { id: 'readtwice', name: 'A field read twice', what: '§4.4 shape 3. A check and a use read the field separately; a writer between them changes the answer, or replaces this reader\'s update.', found: '`ImportInfo.featureImported`, `SourceFile.offsetToLine`, `memberNames` (I46).' },
+  { id: 'inplace', name: 'Mutated while others read', what: '§4.4 shape 4. A structure published while it is filled, or rehashed in place.', found: '`MutableScope.toList` (I77); a package\'s flat classes entered in place rehashed its table under readers: 12,201 missed lookups of classes it held, now 0.' },
+  { id: 'peek', name: 'A peek becomes a race', what: '§4.1. `isCompleting` chooses another path when a completion is in progress; with two readers, "in progress" may be on the other thread, and the answer depends on timing.', found: 'Thirteen sites; the rule is now "in progress on this reader", and a peek at another reader\'s completion waits.' },
+  { id: 'cycle', name: 'A wait-for cycle', what: '§4.2. Two readers each wait on the other\'s completion. Single-threaded the same pair is a `CyclicReference`.', found: 'A wait that would close a cycle raises `CyclicReference` in the reader that would close it.' },
+  { id: 'order', name: 'Answers that depend on history', what: 'A member made on its first lookup and entered into the scope: what an enumeration of the scope sees depends on what earlier code (or another reader) mentioned. Two readers also made two symbols for one name.', found: '`import scala._` shadowing a `Function23` gave different answers by compilation order (the determinism test, no macro needed); 101 of 200 synthesized names split across readers, now 0.' },
+  { id: 'push', name: 'Invalidation racing a store', what: 'A change pushes invalidation into other objects\' caches; a reader that computed from old information stores after the invalidation went past.', found: 'Inherited caches (I46, I92): a monitor per cache, a `valid` check on store, and a `WeakHashMap` of dependents, all replaced by the structure epoch on a concurrent base.' },
+  { id: 'unfrozen', name: 'A reader changes a published scope', what: 'Typing writes into a scope other readers already read: indexing into a package, deleting from it in a classfile\'s completion, entering accessors, retracting a definition.', found: '2,101 changes outside a write action in the presentation-compiler suites (Namer indexing 1,500, classfile deletes 375, inline accessors 181, `retractDefDef` 25, `Definitions` 20), now 0.' },
+  { id: 'stale', name: 'A result read after the lock', what: 'A provider calls `runUpTo`, the read lock is released, and it reads the typed tree afterwards; a write action between the two replaces what it read.', found: 'Most providers read `currentCtx` and `compilationUnits` outside the lock; now served again when a write ran after the read.' },
+  { id: 'early', name: 'Binding during setup', what: 'A batch hazard of the fixes: an eagerly entered definition completed during `init` resolves another definition before the sources that define it are entered.', found: '`scala.Null` entered with the package was completed in `init`; under explicit nulls it bound `AnyValClass` to the classpath\'s `AnyVal`, and compiling the library failed with "Any does not have a constructor". Only a clean build of the library showed it.' },
+];
+
+function renderGuide() {
+  const g = document.getElementById('guide');
+  const md = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const nOf = id => M.fields.filter(f => protBase(f.protection) === id).length;
+  const sById = new Map(STRATEGIES.map(s => [s.id, s])), tById = new Map(TECHNIQUES.map(t => [t.id, t])), hById = new Map(HAZARDS.map(h => [h.id, h]));
+  const curesOf = h => [...STRATEGIES.filter(s => s.cures.includes(h)).map(s => ['s', s]), ...TECHNIQUES.filter(t => t.cures.includes(h)).map(t => ['t', t])];
+  const tag = (kind, x) => `<button class="tag" data-jump="${kind}-${esc(x.id)}">${esc(x.name)}</button>`;
+  const rules = M.header.rules.map(r => `<tr><td class="mono">${esc(r.id)}</td><td>${esc(r.sets)}</td><td>${md(r.doc)}</td></tr>`).join('');
+  const kinds = Object.entries(M.header.kinds).map(([k, d]) => `<li><b>${esc(k)}</b> ${md(d)}: ${count(f => f.kind === k)} fields</li>`).join('');
+  g.innerHTML = `<div class="doc">
+  <nav><span class="eyebrow">Guide</span><a href="#g-made">How the map is made</a><a href="#g-hazards">Hazards</a><a href="#g-strategies">Strategies</a><button id="b-back">back to the map</button></nav>
+  <section id="g-made">
+    <h1>How the map is made</h1>
+    <p>The map is extracted from the compiled compiler, not written by hand. <code>tools/state-map/StateMap.scala</code> is a TASTy inspector over the non-bootstrapped compiler's classes; <code>run.sh</code> compiles and extracts, <code>check-cluster.sh &lt;files&gt;</code> reports a few files' fields with their unprotected accesses. This extraction: ${M.fields.length} fields in ${M.classes.length} classes at <code>${esc(M.header.tip.slice(0, 10))}</code>.</p>
+    <div class="pipeline">
+      <div class="step"><b>Fields</b><span>Every <code>var</code> and mutable collection in dotc's classes; lazy vals, modules and synthetics left out.</span></div>
+      <div class="step"><b>Kind</b><span>A–E from an annotation (<code>@scratch</code>, <code>@lazyFact</code>, <code>@cache</code>, <code>@interned</code>, <code>@treeState</code>), else the K rules: owner, type and name.</span></div>
+      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: under a <code>Caching</code> stamp, a monitor, a claim, <code>Publish</code>, in the batch branch of the seam, or nothing.</span></div>
+      <div class="step"><b>Protection</b><span>The one protection of a field's non-batch accesses; <code>partial</code> when some lack it, <code>none</code> when all do. An annotation takes precedence, and the rules' answer is kept beside it.</span></div>
+      <div class="step"><b>Check</b><span><code>annotationCheck</code>: the annotation agrees with the rules, disagrees, or is unverified. <code>@frozenAfter</code> is checked when the program runs.</span></div>
+      <div class="step"><b>Reach, edges</b><span>Typer or post-typer by the methods that reach a field; edges are field types that are mapped classes, which the diagram draws.</span></div>
+    </div>
+    <h2>Kinds</h2>
+    <ul>${kinds}</ul>
+    <p>Semantic or cache: a field of kind C is a cache, whose loss only costs recomputation; every other kind is semantic, and a lost or torn write is a wrong answer.</p>
+    <details><summary>The ${M.header.rules.length} rules</summary><div class="tablewrap"><table><tr><th>rule</th><th>sets</th><th>what it says</th></tr>${rules}</table></div></details>
+  </section>
+  <section id="g-hazards">
+    <h1>Hazards</h1>
+    <p>What goes wrong when several readers type over one symbol table. The four shapes of race in caches are §4.4 of <code>docs/_docs/internals/interactive-multi-reader.md</code>; the rest are §4.1–§4.3 and what the work since found. Each card names the strategies that answer it.</p>
+    <div class="cards">${HAZARDS.map(h => `<div class="card" id="h-${h.id}"><h3>${esc(h.name)}</h3><p>${md(h.what)}</p><p class="found"><b>Found:</b> ${md(h.found)}</p><div class="cures">${curesOf(h.id).map(([k, x]) => tag(k, x)).join('')}</div></div>`).join('')}</div>
+  </section>
+  <section id="g-strategies">
+    <h1>Strategies</h1>
+    <p>A protection is how a field is kept safe; the map gives each field one. The count is of all extracted fields; "show on map" filters the diagram to that protection.</p>
+    <div class="tablewrap"><table><tr><th>protection</th><th>how</th><th>for</th><th>answers</th><th class="n">fields</th><th></th></tr>
+    ${STRATEGIES.map(s => `<tr id="s-${esc(s.id)}"><td><b>${esc(s.name)}</b><br><span class="mono">${esc(s.id)}</span></td><td>${md(s.how)}</td><td>${md(s.use)}</td><td>${s.cures.map(h => tag('h', hById.get(h))).join(' ')}</td><td class="n">${nOf(s.id)}</td><td>${nOf(s.id) ? `<button data-prot="${esc(s.id)}">show on map</button>` : ''}</td></tr>`).join('')}
+    </table></div>
+    <h2>Techniques</h2>
+    <p>Ways of writing the code that make a protection possible, or unnecessary.</p>
+    <div class="cards">${TECHNIQUES.map(t => `<div class="card" id="t-${t.id}"><h3>${esc(t.name)}</h3><p>${md(t.how)}</p><p class="meta">${md(t.where)}</p><div class="cures">${t.cures.map(h => tag('h', hById.get(h))).join('')}</div></div>`).join('')}</div>
+    <p class="found">Fields with no protection: ${nOf('none')} <code>none</code>, ${nOf('partial')} <code>partial</code>. <button data-prot="none">show on map</button></p>
+  </section></div>`;
+  g.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
+    const el = document.getElementById(b.dataset.jump); if (!el) return;
+    el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+    el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200);
+  });
+  g.querySelectorAll('[data-prot]').forEach(b => b.onclick = () => {
+    const p = b.dataset.prot;
+    state.prot.clear(); (p === 'none' ? ['none', 'partial'] : [p]).forEach(x => state.prot.add(x));
+    state.visible = new Set([...byOwner.keys()].filter(c => (byOwner.get(c) || []).some(shown)).map(nodeOf));
+    showGuide(false); fitted = false; renderChips(); render();
+  });
+  g.querySelectorAll('nav a').forEach(a => a.onclick = e => { e.preventDefault(); document.querySelector(a.getAttribute('href')).scrollIntoView(); });
+  document.getElementById('b-back').onclick = () => showGuide(false);
+}
+function showGuide(on) {
+  const g = document.getElementById('guide');
+  if (on && !g.innerHTML) renderGuide();
+  g.hidden = !on;
+  document.getElementById('b-guide').textContent = on ? 'map' : 'guide';
+  try { history.replaceState(null, '', on ? '#guide' : '#map'); } catch (e) {}
+}
+document.getElementById('b-guide').onclick = () => showGuide(document.getElementById('guide').hidden);
+
 renderChips(); renderStatic(); render();
+if (location.hash === '#guide') showGuide(true);
 })();
 </script>
 </body>
