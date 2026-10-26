@@ -1011,8 +1011,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-non-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= (if (optimizeArtifacts) Seq("-opt", "-opt-inline:**,!java.**") else Nil),
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1101,8 +1101,8 @@ object Build {
       Compile / unmanagedSourceDirectories   := Seq(baseDirectory.value / "src"),
       Compile / unmanagedSourceDirectories   += baseDirectory.value / "src-bootstrapped",
       Compile / unmanagedResourceDirectories := Seq(baseDirectory.value / "resources"),
+      Compile / compile / scalacOptions ++= (if (optimizeArtifacts) Seq("-opt", "-opt-inline:**,!java.**") else Nil),
       Compile / compile / scalacOptions ++= Seq(
-        "-opt", "-opt-inline:**,!java.**",
         // Needed so that the library sources are visible when `dotty.tools.dotc.core.Definitions#init` is called
         "-sourcepath", (Compile / sourceDirectories).value.map(_.getCanonicalPath).distinct.mkString(File.pathSeparator),
       ),
@@ -1629,7 +1629,7 @@ object Build {
       bootstrappedScalaInstanceSettings,
       // Optimize the compiler, but only inline its own code,
       // since it may be used with a different standard library than it was compiled with.
-      Compile / compile / scalacOptions ++= Seq("-opt", "-opt-inline:dotty.**"),
+      Compile / compile / scalacOptions ++= (if (optimizeArtifacts) Seq("-opt", "-opt-inline:dotty.**") else Nil),
       /* Add the sources of scalajs-ir.
        * To guarantee that dotty can bootstrap without depending on a version
        * of scalajs-ir built with a different Scala compiler, we add its
