@@ -228,11 +228,13 @@ class Definitions {
   @tu lazy val ScalaPackageVal: TermSymbol = requiredPackage(nme.scala)
   @tu lazy val ScalaPackageClass: ClassSymbol = {
     val cls = ScalaPackageVal.moduleClass.asClass
-    cls.info.decls.openForMutations.useSynthesizer(
-      name => name.isTypeName && (name.isSyntheticFunction || name == tpnme.Null))(
+    val decls = cls.info.decls.openForMutations
+    // `Null` is one fixed class: entered with the package, so that every enumeration of `scala` has it
+    decls.enter(synthesizeNullClass(cls))
+    // the synthetic function types are a family without end: made on a lookup, and kept beside the scope
+    decls.useSynthesizer(name => name.isTypeName && name.isSyntheticFunction)(
       name =>
         if (name.isTypeName && name.isSyntheticFunction) newFunctionNType(name.asTypeName)
-        else if (name == tpnme.Null) synthesizeNullClass()
         else NoSymbol)
     cls
   }
@@ -522,17 +524,17 @@ class Definitions {
   @tu lazy val NullClass: ClassSymbol = requiredClass("scala.Null")
   def NullType: TypeRef = NullClass.typeRef
 
-  private def synthesizeNullClass(): ClassSymbol = {
+  private def synthesizeNullClass(scalaPackageClass: ClassSymbol): ClassSymbol = {
     // When explicit-nulls is enabled, Null becomes a direct subtype of AnyVal
     val completer = new LazyType {
       def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val parents = if ctx.explicitNulls then AnyValType :: Nil else ObjectType :: Nil
         val decls = newScope
-        denot.info = ClassInfo(ScalaPackageClass.thisType, cls, parents, decls)
+        denot.info = ClassInfo(scalaPackageClass.thisType, cls, parents, decls)
       }
     }
-    newPermanentClassSymbol(ScalaPackageClass, tpnme.Null, AbstractFinal, completer)
+    newPermanentClassSymbol(scalaPackageClass, tpnme.Null, AbstractFinal, completer)
   }
 
   @tu lazy val RuntimeNothingClass: Symbol = requiredClass(RuntimeNothingName)
