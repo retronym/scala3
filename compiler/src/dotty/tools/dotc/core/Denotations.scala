@@ -247,9 +247,12 @@ object Denotations {
     def current(using Context): Denotation
 
     /** The period during which this denotation is valid. */
-    // Written under the bring-forward's claim (`updateValidity`), when a denotation is made, and by `goForward`
-    // for phases after the first transformer, which the interactive compiler (parser, typer) does not run. Read
-    // without the claim: a reader that sees the old period goes through `current`, which takes it.
+    // Written under the bring-forward's claim (`updateValidity`), when a denotation is made, and by `goForward`,
+    // which does not take the claim: it extends the period to the next transformer's phase (the terminal phase in
+    // the interactive compiler, whose only transformer it is) or runs a transformer. Its write can overwrite a
+    // concurrent bring-forward's newer run with the old run it read; that is repaired, as a reader that sees the
+    // old run goes through `current`, whose `toNewRun` takes the claim and writes the run again. Read without
+    // the claim for the same reason.
     @lazyFact @guardedBy("completionLock") private var myValidFor: Period = Nowhere
 
     final def validFor: Period = myValidFor
@@ -866,18 +869,24 @@ object Denotations {
             var startPid = nextTransformerId + 1
             val transformer = ctx.base.denotTransformers(nextTransformerId)
             //println(s"transforming $this with $transformer")
-            val savedPeriod = ctx.period
-            val mutCtx = ctx.asInstanceOf[FreshContext]
-            try
-              mutCtx.setPhase(transformer)
-              next = transformer.transform(cur)
-                // We temporarily update the context with the new phase instead of creating a
-                // new one. This is done for performance. We cut down on about 30% of context
-                // creations that way, and also avoid phase caches in contexts to get large.
-                // To work correctly, we need to demand that the context with the new phase
-                // is not retained in the result.
-            finally
-              mutCtx.setPeriod(savedPeriod)
+            if ctx.base.concurrent then
+              // The context may be shared with other readers (a captured creation context, one derived by
+              // `withPhase`), which must not see the transformer's phase. The interactive compiler's only
+              // transformer is the terminal phase, so this is not reached there; a driver with more would be.
+              next = transformer.transform(cur)(using ctx.fresh.setPhase(transformer))
+            else
+              val savedPeriod = ctx.period
+              val mutCtx = ctx.asInstanceOf[FreshContext]
+              try
+                mutCtx.setPhase(transformer)
+                next = transformer.transform(cur)
+                  // We temporarily update the context with the new phase instead of creating a
+                  // new one. This is done for performance. We cut down on about 30% of context
+                  // creations that way, and also avoid phase caches in contexts to get large.
+                  // To work correctly, we need to demand that the context with the new phase
+                  // is not retained in the result.
+              finally
+                mutCtx.setPeriod(savedPeriod)
             if next eq cur then
               startPid = cur.validFor.firstPhaseId
             else
