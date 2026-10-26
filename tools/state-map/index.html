@@ -99,6 +99,18 @@ svg a text:hover { text-decoration: underline; }
 #guide .step b { font-size: 12px; }
 #guide .step span { font-size: 12px; color: var(--muted); line-height: 1.45; }
 #guide .found { font-size: 11.5px; color: var(--muted); }
+#guide .tabs { display: grid; grid-template-columns: minmax(200px, 250px) 1fr; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); min-height: 420px; }
+#guide .tablist { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 6px 0; overflow: auto; }
+#guide .tabgroup { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 12px 4px; }
+#guide .tab { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; border-radius: 0; background: none; padding: 5px 12px; font-size: 12.5px; border-left: 3px solid transparent; }
+#guide .tab .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+#guide .tab:hover { background: var(--node-head); }
+#guide .tab[aria-selected="true"] { background: var(--node-head); border-left-color: var(--hl); font-weight: 600; }
+#guide .tabpanel { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+#guide .tabpanel .ph { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+#guide .tabpanel .ph h2 { margin: 0; }
+#guide .tabpanel .cures { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+@media (max-width: 700px) { #guide .tabs { grid-template-columns: 1fr; } #guide .tablist { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 0; } #guide .tabgroup { display: none; } #guide .tab { white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent; } #guide .tab[aria-selected="true"] { border-bottom-color: var(--hl); } }
 #guide pre.code { margin: 0; overflow-x: auto; background: var(--node-head); border-radius: 4px; padding: 8px 10px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; max-width: 100%; }
 #guide details.code summary { font-weight: 500; font-size: 11.5px; color: var(--hl); margin: 4px 0; }
 #guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
@@ -762,26 +774,54 @@ function renderGuide() {
   </section>
   <section id="g-strategies">
     <h1>Strategies</h1>
-    <p>A protection is how a field is kept safe; the map gives each field one. The count is of all extracted fields; "show on map" filters the diagram to that protection.</p>
-    <div class="tablewrap"><table><tr><th>protection</th><th>how</th><th>for</th><th>answers</th><th class="n">fields</th><th></th></tr>
-    ${STRATEGIES.map(s => `<tr id="s-${esc(s.id)}"><td><b>${esc(s.name)}</b><br><span class="mono">${esc(s.id)}</span></td><td>${md(s.how)}${CODE[s.id] ? `<details class="code"><summary>in the code</summary><pre class="code">${esc(CODE[s.id])}</pre></details>` : ''}</td><td>${md(s.use)}</td><td>${s.cures.map(h => tag('h', hById.get(h))).join(' ')}</td><td class="n">${nOf(s.id)}</td><td>${nOf(s.id) ? `<button data-prot="${esc(s.id)}">show on map</button>` : ''}</td></tr>`).join('')}
-    </table></div>
-    <h2>Techniques</h2>
-    <p>Ways of writing the code that make a protection possible, or unnecessary.</p>
-    <div class="cards">${TECHNIQUES.map(t => `<div class="card" id="t-${t.id}"><h3>${esc(t.name)}</h3><p>${md(t.how)}</p><p class="meta">${md(t.where)}</p>${CODE[t.id] ? `<pre class="code">${esc(CODE[t.id])}</pre>` : ''}<div class="cures">${t.cures.map(h => tag('h', hById.get(h))).join('')}</div></div>`).join('')}</div>
+    <p>A protection is how a field is kept safe, and the map gives each field one; the number beside it counts the fields that have it. A technique is a way of writing the code that makes a protection possible, or unnecessary.</p>
+    <div class="tabs">
+      <div class="tablist" role="tablist" aria-label="Strategies">
+        <div class="tabgroup">Protections</div>
+        ${STRATEGIES.map(x => `<button role="tab" class="tab" id="s-${esc(x.id)}" data-tab="s:${esc(x.id)}" aria-selected="false"><span>${esc(x.name)}</span><span class="n">${nOf(x.id) || ''}</span></button>`).join('')}
+        <div class="tabgroup">Techniques</div>
+        ${TECHNIQUES.map(x => `<button role="tab" class="tab" id="t-${esc(x.id)}" data-tab="t:${esc(x.id)}" aria-selected="false"><span>${esc(x.name)}</span></button>`).join('')}
+      </div>
+      <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
+    </div>
     <p class="found">Fields with no protection: ${nOf('none')} <code>none</code>, ${nOf('partial')} <code>partial</code>. <button data-prot="none">show on map</button></p>
   </section></div>`;
-  g.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
+  const panel = g.querySelector('#tabpanel');
+  function selectTab(key) {
+    const [kind, id] = key.split(':');
+    const x = kind === 's' ? sById.get(id) : tById.get(id);
+    g.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === key)));
+    const n = kind === 's' ? nOf(id) : 0;
+    panel.innerHTML = `<div class="ph"><h2>${esc(x.name)}</h2>${kind === 's' ? `<span class="mono">${esc(id)}</span>` : '<span class="eyebrow">technique</span>'}</div>
+      <p>${md(x.how)}</p>
+      ${x.use ? `<p><b>For:</b> ${md(x.use)}</p>` : ''}${x.where ? `<p><b>Where:</b> ${md(x.where)}</p>` : ''}
+      ${x.cures.length ? `<div class="cures"><span class="eyebrow">answers</span>${x.cures.map(h => tag('h', hById.get(h))).join('')}</div>` : ''}
+      ${kind === 's' ? `<p class="found">${n} field${n === 1 ? '' : 's'}${n ? ` <button data-prot="${esc(id)}">show on map</button>` : ''}</p>` : ''}
+      ${CODE[id] ? `<pre class="code">${esc(CODE[id])}</pre>` : '<p class="found">No excerpt yet.</p>'}`;
+    wire(panel);
+  }
+  g.querySelectorAll('.tab').forEach(t => t.onclick = () => selectTab(t.dataset.tab));
+  g.querySelector('.tablist').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const ts = [...g.querySelectorAll('.tab')], i = ts.indexOf(document.activeElement); if (i < 0) return;
+    e.preventDefault(); const nx = ts[(i + (e.key === 'ArrowDown' ? 1 : ts.length - 1)) % ts.length]; nx.focus(); selectTab(nx.dataset.tab);
+  });
+  function wire(root) {
+  root.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
     const el = document.getElementById(b.dataset.jump); if (!el) return;
+    if (el.dataset.tab) { selectTab(el.dataset.tab); g.querySelector('.tabs').scrollIntoView({ block: 'start' }); el.focus(); return; }
     el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
     el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200);
   });
-  g.querySelectorAll('[data-prot]').forEach(b => b.onclick = () => {
+  root.querySelectorAll('[data-prot]').forEach(b => b.onclick = () => {
     const p = b.dataset.prot;
     state.prot.clear(); (p === 'none' ? ['none', 'partial'] : [p]).forEach(x => state.prot.add(x));
     state.visible = new Set([...byOwner.keys()].filter(c => (byOwner.get(c) || []).some(shown)).map(nodeOf));
     showGuide(false); fitted = false; renderChips(); render();
   });
+  }
+  wire(g);
+  selectTab('s:' + STRATEGIES[0].id);
   g.querySelectorAll('nav a').forEach(a => a.onclick = e => { e.preventDefault(); document.querySelector(a.getAttribute('href')).scrollIntoView(); });
   document.getElementById('b-back').onclick = () => showGuide(false);
 }
