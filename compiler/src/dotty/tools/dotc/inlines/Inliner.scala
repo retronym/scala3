@@ -966,6 +966,8 @@ end Inliner
             case info: ConstantType if tpe.symbol.isStableMember => return info
             case _ =>
           }
+          // in the IDE an inline method's body keeps its references to non-public members (PrepareInlineable.checkOnly)
+          if ctx.mode.is(Mode.Interactive) && tpe.isTerm then return tpe
         case _ =>
       }
       super.ensureAccessible(tpe, superAccess, pos)
