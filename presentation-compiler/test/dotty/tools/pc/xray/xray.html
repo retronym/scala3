@@ -84,7 +84,9 @@
   #ed .CodeMirror-cursor { border-left: 2px solid #fff; } #ed .CodeMirror-selected { background: #254065 !important; }
   #ed .cm-keyword { color: #c792ea; } #ed .cm-def { color: #82aaff; } #ed .cm-string { color: #c3e88d; } #ed .cm-number { color: #f78c6c; } #ed .cm-comment { color: #637088; }
   #ed .cm-type, #ed .cm-variable-3 { color: #82aaff; } #ed .cm-atom, #ed .cm-builtin { color: #f78c6c; }
-  .line-typed { background: rgba(28,126,214,.18); } .line-typednow { background: rgba(47,158,68,.25); } .line-cancel { background: rgba(224,49,49,.25); }
+  /* the state of each top-level statement after the last request: a bar beside the line numbers, not a tint over the code */
+  #ed .xray-state { width: 5px; } .state-bar { display: block; width: 3px; height: 100%; min-height: 1.4em; margin-left: 1px; border-radius: 1px; }
+  .state-bar.typed { background: #4a90e2; } .state-bar.typednow { background: #2f9e44; } .state-bar.cancel { background: #e03131; }
   /* the background pass: semantic highlighting from the typed tree, diagnostics in the gutter */
   #ed .sem-class, #ed .sem-trait { color: #ffcb6b; } #ed .sem-object { color: #f78c6c; } #ed .sem-type { color: #c3e88d; font-style: italic; }
   #ed .sem-method { color: #82aaff; } #ed .sem-val { color: #d4deef; } #ed .sem-var { color: #ff8a80; text-decoration: underline dotted; } #ed .sem-param { color: #b2ccd6; } #ed .sem-package { color: #637088; }
@@ -390,8 +392,9 @@
   const src = await (await fetch('/source')).json();
   // the state of the IDE bits below (declared here: loadFile, which runs early from the URL, records into it)
   const ide = { defs: [], defsFile: null, defsP: null, index: [], recent: [], structCur: -1, useMarks: [], useTok: null, useSym: '', useTimer: null, useSeq: 0, diags: [] };
-  const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, gutters: ['CodeMirror-linenumbers', 'xray-diag'], indentUnit: 2, tabSize: 2, indentWithTabs: false,
-    extraKeys: { Tab: (c) => c.replaceSelection('  ', 'end') }, configureMouse: () => ({ addNew: false }) });
+  // `smartIndent` off: Enter keeps the previous line's indentation (the clike mode's own indentation does not follow Scala's)
+  const cm = CodeMirror($('ed'), { value: src.source, mode: 'text/x-scala', lineNumbers: true, gutters: ['CodeMirror-linenumbers', 'xray-state', 'xray-diag'], indentUnit: 2, tabSize: 2, indentWithTabs: false, smartIndent: false,
+    extraKeys: { Tab: (c) => c.replaceSelection('  ', 'end'), Enter: 'newlineAndIndent' }, configureMouse: () => ({ addNew: false }) });
   cm.setSize(null, '100%');
   $('ed').insertAdjacentHTML('beforeend', '<div id="stripe" title="the error stripe: diagnostics by relative line"></div>');
   // ---- layout: the borders between the panels are drag handles; widths are kept in localStorage (xray.cols2), the log panel's height (xray.logh), it can be collapsed (xray.logCollapsed)
@@ -517,6 +520,7 @@
     cm.setCursor(cm.posFromIndex(next > 0 ? next : eol)); cm.focus(); cm.scrollIntoView(null, 120); showCursor();
   }
   let seq = 0, busy = false, last = null, lineMarks = [];
+  function clearStates() { cm.clearGutter('xray-state'); lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = []; }
   const sleep = (ms) => new Promise((f) => setTimeout(f, ms));
   const offsetOf = () => cm.indexFromPos(cm.getCursor());
   const showCursor = () => { const p = cm.getCursor(); $('cur').textContent = `${p.line + 1}:${p.ch + 1} (offset ${offsetOf()})`; };
@@ -730,7 +734,7 @@
     $('story').innerHTML = ''; $('logbody').innerHTML = ''; $('log').querySelector('.none').hidden = false;
     document.querySelector('#logsec .ptab[data-ptab="story"]').disabled = true; panelTab('log');
     $('xray').innerHTML = emptyState('All clear', 'Place the cursor inside a method and press Complete, or run a demo.');
-    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    clearStates();
     $('stLast').textContent = 'no request yet'; $('stSession').textContent = ''; $('hoverState').textContent = ''; cm.refresh();
   };
   $('complete').onclick = () => send('complete', cancelMs());
@@ -810,7 +814,7 @@
     try { r = await (await fetch('/reset', { method: 'POST', body: new URLSearchParams({ mode: $('freeMode').value }) })).json(); } catch (e) { r = { error: String(e) }; }
     setBusy(false);
     clearBackground();
-    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    clearStates();
     $('xray').innerHTML = emptyState('Typer state reset', r.error ? r.error : `A fresh driver (${esc(r.mode)}: ${esc(r.flags || 'no flags')}): nothing typed, no session; warm-up ${r.warmupMs} ms. The next request starts run 1 of the new compiler.`);
     $('stSession').textContent = 'reset: no session'; $('stLast').textContent = 'typer state reset';
   }
@@ -889,7 +893,8 @@
       `${st.foregroundDuring ? `; ${st.foregroundDuring} foreground request${st.foregroundDuring === 1 ? '' : 's'} served meanwhile` : ''}${st.lockWaitCount ? `; waited ${st.lockWaitMs} ms on the lock` : ''})`;
   }
   $('bgMode').onchange = () => { if ($('bgMode').checked) scheduleBackground(); else { clearBackground(); $('bgText').textContent = 'background: off'; } };
-  cm.on('change', () => { clearBackground(); $('bgText').textContent = 'background: edited, waiting for a request'; });
+  // the previous pass's colours stay through an edit (the marks move with the text) until the next pass paints over them
+  cm.on('change', () => { $('bgText').textContent = 'background: edited; colours from the previous pass until the next'; });
 
   // ---- the lookup (IntelliJ's completion popup): the completions of the last request at the caret; typing filters by prefix, Up/Down move, Enter/Tab insert, Esc closes
   const lk = { items: [], shown: [], sel: 0, from: null };
@@ -1109,15 +1114,17 @@
       ${cursorSrc ? `<h4 class="sec">${esc(cursorTitle)}</h4><pre><code class="language-scala">${esc(cursorSrc)}</code></pre>${cursorMore ? `<div class="dim">… (${cursorMore} more line${cursorMore === 1 ? '' : 's'})</div>` : ''}` : ''}`;
     x.querySelectorAll('pre code').forEach((el) => hljs.highlightElement(el));
     x.querySelectorAll('.st').forEach((el) => el.onclick = () => { const s = r.statements[+el.dataset.i]; cm.setCursor(cm.posFromIndex(s.start)); cm.scrollIntoView(null, 120); cm.focus(); });
-    lineMarks.forEach((m) => cm.removeLineClass(m.line, 'background', m.cls)); lineMarks = [];
+    clearStates();
     const firstUntyped = r.statements.findIndex((t) => t.state === 'untyped');
     r.statements.forEach((s, i) => {
-      const cls = s.state === 'typed-now' ? 'line-typednow' : s.state === 'typed' ? 'line-typed' : (r.outcome === 'cancelled-resume' && i === r.cursorStatement ? 'line-cancel' : null);
+      const cancelled = r.outcome === 'cancelled-resume' && i === r.cursorStatement;
+      const cls = s.state === 'typed-now' ? 'typednow' : s.state === 'typed' ? 'typed' : cancelled ? 'cancel' : null;
       if (!cls) return;
+      const title = `${s.name}: ${cancelled ? 'a cancellation unwound in it: neither typed nor skipped until a write replaces it' : s.state === 'typed-now' ? 'typed by this request' : 'typed by an earlier request of this run'}${(s.skippedMembers || []).length ? `; ${s.skippedMembers.length} member${s.skippedMembers.length === 1 ? '' : 's'} skipped (no bar)` : ''}`;
       const from = cm.posFromIndex(s.start).line, to = cm.posFromIndex(s.end).line;
       const skippedLines = new Set();
       (s.skippedMembers || []).forEach((m) => { const a = cm.posFromIndex(m.start).line, b = cm.posFromIndex(m.end).line; for (let l = a; l <= b; l++) skippedLines.add(l); });
-      for (let l = from; l <= to; l++) { if (skippedLines.has(l)) continue; cm.addLineClass(l, 'background', cls); lineMarks.push({ line: l, cls }); }
+      for (let l = from; l <= to; l++) { if (skippedLines.has(l)) continue; const el = document.createElement('span'); el.className = 'state-bar ' + cls; el.title = title; cm.setGutterMarker(l, 'xray-state', el); }
     });
   }
   // ---- the timeline: a lane per thread, a bar per request or pass from its start to its end (page clock, ms)
