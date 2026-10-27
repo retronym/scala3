@@ -10,7 +10,8 @@ class Scala3CompilerWrapper(driver: CachingDriver)
 
   override def compiler(): CachingDriver = driver
 
-  override def resetReporter(): Unit =
+  // called as a job loads the compiler, before it holds the driver's lock (see `Scala3CompilerAccess.withSharedCompiler`)
+  override def resetReporter(): Unit = driver.synchronized:
     val ctx = driver.currentCtx
     ctx.reporter.removeBufferedMessages(using ctx)
 
