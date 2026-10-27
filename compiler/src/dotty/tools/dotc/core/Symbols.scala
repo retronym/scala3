@@ -52,7 +52,7 @@ object Symbols extends SymUtils {
 
     type ThisName <: Name
 
-    // set from `NoCoord` by the unpickler of a root's TASTy
+    // set from `NoCoord` by the unpickler of a root's TASTy, and by `BodyEdit` in a write action (no readers)
     private var myCoord: Coord = initCoord
 
     //assert(id != 723)
@@ -65,7 +65,7 @@ object Symbols extends SymUtils {
      *
      *  @pre coord == NoCoord
      */
-    private[core] def coord_=(c: Coord): Unit = {
+    private[dotc] def coord_=(c: Coord): Unit = {
       // assert(myCoord == NoCoord)
         // This assertion fails for CommentPickling test.
         // TODO: figure out what's wrong in the setup of CommentPicklingTest and re-enable assertion.
