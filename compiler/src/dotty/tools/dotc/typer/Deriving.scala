@@ -3,6 +3,7 @@ package dotc
 package typer
 
 import core.*
+import scala.annotation.internal.{confined, scratch}
 import ast.*
 import ast.Trees.*
 import StdNames.*
@@ -25,7 +26,7 @@ trait Deriving {
    *                   `derives` instance.
    */
   // made by the class completer for one class's `derives` clause
-  class Deriver(cls: ClassSymbol, codePos: SrcPos)(using Context) {
+  @scratch @confined class Deriver(cls: ClassSymbol, codePos: SrcPos)(using Context) {
 
     /** A buffer for synthesized symbols for type class instances, with what user asked to synthesize. */
     private val synthetics = ListBuffer.empty[(tpd.Tree, Symbol)]

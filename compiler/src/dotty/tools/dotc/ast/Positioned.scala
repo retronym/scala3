@@ -11,7 +11,7 @@ import core.Flags.{JavaDefined, ExtensionMethod}
 import core.StdNames.nme
 import ast.Trees.mods
 import annotation.constructorOnly
-import annotation.internal.sharable
+import annotation.internal.{confined, publishedBy, scratch, sharable, treeState}
 
 import scala.compiletime.uninitialized
 
@@ -21,6 +21,7 @@ import scala.compiletime.uninitialized
  *  synthetic one, the parent that fills in its children's spans) or by the interactive driver's body edit, a write
  *  action that runs with no reader.
  */
+@treeState @publishedBy("init")
 abstract class Positioned(implicit @constructorOnly src: SourceFile) extends SrcPos, Product, Cloneable {
   import Positioned.{ids, nextId, debugId}
 
@@ -161,6 +162,7 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
       }
   end contains
 
+  @scratch @confined
   private class LastPosRef:
     var positioned: Positioned | Null = null
     var span = NoSpan

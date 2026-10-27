@@ -28,7 +28,7 @@ import collection.mutable
 import io.AbstractFile
 import util.{SourceFile, NoSource, Property, SourcePosition, SrcPos, EqHashMap, WrappedSourceFile}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, lazyFact, sharable, treeState}
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
@@ -58,6 +58,7 @@ object Symbols extends SymUtils {
     type ThisName <: Name
 
     // set from `NoCoord` by the unpickler of a root's TASTy, and by `BodyEdit` in a write action (no readers)
+    @lazyFact @benignRace("an Int set from NoCoord by the root's unpickler, always to the coordinate its TASTy gives")
     private var myCoord: Coord = initCoord
 
     //assert(id != 723)
@@ -79,6 +80,7 @@ object Symbols extends SymUtils {
 
     // assigned by the typing of the symbol's own definition (no check-then-set); read for a local symbol's inline
     // proxies and by signature help, which take the tree of whichever typing stored last
+    @treeState @benignRace("assigned from the symbol's own definition when it is typed; a second typing stores an equal tree")
     private var myDefTree: Tree | Null = null
 
     /** The tree defining the symbol at pickler time, EmptyTree if none was retained */
@@ -496,6 +498,7 @@ object Symbols extends SymUtils {
     // unpickling creates the local symbols again, and a plain store would publish a tree whose `tpe` and spans are
     // mutable. With -Yretain-trees (which interactive mode sets) the provider keeps one reading, under the file's
     // claim, so a reader gets it by taking the claim; without, each call reads the file again.
+    @treeState @benignRace("a provider is replaced by its tree only on a batch base; the stores of `rootTreeOrProvider_=` (a loader's provider, the typer's tree of a source class) are not ordered for other readers")
     private var myTree: TreeOrProvider = tpd.EmptyTree
 
     /** If this is a top-level class and `-Yretain-trees` (or `-from-tasty`) is set.
@@ -555,6 +558,7 @@ object Symbols extends SymUtils {
 
     // a function of the class's file, TASTy info and annotations: `NoSource` until known, then the base's one
     // `SourceFile` for it
+    @cache @benignRace("every reader stores the base's SourceFile for the same file, or NoSource while it is not known")
     private var mySource: SourceFile = NoSource
 
     final def sourceOfClass(using Context): SourceFile = atPhaseNoLater(flattenPhase) {

@@ -11,7 +11,7 @@ import core.Decorators.*
 import scala.io.Codec
 import Chars.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, publishedBy, sharable}
 import scala.collection.mutable.ArrayBuilder
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.util.chaining.*
@@ -68,14 +68,17 @@ object WrappedSourceFile:
 class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec: Codec) extends interfaces.SourceFile {
   // the file's text, read by whichever reader first needs it (every read gives the same String, which is immutable); the
   // interactive driver's body edit replaces it in a write action
+  @cache @benignRace("every reader reads the same file; a String is immutable")
   private var myContent: String | Null = null
 
   // set by `virtual`, as the source file is made
+  @cache @publishedBy("init")
   private var _maybeIncomplete: Boolean = false
 
   def maybeIncomplete: Boolean = _maybeIncomplete
 
   // only the deprecated `content()` fills it, which the compiler does not call
+  @cache @benignRace("every reader stores the same characters")
   private var cachedCharArrayContent: Array[Char] | Null = null
   @deprecated("Use `textContent` to not require a copy of the data.")
   override def content(): Array[Char] =
@@ -182,6 +185,7 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
 
   // volatile: the table is filled before it is stored, and readers on other threads must see it whole. Readers may each
   // compute it, from the same text; the TASTy unpickler may set it from the pickled line sizes.
+  @cache
   @volatile private var lineIndicesCache: Array[Int] = uninitialized
   private def lineIndices: Array[Int] =
     val cached = lineIndicesCache
@@ -215,6 +219,7 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
       Some(lineToOffset(index))
 
   /** A cache to speed up offsetToLine searches to similar lines */
+  @cache @benignRace("a hint: `bestFit` finds the line from any starting point, and an int is stored whole")
   private var lastLine = 0
 
   /** Convert offset to line in this source file

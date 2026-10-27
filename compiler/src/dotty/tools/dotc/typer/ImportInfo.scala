@@ -4,6 +4,7 @@ package typer
 
 import ast.{tpd, untpd}
 import core.*
+import scala.annotation.internal.{benignRace, cache}
 import printing.{Printer, Showable}
 import util.SimpleIdentityMap
 import Symbols.*, Names.*, Types.*, Contexts.*, StdNames.*, Flags.*
@@ -58,7 +59,7 @@ class ImportInfo(symf: Context ?=> Symbol,
     case _                  => None
   }
 
-  private var mySym: Symbol | Null = null
+  @cache @benignRace("`symf` gives the same symbol each time (I91)") private var mySym: Symbol | Null = null
   def importSym(using Context): Symbol =
     initialize(mySym, mySym = _, symf)
 
@@ -90,10 +91,10 @@ class ImportInfo(symf: Context ?=> Symbol,
   // `reverseMapping`). A value of final fields is seen whole.
   private final class SelectorInfo(val excluded: Set[TermName], val forwardMapping: SimpleIdentityMap[TermName, TermName],
       val reverseMapping: SimpleIdentityMap[TermName, TermName], val wildcardImport: Boolean, val givenImport: Boolean)
-  private var mySelectorInfo: SelectorInfo | Null = null
+  @cache @benignRace("recomputed from `selectors`; an immutable value of final fields, seen whole (I60)") private var mySelectorInfo: SelectorInfo | Null = null
   // never reset once set; every writer types the same bound trees (`typedAhead`), so an equal type
-  private var myWildcardBound: Type = NoType
-  private var myGivenBound: Type = NoType
+  @cache @benignRace("equal type from the same selectors") private var myWildcardBound: Type = NoType
+  @cache @benignRace("equal type from the same selectors") private var myGivenBound: Type = NoType
 
   /** Compute info relating to the selector list */
   private def selectorInfo: SelectorInfo =
@@ -184,9 +185,9 @@ class ImportInfo(symf: Context ?=> Symbol,
 
   private val isLanguageImport: Boolean = untpd.languageImport(qualifier).isDefined
 
-  private var myUnimported: Symbol | Null = null
+  @cache @benignRace("a function of the import's site, the same each time (I91)") private var myUnimported: Symbol | Null = null
 
-  private var featureCache: SimpleIdentityMap[TermName, java.lang.Boolean] = SimpleIdentityMap.empty
+  @cache @benignRace("a lost update costs a recompute; every writer stores the same boolean for a feature (I80)") private var featureCache: SimpleIdentityMap[TermName, java.lang.Boolean] = SimpleIdentityMap.empty
 
   /** Does this import clause enable or disable `feature`?
    *  @param  feature   See featureImported for a description

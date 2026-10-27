@@ -25,6 +25,7 @@ import dotty.tools.dotc.transform.BetaReduce
 import quoted.QuoteUtils
 import staging.StagingLevel.{level, spliceContext}
 import scala.annotation.constructorOnly
+import scala.annotation.internal.{confined, scratch}
 
 /** General support for inlining */
 object Inliner:
@@ -222,7 +223,7 @@ end Inliner
  *  @param  rhsToInline  the body of the inlineable method that replaces the call.
  */
 // one Inliner per inline call (or per inlined parent trait): its buffers and proxy maps live for that expansion
-class Inliner(val call: tpd.Tree)(using Context):
+@scratch @confined class Inliner(val call: tpd.Tree)(using Context):
   import tpd.*
   import Inliner.*
 

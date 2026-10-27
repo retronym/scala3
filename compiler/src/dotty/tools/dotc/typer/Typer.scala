@@ -55,6 +55,7 @@ import transform.CheckUnused.withOriginalName
 import dotty.tools.dotc.printing.Formatting.hl
 
 import scala.annotation.{unchecked as _, *}
+import scala.annotation.internal.{confined, scratch}
 import dotty.tools.dotc.util.chaining.*
 
 object Typer {
@@ -206,7 +207,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    */
   // Nothing enters the root typer's scope. A nested typer's is filled by one symbol's completion and handed, through
   // `nestedTyper`'s `remove`, to the one body typing that consumes it.
-  val scope: MutableScope = newScope(nestingLevel)
+  @scratch @confined val scope: MutableScope = newScope(nestingLevel)
 
   /** A temporary data item valid for a single `findRef`:
    *  The set of all root import symbols that have been

@@ -38,6 +38,7 @@ import Denotations.SingleDenotation
 import annotation.threadUnsafe
 
 import scala.annotation.tailrec
+import scala.annotation.internal.{confined, scratch}
 
 object Applications {
   import tpd.*
@@ -207,7 +208,7 @@ object Applications {
    *  TODO: Move into Applications trait. No need to keep it outside. But it's a large
    *        refactor, so do this when the rest is merged.
    */
-  class UnapplyArgs(unapplyResult: Type, unapplyFn: Tree, unadaptedArgs: List[untpd.Tree], pos: SrcPos)(using Context):
+  @scratch @confined class UnapplyArgs(unapplyResult: Type, unapplyFn: Tree, unadaptedArgs: List[untpd.Tree], pos: SrcPos)(using Context):
     private var args = unadaptedArgs
 
     private def getName(fn: Tree): Name =
@@ -547,7 +548,7 @@ trait Applications extends Compatibility {
    *  @param resultType the expected result type of the application
    */
   // one per application being typed or resolved: not shared
-  abstract class Application[Arg](methRef: TermRef, funType: Type, args: List[Arg], resultType: Type)(using Context) {
+  @scratch @confined abstract class Application[Arg](methRef: TermRef, funType: Type, args: List[Arg], resultType: Type)(using Context) {
 
     /** The type of typed arguments: either tpd.Tree or Type */
     type TypedArg
@@ -1118,7 +1119,7 @@ trait Applications extends Compatibility {
   /** Subclass of Application for type checking an Apply node, where
    *  types of arguments are either known or unknown.
    */
-  abstract class TypedApply[T <: Untyped](
+  @scratch @confined abstract class TypedApply[T <: Untyped](
     app: untpd.Apply, fun: Tree, methRef: TermRef, args: List[Trees.Tree[T]], resultType: Type,
     override val applyKind: ApplyKind)(using Context)
   extends Application(methRef, fun.tpe, args, resultType) {

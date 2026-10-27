@@ -30,6 +30,7 @@ object Comments {
 
     // Written by the namer of any reader (`addDocstring`) and by the expander of a comment, so with concurrent
     // readers the map is reached only holding this object's monitor.
+    @scala.annotation.internal.treeState
     private val _docstrings = guarded(MutableSymbolMap[Comment](512))
 
     val templateExpander: CommentExpander = new CommentExpander
@@ -224,6 +225,7 @@ object Comments {
     // With concurrent readers, reached only holding this object's monitor. A comment is cooked outside it (cooking
     // cooks the comments it inherits from, and may type a usecase), so two readers may cook one comment, and the
     // second to finish stores an equal string.
+    @scala.annotation.internal.cache
     private val cookedDocComments = guarded(MutableSymbolMap[String]())
 
     /** The raw doc comment of symbol `sym`, minus usecase and define sections, augmented by
@@ -479,6 +481,7 @@ object Comments {
     /** Maps symbols to the variable -> replacement maps that are defined
      *  in their doc comments
      */
+    @scala.annotation.internal.cache
     // With concurrent readers, reached only holding this object's monitor.
     private val defs = guarded(mutable.Map.empty[Symbol, Map[String, String]].withDefaultValue(Map.empty))
 

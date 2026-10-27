@@ -10,6 +10,7 @@ import Spans.{Span, NoSpan}
 import util.Spans.spanCoord
 
 import scala.collection.mutable
+import scala.annotation.internal.{confined, scratch}
 
 /** An edit of the content of an interactive session, classified against the
  *  session's parse of the old content, and the means to carry the session
@@ -193,6 +194,7 @@ private[interactive] object BodyEdit:
    *  visited once; trees of other sources are visited (an inlined body holds
    *  the call) and not shifted.
    */
+  @scratch @confined
   final class Shift(r: Region, anchor: Span, src: SourceFile)(using Context):
     private val seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[AnyRef, java.lang.Boolean])
     var trees = 0

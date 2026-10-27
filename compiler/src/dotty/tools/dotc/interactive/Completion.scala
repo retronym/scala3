@@ -23,6 +23,7 @@ import dotty.tools.dotc.parsing.Tokens
 import dotty.tools.dotc.typer.Implicits.SearchSuccess
 import dotty.tools.dotc.typer.Inferencing
 import dotty.tools.dotc.util.Chars
+import scala.annotation.internal.{cache, publishedBy}
 import dotty.tools.dotc.util.SourcePosition
 
 import scala.collection.mutable
@@ -50,7 +51,7 @@ case class Completion(label: String, description: String, symbols: List[Symbol])
 
 object Completion:
 
-  private val logger = Logger.getLogger(this.getClass.getName)
+  @cache @publishedBy("init") private val logger = Logger.getLogger(this.getClass.getName)
 
   def scopeContext(pos: SourcePosition, tpdPath: List[tpd.Tree], completionContext: Context)(using Context): CompletionResult =
     inContext(completionContext):

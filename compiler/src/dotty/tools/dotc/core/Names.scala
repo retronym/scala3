@@ -489,6 +489,7 @@ object Names {
   val EmptyTypeName: TypeName = EmptyTermName.toTypeName
 
   // stateless
+  @scala.annotation.internal.publishedBy("init")
   implicit val NameOrdering: Ordering[Name] = new Ordering[Name] {
     private def compareInfos(x: NameInfo, y: NameInfo): Int =
       if (x.kind.tag != y.kind.tag) x.kind.tag - y.kind.tag

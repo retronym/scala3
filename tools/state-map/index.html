@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dotc state map</title>
+<style>
+:root {
+  --bg: #fbfaf8; --panel: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d9d6d0; --edge: #8d8a84;
+  --node: #ffffff; --node-head: #f0eee9; --hl: #1f6feb;
+  --kA: #2f6fd0; --kB: #8a4fc7; --kC: #1f8a6a; --kD: #b7791f; --kE: #c2416e; --kU: #9a9a9f;
+  --warn: #d1242f; --warn-bg: #fde7e9; --chip: #f0eee9; --chip-on: #1d1d1f; --chip-on-fg: #ffffff;
+  --c-kw: #8a2c9e; --c-str: #1f7a4d; --c-com: #7d7a73; --c-ty: #1f5fb4; --c-num: #a35a00; --c-ann: #a3361f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151517; --panel: #1d1d20; --fg: #e8e6e3; --muted: #9b9a97; --line: #3a3a3f; --edge: #77757a;
+    --node: #212125; --node-head: #2b2b30; --hl: #58a6ff;
+    --kA: #6ea2ff; --kB: #b98cf0; --kC: #4cc79e; --kD: #e0a94a; --kE: #ef7aa3; --kU: #8a8a90;
+    --warn: #ff6b6b; --warn-bg: #3d1a1d; --chip: #2b2b30; --chip-on: #e8e6e3; --chip-on-fg: #151517;
+    --c-kw: #d49bf0; --c-str: #7fd3a0; --c-com: #8f8c86; --c-ty: #7ab3ff; --c-num: #f0b36a; --c-ann: #f08a73;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151517; --panel: #1d1d20; --fg: #e8e6e3; --muted: #9b9a97; --line: #3a3a3f; --edge: #77757a;
+  --node: #212125; --node-head: #2b2b30; --hl: #58a6ff;
+  --kA: #6ea2ff; --kB: #b98cf0; --kC: #4cc79e; --kD: #e0a94a; --kE: #ef7aa3; --kU: #8a8a90;
+  --warn: #ff6b6b; --warn-bg: #3d1a1d; --chip: #2b2b30; --chip-on: #e8e6e3; --chip-on-fg: #151517;
+    --c-kw: #d49bf0; --c-str: #7fd3a0; --c-com: #8f8c86; --c-ty: #7ab3ff; --c-num: #f0b36a; --c-ann: #f08a73;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+#app { display: grid; grid-template-columns: 1fr 340px; height: 100vh; }
+#main { display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+#bar { padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 3px; }
+.row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.row .lbl { color: var(--muted); font-size: 10px; width: 70px; text-transform: uppercase; letter-spacing: .04em; }
+.chip { border: 1px solid var(--line); background: var(--chip); color: var(--fg); border-radius: 10px; padding: 0 7px; font-size: 11px; cursor: pointer; user-select: none; }
+.chip.on { background: var(--chip-on); color: var(--chip-on-fg); border-color: var(--chip-on); }
+.chip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+.chip.warn.on { background: var(--warn); border-color: var(--warn); color: #fff; }
+button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+input[type=search] { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 4px; padding: 2px 6px; width: 220px; }
+#stage { position: relative; overflow: hidden; }
+#svg { width: 100%; height: 100%; cursor: grab; display: block; }
+#side { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 10px 12px; }
+#side h2 { font-size: 13px; margin: 12px 0 6px; }
+#side h2:first-child { margin-top: 0; }
+table { border-collapse: collapse; font-size: 11px; width: 100%; }
+td, th { border-bottom: 1px solid var(--line); padding: 2px 4px; text-align: right; }
+td:first-child, th:first-child { text-align: left; }
+#detail { font-size: 12px; }
+#detail code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+#detail .sites { max-height: 220px; overflow: auto; }
+.val { font-size: 11px; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; margin: 2px 0; }
+.val.mm { color: var(--warn); }
+details summary { cursor: pointer; font-weight: 600; margin: 10px 0 4px; }
+.rule { font-size: 11px; margin: 3px 0; }
+.rule b { font-family: ui-monospace, Menlo, monospace; }
+#tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); padding: 6px 8px; border-radius: 4px; font-size: 11px; max-width: 460px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+#status { color: var(--muted); font-size: 11px; }
+svg text { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; fill: var(--fg); }
+svg .head { font-family: -apple-system, system-ui, sans-serif; font-weight: 600; font-size: 12px; }
+svg .pkg { fill: var(--muted); font-size: 10px; }
+svg .ty { fill: var(--muted); }
+svg .prot { font-size: 10px; }
+svg .prot.bad { fill: var(--warn); font-weight: 700; }
+svg text.ann { fill: var(--hl); font-weight: 600; }
+svg .nodebox { fill: var(--node); stroke: var(--line); }
+svg .nodebox.sel { stroke: var(--hl); stroke-width: 2; }
+svg .headbox { fill: var(--node-head); }
+svg .rowbad { fill: var(--warn-bg); }
+svg .edge { fill: none; stroke: var(--edge); opacity: .55; }
+svg .edge.hl { stroke: var(--hl); opacity: 1; }
+svg g.n { cursor: pointer; }
+svg a text:hover { text-decoration: underline; }
+#guide { position: fixed; inset: 0; z-index: 5; overflow: auto; background: var(--bg); padding-top: calc(18px + env(safe-area-inset-top, 0px)); padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+#guide .doc { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+#guide nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#guide nav a { font-size: 12px; color: var(--hl); text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; background: var(--panel); }
+#guide h1 { font-size: 20px; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+#guide h2 { font-size: 15px; margin: 0 0 8px; text-wrap: balance; }
+#guide h3 { font-size: 13px; margin: 0; }
+#guide p, #guide li { font-size: 13px; line-height: 1.55; max-width: 72ch; margin: 0; }
+#guide section { display: flex; flex-direction: column; gap: 10px; }
+#guide ol, #guide ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+#guide code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+#guide .eyebrow { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+#guide .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+#guide .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#guide .card .meta { font-size: 11px; color: var(--muted); }
+#guide .card .cures { display: flex; flex-wrap: wrap; gap: 4px; }
+#guide .tag { font-size: 11px; border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; background: var(--chip); color: var(--fg); cursor: pointer; }
+#guide .tag:hover, #guide .tag:focus-visible { border-color: var(--hl); outline: none; }
+#guide .card.flash { border-color: var(--hl); box-shadow: 0 0 0 2px var(--hl); }
+#guide .tablewrap { overflow-x: auto; }
+#guide table.prereq td { min-width: 180px; line-height: 1.5; }
+#guide table.prereq td:first-child { min-width: 160px; }
+#guide table { font-size: 12px; }
+#guide td, #guide th { text-align: left; vertical-align: top; padding: 4px 6px; }
+#guide td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#guide .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+#guide .step { border-top: 2px solid var(--edge); padding-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+#guide .step b { font-size: 12px; }
+#guide .step span { font-size: 12px; color: var(--muted); line-height: 1.45; }
+#guide .found { font-size: 11.5px; color: var(--muted); }
+#guide .tabs { display: grid; grid-template-columns: minmax(200px, 250px) 1fr; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); min-height: 420px; }
+#guide .tablist { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 6px 0; overflow: auto; }
+#guide .tabgroup { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 12px 4px; }
+#guide .tab { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; border-radius: 0; background: none; padding: 5px 12px; font-size: 12.5px; border-left: 3px solid transparent; }
+#guide .tab .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+#guide .tab:hover { background: var(--node-head); }
+#guide .tab[aria-selected="true"] { background: var(--node-head); border-left-color: var(--hl); font-weight: 600; }
+#guide .tabpanel { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+#guide .tabpanel .ph { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+#guide .tabpanel .ph h2 { margin: 0; }
+#guide .tabpanel .cures { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+@media (max-width: 700px) { #guide .tabs { grid-template-columns: 1fr; } #guide .tablist { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 0; } #guide .tabgroup { display: none; } #guide .tab { white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent; } #guide .tab[aria-selected="true"] { border-bottom-color: var(--hl); } }
+#guide pre.code .hljs-keyword, #guide pre.code .hljs-built_in { color: var(--c-kw); }
+#guide pre.code .hljs-string { color: var(--c-str); }
+#guide pre.code .hljs-comment { color: var(--c-com); font-style: italic; }
+#guide pre.code .hljs-type, #guide pre.code .hljs-title { color: var(--c-ty); }
+#guide pre.code .hljs-number, #guide pre.code .hljs-literal { color: var(--c-num); }
+#guide pre.code .hljs-meta { color: var(--c-ann); }
+#guide figure.swim { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+#guide .swimwrap { overflow-x: auto; }
+#guide .swimwrap svg { display: block; min-width: 600px; width: 100%; height: auto; }
+#guide .swim svg text { font-family: -apple-system, system-ui, sans-serif; fill: var(--fg); }
+#guide .swim .sl { fill: var(--node-head); }
+#guide .swim .sn { font-size: 11px; font-weight: 600; fill: var(--muted); }
+#guide .swim .sb { fill: var(--node); stroke: var(--edge); stroke-width: 1; }
+#guide .swim .sb.hold { stroke: var(--hl); stroke-width: 1.6; }
+#guide .swim .sb.wait { fill: none; stroke-dasharray: 4 3; }
+#guide .swim .sb.write { stroke: var(--warn); stroke-width: 1.6; }
+#guide .swim .st { font-size: 11px; }
+#guide .swim .sm { stroke: var(--hl); stroke-width: 1.5; }
+#guide .swim .sml { font-size: 10px; fill: var(--hl); }
+#guide .swim .sa { stroke: var(--hl); stroke-width: 1.3; fill: none; }
+#guide .swim .sal { font-size: 10px; fill: var(--hl); }
+#guide .swim figcaption { font-size: 12px; color: var(--muted); }
+#guide pre.code { margin: 0; overflow-x: auto; background: var(--node-head); border-radius: 4px; padding: 8px 10px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; max-width: 100%; }
+#guide details.code summary { font-weight: 500; font-size: 11.5px; color: var(--hl); margin: 4px 0; }
+#guide .lede { font-size: 14px; line-height: 1.55; max-width: 76ch; }
+#guide .figure { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+#guide .figure svg { display: block; min-width: 760px; width: 100%; height: auto; }
+#guide .figure svg text { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; fill: var(--fg); }
+#guide .figure svg .t { font-weight: 650; font-size: 13px; }
+#guide .figure svg .m { fill: var(--muted); font-size: 11px; }
+#guide .figure svg .box { fill: var(--node); stroke: var(--line); }
+#guide .figure svg .lane { fill: var(--node-head); stroke: none; }
+#guide .figure svg .ar { stroke: var(--edge); stroke-width: 1.4; fill: none; }
+#guide .figure svg .ar.w { stroke: var(--warn); }
+#guide .figure svg .lbl { font-size: 11px; fill: var(--hl); }
+button:focus-visible, .chip:focus-visible { outline: 2px solid var(--hl); outline-offset: 1px; }
+@media (max-width: 700px) { #app { grid-template-columns: 1fr; grid-template-rows: 1fr 40vh; } #side { border-left: 0; border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="main">
+    <div id="bar">
+      <div class="row"><span class="lbl">kind</span><span id="f-kind" class="row"></span></div>
+      <div class="row"><span class="lbl">protection</span><span id="f-prot" class="row"></span></div>
+      <div class="row"><span class="lbl">feature</span><span id="f-feat" class="row"></span></div>
+      <div class="row"><span class="lbl">role / reach</span><span id="f-role" class="row"></span><span id="f-reach" class="row"></span></div>
+      <div class="row"><span class="lbl">source</span><span id="f-source" class="row"></span></div>
+      <div class="row"><span class="lbl">view</span>
+        <button id="b-reset">core view</button>
+        <button id="b-all">every class with a shown field</button>
+        <label class="chip" id="b-types">expand Type families</label>
+        <input type="search" id="q" placeholder="add a class or field (Enter)">
+        <button id="b-theme">theme</button>
+        <button id="b-guide">guide</button>
+        <span id="status"></span>
+      </div>
+    </div>
+    <div id="stage"><svg id="svg"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker></defs><g id="vp"></g></svg><div id="tip"></div></div>
+  </div>
+  <div id="side">
+    <h2>Field</h2>
+    <div id="detail"><span class="mono" style="color:var(--muted)">Hover a row for its rules; click it for its source on GitHub. Click a class header to add the classes its fields point to; alt-click to add the classes that point to it as well; shift-click to remove it. Alt-click a kind or protection chip to show it alone; a feature chip brings in the classes with fields in that area.</span></div>
+    <h2>Shown, kind × protection</h2>
+    <div id="counts"></div>
+    <details><summary id="val-sum">Checks against the design notes</summary><div id="validation"></div></details>
+    <details><summary>Rules</summary><div id="rules"></div></details>
+    <div id="meta" class="mono" style="color:var(--muted); margin-top:10px"></div>
+  </div>
+</div>
+<div id="guide" hidden></div>
+<script src="state-map.data.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/scala.min.js"></script>
+<script>
+(() => {
+const M = window.STATE_MAP;
+if (!M) { document.getElementById('status').textContent = 'state-map.data.js did not load: run tools/state-map/StateMap.scala'; return; }
+const elk = new ELK();
+const classes = new Map(M.classes.map(c => [c.name, c]));
+const byOwner = new Map();
+for (const f of M.fields) { if (!byOwner.has(f.owner)) byOwner.set(f.owner, []); byOwner.get(f.owner).push(f); }
+const KINDS = ['A', 'B', 'C', 'D', 'E', 'unclassified'];
+const KCOL = { A: '--kA', B: '--kB', C: '--kC', D: '--kD', E: '--kE', unclassified: '--kU' };
+const protBase = p => p.split(':')[0];
+// how a field is classified: by an annotation of the state-map vocabulary, by a -Ycheck-reentrant marker alone, or by the rules
+const isMarker = f => f.protectionRule === '@sharable' || f.protectionRule === '@unshared';
+const sourceOf = f => (f.kindSource === 'annotated' || (f.protectionSource === 'annotated' && !isMarker(f))) ? 'annotated' : isMarker(f) ? 'marker' : 'inferred';
+const SOURCES = [['annotated', 'annotated'], ['marker', '@sharable / @unshared'], ['inferred', 'inferred']];
+const isBad = p => p === 'none' || p.startsWith('partial');
+const PROT_SHORT = { 'benign-race': 'benign race', 'static-safe (@sharable)': '@sharable', 'single-threaded (@unshared)': '@unshared',  'Stamped': 'Stamped', 'Publish': 'Publish', 'holder-volatile': 'holder', 'volatile': 'volatile', 'completion-lock': 'lock', 'root-claim': 'claim', 'thread-confined': 'confined', 'synchronized': 'sync', 'concurrent': 'concurrent', 'batch-only': 'batch', 'post-typer': 'post-typer', 'none': '! none', 'partial': '! partial', 'mixed': 'mixed', 'unknown': '?' };
+
+const simple = n => n.replace(/\$$/, '').split('.').filter(s => /^[A-Z_]/.test(s)).join('.') || n;
+const isType = n => { const c = classes.get(n); return !!c && (n === 'core.Types.Type' || c.bases.includes('core.Types.Type')); };
+const GROUPS = [
+  { id: 'Symbol', match: n => n === 'core.Symbols.Symbol' || n === 'core.Symbols.ClassSymbol' },
+  { id: 'SymDenotation', match: n => n === 'core.SymDenotations.SymDenotation' },
+  { id: 'ClassDenotation', match: n => n === 'core.SymDenotations.ClassDenotation' || n === 'core.SymDenotations.PackageClassDenotation' },
+  { id: 'Denotation', match: n => n.startsWith('core.Denotations.') },
+  { id: 'NamedType', match: n => ['core.Types.NamedType', 'core.Types.TypeRef', 'core.Types.TermRef'].includes(n) },
+  { id: 'AppliedType', match: n => n === 'core.Types.AppliedType' },
+  { id: 'Type families', types: true, match: n => isType(n) },
+  { id: 'Scope', match: n => n.startsWith('core.Scopes.') },
+  { id: 'ContextBase', match: n => n === 'core.Contexts.ContextBase' || n === 'core.Contexts.ContextState' },
+  { id: 'Run', match: n => n === 'Run' || n.startsWith('Run.') },
+  { id: 'Reader', match: n => n === 'Reader' },
+  { id: 'TreeUnpickler', match: n => n.startsWith('core.tasty.TreeUnpickler') },
+  { id: 'Session', match: n => n === 'interactive.InteractiveDriver.Session' },
+  { id: 'InheritedCache', match: n => /SymDenotations\.(InheritedCacheImpl|MemberNamesImpl|BaseDataImpl)$/.test(n) },
+  { id: 'Uniques', match: n => n.startsWith('core.Uniques') || n === 'util.WeakHashSet' || n === 'util.ConcurrentWeakHashSet' },
+  { id: 'LazyType', match: n => n === 'core.SymDenotations.LazyType' },
+];
+const DEFAULT_NODES = GROUPS.map(g => g.id);
+
+const state = {
+  kind: new Set(KINDS), source: new Set(SOURCES.map(s => s[0])), prot: new Set(), feat: null, role: new Set(['semantic', 'cache']), reach: new Set(['typer', 'post-typer']),
+  expandTypes: false, visible: new Set(DEFAULT_NODES), sel: null,
+};
+const allProts = [...new Set(M.fields.map(f => protBase(f.protection)))].sort();
+allProts.forEach(p => state.prot.add(p));
+const allFeats = M.header.features.map(f => f.id);
+
+function nodeOf(cls) {
+  for (const g of GROUPS) {
+    if (g.types && state.expandTypes) continue;
+    if (g.match(cls)) return g.id;
+  }
+  return cls;
+}
+const groupClasses = new Map();
+function membersOf(node) {
+  const key = node + '|' + state.expandTypes;
+  if (!groupClasses.has(key)) groupClasses.set(key, [...byOwner.keys()].filter(c => nodeOf(c) === node));
+  return groupClasses.get(key);
+}
+function shown(f) {
+  if (!state.kind.has(f.kind)) return false;
+  if (!state.prot.has(protBase(f.protection))) return false;
+  if (!state.role.has(f.role)) return false;
+  if (!state.reach.has(f.reach)) return false;
+  if (!state.source.has(sourceOf(f))) return false;
+  if (state.feat && !f.features.some(x => state.feat.has(x))) return false;
+  return true;
+}
+function rowsOf(node) {
+  const cs = membersOf(node);
+  const multi = cs.length > 1;
+  const rows = [];
+  for (const c of cs) for (const f of byOwner.get(c) || []) if (shown(f)) rows.push({ f, label: (multi ? simple(c).split('.').pop() + '.' : '') + f.name });
+  return rows;
+}
+
+// ---- chips
+// a protection's name in plain words; the id is the chip's tooltip
+const PROT_LABELS = { 'thread-confined': 'one reader only', 'completion-lock': 'completion lock', 'root-claim': 'root claim',
+  'frozen-after-completion': 'frozen once published', 'writer-action': 'write actions only', 'Stamped': 'stamped value',
+  'holder-volatile': 'immutable holder', 'Publish': 'release/acquire publication', 'volatile': 'one volatile field',
+  'init-only': 'written during setup', 'concurrent': 'concurrent structure', 'synchronized': 'monitor',
+  'benign-race': 'benign race, argued', 'batch-only': 'batch compiler only', 'post-typer': 'after typer',
+  'static-safe (@sharable)': 'shared statically, safe', 'single-threaded (@unshared)': 'single-threaded', none: 'unprotected',
+  partial: 'partly protected', mixed: 'mixed', unknown: 'not seen' };
+const protLabel = p => PROT_LABELS[p] || p;
+function chips(el, items, set, opts = {}) {
+  el.innerHTML = '';
+  for (const it of items) {
+    const c = document.createElement('span');
+    c.className = 'chip' + (set.has(it.id) ? ' on' : '') + (it.warn ? ' warn' : '');
+    c.innerHTML = (it.color ? `<span class="sw" style="background:var(${it.color})"></span>` : '') + it.label;
+    c.title = it.title || '';
+    c.onclick = e => { opts.onclick ? opts.onclick(it, e) : (set.has(it.id) ? set.delete(it.id) : set.add(it.id)); renderChips(); render(); };
+    el.appendChild(c);
+  }
+}
+const count = pred => M.fields.filter(pred).length;
+function renderChips() {
+  chips(document.getElementById('f-kind'), KINDS.map(k => ({ id: k, label: `${k === 'unclassified' ? 'unclassified' : k + ' ' + M.header.kinds[k]} (${count(f => f.kind === k)})`, color: KCOL[k] })), state.kind,
+    { onclick: (it, e) => toggleOnly(state.kind, it.id, e, KINDS) });
+  const protItems = [{ id: '__bad', label: 'unprotected only', warn: true, title: 'none and partial: no protection found at some access' }]
+    .concat(allProts.map(p => ({ id: p, label: `${protLabel(p)} (${count(f => protBase(f.protection) === p)})`, title: p, warn: p === 'none' || p === 'partial' })));
+  const protSet = new Set(state.prot);
+  if ([...state.prot].every(p => p === 'none' || p === 'partial') && state.prot.size > 0) protSet.add('__bad');
+  chips(document.getElementById('f-prot'), protItems, protSet, {
+    onclick: (it, e) => {
+      if (it.id === '__bad') {
+        const bad = [...state.prot].every(p => p === 'none' || p === 'partial');
+        state.prot.clear();
+        (bad ? allProts : ['none', 'partial']).forEach(p => state.prot.add(p));
+      } else toggleOnly(state.prot, it.id, e, allProts);
+    }
+  });
+  const fset = state.feat || new Set();
+  chips(document.getElementById('f-feat'), [{ id: '__all', label: 'any' }].concat(allFeats.map(x => ({ id: x, label: `${x} (${count(f => f.features.includes(x))})`, title: M.header.features.find(f => f.id === x).doc }))),
+    state.feat ? fset : new Set(['__all']), {
+    onclick: (it) => {
+      if (it.id === '__all') state.feat = null;
+      else { state.feat = state.feat || new Set(); state.feat.has(it.id) ? state.feat.delete(it.id) : state.feat.add(it.id); if (!state.feat.size) state.feat = null; }
+      addFeatureClasses(); fitted = false;
+    }
+  });
+  chips(document.getElementById('f-role'), ['semantic', 'cache'].map(r => ({ id: r, label: `${r} (${count(f => f.role === r)})`, title: r === 'cache' ? 'kind C: derivable, performance only' : 'kinds A, B, D, E and unclassified' })), state.role);
+  chips(document.getElementById('f-reach'), ['typer', 'post-typer'].map(r => ({ id: r, label: `${r} (${count(f => f.reach === r)})` })), state.reach);
+  chips(document.getElementById('f-source'), SOURCES.map(([id, label]) => ({ id, label: `${label} (${count(f => sourceOf(f) === id)})`,
+    title: id === 'annotated' ? 'kind or protection declared by an annotation (scala.annotation.internal)' : id === 'marker' ? 'protection from a -Ycheck-reentrant marker on the field or its owner' : 'placed by the rules alone' })), state.source,
+    { onclick: (it, e) => toggleOnly(state.source, it.id, e, SOURCES.map(s => s[0])) });
+  document.getElementById('b-types').className = 'chip' + (state.expandTypes ? ' on' : '');
+}
+// a click toggles; alt-click shows that one alone
+function toggleOnly(set, id, e, all) {
+  if (e.altKey || e.metaKey) { set.clear(); set.add(id); }
+  else set.has(id) ? set.delete(id) : set.add(id);
+  if (!set.size) all.forEach(x => set.add(x));
+}
+
+// ---- graph
+const ROW = 16, HEAD = 34, CH = 6.7, PAD = 8;
+function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+function buildGraph() {
+  const nodes = [];
+  const rowsBy = new Map();
+  for (const id of state.visible) {
+    const rows = rowsOf(id);
+    if (!rows.length) continue;
+    rowsBy.set(id, rows);
+  }
+  const edges = [];
+  for (const [id, rows] of rowsBy) {
+    const cs = membersOf(id);
+    const title = cs.length === 1 && id === cs[0] ? simple(id) : id;
+    const sub = cs.length === 1 ? (classes.get(cs[0])?.pkg || '') : `${cs.length} classes`;
+    const nameW = Math.max(...rows.map(r => r.label.length));
+    const typeW = Math.min(28, Math.max(...rows.map(r => r.f.type.length)));
+    const protW = Math.max(...rows.map(r => (PROT_SHORT[protBase(r.f.protection)] || r.f.protection).length));
+    const w = Math.max(title.length * 7.6 + 2 * PAD, (nameW + typeW + protW + 4) * CH + 2 * PAD + 6);
+    const h = HEAD + rows.length * ROW + 4;
+    // one edge per pair of classes, carrying the fields whose types point there
+    const byTarget = new Map();
+    rows.forEach(r => {
+      for (const t of new Set(r.f.edges.map(nodeOf))) if (t !== id && rowsBy.has(t)) {
+        if (!byTarget.has(t)) byTarget.set(t, []);
+        byTarget.get(t).push(r.f);
+      }
+    });
+    for (const [t, fs] of byTarget) edges.push({ id: `${id}->${t}`, sources: [id], targets: [t], from: id, to: t, fields: fs });
+    nodes.push({ id, width: w, height: h, _rows: rows, _title: title, _sub: sub, _nameW: nameW, _typeW: typeW });
+  }
+  return { id: 'root', layoutOptions: {
+      'elk.algorithm': 'layered', 'elk.direction': 'RIGHT', 'elk.layered.spacing.nodeNodeBetweenLayers': '70',
+      'elk.spacing.nodeNode': '28', 'elk.spacing.edgeNode': '16', 'elk.spacing.edgeEdge': '6', 'elk.edgeRouting': 'ORTHOGONAL', 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES' },
+    children: nodes, edges };
+}
+
+const svg = document.getElementById('svg'), vp = document.getElementById('vp'), tip = document.getElementById('tip');
+let view = { x: 20, y: 20, k: 1 }, fitted = false, seq = 0;
+function applyView() { vp.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`); }
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+
+async function render() {
+  const my = ++seq;
+  const g = buildGraph();
+  let laid;
+  try { laid = await elk.layout(g); } catch (e) { document.getElementById('status').textContent = 'layout failed: ' + e; return; }
+  if (my !== seq) return;
+  vp.innerHTML = '';
+  const edgeEls = [];
+  const eg = el('g', {}, vp);
+  for (const e of laid.edges || []) {
+    for (const s of e.sections || []) {
+      const pts = [s.startPoint, ...(s.bendPoints || []), s.endPoint];
+      let d = `M${pts[0].x},${pts[0].y}`;
+      if (pts.length > 2 && g.layoutOptions['elk.edgeRouting'] === 'SPLINES') {
+        for (let i = 1; i + 2 < pts.length + 1; i += 3) {
+          const [a, b, c] = [pts[i], pts[i + 1] || pts[pts.length - 1], pts[i + 2] || pts[pts.length - 1]];
+          d += ` C${a.x},${a.y} ${b.x},${b.y} ${c.x},${c.y}`;
+        }
+      } else for (const p of pts.slice(1)) d += ` L${p.x},${p.y}`;
+      const src = g.edges.find(x => x.id === e.id);
+      const p = el('path', { d, class: 'edge', 'marker-end': 'url(#arr)', 'stroke-width': Math.min(4, 0.6 + Math.log2(1 + src.fields.length)) }, eg);
+      p._from = src.from; p._to = src.to; p._fields = src.fields;
+      const tt = el('title', {}, p); tt.textContent = `${src.from} → ${src.to}: ${src.fields.map(f => f.name).join(', ')}`;
+      edgeEls.push(p);
+    }
+  }
+  for (const n of laid.children) {
+    const gn = el('g', { class: 'n', transform: `translate(${n.x},${n.y})` }, vp);
+    el('rect', { class: 'nodebox' + (state.sel === n.id ? ' sel' : ''), width: n.width, height: n.height, rx: 4 }, gn);
+    el('rect', { class: 'headbox', width: n.width - 2, x: 1, y: 1, height: HEAD - 4, rx: 3 }, gn);
+    const head = el('text', { class: 'head', x: PAD, y: 15 }, gn); head.textContent = n._title;
+    const sub = el('text', { class: 'pkg', x: PAD, y: 27 }, gn); sub.textContent = n._sub;
+    const hit = el('rect', { width: n.width, height: HEAD, fill: 'transparent' }, gn);
+    hit.onclick = ev => { ev.stopPropagation(); ev.shiftKey ? hide(n.id) : expand(n.id, ev.altKey || ev.metaKey); };
+    hit.onmouseenter = () => edgeEls.forEach(p => p.classList.toggle('hl', p._from === n.id || p._to === n.id));
+    hit.onmouseleave = () => edgeEls.forEach(p => p.classList.remove('hl'));
+    n._rows.forEach((r, i) => {
+      const y = HEAD + i * ROW;
+      const f = r.f;
+      const pb = protBase(f.protection);
+      if (isBad(f.protection)) el('rect', { class: 'rowbad', x: 1, y, width: n.width - 2, height: ROW }, gn);
+      el('rect', { x: 1, y: y + 1, width: 4, height: ROW - 2, fill: `var(${KCOL[f.kind]})` }, gn);
+      const a = el('a', { href: f.url, target: '_blank' }, gn);
+      const t = el('text', { x: PAD + 2, y: y + 12 }, a);
+      t.textContent = (sourceOf(f) === 'annotated' ? '@ ' : '') + r.label + (f.var ? '' : ' ⟨val⟩');
+      if (sourceOf(f) === 'annotated') t.setAttribute('class', 'ann');
+      const ty = el('text', { class: 'ty', x: PAD + 2 + (n._nameW + 1) * CH, y: y + 12 }, gn); ty.textContent = trunc(f.type, n._typeW);
+      const pr = el('text', { class: 'prot' + (isBad(f.protection) ? ' bad' : ''), x: n.width - PAD, y: y + 12, 'text-anchor': 'end' }, gn);
+      pr.textContent = (f.annotationCheck && f.annotationCheck.includes('disagrees') ? '≠ ' : '') + (PROT_SHORT[pb] || pb);
+      const hov = el('rect', { x: 0, y, width: n.width, height: ROW, fill: 'transparent', 'pointer-events': 'none' }, gn);
+      a.onmouseenter = t.onmouseenter = ev => { showDetail(f); showTip(ev, f); edgeEls.forEach(p => p.classList.toggle('hl', p._fields.includes(f))); };
+      a.onmousemove = ev => moveTip(ev);
+      a.onmouseleave = () => { tip.style.display = 'none'; edgeEls.forEach(p => p.classList.remove('hl')); };
+    });
+  }
+  if (!fitted) fit(laid);
+  applyView();
+  const nf = laid.children.reduce((s, n) => s + n._rows.length, 0);
+  document.getElementById('status').textContent = `${laid.children.length} classes, ${nf} fields shown of ${M.fields.length}`;
+  renderCounts();
+}
+function fit(laid) {
+  const W = svg.clientWidth, H = svg.clientHeight;
+  const k = Math.min(1.1, (W - 40) / (laid.width || 1), (H - 40) / (laid.height || 1));
+  view = { k: Math.max(0.2, k), x: 20, y: 20 };
+  fitted = true;
+}
+// the classes `id`'s shown fields point to; with `incoming`, also the classes with shown fields that point to `id`
+function neighbours(id, incoming) {
+  const out = new Set();
+  for (const c of membersOf(id)) for (const f of byOwner.get(c) || []) if (shown(f)) f.edges.forEach(t => out.add(nodeOf(t)));
+  if (incoming) for (const f of M.fields) if (shown(f) && f.edges.some(t => nodeOf(t) === id)) out.add(nodeOf(f.owner));
+  out.delete(id);
+  return out;
+}
+function expand(id, incoming) {
+  state.sel = id;
+  const ns = neighbours(id, incoming);
+  ns.forEach(n => state.visible.add(n));
+  document.getElementById('status').textContent = `added ${ns.size} classes`;
+  render();
+}
+// a feature chip brings in the classes with fields in that area
+function addFeatureClasses() {
+  if (!state.feat) return;
+  for (const f of M.fields) if (shown(f)) state.visible.add(nodeOf(f.owner));
+}
+function hide(id) { state.visible.delete(id); render(); }
+
+// ---- detail and tooltip
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+const ruleDoc = id => (M.header.rules.find(r => r.id === id) || {}).doc || '';
+
+function showDetail(f) {
+  const acc = Object.entries(f.accesses).map(([k, v]) => `${k} ${v}`).join(', ') || 'none seen';
+  const sites = f.unprotectedSites.map(s => {
+    const m = s.match(/^(\S+):(\d+) (.*)$/);
+    return m ? `<div><a class="mono" target="_blank" href="${M.header.github}/${M.header.tip}/${m[1]}#L${m[2]}">${esc(m[1].replace('compiler/src/dotty/tools/dotc/', ''))}:${m[2]}</a> <span class="mono">${esc(m[3])}</span></div>` : '';
+  }).join('');
+  document.getElementById('detail').innerHTML = `
+    <div><b class="mono">${esc(f.owner)}#${esc(f.name)}</b></div>
+    <div class="mono">${f.var ? 'var' : 'val'} ${esc(f.name)}: ${esc(f.type)}</div>
+    ${f.annotations.length ? `<div class="mono">@${f.annotations.map(esc).join(' @')}</div>` : ''}
+    <div><a target="_blank" href="${f.url}" class="mono">${esc(f.file.replace('compiler/src/dotty/tools/dotc/', ''))}:${f.line}</a></div>
+    <div style="margin-top:4px"><span class="chip on" style="background:var(${KCOL[f.kind]});border-color:var(${KCOL[f.kind]})">${f.kind}</span>
+      <b>${f.kindSource}</b> ${f.kindRule ? `<b class="mono">${esc(f.kindRule)}</b> ${f.kindSource === 'inferred' ? esc(ruleDoc(f.kindRule)) : ''}` : 'no kind rule matched'}
+      ${f.kindSource === 'annotated' ? `<div class="mono">rules: ${esc(f.inferredKind)} ${esc(f.inferredKindRule)}</div>` : ''}</div>
+    <div style="margin-top:4px"><b class="mono" style="${isBad(f.protection) ? 'color:var(--warn)' : ''}">${esc(f.protection)}</b>
+      <b>${f.protectionSource}</b> (<span class="mono">${esc(f.protectionRule)}</span>, evidence ${f.evidence}) ${f.protectionSource === 'inferred' ? esc(ruleDoc(f.protectionRule)).slice(0, 220) : ''}
+      ${f.protectionSource === 'annotated' ? `<div class="mono">rules: ${esc(f.inferredProtection)} (${esc(f.inferredProtectionRule)})</div>` : ''}</div>
+    ${f.annotationCheck ? `<div class="mono" style="margin-top:4px;${f.annotationCheck.includes('disagrees') ? 'color:var(--warn)' : ''}">check: ${esc(f.annotationCheck)}</div>` : ''}
+    <div class="mono" style="margin-top:4px">accesses: ${esc(acc)}</div>
+    <div class="mono">features: ${f.features.join(', ') || '–'}; ${f.role}; reach ${f.reach}</div>
+    ${f.mutableCollection ? `<div class="mono">mutable collection: ${esc(f.mutableCollection)}</div>` : ''}
+    ${sites ? `<div style="margin-top:6px"><b>accesses with no protection</b></div><div class="sites">${sites}</div>` : ''}`;
+}
+function showTip(ev, f) {
+  tip.innerHTML = `<b class="mono">${esc(f.owner)}#${esc(f.name)}</b><br><span class="mono">${esc(f.type)}</span><br>${f.kind} (${f.kindSource}) · ${esc(f.protection)} (${f.protectionSource}) · ${esc(f.kindRule || 'unclassified')}${f.annotationCheck ? '<br>' + esc(f.annotationCheck) : ''}`;
+  tip.style.display = 'block'; moveTip(ev);
+}
+function moveTip(ev) { const r = svg.getBoundingClientRect(); tip.style.left = (ev.clientX - r.left + 14) + 'px'; tip.style.top = (ev.clientY - r.top + 14) + 'px'; }
+
+function renderCounts() {
+  const fs = [];
+  for (const id of state.visible) fs.push(...rowsOf(id).map(r => r.f));
+  const prots = [...new Set(fs.map(f => protBase(f.protection)))].sort();
+  let h = '<table><tr><th></th>' + KINDS.map(k => `<th>${k === 'unclassified' ? '?' : k}</th>`).join('') + '<th>Σ</th></tr>';
+  for (const p of prots) {
+    const row = KINDS.map(k => fs.filter(f => f.kind === k && protBase(f.protection) === p).length);
+    h += `<tr><td style="${p === 'none' || p === 'partial' ? 'color:var(--warn)' : ''}">${p}</td>${row.map(n => `<td>${n || ''}</td>`).join('')}<td>${row.reduce((a, b) => a + b, 0)}</td></tr>`;
+  }
+  h += '</table>';
+  document.getElementById('counts').innerHTML = h;
+}
+function renderStatic() {
+  const differs = M.validation.filter(v => v.startsWith('MISMATCH') || v.startsWith('MISSING')).length;
+  document.getElementById('val-sum').textContent = `Checks against the design notes (§8): ${differs} differ`;
+  document.getElementById('validation').innerHTML = '<div class="rule">Where the extracted placement differs from what §8 of the design notes says, usually because §8 predates a change.</div>' +
+    M.validation.map(v => `<div class="val ${v.startsWith('MISMATCH') || v.startsWith('MISSING') ? 'mm' : ''}">${esc(v.replace(/^MISMATCH /, 'differs: ').replace(/^MISSING /, 'missing: ').replace(/^INFO +/, ''))}</div>`).join('');
+  document.getElementById('rules').innerHTML = M.header.rules.map(r => `<div class="rule"><b>${r.id}</b> → ${esc(r.sets)}: ${esc(r.doc)}</div>`).join('') +
+    `<div class="rule">${esc(M.header.note)}</div>`;
+  document.getElementById('meta').innerHTML = `generated by ${esc(M.header.generator)} at <a target="_blank" href="${M.header.github.replace('/blob', '/tree')}/${M.header.tip}">${M.header.tip.slice(0, 10)}</a>`;
+}
+
+// ---- controls
+document.getElementById('b-reset').onclick = () => {
+  state.expandTypes = false; groupClasses.clear();
+  state.visible = new Set(DEFAULT_NODES); state.sel = null; fitted = false; renderChips(); render();
+};
+document.getElementById('b-all').onclick = () => { state.visible = new Set([...byOwner.keys()].map(nodeOf)); fitted = false; render(); };
+document.getElementById('b-types').onclick = () => {
+  state.expandTypes = !state.expandTypes;
+  if (state.expandTypes) { state.visible.delete('Type families'); for (const c of byOwner.keys()) if (isType(c) && nodeOf(c) === c) state.visible.add(c); }
+  else { for (const c of [...state.visible]) if (isType(c) && !GROUPS.some(g => !g.types && g.match(c))) state.visible.delete(c); state.visible.add('Type families'); }
+  groupClasses.clear(); renderChips(); fitted = false; render();
+};
+document.getElementById('b-theme').onclick = () => {
+  const r = document.documentElement, dark = getComputedStyle(r).getPropertyValue('--bg').trim() === '#151517';
+  r.setAttribute('data-theme', dark ? 'light' : 'dark');
+};
+document.getElementById('q').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim().toLowerCase(); if (!q) return;
+  const hits = new Set();
+  for (const f of M.fields) if ((f.owner + '#' + f.name).toLowerCase().includes(q)) hits.add(nodeOf(f.owner));
+  hits.forEach(h => state.visible.add(h));
+  document.getElementById('status').textContent = `added ${hits.size} classes`;
+  render();
+};
+let drag = null;
+svg.addEventListener('mousedown', e => { drag = { x: e.clientX - view.x, y: e.clientY - view.y }; svg.style.cursor = 'grabbing'; });
+window.addEventListener('mouseup', () => { drag = null; svg.style.cursor = 'grab'; });
+window.addEventListener('mousemove', e => { if (drag) { view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; applyView(); } });
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.min(3, Math.max(0.1, view.k * Math.exp(-e.deltaY * 0.0015)));
+  view.x = mx - (mx - view.x) * k / view.k; view.y = my - (my - view.y) * k / view.k; view.k = k; applyView();
+}, { passive: false });
+
+// ---- guide: the extractor, the hazards it maps, and the strategies that answer them
+// Hazards and strategies cross-link by id; a strategy's count and "show on map" come from the extracted fields.
+const PICTURE = `<div class="figure" role="img" aria-label="Readers type under a read lock, each with its own scratch; they share the symbol table, where lazy facts are completed under the completion lock, scopes are frozen once published, caches are stamped and interned values go through concurrent interners. A write action runs alone: it cancels readers, changes published state and moves the structure epoch, and readers retry.">
+<svg viewBox="0 0 900 356" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ga" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge)"/></marker>
+<marker id="gw" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"/></marker></defs>
+<rect class="lane" x="10" y="10" width="220" height="310" rx="6"/>
+<text class="t" x="24" y="34">Readers</text><text class="m" x="24" y="52">one per request, under the read lock</text>
+<rect class="box" x="24" y="68" width="192" height="58" rx="5"/><text x="36" y="90">reader 1: its own scratch</text><text class="m" x="36" y="108">pools, comparers, limiter (A)</text>
+<rect class="box" x="24" y="138" width="192" height="58" rx="5"/><text x="36" y="160">reader 2: its own scratch</text><text class="m" x="36" y="178">confined, needs no lock</text>
+<text class="m" x="24" y="222">results carry the write count;</text><text class="m" x="24" y="238">served again if a write ran after</text>
+<rect class="lane" x="300" y="10" width="330" height="310" rx="6"/>
+<text class="t" x="314" y="34">Shared symbol table</text><text class="m" x="314" y="52">every reader reaches it</text>
+<rect class="box" x="314" y="66" width="302" height="54" rx="5"/><text x="326" y="88">lazy facts (B): completions, inherited caches</text><text class="m" x="326" y="106">one completer under the lock; others wait</text>
+<rect class="box" x="314" y="128" width="302" height="54" rx="5"/><text x="326" y="150">scopes: filled hidden, frozen when published</text><text class="m" x="326" y="168">synthesized members kept beside, interned</text>
+<rect class="box" x="314" y="190" width="302" height="54" rx="5"/><text x="326" y="212">caches (C): stamped by period and epoch</text><text class="m" x="326" y="230">read once; a stale one is recomputed</text>
+<rect class="box" x="314" y="252" width="302" height="54" rx="5"/><text x="326" y="274">interned types and names (D)</text><text class="m" x="326" y="292">concurrent interners on a concurrent base</text>
+<rect class="lane" x="700" y="10" width="190" height="310" rx="6"/>
+<text class="t" x="714" y="34">Writer</text><text class="m" x="714" y="52">a write action, alone</text>
+<rect class="box" x="714" y="68" width="162" height="76" rx="5"/><text x="726" y="90">new content, a re-index,</text><text x="726" y="108">a splice, a body edit</text><text class="m" x="726" y="128">changes published state</text>
+<text class="m" x="714" y="176">moves the structure epoch:</text><text class="m" x="714" y="192">every stamped cache is stale</text>
+<path class="ar" d="M216,97 L314,93" marker-end="url(#ga)"/><text class="lbl" x="232" y="86">complete</text>
+<path class="ar" d="M216,167 L314,217" marker-end="url(#ga)"/><text class="lbl" x="236" y="208">read, stamp</text>
+<path class="ar" d="M216,160 L314,155" marker-end="url(#ga)"/><text class="lbl" x="236" y="150">look up</text>
+<path class="ar w" d="M714,128 L616,155" marker-end="url(#gw)"/><text class="lbl" x="640" y="128">write</text>
+<path class="ar w" d="M800,144 L800,330 L120,330 L120,322" marker-end="url(#gw)"/><text class="lbl" x="300" y="348">a pending writer cancels readers at their next checkpoint; they retry after it</text>
+</svg></div>`;
+// Each strategy's and technique's code, as it is written in the compiler (abridged with …; file in the first line)
+const CODE = {
+'thread-confined': String.raw`// Reader.scala: the request's own printer limiter
+private[dotc] val messageLimiter: printing.DefaultMessageLimiter = printing.DefaultMessageLimiter()
+
+// printing/PlainPrinter.scala: used in place of the base's shared one
+protected final def limiter: MessageLimiter = ctx.property(MessageLimiter).get match
+  case _: DefaultMessageLimiter if ctx.base.concurrent => ctx.reader.messageLimiter
+  case l => l`,
+'completion-lock': String.raw`// core/SymDenotations.scala: an inherited cache's claim; its kind is a given beside the class
+private given Sharing.ClaimKind[InheritedCacheImpl] =
+  Sharing.ClaimKind(CompletionLock.inheritedCache, lockWhenSerialised = true)
+
+// state only the claim's holder may touch
+private var myProvisional = false
+protected final def setProvisional(b: Boolean)(using Sharing.Holds[this.type]): Unit = myProvisional = b
+
+// the only way to get a Holds[this.type]
+protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
+  Sharing.claim(this, clsd)(op)
+
+computing(clsd) { setProvisional(true); … }   // compiles
+setProvisional(true)                           // does not: no Holds in scope`,
+'root-claim': String.raw`// core/Annotations.scala: a lazy annotation's evaluation is claimed per annotation
+private given Sharing.ClaimKind[LazyAnnotation | LazyBodyAnnotation] =
+  Sharing.ClaimKind(CompletionLock.lazyAnnotation, lockWhenSerialised = false)
+
+private[core] var myTree: Once[this.type, Tree] = Once.empty   // stored only by its get
+
+def tree(using Context): Tree =
+  myTree.get(tree0)   // lock free once evaluated; else claim, look again, compute, store with release
+// re-entry on this thread is a cycle; another reader waits for the claim`,
+'frozen-after-completion': String.raw`// core/Scopes.scala
+@frozenAfter("completion") private var hashTable: Array[ScopeEntry | Null] | Null = null
+@frozenAfter("completion") private[dotc] var published = false   // set when the owner's completion returns
+
+final def enter[T <: Symbol](name: Name, sym: T)(using Context): T =
+  // a published scope on a concurrent base: one writer, and the new entries built aside
+  if needsWriter then writing(extendAside(_.enter(name, sym))) else newScopeEntry(name, sym)
+  sym
+
+// the one writer is the thread inside the scope's Sharing.BlackHole, under a claim keyed by the scope
+private[core] final def writing[T](op: => T)(using Context): T =
+  if !ctx.base.concurrent then op
+  else Sharing.claim(this)(inside(op))`,
+'writer-action': String.raw`// interactive/InteractiveDriver.scala
+private def writing[T](body: => T): T =
+  val lock = regime.writeLock
+  if lock.isHeldByCurrentThread then body
+  else
+    writerPending = true            // readers unwind at their next checkpoint
+    lock.lock()
+    try
+      writerPending = false
+      base.writeActionThread = Thread.currentThread
+      myWrites += 1
+      body
+    finally
+      base.writeActionThread = null
+      lock.unlock()`,
+'Stamped': String.raw`// core/Types.scala: AndType's base classes, valid for one period
+private var myBaseClasses: Stamped[List[ClassSymbol]] = Stamped.Empty
+override final def baseClasses(using Context): List[ClassSymbol] =
+  myBaseClasses.cached(ctx.period.rawCode):
+    … // computed; stored as a new Stamped with final fields, so the same code on every base`,
+'synchronized': String.raw`// Run.scala: the suppressions live in their guard, reached only inside locked
+object suppressions extends Sharing.Guard:
+  private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
+  private val suspended = guarded(mutable.LinkedHashMap.empty[SourceFile, mutable.LinkedHashSet[Warning]])
+  …
+  def addSuspendedMessage(warning: Warning)(using Context) =
+    locked(suspended().getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning)
+  // locked: the monitor on a concurrent base only; suspended() needs its Sharing.Monitor evidence`,
+'concurrent': String.raw`// core/Sharing.scala: the seam picks the structure per mode; batch keeps the plain one
+def newUniques(): Uniques = if concurrent then ConcurrentUniques() else Uniques()
+def newEqHashMap[K, V](initialCapacity: Int = 8): util.EqHashMap[K, V] = …`,
+'init-only': String.raw`// core/Phases.scala: set by init when the base plans its phases, before any reader
+@publishedBy("init") private var mySameMembersStartId = NoPhaseId
+…
+mySameMembersStartId = if (changesMembers) id else prev.sameMembersStartId`,
+'benign-race': String.raw`// core/Scopes.scala: the reason is part of the annotation
+@cache @benignRace("an immutable list of the entries; a reader that misses builds the same list, and a change nulls it. …")
+private var elemsCache: List[Symbol] | Null = null
+
+// an escape hatch from the evidence is spelled out the same way
+Sharing.unguarded("compares with this thread: only its own store can make it true")`,
+pull: String.raw`// core/SymDenotations.scala: InheritedCacheImpl
+protected final val concurrent: Boolean = base.concurrent
+private val epoch: Int = if concurrent then base.structureEpoch else 0
+protected final def epochCurrent: Boolean = !concurrent || epoch == base.structureEpoch
+
+protected def invalidateDependents(): Unit =
+  if concurrent then base.bumpStructureEpoch()     // pull: every stamped cache is now stale
+  else …                                           // batch: walk the dependents, as before`,
+aside: String.raw`// core/Scopes.scala
+private[core] final def extendAside(fill: MutableScope => Unit)(using Context): Unit =
+  val aside = newScopeLikeThis()
+  … // copy this scope's entries into aside, then
+  fill(aside)
+  lastEntry = aside.lastEntry
+  _size = aside._size
+  elemsCache = null
+  VarHandle.releaseFence()       // a reader that sees the table sees what it holds
+  hashTable = aside.hashTable
+  changed("extend")`,
+memo: String.raw`// core/Scopes.scala: one entry per synthesized name, never entered into the scope
+private def synthesizedEntry(s: SymbolSynthesizer, name: Name)(using Context): ScopeEntry | Null =
+  val memo = synthesized.nn       // a ConcurrentHashMap
+  val known = memo.get(name)
+  if known != null then known
+  else
+    val sym = s(name)
+    if !sym.exists then null
+    else
+      val fresh = new ScopeEntry(sym.name, sym, this)
+      val won = memo.putIfAbsent(name, fresh)
+      if won == null then fresh else won`,
+local: String.raw`// core/SymDenotations.scala: the cache read once; the field is never read again
+private def baseData(implicit onBehalf: BaseData, ctx: Context): (List[ClassSymbol], BaseClassSet) = {
+  var cache = baseDataCache
+  if !cache.isValid then
+    cache = BaseData.newCache()
+    baseDataCache = cache
+  cache(this)
+}`,
+stamp: String.raw`// interactive/InteractiveDriver.scala
+private def servedCurrent[T](check: () => Boolean)(body: => T): T =
+  var tries = 0
+  while true do
+    val result = body
+    val stamp = base.reader.resultStamp       // the write count when it last left a lock
+    if stamp < 0 || stamp == myWrites then return result
+    if tries == MaxStaleRetries then { staleServed.incrementAndGet(); return result }
+    tries += 1; staleRetries.incrementAndGet()
+    bindReader(check)                         // again, on a fresh reader`,
+checkonly: String.raw`// inlines/PrepareInlineable.scala
+protected def checkOnly(using Context): Boolean = ctx.mode.is(Mode.Interactive)
+override protected def entersAccessors(using Context): Boolean = !checkOnly
+
+case tree: RefTree if needsAccessor(tree) =>
+  …
+  else if checkOnly && !ctx.settings.Whas.unstableInlineAccessors then tree   // the reference as written`,
+byname: String.raw`// core/Definitions.scala: Null is completed during init
+val parents =
+  if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil   // not AnyValType
+  else ObjectType :: Nil`,
+};
+// Swim lanes: one lane per thread, time left to right (0-10). bars: [lane, from, to, label, style] with style act (working),
+// hold (holding a lock or claim), wait (blocked), write (a write action); marks: [lane, t, label]; arrows: [lane, t, lane, t, label]
+const SWIM = {
+  'thread-confined': { lanes: ['reader 1', 'reader 2'], bars: [[0, 0, 9, 'prints a type with its own limiter', 'act'], [1, 1, 10, 'prints a type with its own limiter', 'act']],
+    note: 'Nothing is shared, so nothing is guarded: neither reader sees the other\'s depth.' },
+  'completion-lock': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0.5, 5.5, 'holds the claim: completes C', 'hold'], [1, 1.5, 5.5, 'forces C: waits', 'wait'], [0, 5.8, 9.5, 'uses C', 'act'], [1, 5.8, 9.5, 'uses the completed C', 'act']],
+    arrows: [[0, 5.5, 1, 5.8, 'released: C published']], note: 'One completer; the other reader waits and then sees only the finished fact.' },
+  'root-claim': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0.5, 6.5, 'claims the annotation, evaluates it', 'hold'], [1, 1.5, 6.5, 'asks for its tree: waits on the claim', 'wait'], [1, 6.8, 9.5, 'gets the tree', 'act']],
+    marks: [[0, 3.5, 're-entry meets the sentinel']], arrows: [[0, 6.5, 1, 6.8, 'tree']],
+    note: 'Re-entry on the claim\'s own thread is a cycle; another thread waits, and the wait is in the wait-for graph.' },
+  'frozen-after-completion': { lanes: ['completer', 'reader', 'write action'],
+    bars: [[0, 0, 3.5, 'fills the scope, hidden', 'hold'], [1, 3.8, 5.6, 'looks up, no lock', 'act'], [1, 5.6, 6.2, 'unwinds', 'wait'], [2, 6.2, 8.4, 'builds aside, publishes', 'write'], [1, 8.7, 10, 'sees the new table', 'act']],
+    marks: [[0, 3.5, 'published']], arrows: [[0, 3.5, 1, 3.8, ''], [2, 8.4, 1, 8.7, '']],
+    note: 'Filled while no reader can see it, frozen once its completion returns; after that only a write action changes it.' },
+  'writer-action': { lanes: ['reader 1', 'reader 2', 'writer'],
+    bars: [[0, 0, 4.4, 'typing', 'act'], [1, 0, 5, 'typing', 'act'], [2, 5.2, 7.8, 'runs alone', 'write'], [0, 8, 10, 'served again', 'act'], [1, 8, 10, 'served again', 'act'], [2, 3.8, 5.2, 'pending', 'wait']],
+    marks: [[0, 4.4, 'checkpoint'], [1, 5, 'checkpoint']],
+    note: 'A pending writer cancels readers at their next checkpoint; they retry once it is done.' },
+  Stamped: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 4, 'computes the value', 'act'], [1, 5, 7, 'reads the field', 'act']],
+    marks: [[0, 4.3, 'stores a new Stamped']], arrows: [[0, 4.3, 1, 5, 'Stamped(stamp, value)']],
+    note: 'Stamp and value are final fields of one object: a reader that loads it sees both, with no fence and no test of the mode.' },
+  'benign-race': { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 4, 'misses: builds the list', 'act'], [1, 0.6, 4.6, 'misses: builds the same list', 'act']],
+    marks: [[0, 4, 'stores'], [1, 4.6, 'stores, equal']],
+    note: 'Both store an equal value; losing either store only repeats work.' },
+  synchronized: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 1, 3.5, 'in the monitor: records a warning', 'hold'], [1, 2, 3.5, 'waits', 'wait'], [1, 3.5, 5.5, 'in the monitor', 'hold']],
+    note: 'Short critical sections; the evidence (Monitor) is needed to reach the collections at all.' },
+  concurrent: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 2.5, 'makes AppliedType(List, Int)', 'act'], [1, 0.4, 2.9, 'makes AppliedType(List, Int)', 'act'], [0, 2.9, 9, 'uses the interned type', 'act'], [1, 3.3, 9, 'uses the same type', 'act']],
+    marks: [[0, 2.5, 'interned'], [1, 2.9, 'finds it']],
+    note: 'A concurrent interner: one type per structure, whoever gets there first.' },
+  pull: { lanes: ['reader', 'writer'],
+    bars: [[0, 0, 2.5, 'member names cached at epoch 5', 'act'], [1, 3.5, 5.5, 'changes a published scope: epoch 6', 'write'], [0, 6.5, 9.5, 'epoch 5 ≠ 6: recomputes', 'act']],
+    arrows: [[1, 5.5, 0, 6.5, 'epoch']],
+    note: 'Nobody invalidates the cache; the reader compares stamps when it reads.' },
+  aside: { lanes: ['scope\'s writer', 'reader'],
+    bars: [[0, 0, 5, 'fills a fresh table aside', 'hold'], [1, 0, 5.5, 'looks up in the old table', 'act'], [1, 5.8, 10, 'looks up in the new table', 'act']],
+    marks: [[0, 5.2, 'release fence, publish']], arrows: [[0, 5.2, 1, 5.8, 'acquire']],
+    note: 'A reader sees the old table whole or the new one whole, never one being filled.' },
+  memo: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 3, 'Function23: synthesizes', 'act'], [1, 0.4, 3.4, 'Function23: synthesizes', 'act'], [0, 3.6, 9, 'the symbol', 'act'], [1, 3.6, 9, 'the same symbol', 'act']],
+    marks: [[0, 3, 'putIfAbsent wins'], [1, 3.4, 'loses: takes the winner\'s']],
+    note: 'One symbol per name, and the scope\'s enumeration never changes.' },
+  local: { lanes: ['reader', 'other reader'],
+    bars: [[0, 0, 1, 'reads the field once', 'act'], [0, 1, 6, 'computes from the local, returns it', 'act'], [1, 2, 3, 'replaces the field', 'act']],
+    note: 'The other reader\'s store cannot change an answer already read into a local.' },
+  stamp: { lanes: ['request', 'writer'],
+    bars: [[0, 0, 2.5, 'runUpTo: stamp 7', 'act'], [0, 2.5, 5.5, 'provider reads the tree, no lock', 'act'], [1, 3.5, 4.8, 'write: count 8', 'write'], [0, 6.2, 9.5, 'again, on a fresh reader', 'act']],
+    marks: [[0, 5.8, '7 ≠ 8']],
+    note: 'A result read after a write is not handed over; the request is served again, at most three times.' },
+};
+
+function swim(d) {
+  const L = 104, W = 560, lh = 40, bh = 20, top = 8, x = t => L + t * W / 10, y = i => top + i * lh;
+  const h = top + d.lanes.length * lh + 8;
+  const cls = { act: 'sb', hold: 'sb hold', wait: 'sb wait', write: 'sb write' };
+  let s = `<svg viewBox="0 0 ${L + W + 16} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+  d.lanes.forEach((ln, i) => {
+    s += `<rect class="sl" x="0" y="${y(i)}" width="${L + W + 16}" height="${lh - 4}" rx="3"/><text class="sn" x="8" y="${y(i) + lh / 2 + 2}">${esc(ln)}</text>`;
+  });
+  for (const [i, a, b, label, st] of d.bars || []) {
+    s += `<rect class="${cls[st] || 'sb'}" x="${x(a)}" y="${y(i) + (lh - 4 - bh) / 2}" width="${Math.max(4, x(b) - x(a))}" height="${bh}" rx="3"/>`;
+    s += `<text class="st" x="${x(a) + 5}" y="${y(i) + (lh - 4) / 2 + 4}">${esc(label)}</text>`;
+  }
+  for (const [i, t, label] of d.marks || []) {
+    s += `<line class="sm" x1="${x(t)}" x2="${x(t)}" y1="${y(i) + 2}" y2="${y(i) + lh - 6}"/><text class="sml" x="${x(t) + 3}" y="${y(i) + 9}">${esc(label)}</text>`;
+  }
+  for (const [i, t, j, u, label] of d.arrows || []) {
+    const y1 = y(i) + (lh - 4) / 2 + (j > i ? bh / 2 : -bh / 2), y2 = y(j) + (lh - 4) / 2 + (j > i ? -bh / 2 : bh / 2);
+    s += `<path class="sa" d="M${x(t)},${y1} L${x(u)},${y2}" marker-end="url(#swa)"/>` + (label ? `<text class="sal" x="${(x(t) + x(u)) / 2 + 4}" y="${(y1 + y2) / 2 + 3}">${esc(label)}</text>` : '');
+  }
+  s += `<defs><marker id="swa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--hl)"/></marker></defs></svg>`;
+  return `<figure class="swim"><div class="swimwrap">${s}</div><figcaption>${esc(d.note || '')}</figcaption></figure>`;
+}
+
+// what the design stands on: explained in interactive-session.md, only motivated here
+const PREREQS = [
+  { name: 'Cancellation', where: '`Reader.checkCancelledTyping`, `CancelledCompilation`',
+    what: 'The typer polls a checkpoint and unwinds with `CancelledCompilation`. A completion that unwinds leaves its fact unpublished, and the session survives it.',
+    why: 'A write action needs readers to stop at a known point. A pending writer is one more reason to cancel, and a reader that unwound is served again after it. Without it a writer waits for the slowest request, or stops a reader halfway through a fact.' },
+  { name: 'Targeted typing', where: '`InteractiveDriver.runUpTo`, `Reader.typingTarget`',
+    what: 'A request types the statements on the path to its target and skips the rest.',
+    why: 'Each reader\'s work is small and local, so readers of one file overlap in what they force (completions, caches) rather than in what they type, and a request a writer cancelled is cheap to serve again.' },
+  { name: 'Resumable statements', where: '`Reader.skippedStats`, the session\'s splice',
+    what: 'A skipped statement stays in the session, and a later request types it in place.',
+    why: 'Requests share one session\'s run instead of each starting a fresh run, which is a write. Several readers resume into different statements at once; only a change to the source of truth needs a write action.' },
+];
+const STRATEGIES = [
+  { id: 'thread-confined', name: 'Confine to a reader', how: 'Per-request state lives on the thread\'s `Reader` (or is local to one traversal): context pools, the comparer stack, recursion counters, the printer\'s limiter. Nothing else reaches it, so it needs no lock.', use: 'Scratch that was shared by accident (kind A).', cures: ['scratch'], example: 'Reader#messageLimiter' },
+  { id: 'completion-lock', name: 'Completion lock, with evidence', how: 'The base\'s completion lock, or the root\'s claim with parallel readers (`Sharing.claim`, its kind a `ClaimKind` given beside the key\'s class). The state behind it is reached only with a `Sharing.Holds[K]` in scope, which only `claim`, `once` and a completion (`lockAndComplete0`) hand out, so an access outside the claim does not compile.', use: 'A lazy fact with a black hole: a completion, an inherited cache\'s computation, a scope\'s one writer.', cures: ['sentinel', 'peek', 'cycle'], example: 'core.Scopes.MutableScope#writer' },
+  { id: 'root-claim', name: 'Root claim', how: 'A claim in `CompletionRoots` keyed by the object (`Sharing.claim`, or a `Once` field or `Sharing.once` for a value computed once): re-entry by the owner is a cycle, another reader waits, and the wait is in the wait-for graph.', use: 'A cycle-breaking sentinel on a shared object (`LazyRef`, `packageObjs`).', cures: ['sentinel', 'cycle'], example: null },
+  { id: 'frozen-after-completion', name: 'Fill hidden, then freeze', how: 'A scope is filled while its owner\'s completion hides it, published when the completion returns (`MutableScope.published`), and changed after that only by a write action or its one writer, building new entries aside (`extendAside`). `-Ycheck-frozen-scopes` fails any other change.', use: 'Scopes, which every reader looks up in: a class\'s members, and a package\'s, its flat classes included.', cures: ['inplace', 'unfrozen', 'order'], example: 'core.Scopes.MutableScope#hashTable' },
+  { id: 'writer-action', name: 'Write action', how: 'The driver\'s write lock (`InteractiveDriver.writing`): a pending writer cancels readers at their next checkpoint, runs alone, and readers retry. State only writers touch needs nothing else.', use: 'Changes to the source of truth: a fresh run, a re-index, a splice, a body edit.', cures: ['unfrozen', 'stale'], example: null },
+  { id: 'Stamped', name: 'Stamped value (`Stamped`)', how: 'A value and its stamp as one immutable object with final fields, held in one `var` of the owner; a miss stores a new one (`myX.cached(now): compute`, a macro that writes the field it is called on). A reader that loads it sees the pair whole however it was published, so the code is the same on a batch and a concurrent base. An empty cache is a reference to the shared `Stamped.Empty`, smaller than a stamp and a value; a miss allocates.', use: 'A memo that most instances never fill, or whose hit path can afford one dependent load.', cures: ['twofields', 'readtwice'], example: null },
+  { id: 'packed-volatile', name: 'Pack into one value', how: 'Key, stamp and value as one immutable object in one volatile field, so no reader pairs one writer\'s key with another\'s value.', use: 'A cache keyed by more than the stamp, or whose writers may store different values (`asSeenFrom`, `MatchType.reduced`).', cures: ['twofields'], example: null },
+  { id: 'Publish', name: 'Ordered publication (`util.Publish`)', how: 'Acquire/release handles on a period that guards other fields (`Symbol.checkedPeriod`, `NamedType.checkedPeriod`), where the shape is not two fields.', use: 'A validity period read first on a hot path.', cures: ['twofields'], example: null },
+  { id: 'volatile', name: 'One volatile field', how: 'A single field whose every value is complete on its own: a flag, a counter read for display, a reference to an immutable value.', use: 'One field, nothing paired with it.', cures: ['twofields'], example: null },
+  { id: 'init-only', name: 'Written before sharing', how: 'Set while the owner is built (`Definitions.init`, a constructor, a synthesizer installed before the scope is published) and only read after.', use: 'Configuration of shared objects.', cures: [], example: null },
+  { id: 'concurrent', name: 'Concurrent structure', how: 'A concurrent interner or map in interactive mode (`ConcurrentWeakHashSet`, `ConcurrentHashMap`), chosen per mode by the `Sharing` seam so batch keeps the plain one.', use: 'Interning and counters (kind D); one symbol per name.', cures: ['inplace', 'order'], example: null },
+  { id: 'synchronized', name: 'Monitor, with evidence', how: 'A `Sharing.Guard` whose state is `Guarded` fields, reached only inside its `locked` with the `Sharing.Monitor[K]` evidence; or `synchronized` and `Sharing.serialised` on another object\'s monitor.', use: 'Bookkeeping maps with short critical sections (sources, files, suppressions).', cures: ['inplace'], example: null },
+  { id: 'benign-race', name: 'Benign race, argued', how: 'No protection, with the reason it is safe written in `@benignRace(why)`: idempotent values, read once into a local, or a lost store that only repeats work.', use: 'A memo whose every writer stores an equal value; never a pair of fields.', cures: ['readtwice'], example: 'core.Scopes.MutableScope#elemsCache' },
+  { id: 'batch-only', name: 'Batch only', how: 'Every access is in the batch branch of the seam (`if ctx.base.concurrent ... else ...`): readers never reach it.', use: 'The batch path\'s original code kept beside the concurrent one (the push invalidation of inherited caches).', cures: [], example: null },
+  { id: 'post-typer', name: 'After typer', how: 'Reached only from phases after typer, which the presentation compiler does not run.', use: 'Back-end and transform state.', cures: [], example: null },
+];
+const TECHNIQUES = [
+  { id: 'pull', name: 'Pull, do not push', how: 'A cache records the base\'s structure epoch when it is made and is valid while the epoch has not moved; a change to a published scope moves it. No invalidation walks other objects\' caches, so a store that races with one lands in a cache already stale.', cures: ['push'], where: '`InheritedCacheImpl` on a concurrent base' },
+  { id: 'aside', name: 'Build aside, publish once', how: 'Fill a fresh table or scope in a local, then publish it with one store after a release fence; readers load it with an acquire fence.', cures: ['inplace'], where: '`MutableScope.createHash`, `extendAside`, flat classes' },
+  { id: 'memo', name: 'Synthesize beside, not into', how: 'Members made on a lookup are kept in an interned memo beside the scope and never entered, so an enumeration does not depend on what earlier code mentioned; fixed members are entered with the package.', cures: ['order'], where: '`MutableScope.synthesized`, `scala.Null`' },
+  { id: 'local', name: 'Read once into a local', how: 'Read the field once, compute from the local, return the local.', cures: ['readtwice'], where: 'every `Stamped` site, `memberNames`, `baseData`' },
+  { id: 'stamp', name: 'Stamp the result', how: 'A request\'s result carries the driver\'s write count when it last left a lock; the request is served again if a write ran after it, at most three times.', cures: ['stale'], where: '`Reader.resultStamp`, `InteractiveDriver.servedCurrent`' },
+  { id: 'checkonly', name: 'Check, do not generate', how: 'In the IDE nothing runs the code, so what exists only for code generation is not made: inline accessors are checked, not entered.', cures: ['unfrozen'], where: '`PrepareInlineable.checkOnly`' },
+  { id: 'byname', name: 'Refer by name during setup', how: 'An eagerly entered definition that is completed during `init` refers to others by name, so nothing binds before the sources being compiled are entered.', cures: ['early'], where: '`Definitions.synthesizeNullClass`' },
+];
+const HAZARDS = [
+  { id: 'scratch', name: 'Scratch on a shared object', what: 'Per-request state (pools, the comparer stack, depth counters) kept on the base or a run, so two readers interleave in it.', found: 'The printer\'s `DefaultMessageLimiter` on the base\'s initial context: readers printing at once added up their depths, and a lost update left labels printed as `...`.' },
+  { id: 'twofields', name: 'A cache in several fields', what: '§4.4 shape 1. A key or period and a value written one after the other: a reader pairs one writer\'s period with another\'s value, or sees the period before the value and returns null.', found: '`PreDenotation.asSeenFrom` took `Conversion#apply` seen from the wrong prefix (the `Formatting.Shown` divergences); `NamedType.denot` read the denotation before the period.' },
+  { id: 'sentinel', name: 'A sentinel during a computation', what: '§4.4 shape 2. A single-threaded cycle breaker (`Nil`, `null`, a provisional value) that another reader takes for the answer or for a cycle.', found: '`packageObjsCache = Nil` while package objects are collected: "Not found: type List".' },
+  { id: 'readtwice', name: 'A field read twice', what: '§4.4 shape 3. A check and a use read the field separately; a writer between them changes the answer, or replaces this reader\'s update.', found: '`ImportInfo.featureImported`, `SourceFile.offsetToLine`, `memberNames` (I46).' },
+  { id: 'inplace', name: 'Mutated while others read', what: '§4.4 shape 4. A structure published while it is filled, or rehashed in place.', found: '`MutableScope.toList` (I77); a package\'s flat classes entered in place rehashed its table under readers: 12,201 missed lookups of classes it held, now 0.' },
+  { id: 'peek', name: 'A peek becomes a race', what: '§4.1. `isCompleting` chooses another path when a completion is in progress; with two readers, "in progress" may be on the other thread, and the answer depends on timing.', found: 'Thirteen sites; the rule is now "in progress on this reader", and a peek at another reader\'s completion waits.' },
+  { id: 'cycle', name: 'A wait-for cycle', what: '§4.2. Two readers each wait on the other\'s completion. Single-threaded the same pair is a `CyclicReference`.', found: 'A wait that would close a cycle aborts the reader as its victim: it is cancelled and its request served again (I54). The chain counts only live claims seen twice (I87) and still held after the walk (I98); a reader inside a Namer completion is not aborted (I74).' },
+  { id: 'order', name: 'Answers that depend on history', what: 'A member made on its first lookup and entered into the scope: what an enumeration of the scope sees depends on what earlier code (or another reader) mentioned. Two readers also made two symbols for one name.', found: '`import scala._` shadowing a `Function23` gave different answers by compilation order (the determinism test, no macro needed); 101 of 200 synthesized names split across readers, now 0.' },
+  { id: 'push', name: 'Invalidation racing a store', what: 'A change pushes invalidation into other objects\' caches; a reader that computed from old information stores after the invalidation went past.', found: 'Inherited caches (I46, I92): a monitor per cache, a `valid` check on store, and a `WeakHashMap` of dependents, all replaced by the structure epoch on a concurrent base.' },
+  { id: 'unfrozen', name: 'A reader changes a published scope', what: 'Typing writes into a scope other readers already read: indexing into a package, deleting from it in a classfile\'s completion, entering accessors, retracting a definition.', found: '2,101 changes outside a write action in the presentation-compiler suites (Namer indexing 1,500, classfile deletes 375, inline accessors 181, `retractDefDef` 25, `Definitions` 20), now 0.' },
+  { id: 'stale', name: 'A result read after the lock', what: 'A provider calls `runUpTo`, the read lock is released, and it reads the typed tree afterwards; a write action between the two replaces what it read.', found: 'Most providers read `currentCtx` and `compilationUnits` outside the lock; now served again when a write ran after the read.' },
+  { id: 'early', name: 'Binding during setup', what: 'A batch hazard of the fixes: an eagerly entered definition completed during `init` resolves another definition before the sources that define it are entered.', found: '`scala.Null` entered with the package was completed in `init`; under explicit nulls it bound `AnyValClass` to the classpath\'s `AnyVal`, and compiling the library failed with "Any does not have a constructor". Only a clean build of the library showed it.' },
+];
+
+function renderGuide() {
+  const g = document.getElementById('guide');
+  const md = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Scala highlighted by highlight.js when it loaded, else plain
+  const scala = c => { try { return window.hljs ? hljs.highlight(c, { language: 'scala', ignoreIllegals: true }).value : esc(c); } catch (e) { return esc(c); } };
+  const nOf = id => M.fields.filter(f => protBase(f.protection) === id).length;
+  const sById = new Map(STRATEGIES.map(s => [s.id, s])), tById = new Map(TECHNIQUES.map(t => [t.id, t])), hById = new Map(HAZARDS.map(h => [h.id, h]));
+  const curesOf = h => [...STRATEGIES.filter(s => s.cures.includes(h)).map(s => ['s', s]), ...TECHNIQUES.filter(t => t.cures.includes(h)).map(t => ['t', t])];
+  const tag = (kind, x) => `<button class="tag" data-jump="${kind}-${esc(x.id)}">${md(x.name)}</button>`;
+  const rules = M.header.rules.map(r => `<tr><td class="mono">${esc(r.id)}</td><td>${esc(r.sets)}</td><td>${md(r.doc)}</td></tr>`).join('');
+  const kinds = Object.entries(M.header.kinds).map(([k, d]) => `<li><b>${esc(k)}</b> ${md(d)}: ${count(f => f.kind === k)} fields</li>`).join('');
+  g.innerHTML = `<div class="doc">
+  <nav><span class="eyebrow">Guide</span><a href="#g-made">How the map is made</a><a href="#g-hazards">Hazards</a><a href="#g-strategies">Strategies</a><button id="b-back">open the map</button></nav>
+  <section id="g-made">
+    <h1>Mutable state in the Scala 3 compiler</h1>
+    <p class="lede">The presentation compiler serves several requests at once over one symbol table. Each mutable field of the compiler is either private to one request, protected by one of a few disciplines, or a hazard. This page maps all ${byOwner.size} classes with mutable fields and ${M.fields.length} fields: the guide below explains the hazards and the disciplines, and the map shows where each field stands.</p>
+    ${PICTURE}
+    <h2>Prerequisites</h2>
+    <p>The design rests on three features the presentation compiler already had for one reader. They are described in <code>docs/_docs/internals/interactive-session.md</code>; here is only why each one matters.</p>
+    <div class="tablewrap"><table class="prereq"><tr><th>prerequisite</th><th>what it is</th><th>why the design needs it</th></tr>
+    ${PREREQS.map(r => `<tr><td><b>${esc(r.name)}</b><br><span class="found">${md(r.where)}</span></td><td>${md(r.what)}</td><td>${md(r.why)}</td></tr>`).join('')}
+    </table></div>
+    <h1>How the map is made</h1>
+    <p>The map is extracted from the compiled compiler, not written by hand. <code>tools/state-map/StateMap.scala</code> is a TASTy inspector over the non-bootstrapped compiler's classes; <code>run.sh</code> compiles and extracts, <code>check-cluster.sh &lt;files&gt;</code> reports a few files' fields with their unprotected accesses. This extraction: ${M.fields.length} fields in ${byOwner.size} classes at <code>${esc(M.header.tip.slice(0, 10))}</code>.</p>
+    <div class="pipeline">
+      <div class="step"><b>Fields</b><span>Every <code>var</code> and mutable collection in dotc's classes; lazy vals, modules and synthetics left out.</span></div>
+      <div class="step"><b>Kind</b><span>A–E from an annotation (<code>@scratch</code>, <code>@lazyFact</code>, <code>@cache</code>, <code>@interned</code>, <code>@treeState</code>), else the K rules: owner, type and name.</span></div>
+      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: on a <code>Stamped</code> field, a monitor, a claim, <code>Publish</code>, in the batch branch of the seam, or nothing.</span></div>
+      <div class="step"><b>Protection</b><span>The one protection of a field's non-batch accesses; <code>partial</code> when some lack it, <code>none</code> when all do. An annotation takes precedence, and the rules' answer is kept beside it.</span></div>
+      <div class="step"><b>Check</b><span><code>annotationCheck</code>: the annotation agrees with the rules, disagrees, or is unverified. <code>@frozenAfter</code> is checked when the program runs.</span></div>
+      <div class="step"><b>Reach, edges</b><span>Typer or post-typer by the methods that reach a field; edges are field types that are mapped classes, which the diagram draws.</span></div>
+    </div>
+    <h2>Kinds</h2>
+    <ul>${kinds}</ul>
+    <p>Semantic or cache: a field of kind C is a cache, whose loss only costs recomputation; every other kind is semantic, and a lost or torn write is a wrong answer.</p>
+    <details><summary>The ${M.header.rules.length} rules</summary><div class="tablewrap"><table><tr><th>rule</th><th>sets</th><th>what it says</th></tr>${rules}</table></div></details>
+  </section>
+  <section id="g-hazards">
+    <h1>Hazards</h1>
+    <p>What goes wrong when several readers type over one symbol table. The four shapes of race in caches are §4.4 of <code>docs/_docs/internals/interactive-multi-reader.md</code>; the rest are §4.1–§4.3 and what the work since found. Each card names the strategies that answer it.</p>
+    <div class="cards">${HAZARDS.map(h => `<div class="card" id="h-${h.id}"><h3>${esc(h.name)}</h3><p>${md(h.what)}</p><p class="found"><b>Found:</b> ${md(h.found)}</p><div class="cures">${curesOf(h.id).map(([k, x]) => tag(k, x)).join('')}</div></div>`).join('')}</div>
+  </section>
+  <section id="g-strategies">
+    <h1>Strategies</h1>
+    <p>A protection is how a field is kept safe, and the map gives each field one; the number beside it counts the fields that have it. A technique is a way of writing the code that makes a protection possible, or unnecessary.</p>
+    <div class="tabs">
+      <div class="tablist" role="tablist" aria-label="Strategies">
+        <div class="tabgroup">Protections</div>
+        ${STRATEGIES.map(x => `<button role="tab" class="tab" id="s-${esc(x.id)}" data-tab="s:${esc(x.id)}" aria-selected="false"><span>${md(x.name)}</span><span class="n">${nOf(x.id) || ''}</span></button>`).join('')}
+        <div class="tabgroup">Techniques</div>
+        ${TECHNIQUES.map(x => `<button role="tab" class="tab" id="t-${esc(x.id)}" data-tab="t:${esc(x.id)}" aria-selected="false"><span>${md(x.name)}</span></button>`).join('')}
+      </div>
+      <div class="tabpanel" role="tabpanel" id="tabpanel"></div>
+    </div>
+    <p class="found">Fields with no protection: ${nOf('none')} <code>none</code>, ${nOf('partial')} <code>partial</code>. <button data-prot="none">show on map</button></p>
+  </section></div>`;
+  const panel = g.querySelector('#tabpanel');
+  function selectTab(key) {
+    const [kind, id] = key.split(':');
+    const x = kind === 's' ? sById.get(id) : tById.get(id);
+    g.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === key)));
+    const n = kind === 's' ? nOf(id) : 0;
+    panel.innerHTML = `<div class="ph"><h2>${md(x.name)}</h2>${kind === 's' ? `<span class="mono">${esc(id)}</span>` : '<span class="eyebrow">technique</span>'}</div>
+      <p>${md(x.how)}</p>
+      ${x.use ? `<p><b>For:</b> ${md(x.use)}</p>` : ''}${x.where ? `<p><b>Where:</b> ${md(x.where)}</p>` : ''}
+      ${x.cures.length ? `<div class="cures"><span class="eyebrow">answers</span>${x.cures.map(h => tag('h', hById.get(h))).join('')}</div>` : ''}
+      ${kind === 's' ? `<p class="found">${n} field${n === 1 ? '' : 's'}${n ? ` <button data-prot="${esc(id)}">show on map</button>` : ''}</p>` : ''}
+      ${SWIM[id] ? swim(SWIM[id]) : ''}
+      ${CODE[id] ? `<pre class="code">${scala(CODE[id])}</pre>` : '<p class="found">No excerpt yet.</p>'}`;
+    wire(panel);
+  }
+  g.querySelectorAll('.tab').forEach(t => t.onclick = () => selectTab(t.dataset.tab));
+  g.querySelector('.tablist').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const ts = [...g.querySelectorAll('.tab')], i = ts.indexOf(document.activeElement); if (i < 0) return;
+    e.preventDefault(); const nx = ts[(i + (e.key === 'ArrowDown' ? 1 : ts.length - 1)) % ts.length]; nx.focus(); selectTab(nx.dataset.tab);
+  });
+  function wire(root) {
+  root.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
+    const el = document.getElementById(b.dataset.jump); if (!el) return;
+    if (el.dataset.tab) { selectTab(el.dataset.tab); g.querySelector('.tabs').scrollIntoView({ block: 'start' }); el.focus(); return; }
+    el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
+    el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200);
+  });
+  root.querySelectorAll('[data-prot]').forEach(b => b.onclick = () => {
+    const p = b.dataset.prot;
+    state.prot.clear(); (p === 'none' ? ['none', 'partial'] : [p]).forEach(x => state.prot.add(x));
+    state.visible = new Set([...byOwner.keys()].filter(c => (byOwner.get(c) || []).some(shown)).map(nodeOf));
+    showGuide(false); fitted = false; renderChips(); render();
+  });
+  }
+  wire(g);
+  selectTab('s:' + STRATEGIES[0].id);
+  g.querySelectorAll('nav a').forEach(a => a.onclick = e => { e.preventDefault(); document.querySelector(a.getAttribute('href')).scrollIntoView(); });
+  document.getElementById('b-back').onclick = () => showGuide(false);
+}
+function showGuide(on) {
+  const g = document.getElementById('guide');
+  if (on && !g.innerHTML) renderGuide();
+  g.hidden = !on;
+  document.getElementById('b-guide').textContent = on ? 'map' : 'guide';
+  try { history.replaceState(null, '', on ? '#guide' : '#map'); } catch (e) {}
+}
+document.getElementById('b-guide').onclick = () => showGuide(document.getElementById('guide').hidden);
+
+renderChips(); renderStatic(); render();
+showGuide(location.hash !== '#map');
+})();
+</script>
+</body>
+</html>

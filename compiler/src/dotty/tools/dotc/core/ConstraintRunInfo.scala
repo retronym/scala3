@@ -5,13 +5,16 @@ import Contexts.*
 import config.Printers.{default, typr}
 import dotty.tools.dotc.util.NoSourcePosition
 
+import scala.annotation.internal.{benignRace, cache, guardedBy}
 import scala.compiletime.uninitialized
 
 trait ConstraintRunInfo { self: Run =>
   // A statistic for `printMaxConstraint`. Every constraint made reports its size, from every reader: the size is
   // tested without the monitor (it only grows, so a stale value costs a lock taken for nothing), and the pair is
   // stored, and printed, with the monitor of a concurrent base.
+  @cache @benignRace("only grows; a stale read costs a lock, and the pair is rechecked and stored under the monitor")
   private var maxSize = 0
+  @cache @guardedBy("this")
   private var maxConstraint: Constraint | Null = null
   def recordConstraintSize(c: Constraint, size: Int)(using Context): Unit =
     if (size > maxSize) {
