@@ -48,7 +48,7 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
-import _root_.dotty.tools.sharing.{Payload, Published, Stamped}
+import _root_.dotty.tools.sharing.{Once, Payload, Published, Stamped}
 
 object Types extends TypeUtils {
 
@@ -3228,12 +3228,11 @@ object Types extends TypeUtils {
 
   // `refFn` can be null only if `computed` is true.
   case class LazyRef(@(lazyFact @field) @(guardedBy @field)("rootClaim") private var refFn: (Context => (Type | Null)) | Null) extends UncachedProxyType with ValueType {
-    // Written under this reference's claim, read without it by a reader that finds `computed` and waits on the claim for
-    // the value. A plain field: a type's structure is in final fields, which the JMM shows complete to a reader that
-    // sees the reference, so a volatile would only cost the batch compiler a barrier on every `ref`. `refFn` is read
-    // without the claim only by the case class's own `_1` and `copy`, which nothing calls.
-    @lazyFact @benignRace("one store of a type whose structure is final fields; a reader that finds no value waits on the claim")
-    private var myRef: Type | Null = null
+    // The value, stored by `myRef.get` as the one writer, under this reference's claim, and read without it: with
+    // concurrent readers through an acquire, so the type is seen whole; in batch a plain read and a null test.
+    // `refFn` is read without the claim only by the case class's own `_1` and `copy`, which nothing calls.
+    @lazyFact
+    private[core] var myRef: Once[this.type, Type] = Once.empty
     @lazyFact @benignRace("set once and never reset: a reader that sees it false takes the claim and checks again, one that sees it true and no value waits on the claim")
     private var computed = false
 
@@ -3241,7 +3240,7 @@ object Types extends TypeUtils {
       // with parallel readers the computation has an owner, as a completion does, and another reader waits for it
       // at the claim, not taking it for a cycle (finding I57: a false "Cyclic reference", and a completion described
       // with `...`)
-      Sharing.once(this)(myRef):
+      myRef.get:
         if computed then
           // the owner re-entering its own computation. If errors were reported previously handle this by throwing a
           // CyclicReference instead of crashing immediately. A test case is neg/i6057.scala.
@@ -3250,28 +3249,25 @@ object Types extends TypeUtils {
               || ctx.reporter.errorsReported)
           throw CyclicReference(NoDenotation)
         compute()
-        myRef.nn
 
-    // `myRef`, `computed` and `refFn` are written only by the holder of this reference's claim (a `Sharing.Holds`),
-    // and read without it: a reader that finds `computed` and no `myRef` waits on the claim
-    private def set(ref: Type | Null, done: Boolean)(using Sharing.Holds[this.type]): Unit =
-      myRef = ref
-      computed = done
+    // `computed` and `refFn` are written only by the holder of this reference's claim (a `Sharing.Holds`), and read
+    // without it: a reader that finds `computed` and no `myRef` waits on the claim
+    private def setComputed(done: Boolean)(using Sharing.Holds[this.type]): Unit = computed = done
     private def dropFn()(using Sharing.Holds[this.type]): Unit = refFn = null
 
     @annotation.nowarn("msg=Catching Throwable can lead to unexpected behavior") // rethrown at once
-    private def compute()(using Context, Sharing.Holds[this.type]): Unit =
-      set(myRef, done = true)
+    private def compute()(using Context, Sharing.Holds[this.type]): Type =
+      setComputed(true)
       val result =
         try refFn.nn(ctx)
         catch case ex: Throwable if !ex.isInstanceOf[CyclicReference] =>
           // an unwound computation (a cancellation, a back-off, a crash) publishes nothing, so the next reader
           // computes again rather than taking `computed` for a cycle; a cycle is a fact of this run and stays
-          set(myRef, done = myRef != null)
+          setComputed(myRef.peek != null)
           throw ex
       dropFn()
-      if result != null then set(result, done = true)
-      else assert(myRef != null)  // must have been `update`d
+      if result != null then result
+      else myRef.peek.nn  // must have been `update`d
 
     /** Update the value of the lazyref, discarding the compute function `refFn`
      *  Can be called only as long as the ref is still undefined.
@@ -3279,23 +3275,27 @@ object Types extends TypeUtils {
     def update(tp: Type)(using Context) =
       // under this reference's claim: usually re-entered from its own computation (`refFn` completes an opaque
       // alias, whose completer updates it); with parallel readers, another reader that completed the alias first
-      // has set the same value
+      // has set the same value. A plain store, outside `get`: a type's structure is in final fields, which the JMM
+      // shows complete to a reader that sees the reference.
       Sharing.claim(this) {
-        if myRef == null || !ctx.base.parallel then
-          assert(myRef == null || ctx.reporter.errorsReported)
-          set(tp, done = true)
+        if myRef.peek == null || !ctx.base.parallel then
+          assert(myRef.peek == null || ctx.reporter.errorsReported)
+          myRef.setPlain(tp)
+          setComputed(true)
           dropFn()
       }
 
-    def evaluating: Boolean = computed && myRef == null
-    def completed: Boolean = myRef != null
+    def evaluating(using Context): Boolean = computed && myRef.peek == null
+    def completed(using Context): Boolean = myRef.peek != null
     override def underlying(using Context): Type = ref
-    override def toString: String = s"LazyRef(${if (computed) myRef else "..."})"
+    override def toString: String = s"LazyRef(${if (computed) myRef.peek(using _root_.dotty.tools.sharing.Mode.Concurrent) else "..."})"
     override def equals(other: Any): Boolean = this.eq(other.asInstanceOf[AnyRef])
     override def hashCode: Int = System.identityHashCode(this)
   }
   object LazyRef:
     given Sharing.ClaimKind[LazyRef] = Sharing.ClaimKind(CompletionLock.lazyRef, lockWhenSerialised = false)
+    val myRefHandle: Published.Handle[LazyRef, "myRef"] = Published.handle
+    given Published.Handle[LazyRef, "myRef"] = myRefHandle
     def of(refFn: Context ?=> (Type | Null)): LazyRef = LazyRef(refFn(using _))
 
   // --- Refined Type and RecType ------------------------------------------------

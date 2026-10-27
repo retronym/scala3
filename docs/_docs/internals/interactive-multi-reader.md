@@ -439,7 +439,7 @@ The Java toy's `dotc-concurrent` kernel and its scheduler interleave two request
     | `RecType.openedWithPrefix` | 1, open (I96) | a mark of the reader's own `findMember` stack kept on a shared type |
     | `NamedType` `lastDenotation`/`lastSymbol`/`checkedPeriod`, `Symbol.lastDenot`/`checkedPeriod` | protected | a `Published` period, release/acquire (I36, I78) |
     | `PreDenotation.asSeenFrom`, `MatchType.reduced`, `PackageClassDenotation.packageObjs` | protected | one immutable value in a volatile field with parallel readers (I78, I79) |
-    | `LazyRef.myRef`/`computed` | protected | a claim per lazy reference with parallel readers (I57) |
+    | `LazyRef.myRef`/`computed` | protected | a claim per lazy reference with parallel readers (I57); `myRef` a `Once` |
     | `InheritedCacheImpl` `checkedPeriod`, `dependent`; `MemberNamesImpl.cache`, `BaseDataImpl.cache`/`valid`/`locked` | protected | computed under `Sharing.exclusive`; the cache is an immutable map or tuple read once; `checkedPeriod` is a stamp without a value, so a stale read only checks again; `dependent` is under the cache's monitor |
     | `fullNameCache`, `NamedType.myName`, `myStableHash`, `myGround`, `myHash`, `LambdaType.myParamRefs`, `TermLambda` `myDependencyStatus`/`myParamDependencyStatus`, `LambdaParam.myVariance`, `ClassInfo` `selfTypeCache`/`appliedRefCache`/`parentsCache`, `SkolemType.myRepr`, `NarrowCached.myNarrow` | 2 | one field, the same value from any writer, or an interned or structurally equal one; a lost update of `fullNameCache` loses an entry. `myRepr` can name one skolem twice (printing only); `myNarrow` is cached only so that `uniques` does not fill (c476171d83), and each caller uses its own result |
     | `Capability` `myCaptureSet`/`captureSetValid`, `myClassifiers`/`classifiersValid`, `myDerived`, `LocalCap` `isClassified`/`skolems` | 3 | the capture checker's: filled in capture checking and its setup, phases after typer that the interactive compiler does not run (`captureSetOfInfo` stores only while capture checking). `myDerived` would make an equal case-class capability twice if it were shared. In `StampedCachesTest` as exceptions |
@@ -808,7 +808,7 @@ Independent of any of the experiment's flags, each with a test on this branch:
 
 ### The concurrency primitives as a library
 
-The primitives never needed the compiler: an evidence type per claim and per monitor, a black hole, guarded fields, a double-checked `once`, a stamped cache, a published field and its payloads. What could tie them to dotc is where they find their inputs (`ctx.base.concurrent`, `ctx.base.completionRoots`, the cycle back-off, the period or run id that stamps a cache). They live in `dotty.tools.sharing`, a package that names nothing in dotc, and the compiler supplies those inputs.
+The primitives never needed the compiler: an evidence type per claim and per monitor, a black hole, guarded fields, a double-checked `once` and the `Once` field that stores its value itself, a stamped cache, a published field and its payloads. What could tie them to dotc is where they find their inputs (`ctx.base.concurrent`, `ctx.base.completionRoots`, the cycle back-off, the period or run id that stamps a cache). They live in `dotty.tools.sharing`, a package that names nothing in dotc, and the compiler supplies those inputs.
 
 The boundary:
 

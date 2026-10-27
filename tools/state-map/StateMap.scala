@@ -49,7 +49,7 @@ object Rules:
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
-    Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`: release store, acquire load, a plain access only through `plain`/`setPlain`) or `Payload[O, F, T]` (stored only in a `publishing` block of `F`, read only `after` its acquire, or with `peek`)"),
+    Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`: release store, acquire load, a plain access only through `plain`/`setPlain`) or `Payload[O, F, T]` (stored only in a `publishing` block of `F`, read only `after` its acquire, or with `plain`), or `Once[K, T]` (stored only by its `get`, under the claim on its owner, with release semantics, and read with acquire semantics in a concurrent mode)"),
     Rule("P.stamped", "Stamped", "declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair"),
     Rule("P.packed", "packed-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
     Rule("P.volatile", "volatile", "`@volatile`, a single value"),
@@ -500,8 +500,8 @@ object StateMap:
     val tastyFiles = Files.walk(root).iterator.asScala.map(_.toString).filter(_.endsWith(".tasty")).toList.sorted
     val collector = Collector(pkgs, repoRoot)
     TastyInspector.inspectAllTastyFiles(tastyFiles, Nil, classesDir.toString :: cp)(collector)
-    // the fields that publish others, and the ones they publish: declared `Published[T]`, `Payload[O, F, T]`
-    val publishHandles = collector.fields.values.filter(f => f.tpe.startsWith("Published[") || f.tpe.startsWith("Payload["))
+    // the fields that publish others, and the ones they publish: declared `Published[T]`, `Payload[O, F, T]`, `Once[K, T]`
+    val publishHandles = collector.fields.values.filter(f => f.tpe.startsWith("Published[") || f.tpe.startsWith("Payload[") || f.tpe.startsWith("Once["))
       .map(f => (f.owner, f.name)).toSet
 
     val model = Model(collector, publishHandles, repoRoot)
