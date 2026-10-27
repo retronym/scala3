@@ -1771,9 +1771,16 @@ class InteractiveDriver(
    *  having a completer hanging in a typed tree which can capture the context
    *  of a previous run. Note that typed trees can have untyped or partially
    *  typed children if the source contains errors.
+   *
+   *  The annotation trees cleaned are those of the symbols `tree`'s file defines, the ones typed in its run. A
+   *  symbol from elsewhere (the classpath, another file) is only referred to: its evaluated annotation trees are
+   *  shared with the other readers, which may be inlining or reading them, so stripping their attachments from
+   *  here would race with them (a body inlined from a stripped tree gave wrong completions under
+   *  `-Yinteractive-parallel`, `CompletionSoakSuite`).
    */
   private def cleanup(tree: tpd.Tree, errorOutCompleters: Boolean = true)(using Context): Unit = {
     val seen = mutable.Set.empty[tpd.Tree]
+    val file = tree.source.file
     def cleanupTree(tree: tpd.Tree): Unit = {
       seen += tree
       tree.foreachSubTree { t =>
@@ -1790,7 +1797,7 @@ class InteractiveDriver(
           if errorOutCompleters && !t.symbol.isCompleted then completionLocked(CompletionLock.cleanup) {
             if t.symbol.infoOrCompleter.isInstanceOf[typer.Namer#Completer] then t.symbol.info = UnspecifiedErrorType
           }
-          t.symbol.annotations.foreach { annot =>
+          if t.symbol.associatedFile == file then t.symbol.annotations.foreach { annot =>
             /* In some cases annotations are used on themself (possibly larger cycles).
             *  This is the case with the java.lang.annotation.Target annotation, would end
             *  in an infinite loop while cleaning. The `seen` is added to ensure that those
