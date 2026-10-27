@@ -184,7 +184,7 @@ class PlainPrinter(_ctx: Context) extends Printer {
     case c: Capability => toTextCapability(c)
     case _ =>
       try toTextCapability(ref.toCapability)
-      catch case _ =>
+      catch case scala.util.control.NonFatal(_) => // not a cancellation (a `ControlThrowable`), which must unwind
         toText(ref)
 
   private def toTextRetainedElems(refs: List[Type]): Text =
