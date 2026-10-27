@@ -110,7 +110,7 @@ object Symbols extends SymUtils {
      *  denotation stored before it, never the previous one.
      */
     @cache @publishedBy("Publish") private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
-    private var checkedPeriod: Published[Period] = Published(Nowhere)
+    private[core] var checkedPeriod: Published[Period] = Published(Nowhere)
 
     /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
      *  the period is loaded with acquire semantics first, so that a denotation stored before the period that
@@ -124,7 +124,7 @@ object Symbols extends SymUtils {
      */
     private def latestDenotIn(using Context): SymDenotation =
       if ctx.base.concurrent then lastDenot.after(checkedPeriod.acquired)
-      else lastDenot.peek // one thread
+      else lastDenot.plain // one thread
 
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod.setPlain(Nowhere) }
 

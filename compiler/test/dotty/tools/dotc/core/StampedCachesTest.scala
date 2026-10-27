@@ -67,7 +67,8 @@ object StampedCachesTest:
       "the capture checker's, as `captureSetValid`"
   )
 
-  private val StampField = raw"private var (\w+)\s*:\s*(\w+)".r
+  // `private[core]` too: a `Published` field may not be `private`
+  private val StampField = raw"private(?:\[\w+\])? var (\w+)\s*:\s*(\w+)".r
 
   private def isStampName(name: String) =
     name.endsWith("Period") || name.endsWith("RunId") || raw"(valid|checked)[A-Z]\w*".r.matches(name)

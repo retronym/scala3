@@ -1447,7 +1447,7 @@ object Build {
   // (docs/_docs/internals/interactive-multi-reader.md §11). A module of its own, compiled before the compiler so that
   // its macros expand in the compiler's run, and depending on the library alone, which keeps it from naming the
   // compiler. Not published: its classes, TASTy and sources are packaged into the compiler's jars
-  // (`sharingPackagedInCompiler`).
+  // (`sharingPackagedInCompiler`). The sources are vendored from scala-sharing (sharing/VENDORED.md).
   def sharingSettings(nonBootstrapped: Boolean) = Def.settings(
     name          := (if (nonBootstrapped) "scala3-sharing-nonbootstrapped" else "scala3-sharing-bootstrapped"),
     moduleName    := "scala3-sharing",
