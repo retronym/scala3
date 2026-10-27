@@ -32,3 +32,15 @@ class TagOutsideCode
  * see [[<:<]], or [[>:>]]
  */
 class LinkToTagLike
+/** `x < 0` and `0 <= n < k`, then `"<cycle>"` and `<script>alert('hello')</script>`. */
+class AngleBracketsInCodeSpan
+
+/**
+ * `a < b
+ *
+ * c > d`
+ */
+class CodeSpanDoesNotCrossParagraph
+
+/** ``a ` < b`` and `<b>bold</b>` */
+class DoubleBacktickCodeSpan
