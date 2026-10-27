@@ -3685,8 +3685,7 @@ object Types extends TypeUtils {
           case union: OrType if isSoft => union.join
           case _ => union
 
-    private var atomsRunId: RunId = NoRunId
-    private var myAtoms: Atoms = uninitialized
+    private var myAtoms: Stamped[Atoms] = Stamped.Empty
     private var myWidened: Stamped[Type] = Stamped.Empty
 
     private def computeAtoms()(using Context): Atoms =
@@ -3702,7 +3701,7 @@ object Types extends TypeUtils {
       if ((tp1 eq tp1w) && (tp2 eq tp2w)) this else TypeComparer.lub(tp1w, tp2w, isSoft = isSoft)
 
     override def atoms(using Context): Atoms =
-      Caching.stampedIf(atomsRunId, myAtoms)(atomsRunId = _, myAtoms = _)(ctx.runId, _ => !isProvisional):
+      Stamped.cachedIf(myAtoms)(myAtoms = _)(ctx.runId, _ => !isProvisional):
         computeAtoms()
 
     override def widenSingletons(skipSoftUnions: Boolean)(using Context): Type =
