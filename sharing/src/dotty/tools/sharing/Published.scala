@@ -45,6 +45,51 @@ object Published extends PublishedOps:
    *  there, or not `Published`, is a compile error. */
   inline def handle[O, F <: String]: Handle[O, F] = ${ PublishedMacros.handleImpl[O, F] }
 
+  /** The value of `S`'s publisher `F` (`S` the owner's singleton type), loaded with acquire semantics: the evidence
+   *  a `Payload` of `F` is read after (`checkedPeriod.acquired`, `lastDenot.after(snap)`). It need not be used at
+   *  once: a read after an acquire stays ordered after it, so evidence that outlives its block is still sound. */
+  opaque type Acquired[S, F <: String, T] = T
+
+  /** Evidence that a store runs inside a `publishing` block, before the release that ends it: what `:=` on a
+   *  `Payload` needs. A block's evidence may only be passed to `:=` in it: the macro rejects any other use. */
+  opaque type Publishing = AnyRef
+
+/** A field published by its owner's `Published` field `F`: stored only in a `publishing` block of `F` (before its
+ *  release), read only after an `acquired` of `F` on the same object, or with `peek` where an unordered read is the
+ *  protocol (a hint checked again after).
+ *  {{{
+ *  private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = Payload(uninitialized)
+ *  private var checkedPeriod: Published[Period] = Published(Nowhere)
+ *  // reader
+ *  val p = checkedPeriod.acquired
+ *  if p.value == ctx.period then lastDenot.after(p) else ...
+ *  // writer
+ *  checkedPeriod.publishing(ctx.period):
+ *    lastDenot := newd
+ *  }}}
+ */
+opaque type Payload[O, F <: String, T] = T
+
+object Payload extends PayloadOps:
+  /** The field's initial value, stored before its owner is shared. */
+  inline def apply[O, F <: String, T](t: T): Payload[O, F, T] = t
+
+/** The operations on a `Payload` field, outside the opaque scope as `PublishedOps` are. */
+trait PayloadOps:
+  import Published.{Acquired, Publishing}
+
+  extension [O, F <: String, T](inline field: Payload[O, F, T])
+
+    /** The field, read after `snap`, the acquire of its publisher on the same object: a macro, which checks that
+     *  `snap` is of the field's owner. */
+    inline def after[S, V](snap: Acquired[S, F, V]): T = ${ PublishedMacros.afterImpl[S, F, T]('field, 'snap) }
+
+    /** The field, read with no order: only where the protocol allows it (a hint checked again after). */
+    inline def peek: T = ${ PublishedMacros.payloadPeekImpl[T]('field) }
+
+    /** Stores `v` in the field, inside a `publishing` block of its publisher, before the release that ends it. */
+    inline def :=(inline v: T)(using Publishing): Unit = ${ PublishedMacros.payloadStoreImpl[O, F, T]('field, 'v) }
+
 /** The operations on a `Published` field, inherited by its companion, so found with no import. Defined outside the
  *  opaque types' scope: an inline method inside it leaves the inliner's proxy for the scope, a dead load of
  *  `Published`'s module, at every call site. The macros see through `Published[T]` and `Handle` where they need to
@@ -67,6 +112,19 @@ trait PublishedOps:
     /** A plain store: only where the protocol allows it (a store no other thread acts on yet, or a reset). */
     inline def setPlain(inline v: T): Unit = ${ PublishedMacros.setPlainImpl[T]('field, 'v) }
 
+    /** The field, loaded with acquire semantics, as the evidence that the payloads it publishes are read after:
+     *  an `Acquired[owner.type, "field", T]`, whose `value` is the field's value. */
+    transparent inline def acquired: Any = ${ PublishedMacros.acquiredImpl[T]('field) }
+
+    /** Runs `body`, which stores this field's payloads (`p := v`), then stores `v` in this field with release
+     *  semantics: the stores are ordered before the release by construction. */
+    inline def publishing(inline v: T)(inline body: Published.Publishing ?=> Unit): Unit =
+      ${ PublishedMacros.publishingImpl[T]('field, 'v, 'body) }
+
+  extension [S, F <: String, T](snap: Published.Acquired[S, F, T])
+    /** The publisher's value, as acquired. */
+    inline def value: T = ${ PublishedMacros.acquiredValueImpl[S, F, T]('snap) }
+
   // The accesses the macros expand to, by the field's erased type. Each is typed here, with an `Object` receiver,
   // so that the signature-polymorphic `VarHandle` call has a fixed descriptor (`(Ljava/lang/Object;)I`), as
   // `util.Publish` has; inlined at the site, with inline parameters, which leave no local for the handle.
@@ -83,7 +141,7 @@ private[sharing] object PublishedMacros:
   import Published.Handle
 
   /** A `Published` field reference: the tree, its owner (the handle's receiver) and the given handle. */
-  private class FieldRef[T](field: Expr[Published[T]])(using val q: Quotes, t: Type[T]):
+  private class FieldRef[T](field: Expr[Any])(using val q: Quotes, t: Type[T]):
     import q.reflect.*
 
     // the field as written: the inliner wraps it in a binding-free `Inlined`, and, the extension being in the opaque
@@ -95,7 +153,7 @@ private[sharing] object PublishedMacros:
       case _ => t
 
     val ref: Term = underlying(field.asTerm)
-    private val sym = ref.symbol
+    val sym = ref.symbol
     val isFieldRef = ref match
       case Ident(_) | Select(_, _) => true
       case _ => false
@@ -106,7 +164,7 @@ private[sharing] object PublishedMacros:
       case Select(qual, _) => qual
       case _ => This(sym.owner)
 
-    val handle: Term =
+    lazy val handle: Term =
       // by its symbol: in this file `TypeRepr.of[Handle[...]]` would see through the opaque type to `VarHandle`
       // and as `Published.Handle`, a member of the module's term: `this.Handle` would see through it too
       val module = Symbol.requiredModule("dotty.tools.sharing.Published")
@@ -195,3 +253,82 @@ private[sharing] object PublishedMacros:
     val ownerClass = Literal(ClassOfConstant(TypeRepr.of[O])).asExprOf[Class[O]]
     '{ Handle[O, F](MethodHandles.privateLookupIn($ownerClass, MethodHandles.lookup())
           .findVarHandle($ownerClass, ${Expr(name)}, $erasedClassOf)) }
+
+  // ---- payloads: `acquired`, `after`, `publishing`
+
+  // an opaque type of this package by its symbol, as a member of the term that owns it: from inside its scope
+  // `TypeRepr.of` would see through it
+  private def opaqueTycon(using q: Quotes)(module: String, name: String): q.reflect.TypeRepr =
+    import q.reflect.*
+    val m = Symbol.requiredModule(module)
+    m.termRef.select(m.moduleClass.typeMember(name))
+
+  private def payloadTycon(using q: Quotes): q.reflect.TypeRepr =
+    import q.reflect.*
+    // `Payload` is a top-level opaque type: a member of the file's package object
+    val pkgObj = Symbol.requiredModule("dotty.tools.sharing.Published$package")
+    pkgObj.termRef.select(pkgObj.moduleClass.typeMember("Payload"))
+
+  def acquiredImpl[T: Type](field: Expr[Published[T]])(using Quotes): Expr[Any] =
+    val f = FieldRef[T](field)
+    import f.q.reflect.*
+    val loaded = acquireImpl[T](field).asTerm
+    val acq = opaqueTycon(using f.q)("dotty.tools.sharing.Published", "Acquired")
+      .appliedTo(List(f.owner.tpe, ConstantType(StringConstant(f.sym.name)), TypeRepr.of[T]))
+    Select.unique(loaded, "asInstanceOf").appliedToType(acq).asExpr
+
+  def acquiredValueImpl[S: Type, F <: String: Type, T: Type](snap: Expr[Published.Acquired[S, F, T]])(using Quotes): Expr[T] =
+    import quotes.reflect.*
+    Select.unique(snap.asTerm, "asInstanceOf").appliedToType(TypeRepr.of[T]).asExprOf[T]
+
+  def afterImpl[S: Type, F <: String: Type, T: Type](field: Expr[Any], snap: Expr[Any])(
+      using Quotes): Expr[T] =
+    val f = FieldRef[T](field)
+    import f.q.reflect.*
+    if !(TypeRepr.of[S] =:= f.owner.tpe) then
+      report.errorAndAbort(
+        s"${f.ref.show} is read after the acquire of another object's publisher (${TypeRepr.of[S].show}, not ${f.owner.tpe.show})", snap)
+    Select.unique(f.ref, "asInstanceOf").appliedToType(TypeRepr.of[T]).asExprOf[T]
+
+  def payloadPeekImpl[T: Type](field: Expr[Any])(using Quotes): Expr[T] =
+    val f = FieldRef[T](field)
+    import f.q.reflect.*
+    Select.unique(f.ref, "asInstanceOf").appliedToType(TypeRepr.of[T]).asExprOf[T]
+
+  def payloadStoreImpl[O: Type, F <: String: Type, T: Type](field: Expr[Payload[O, F, T]], v: Expr[T])(using Quotes): Expr[Unit] =
+    val f = FieldRef[T](field)
+    import f.q.reflect.*
+    val tpe = payloadTycon(using f.q).appliedTo(List(TypeRepr.of[O], TypeRepr.of[F], TypeRepr.of[T]))
+    Assign(f.ref, Select.unique(v.asTerm, "asInstanceOf").appliedToType(tpe)).asExprOf[Unit]
+
+  def publishingImpl[T: Type](field: Expr[Published[T]], v: Expr[T], body: Expr[Published.Publishing ?=> Unit])(
+      using Quotes): Expr[Unit] =
+    val f = FieldRef[T](field)
+    import f.q.reflect.*
+    val publisher = f.sym.name
+    // the block's evidence parameter, and the block itself
+    def closure(t: Term): Option[(Symbol, Term)] = t match
+      case Inlined(_, Nil, e) => closure(e)
+      case Block(List(dd: DefDef), _: Closure) => dd.rhs.map(rhs => (dd.termParamss.head.params.head.symbol, rhs))
+      case _ => None
+    closure(body.asTerm) match
+      case None => report.errorAndAbort("`publishing` takes a block literal, so that its stores can be checked", body)
+      case Some((evidence, rhs)) =>
+        new TreeTraverser:
+          override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+            // a use of the block's evidence that its stores did not consume: it would let a store outlive the block
+            case id: Ident if id.symbol == evidence =>
+              report.error("the evidence of a `publishing` block may only be passed to `:=` in it", id.pos)
+            // a store of a payload: of this publisher, on this object
+            case Assign(lhs, _) if lhs.tpe.widen.typeSymbol.name == "Payload" =>
+              val (pubOwner, pubName) = lhs.tpe.widen match
+                case AppliedType(_, List(_, ConstantType(StringConstant(n)), _)) =>
+                  (lhs match { case Select(q, _) => q.tpe; case _ => This(lhs.symbol.owner).tpe }, n)
+                case _ => (TypeRepr.of[Nothing], "")
+              if pubName != publisher || !(pubOwner =:= f.owner.tpe) then
+                report.error(s"${lhs.show} is not published by ${f.ref.show}, so it is not stored in its `publishing` block", lhs.pos)
+              super.traverseTree(tree)(owner)
+            case _ => super.traverseTree(tree)(owner)
+        .traverseTree(rhs)(Symbol.spliceOwner)
+    val run = Expr.betaReduce('{ $body(using null.asInstanceOf[Published.Publishing]) })
+    '{ $run; ${ releaseImpl[T](field, v) } }

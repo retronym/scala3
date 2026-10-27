@@ -35,6 +35,53 @@ class PublishedTest:
     assertFalse(typeCheckErrors("{ val c = Cell(); c.flag = 1 }").isEmpty)
     assertFalse(typeCheckErrors("Cell().flag + 1").isEmpty)
 
+  @Test def payloadRoundTrips(): Unit =
+    val c = Cell()
+    c.flag.publishing(5):
+      c.payload := 42
+    val p = c.flag.acquired
+    assertEquals(5, p.value)
+    assertEquals(42, c.payload.after(p))
+    assertEquals(42, c.payload.peek)
+
+  @Test def payloadMisuseDoesNotCompile(): Unit =
+    // a plain read, a store outside a `publishing` block
+    assertFalse(typeCheckErrors("(Cell().payload: Int)").isEmpty)
+    assertFalse(typeCheckErrors("Cell().payload := 1").isEmpty)
+    // a read after another object's acquire
+    assertFalse(typeCheckErrors("{ val a = Cell(); val b = Cell(); b.payload.after(a.flag.acquired) }").isEmpty)
+    // a store to another object's payload, and the evidence kept past the block
+    assertFalse(typeCheckErrors("{ val a = Cell(); val b = Cell(); a.flag.publishing(1) { b.payload := 2 } }").isEmpty)
+    assertFalse(typeCheckErrors("{ var kept: AnyRef | Null = null; val a = Cell(); a.flag.publishing(1) { kept = summon[Published.Publishing] } }").isEmpty)
+    // and the well-formed version of each compiles
+    assertTrue(typeCheckErrors("{ val a = Cell(); a.flag.publishing(1) { a.payload := 2 }; a.payload.after(a.flag.acquired) }").isEmpty)
+
+  @Test def payloadMessagePassing(): Unit =
+    // the writer stores the payload in a `publishing` block of the flag; a reader that acquires it sees the payload
+    val rounds = 200_000
+    var stale = 0
+    for _ <- 1 to 4 do
+      val cells = Array.fill(rounds)(Cell())
+      val reader = Thread { () =>
+        var i = 0
+        while i < rounds do
+          val c = cells(i)
+          val p = c.flag.acquired
+          if p.value == 1 then
+            if c.payload.after(p) != 42 then stale += 1
+            i += 1
+          else Thread.onSpinWait()
+      }
+      reader.start()
+      var i = 0
+      while i < rounds do
+        val c = cells(i)
+        c.flag.publishing(1):
+          c.payload := 42
+        i += 1
+      reader.join()
+    assertEquals("payload reads after an acquire that found the flag", 0, stale)
+
   @Test def messagePassing(): Unit =
     // a writer stores the data, then releases the flag; a reader that acquires the flag sees the data
     val rounds = 200_000
@@ -69,6 +116,7 @@ object PublishedTest:
     var flag: Published[Int] = Published(0)
     var code: Published[Code] = Published(Code(0))
     var name: Published[String] = Published("")
+    var payload: Payload[Cell, "flag", Int] = Payload(0)
 
   // each handle in a `val`, the given a reference to it: an alias given computed in place is a lazy val, checked
   // on every access
