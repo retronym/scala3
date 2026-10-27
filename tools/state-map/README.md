@@ -50,7 +50,7 @@ Protection (after the annotations `@guardedBy`, `@confined`, `@publishedBy`, `@b
 - `P.thread-local` → thread-confined: declared `ThreadLocal`.
 - `P.confined-owner` → thread-confined: kind A.
 - `P.post-typer` → post-typer: reach `post-typer`.
-- `P.publish-handle` → Publish: declared `Published[T]` (`dotty.tools.sharing.Published`).
+- `P.publish-handle` → Publish: declared `Published[T]` (`dotty.tools.sharing.Published`), or `Payload[O, F, T]`, a field it publishes.
 - `P.packed` → packed-volatile, `P.volatile` → volatile: `@volatile`, packed as for `C.packed` or not.
 - `P.concurrent-type` → concurrent: a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `ConcurrentWeakHashSet`, `SyncEqHashMap`.
 - `P.on-base` → concurrent: initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`.

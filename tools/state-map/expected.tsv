@@ -1,8 +1,8 @@
 # What docs/_docs/internals/interactive-multi-reader.md §8 (the I91 table, I92–I96) says of each cache, as
 # field-key regex, kind, protection (a regex; `*` for any), and the row it comes from. `StateMap.scala` reports every
 # row whose fields the rules place differently, and every row that matches no field.
-core\.Types\.NamedType#(lastDenotation|lastSymbol|checkedPeriod)	C	Publish	NamedType lastDenotation/lastSymbol/checkedPeriod: util.Publish, release/acquire (I36, I78)
-core\.Symbols\.Symbol#(lastDenot|checkedPeriod)	C	Publish	Symbol.lastDenot/checkedPeriod: util.Publish (I36)
+core\.Types\.NamedType#(lastDenotation|lastSymbol|checkedPeriod)	C	Publish	NamedType lastDenotation/lastSymbol/checkedPeriod: a Published period and its Payloads, release/acquire (I36, I78)
+core\.Symbols\.Symbol#(lastDenot|checkedPeriod)	C	Publish	Symbol.lastDenot/checkedPeriod: a Published period and its Payload (I36)
 core\.Denotations\.PreDenotation#sharedAsSeenFrom	C	packed-volatile	PreDenotation.asSeenFrom: one immutable value in a volatile field (I78)
 core\.Denotations\.PreDenotation#(cachedAsSeenFrom|validAsSeenFrom|cachedPrefix)	C	batch-only	PreDenotation.asSeenFrom: the plain fields are batch only (StampedCachesTest exception)
 core\.Types\.MatchType#sharedReduced	C	packed-volatile	MatchType.reduced: one immutable value in a volatile field (I79)
