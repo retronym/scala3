@@ -31,6 +31,7 @@ import scala.util.boundary, boundary.break
 import dotty.tools.dotc.transform.Specialization
 import dotty.tools.dotc.transform.DesugarSpecializedTraits
 import scala.util.control.NonFatal
+import scala.annotation.internal.{confined, scratch}
 
 /** Provides methods to compare types.
  */
@@ -3490,7 +3491,7 @@ object TypeComparer {
     case Fail(errorNotes: List[Note])
 
   /** Class for unification variables used in `natValue`. */
-  // a unification variable of one `constValue` call
+  @scratch @confined // a unification variable of one `constValue` call
   private class AnyConstantType extends UncachedGroundType with ValueType {
     var tpe: Type = NoType
   }

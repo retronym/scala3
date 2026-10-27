@@ -2,6 +2,7 @@ package dotty.tools
 package dotc
 package core
 
+import scala.annotation.internal.publishedBy
 import Periods.*
 import Contexts.*
 import DenotTransformers.*
@@ -17,7 +18,7 @@ import typer.{TyperPhase, RefChecks}
 import cc.CheckCaptures
 import typer.ImportInfo.withRootImports
 import ast.{tpd, untpd}
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, cache, guardedBy}
 import scala.compiletime.uninitialized
 
 object Phases {
@@ -33,7 +34,7 @@ object Phases {
   }
 
   // Set by `usePhases` when a run starts, which in the interactive driver is a write action: readers find them settled.
-  trait PhasesBase {
+  @cache @guardedBy("writer") trait PhasesBase {
     this: ContextBase =>
 
     // drop NoPhase at beginning
@@ -462,17 +463,17 @@ object Phases {
     def printingContext(ctx: Context): Context = ctx
 
     // set by `init` when the base plans its phases, before any reader; only read after
-    private var myPeriod: Period = Nowhere
-    private var myBase: ContextBase = uninitialized
-    private var myErasedTypes = false
-    private var myFlatClasses = false
-    private var myRefChecked = false
-    private var myLambdaLifted = false
-    private var myPatternTranslated = false
+    @publishedBy("init") private var myPeriod: Period = Nowhere
+    @publishedBy("init") private var myBase: ContextBase = uninitialized
+    @publishedBy("init") private var myErasedTypes = false
+    @publishedBy("init") private var myFlatClasses = false
+    @publishedBy("init") private var myRefChecked = false
+    @publishedBy("init") private var myLambdaLifted = false
+    @publishedBy("init") private var myPatternTranslated = false
 
-    private var mySameMembersStartId = NoPhaseId
-    private var mySameParentsStartId = NoPhaseId
-    private var mySameBaseTypesStartId = NoPhaseId
+    @publishedBy("init") private var mySameMembersStartId = NoPhaseId
+    @publishedBy("init") private var mySameParentsStartId = NoPhaseId
+    @publishedBy("init") private var mySameBaseTypesStartId = NoPhaseId
 
     /** The sequence position of this phase in the given context where 0
      * is reserved for NoPhase and the first real phase is at position 1.

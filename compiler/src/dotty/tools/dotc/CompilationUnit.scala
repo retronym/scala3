@@ -14,7 +14,7 @@ import ast.Trees.{Import, Ident}
 import typer.Nullables
 import core.Decorators.*
 import config.{SourceVersion, Feature}
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, featureArea, guardedBy, publishedBy, scratch, sharable, treeState}
 import scala.util.control.NoStackTrace
 import transform.MacroAnnotations.isMacroAnnotation
 import scala.io.Codec
@@ -25,13 +25,13 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
 
   // Written by the parser or the namer before the unit is shared, and after that only by the interactive driver's write
   // actions (`adopt`, the body edit), which run with no reader.
-  var untpdTree: untpd.Tree = untpd.EmptyTree
+  @treeState @guardedBy("writer") var untpdTree: untpd.Tree = untpd.EmptyTree
 
   // A persistent value: a reader takes the current tree and a resume publishes a new one with its statements spliced in
   // (docs/_docs/internals/interactive-multi-reader.md §3.2). The splices are serialised by the session's monitor, which
   // is not this unit's and is held only for the read-modify-write, so the reads here do not hold it: a reader sees the
   // tree before or after a splice, both complete. Phases write it in the batch pipeline, one thread.
-  @volatile var tpdTree: tpd.Tree = tpd.EmptyTree
+  @treeState @volatile var tpdTree: tpd.Tree = tpd.EmptyTree
 
   private val myIsJava: Boolean = source.ext.isJava // `source` and `ext` are immutable, so cache the answer
 
@@ -49,11 +49,11 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
 
 
   /** The source version for this unit, as determined by a language import */
-  var sourceVersion: Option[SourceVersion] = None
+  @treeState @publishedBy("init") var sourceVersion: Option[SourceVersion] = None
 
   /** Pickled TASTY binaries, indexed by class. */
   // set by the Pickler (or ReadTasty), after typer
-  var pickled: Map[ClassSymbol, () => Array[Byte]] = Map()
+  @scratch @confined var pickled: Map[ClassSymbol, () => Array[Byte]] = Map()
 
   /** The fresh name creator for the current unit.
    *  FIXME(#7661): This is not fine-grained enough to enable reproducible builds,
@@ -65,59 +65,61 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
    *  The information is used in phase `Inlining` in order to avoid traversing trees that need no transformations.
    */
   // set after typer, by PostTyper and the phases that follow it
-  var needsInlining: Boolean = false
+  @scratch @confined var needsInlining: Boolean = false
 
   /** Set to `true` if there are inline traits (with or without Specialized context bounds)
    *  This is used by:
    *  DesugarSpecializedTraits, SpecializeInlineTraits, PruneInlinedMethods, PruneInlineTraits
    */
-  var hasSpecializations: Boolean = false
+  @scratch @confined var hasSpecializations: Boolean = false
 
-  var hasMacroAnnotations: Boolean = false
+  @scratch @confined var hasMacroAnnotations: Boolean = false
 
   def hasUnrollDefs: Boolean = unrolledClasses.nonEmpty
-  var unrolledClasses: Set[Symbol] = Set.empty
+  @scratch @confined var unrolledClasses: Set[Symbol] = Set.empty
 
   /** Set to `true` if inliner added anonymous mirrors that need to be completed */
   // set by the Synthesizer only after typer
-  var needsMirrorSupport: Boolean = false
+  @scratch @confined var needsMirrorSupport: Boolean = false
 
   /** Will be set to `true` if contains `Quote`.
    *  The information is used in phase `Staging`/`Splicing`/`PickleQuotes` in order to avoid traversing trees that need no transformations.
    */
   // Monotone: every writer stores true, among them the typer of an inlined body, which concurrent readers of the unit
   // may be; it is read by the phases after typer.
-  var needsStaging: Boolean = false
+  @scratch @benignRace("every writer stores true; read after typer") var needsStaging: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
   // the language imports: set when the unit is parsed (or unpickled), before it is shared
-  var needsCaptureChecking: Boolean = false
+  @featureArea("cc") @treeState @publishedBy("init") var needsCaptureChecking: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
-  var needsSeparationChecking: Boolean = false
+  @treeState @publishedBy("init") var needsSeparationChecking: Boolean = false
 
   /** Will be set to true if unit was compiled with `safe` language import. */
-  var safeMode: Boolean = false
+  @treeState @publishedBy("init") var safeMode: Boolean = false
 
   /** Will be set to true if unit was compiled with `magic` language import. */
-  var magic: Boolean = false
+  @treeState @publishedBy("init") var magic: Boolean = false
 
   /** Will be set to true if the unit contains a pureFunctions language import */
-  var knowsPureFuns: Boolean = false
+  @treeState @publishedBy("init") var knowsPureFuns: Boolean = false
   
   /** Will be set to true if the unit contains an inlineTrait language import */
-  var knowsInlineTraits: Boolean = false
+  @treeState @publishedBy("init") var knowsInlineTraits: Boolean = false
 
   // Only ever set to true, under the run's `suspension` monitor (`suspend`); the typer phase reads it as a hint, and
   // a new run resets it with no reader.
+  @scratch @benignRace("set true only, under the monitor of the run's `suspension`; a hint when read")
   var suspended: Boolean = false
+  @scratch @benignRace("set true only, under the monitor of the run's `suspension`")
   var suspendedAtInliningPhase: Boolean = false
 
   /** Can this compilation unit be suspended */
   def isSuspendable: Boolean = true
 
   /** List of all comments present in this compilation unit */
-  var comments: List[Comment] = Nil
+  @treeState @publishedBy("init") var comments: List[Comment] = Nil
 
   /** This is used to record dependencies to invalidate during incremental
    *  compilation, but only if `ctx.runZincPhases` is true.
@@ -137,6 +139,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
       ctx.run.nn.suspension.add(this, hint, ctx.phase == Phases.inliningPhase)
     throw CompilationUnit.SuspendException()
 
+  @cache @benignRace("any reader derives an equal immutable map from the unit's untyped tree")
   private var myAssignmentSpans: Map[Int, List[Span]] | Null = null
 
   /** A map from (name-) offsets of all local variables in this compilation unit
@@ -175,7 +178,7 @@ object CompilationUnit {
    *  exceptions by their cause chain (e.g. Metals) treat it as a cancellation.
    */
   class CancelledCompilation(reason: String = "") extends _root_.dotty.tools.sharing.Cancelled:
-    private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
+    @scratch @publishedBy("init") private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
     override def getCause: Throwable = myCause
     /** Why: a checker, a pending writer, or a completion an earlier cancellation unwound (`UnwoundCompletion`), for
      *  the one who meets it where no checker was installed. */

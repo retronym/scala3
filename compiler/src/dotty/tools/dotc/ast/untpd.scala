@@ -9,7 +9,7 @@ import Symbols.*, StdNames.*, Trees.*
 import util.{Property, SourceFile, NoSource}
 import util.Spans.Span
 import annotation.constructorOnly
-import annotation.internal.sharable
+import annotation.internal.{publishedBy, sharable, treeState}
 import Decorators.*
 
 object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
@@ -352,7 +352,7 @@ object untpd extends Trees.Instance[Untyped] with UntypedTreeInfo {
   abstract class DerivedTypeTree(implicit @constructorOnly src: SourceFile) extends TypeTree {
 
     // set by `watching` on the tree the desugarer has just made
-    private var myWatched: Tree = EmptyTree
+    @treeState @publishedBy("init") private var myWatched: Tree = EmptyTree
 
     /** The watched tree; used only for printing */
     def watched: Tree = myWatched
