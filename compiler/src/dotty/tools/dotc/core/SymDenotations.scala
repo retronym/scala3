@@ -25,7 +25,7 @@ import reporting.Diagnostic.LoadingFailure
 import collection.mutable
 import cc.{CapturingType, derivedCapturingType, stripCapturing}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
 import _root_.dotty.tools.sharing.Caching
@@ -835,6 +835,7 @@ object SymDenotations {
 
     // a function of the annotations, stored whole (the name is an immutable value); `setTargetName` is the typer's
     // own, on a symbol it makes
+    @cache @benignRace("a function of the symbol's annotations: any reader stores an equal Name")
     private var myTargetName: Name | Null = null
 
     private def computeTargetName(targetNameAnnot: Option[Annotation])(using Context): Name =
@@ -2243,24 +2244,30 @@ object SymDenotations {
 
     // recomputed from the decls and reset by `info_=`; with parallel readers `typeParams` keeps a result only if no
     // completion started or ended while it was computed
+    @cache @benignRace("a function of the decls: a reader stores an equal list, or none if the info changed meanwhile")
     private var myTypeParams: List[TypeSymbol] | Null = null
     // an immutable map: a lost update loses one entry
+    @cache @benignRace("an immutable map of names a function of the class; a lost update drops an entry, recomputed on demand")
     private var fullNameCache: SimpleIdentityMap[QualifiedNameKind, Name] = SimpleIdentityMap.empty
 
     // `Caching` stamps and stores it; the invalidations null the stamp and remove entries from the (synchronised, on a
     // concurrent base) map, as `stamped` expects of an invalidation
+    @cache @publishedBy("Caching")
     private var myMemberCache: EqHashMap[Name, PreDenotation] | Null = null
     private var myMemberCachePeriod: Period = Nowhere
 
     /** A cache from types T to baseType(T, C) */
     type BaseTypeMap = EqHashMap[CachedType, Type]
     // as `myMemberCache`: an invalidation nulls the value, which `stampedWhen`'s `isCurrent` tests
+    @cache @publishedBy("Caching")
     private var myBaseTypeCache: BaseTypeMap | Null = null
     private var myBaseTypeCachePeriod: Period = Nowhere
 
     // read once into a local; a reader that finds one invalid stores a fresh one, and a lost store is a lost memo:
     // validity is the cache's own (its run and phase group, and on a concurrent base the structure epoch)
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var baseDataCache: BaseData = BaseData.None
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var memberNamesCache: MemberNames = MemberNames.None
 
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
@@ -2419,6 +2426,7 @@ object SymDenotations {
    // ------ class-specific operations -----------------------------------
 
     // a ThisType and a TypeRef are interned: any reader computes the same one, and neither field is ever reset
+    @cache @benignRace("the interned this-type of the class: any reader stores the same type")
     private var myThisType: Type | Null = null
 
     /** The this-type depends on the kind of class:
@@ -2436,6 +2444,7 @@ object SymDenotations {
       ThisType.raw(TypeRef(pre, cls))
     }
 
+    @cache @benignRace("the interned type reference to the class: any reader stores the same type")
     private var myTypeRef: TypeRef | Null = null
 
     override def typeRef(using Context): TypeRef = {
@@ -3019,6 +3028,7 @@ object SymDenotations {
     private var packageObjsCache: List[ClassDenotation] = uninitialized
     private var packageObjsRunId: RunId = NoRunId
     // set only to true; a race issues the warning twice
+    @cache @benignRace("only ever set to true: readers that race on it both warn, once more than necessary")
     private var ambiguityWarningIssued: Boolean = false
 
     // with parallel readers, the package objects of a run as one value:
@@ -3547,6 +3557,7 @@ object SymDenotations {
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
 
     // a memo of "valid in this period", stored after the check
+    @benignRace("any reader that finds the cache valid stores the period it checked in; a stale one only repeats the check")
     private var checkedPeriod: Period = Nowhere
 
     /** The invalidation of this cache reaches the caches computed from it. */
@@ -3597,6 +3608,7 @@ object SymDenotations {
   private class MemberNamesImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with MemberNames {
     // read once per use: the map is immutable, and a stale one is a miss or a cache another reader has just
     // invalidated (I46, I92)
+    @benignRace("a lost store is a lost memo entry; a store after an invalidation is in a cache whose epoch has moved")
     private var cache: SimpleIdentityMap[NameFilter, Set[Name]] | Null = SimpleIdentityMap.empty
     private def cacheNow: SimpleIdentityMap[NameFilter, Set[Name]] | Null = cache
 
@@ -3650,7 +3662,9 @@ object SymDenotations {
   private class BaseDataImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with BaseData {
     // read once per use: a tuple of immutable values, and a stale read is a cache another reader has just
     // invalidated (I92)
+    @benignRace("a store after an invalidation is in a cache whose epoch has moved")
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
+    @benignRace("a stale `true` is a cache another reader has just invalidated, and its epoch has moved")
     private var valid = true
 
     private def store(computed: (List[ClassSymbol], BaseClassSet)): Unit = if !concurrent || valid then cache = computed // a batch base stores unconditionally, as before
@@ -3717,7 +3731,7 @@ object SymDenotations {
   }
 
   /** A class to combine base data from parent types */
-  private final class BaseDataBuilder {
+  @scratch @confined private final class BaseDataBuilder {
     private var classes: List[ClassSymbol] = Nil
     private var length = 0
 
@@ -3744,5 +3758,6 @@ object SymDenotations {
   private val packageTypeName = ModuleClassName(nme.PACKAGE).toTypeName
 
   // under `Config.showCompletions`, a constant that is off in every build
+  @interned @benignRace("indentation of a debug print only; a race skews it")
   @sharable private var indent = 0 // for completions printing
 }

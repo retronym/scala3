@@ -8,6 +8,7 @@ import core.Contexts.*
 import reporting.*
 import util.SourceFile
 import util.Spans.Span
+import scala.annotation.internal.{guardedBy, treeState}
 
 /** The reporter of an interactive run: every reader reports to it, a
  *  completer through its creation context. It keeps each diagnostic under
@@ -18,6 +19,7 @@ import util.Spans.Span
  *  (docs/_docs/internals/interactive-session.md §12, "Diagnostics").
  *  Nothing is buffered: a session reads the union.
  */
+@treeState @guardedBy("this")
 private[interactive] final class SessionReporter extends StoreReporter(null) with UniqueMessagePositions with HideNonSensicalMessages:
 
   private final class Entry(val seq: Long, val dia: Diagnostic)

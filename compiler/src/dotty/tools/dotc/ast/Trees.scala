@@ -3,6 +3,7 @@ package dotc
 package ast
 
 import core.*
+import scala.annotation.internal.confined
 import Types.*, Names.*, NameOps.*, Flags.*, util.Spans.*, Contexts.*, Constants.*
 import typer.{ ConstFold, ProtoTypes }
 import SymDenotations.*, Symbols.*, Denotations.*, StdNames.*, Comments.*
@@ -13,7 +14,7 @@ import util.{Stats, Attachment, Property, SourceFile, NoSource, SrcPos, SourcePo
 import config.Config
 import config.Printers.overload
 import java.lang.invoke.VarHandle
-import annotation.internal.sharable
+import annotation.internal.{benignRace, interned, publishedBy, sharable, treeState}
 import annotation.unchecked.uncheckedVariance
 import annotation.constructorOnly
 import compiletime.uninitialized
@@ -26,7 +27,7 @@ object Trees {
 
   /** The total number of created tree nodes, maintained if Stats.enabled */
   // counts only while `Stats.enabled`, a constant false
-  @sharable var ntrees: Int = 0
+  @sharable @interned @benignRace("diagnostic count, compiled out unless Stats.enabled") var ntrees: Int = 0
 
   /** Property key for trees with documentation strings attached */
   val DocComment: Property.StickyKey[Comments.Comment] = Property.StickyKey()
@@ -56,6 +57,7 @@ object Trees {
    */
   // Its type is set when the tree is made or typed, on a tree the typer still owns (`overwriteType`, `withTypeUnchecked`
   // on one without a type; a typed tree is copied, not changed), and not after it is published.
+  @treeState @publishedBy("init")
   abstract class Tree[+T <: Untyped](implicit @constructorOnly src: SourceFile)
   extends Positioned, SrcPos, Product, Attachment.Container, printing.Showable {
 
@@ -301,7 +303,7 @@ object Trees {
     // or after, but not the same ones.
     // a definition's tree belongs to its completer (under the completion lock), then to the one reader that claims its
     // statement (`Session.claim`)
-    private var myMods: untpd.Modifiers | Null = null
+    @treeState @confined private var myMods: untpd.Modifiers | Null = null
 
     private[dotc] def rawMods: untpd.Modifiers = myMods match
       case null => untpd.EmptyModifiers
@@ -953,7 +955,8 @@ object Trees {
   }
 
   /** mods val name: tpt = rhs */
-  case class ValDef[+T <: Untyped] private[ast] (name: TermName, tpt: Tree[T], private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
+  @publishedBy("Publish")
+  case class ValDef[+T <: Untyped] private[ast] (name: TermName, tpt: Tree[T], @(treeState @scala.annotation.meta.field) private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
     extends ValOrDefDef[T], ValOrTypeDef[T] {
     type ThisTree[+T <: Untyped] = ValDef[T]
     assert(isEmpty || (tpt ne genericEmptyTree))
@@ -968,8 +971,9 @@ object Trees {
   }
 
   /** mods def name[tparams](vparams_1)...(vparams_n): tpt = rhs */
+  @publishedBy("Publish")
   case class DefDef[+T <: Untyped] private[ast] (name: TermName,
-      paramss: List[ParamClause[T]], tpt: Tree[T], private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
+      paramss: List[ParamClause[T]], tpt: Tree[T], @(treeState @scala.annotation.meta.field) private var preRhs: LazyTree[T])(implicit @constructorOnly src: SourceFile)
     extends ValOrDefDef[T] {
     type ThisTree[+T <: Untyped] = DefDef[T]
     assert(tpt ne genericEmptyTree)
@@ -1016,7 +1020,8 @@ object Trees {
    *                             if this is of class untpd.DerivingTemplate.
    *                             Typed templates only have parents.
    */
-  case class Template[+T <: Untyped] private[ast] (constr: DefDef[T], private var preParentsOrDerived: LazyTreeList[T], self: ValDef[T], private var preBody: LazyTreeList[T])(implicit @constructorOnly src: SourceFile)
+  @publishedBy("Publish")
+  case class Template[+T <: Untyped] private[ast] (constr: DefDef[T], @(treeState @scala.annotation.meta.field) private var preParentsOrDerived: LazyTreeList[T], self: ValDef[T], @(treeState @scala.annotation.meta.field) private var preBody: LazyTreeList[T])(implicit @constructorOnly src: SourceFile)
     extends DefTree[T] with WithLazyFields {
     type ThisTree[+T <: Untyped] = Template[T]
 

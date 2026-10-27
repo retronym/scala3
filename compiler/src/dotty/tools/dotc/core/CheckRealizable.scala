@@ -8,6 +8,7 @@ import Decorators.*
 import collection.mutable
 import config.SourceVersion.future
 import config.Feature.sourceVersion
+import scala.annotation.internal.{confined, scratch}
 
 /** Realizability status */
 object CheckRealizable {
@@ -65,7 +66,7 @@ class CheckRealizable(using Context) {
   /** A set of all fields that have already been checked. Used
    *  to avoid infinite recursions when analyzing recursive types.
    */
-  // one instance per realizability check
+  @scratch @confined // one instance per realizability check
   private val checkedFields: mutable.Set[Symbol] = mutable.LinkedHashSet[Symbol]()
 
   /** Is symbol's definitition a lazy or erased val?

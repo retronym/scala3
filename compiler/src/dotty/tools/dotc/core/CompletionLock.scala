@@ -8,6 +8,7 @@ import Symbols.Symbol
 
 import _root_.dotty.tools.sharing.{ClaimRegistry, Sharing as Shared}
 
+import scala.annotation.internal.{guardedBy, publishedBy, scratch}
 
 /** The completion lock of a `ContextBase` read by several threads
  *  (interactive mode, step 3 of `docs/_docs/internals/interactive-multi-reader.md`):
@@ -26,10 +27,11 @@ final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock, C
     if kind.lockWhenSerialised then locked(kind.what)(op()) else op()
 
   // written by the holder only; read by waiters before they block
-  @volatile private var rootWhat: What | Null = null
-  @volatile private var currentWhat: What | Null = null
-  @volatile private var holderName: String = ""
+  @scratch @publishedBy("packed") @volatile private var rootWhat: What | Null = null
+  @scratch @publishedBy("packed") @volatile private var currentWhat: What | Null = null
+  @scratch @publishedBy("volatile") @volatile private var holderName: String = ""
   // the holder's, touched only between `lockFor` having acquired the lock and `unlockFor` releasing it
+  @scratch @guardedBy("completionLock")
   private val stack = new java.util.ArrayDeque[What]()
 
   /** Acquire the lock to do `what`. */

@@ -2,11 +2,13 @@ package dotty.tools.dotc.util
 
 import scala.util.{Try, Failure}
 import scala.collection.mutable.ArrayBuffer
+import scala.annotation.internal.{guardedBy, scratch}
 
 object concurrent:
 
   class NoCompletion extends RuntimeException
 
+  @scratch @guardedBy("this")
   class Future[T](exec: Executor[T]):
     private var result: Option[Try[T]] = None
     def force: Try[T] = synchronized {
@@ -19,6 +21,7 @@ object concurrent:
     }
   end Future
 
+  @scratch @guardedBy("this")
   class Executor[T] extends Thread:
     private type WorkItem = (Future[T], () => T)
 

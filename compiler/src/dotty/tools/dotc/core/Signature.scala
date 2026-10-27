@@ -2,6 +2,7 @@ package dotty.tools.dotc
 package core
 
 import scala.annotation.tailrec
+import scala.annotation.internal.{cache, publishedBy}
 
 import Names.*, Types.*, Contexts.*, StdNames.*, Decorators.*
 import TypeErasure.sigName
@@ -167,7 +168,10 @@ object Signature {
     apply(Nil, sigName(resultType, sourceLanguage))
   }
 
+  // stateless comparators (the extractor takes `Ordering` for a collection)
+  @cache @publishedBy("init")
   val lexicographicOrdering: Ordering[Signature] = new Ordering[Signature] {
+    @cache @publishedBy("init")
     val paramSigOrdering: Ordering[Signature.ParamSig] = new Ordering[Signature.ParamSig] {
       def compare(x: ParamSig, y: ParamSig): Int = x match { // `(x, y) match` leads to extra allocations
         case x: TypeName =>
