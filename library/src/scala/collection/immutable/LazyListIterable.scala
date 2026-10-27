@@ -1111,7 +1111,7 @@ final class LazyListIterable[+A] private (lazyState: LazyListIterable.EmptyMarke
    *  Inside, the string representations (w.r.t. the method `toString`)
    *  of all elements of this $coll are separated by the string `sep`.
    *
-   *  An undefined state is represented with `"<not computed>"` and cycles are represented with `"<cycle>"`.
+   *  An undefined state is represented with <code>"&lt;not computed&gt;"</code> and cycles are represented with <code>"&lt;cycle&gt;"</code>.
    *
    *  $evaluatesAllElements
    *
@@ -1196,13 +1196,13 @@ final class LazyListIterable[+A] private (lazyState: LazyListIterable.EmptyMarke
   /** $preservesLaziness
    *
    *  @return a string representation of this collection. An undefined state is
-   *         represented with `"<not computed>"` and cycles are represented with `"<cycle>"`
+   *         represented with <code>"&lt;not computed&gt;"</code> and cycles are represented with <code>"&lt;cycle&gt;"</code>
    *
    *         Examples:
    *
-   *           - `"LazyListIterable(4, <not computed>)"`, a non-empty lazy list ;
-   *           - `"LazyListIterable(1, 2, 3, <not computed>)"`, a lazy list with at least three elements ;
-   *           - `"LazyListIterable(1, 2, 3, <cycle>)"`, an infinite lazy list that contains
+   *           - <code>"LazyListIterable(4, &lt;not computed&gt;)"</code>, a non-empty lazy list ;
+   *           - <code>"LazyListIterable(1, 2, 3, &lt;not computed&gt;)"</code>, a lazy list with at least three elements ;
+   *           - <code>"LazyListIterable(1, 2, 3, &lt;cycle&gt;)"</code>, an infinite lazy list that contains
    *             a cycle at the fourth element.
    */
   override def toString(): String = addStringNoForce(new JStringBuilder(className), "(", ", ", ")").toString

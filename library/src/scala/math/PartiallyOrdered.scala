@@ -26,13 +26,13 @@ trait PartiallyOrdered[+A] extends Any {
   /** Result of comparing `this` with operand `that`.
    *  Returns `None` if operands are not comparable.
    *  If operands are comparable, returns `Some(x)` where
-   *  - `x < 0`    iff   `this < that`
+   *  - <code>x &lt; 0</code>    iff   <code>this &lt; that</code>
    *  - `x == 0`   iff   `this == that`
-   *  - `x > 0`    iff   `this > that`
+   *  - <code>x &gt; 0</code>    iff   <code>this &gt; that</code>
    *
    *  @tparam B a supertype of `A` for which an implicit conversion to `PartiallyOrdered[B]` exists
    *  @param that the value to compare against
-   *  @return `Some(x)` where `x < 0` means this is less than `that`, `x == 0` means they are equal, and `x > 0` means this is greater than `that`; `None` if the operands are not comparable
+   *  @return `Some(x)` where <code>x &lt; 0</code> means this is less than `that`, `x == 0` means they are equal, and <code>x &gt; 0</code> means this is greater than `that`; `None` if the operands are not comparable
    */
   def tryCompareTo [B >: A: AsPartiallyOrdered](that: B): Option[Int]
 

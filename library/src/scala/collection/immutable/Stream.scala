@@ -234,8 +234,8 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
    *  Inside, the string representations (w.r.t. the method `toString`)
    *  of all elements of this $coll are separated by the string `sep`.
    *
-   *  Undefined elements are represented with `"_"`, an undefined tail is represented with `"<not computed>"`,
-   *  and cycles are represented with `"<cycle>"`.
+   *  Undefined elements are represented with `"_"`, an undefined tail is represented with <code>"&lt;not computed&gt;"</code>,
+   *  and cycles are represented with <code>"&lt;cycle&gt;"</code>.
    *
    *  @param sb    the string builder to which elements are appended.
    *  @param start the starting string.
@@ -322,16 +322,16 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
   }
 
   /** Returns a string representation of this collection. Undefined elements are
-   *         represented with `"_"`, an undefined tail is represented with `"<not computed>"`,
-   *         and cycles are represented with `"<cycle>"`
+   *         represented with `"_"`, an undefined tail is represented with <code>"&lt;not computed&gt;"</code>,
+   *         and cycles are represented with <code>"&lt;cycle&gt;"</code>
    *
    *         Examples:
    *
-   *           - `"Stream(_, <not computed>)"`, a non-empty stream, whose head has not been
+   *           - <code>"Stream(_, &lt;not computed&gt;)"</code>, a non-empty stream, whose head has not been
    *             evaluated ;
-   *           - `"Stream(_, 1, _, <not computed>)"`, a stream with at least three elements,
+   *           - <code>"Stream(_, 1, _, &lt;not computed&gt;)"</code>, a stream with at least three elements,
    *             the second one has been evaluated ;
-   *           - `"Stream(1, 2, 3, <cycle>)"`, an infinite stream that contains
+   *           - <code>"Stream(1, 2, 3, &lt;cycle&gt;)"</code>, an infinite stream that contains
    *             a cycle at the fourth element.
    */
   override def toString() = addStringNoForce(new JStringBuilder(className), "(", ", ", ")").toString
