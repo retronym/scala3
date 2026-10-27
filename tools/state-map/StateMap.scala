@@ -29,7 +29,7 @@ object Rules:
     Rule("B.scope", "B", "a field of `Scopes.MutableScope`: completions enter into shared scopes that rehash on `enter`"),
     Rule("C.stamped", "C", "the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object"),
     Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
-    Rule("C.publish", "C", "named by a `VarHandle` in `util/Publish.java`, or read or written in a method that calls `util.Publish` on the same object (the value the stamp publishes)"),
+    Rule("C.publish", "C", "declared `Published[T]`, or read or written in a method that calls `acquire` or `release` on a `Published` field, or `util.Publish`, on the same object (the value the stamp publishes)"),
     Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
     Rule("D.designator", "D", "`myDesignator` of a `NamedType`: part of the interned key, rewritten by `setDenot` (§3 D)"),
     Rule("C.type-memo", "C", "any other field of a `Type` other than a `TypeVar`: types are hash-consed values, so a field on one memoises a function of the type"),
@@ -49,7 +49,7 @@ object Rules:
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
-    Rule("P.publish-handle", "Publish", "named by a `VarHandle` in `util/Publish.java` (release store, acquire load)"),
+    Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`): release store, acquire load, a plain access only through `plain`/`setPlain`"),
     Rule("P.stamped", "Stamped", "declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair"),
     Rule("P.packed", "packed-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
     Rule("P.volatile", "volatile", "`@volatile`, a single value"),
@@ -93,7 +93,7 @@ case class ClassInfo(name: String, simple: String, pkg: String, file: String, li
 case class Access(field: String, write: Boolean, reset: Boolean, prot: String, method: String, init: Boolean,
     file: String, line: Int)
 
-class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(String, String)]) extends Inspector:
+class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
   val classes = mutable.LinkedHashMap[String, ClassInfo]()
   val fields = mutable.LinkedHashMap[String, FieldInfo]()
   val accesses = mutable.ArrayBuffer[Access]()
@@ -403,8 +403,9 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           val (fn, argss) = flatten(app)
           val fsym = fn.symbol
           recordCall(fsym)
-          if fsym.exists && fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.dotc.util.Publish" then
-            publishingMethods += currentMethod
+          if fsym.exists && (fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.dotc.util.Publish"
+              || fsym.maybeOwner.fullName == "dotty.tools.sharing.PublishedOps" && (fsym.name == "acquire" || fsym.name == "release"))
+          then publishingMethods += currentMethod
           protectedCall(fsym) match
             case Some((prot0, names)) =>
               val prot = if prot0 == "claim" then claimProtection(argss) else prot0
@@ -487,14 +488,13 @@ object StateMap:
     val ghBase = opts.getOrElse("github", "https://github.com/retronym/scala3/blob")
     val pkgs = opts.getOrElse("packages", ",core,typer,interactive,cc,transform,ast,util,inlines,quoted").split(',').toList
 
-    val publishJava = Files.readString(repoRoot.resolve("compiler/src/dotty/tools/dotc/util/Publish.java"))
-    val publishHandles = raw"""intField\("([\w.$$]+)",\s*"(\w+)"\)""".r.findAllMatchIn(publishJava)
-      .map(m => (m.group(1).replace("$", ".").stripPrefix("dotty.tools.dotc."), m.group(2))).toSet
 
     val root = classesDir.resolve("dotty/tools/dotc")
     val tastyFiles = Files.walk(root).iterator.asScala.map(_.toString).filter(_.endsWith(".tasty")).toList.sorted
-    val collector = Collector(pkgs, repoRoot, publishHandles)
+    val collector = Collector(pkgs, repoRoot)
     TastyInspector.inspectAllTastyFiles(tastyFiles, Nil, classesDir.toString :: cp)(collector)
+    // the fields that publish others: declared `Published[T]`
+    val publishHandles = collector.fields.values.filter(_.tpe.startsWith("Published[")).map(f => (f.owner, f.name)).toSet
 
     val model = Model(collector, publishHandles, repoRoot)
     val validation = model.validate(

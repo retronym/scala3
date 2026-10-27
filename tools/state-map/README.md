@@ -32,7 +32,7 @@ Kind (after the annotations `@scratch`, `@lazyFact`, `@cache`, `@interned`, `@tr
 - `B.scope`: a field of `MutableScope`.
 - `C.stamped`: the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object.
 - `C.stamp`: a stamp by `StampedCachesTest`'s rule (declared `Period`, `RunId`, `Validity`, or named `…Period`, `…RunId`, `valid…`, `checked…`).
-- `C.publish`: named by a `VarHandle` in `util/Publish.java`, or accessed in a method that calls `util.Publish`.
+- `C.publish`: declared `Published[T]`, or accessed in a method that calls `acquire`/`release` on a `Published` field, or `util.Publish`.
 - `C.packed`: on a type, denotation or symbol, `@volatile` and declared a tuple or a class of two or more `val`s.
 - `D.designator`: `NamedType.myDesignator`, part of the interned key.
 - `C.type-memo`: any other field of a `Type` other than a `TypeVar` (types are hash-consed values).
@@ -50,7 +50,7 @@ Protection (after the annotations `@guardedBy`, `@confined`, `@publishedBy`, `@b
 - `P.thread-local` → thread-confined: declared `ThreadLocal`.
 - `P.confined-owner` → thread-confined: kind A.
 - `P.post-typer` → post-typer: reach `post-typer`.
-- `P.publish-handle` → Publish: named by a `VarHandle` in `Publish.java`.
+- `P.publish-handle` → Publish: declared `Published[T]` (`dotty.tools.sharing.Published`).
 - `P.packed` → packed-volatile, `P.volatile` → volatile: `@volatile`, packed as for `C.packed` or not.
 - `P.concurrent-type` → concurrent: a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `ConcurrentWeakHashSet`, `SyncEqHashMap`.
 - `P.on-base` → concurrent: initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`.
