@@ -4667,8 +4667,7 @@ object Types extends TypeUtils {
   abstract case class AppliedType(tycon: Type, args: List[Type])
   extends CachedProxyType with ValueType {
 
-    private var validSuper: Period = Nowhere
-    private var cachedSuper: Type = uninitialized
+    private var cachedSuper: Stamped[Type] = Stamped.Empty
 
     // Boolean caches: 0 = uninitialized, -1 = false, 1 = true
     @cache @benignRace("a Byte computed from the same tycon and arguments, written whole")
@@ -4705,7 +4704,7 @@ object Types extends TypeUtils {
     override def underlying(using Context): Type = tycon
 
     override def superType(using Context): Type =
-      Caching.stampedIf(validSuper, cachedSuper)(validSuper = _, cachedSuper = _)(ctx.period, _ => !superTypeIsProvisional):
+      Stamped.cachedIf(cachedSuper)(cachedSuper = _)(ctx.period.rawCode, _ => !superTypeIsProvisional):
         tycon match
           case tycon: HKTypeLambda => defn.AnyType
           case tycon: TypeRef if tycon.symbol.isClass => tycon
