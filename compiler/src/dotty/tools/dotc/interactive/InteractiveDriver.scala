@@ -1700,6 +1700,8 @@ class InteractiveDriver(
       myOpenedFiles.synchronized { myOpenedFiles(uri) = source }
 
       reader.typingTarget = target
+      reader.runsStarted += 1
+      if !target.exists then reader.wholeFileRunsStarted += 1
       run.isTargeted = target.exists
       val skipped =
         try
