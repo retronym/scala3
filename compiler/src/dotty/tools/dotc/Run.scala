@@ -32,7 +32,7 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable, mutable.ListBuffer
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, scratch, cache, interned, guardedBy, benignRace}
 import scala.io.Codec
 
 import Run.Progress
@@ -51,6 +51,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  This is usually for the first import suggestion; subsequent suggestions
    *  may get smaller timeouts. @see ImportSuggestions.reduceTimeBudget
    */
+  @scratch @benignRace("a time budget in ms for import suggestions: a lost update only changes how long a later suggestion searches, which the clock decides anyway")
   private var myImportSuggestionBudget: Int =
     Int.MinValue // sentinel value; means whatever is set in command line option
 
@@ -65,26 +66,28 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  return immediately. Currently these early abort operations are
    *  `Typer.typed` and `Implicits.typedImplicit`.
    */
-  @volatile var isCancelled = false
+  @scratch @volatile var isCancelled = false
 
-  private var compiling = false
+  // `compiling`, `myUnits` and the other run-wide fields marked `@guardedBy("writer")` are set while the run compiles:
+  // in the interactive driver that is a write action, so readers see them only after it, and none of them changes then.
+  @scratch @guardedBy("writer") private var compiling = false
 
-  private var myUnits: List[CompilationUnit] = Nil
+  @scratch @guardedBy("writer") private var myUnits: List[CompilationUnit] = Nil
 
   // `files` of `myUnits`, with the units it was made from: one immutable pair in one volatile field, so that a reader
   // that finds the units it asks for finds their files with them
-  @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
+  @cache @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
   // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
   // collections, so they are reached only holding the monitor of `suppressions` (`locked`: with concurrent readers
   // only, as the batch compiler is one thread). Nothing issues a message while holding it.
   object suppressions extends Sharing.Guard:
     // `@nowarn` annotations by source file, populated during typer
-    private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
+    @scratch private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
     // source files whose `@nowarn` annotations are processed
-    private val complete = guarded(mutable.Set.empty[SourceFile])
+    @scratch private val complete = guarded(mutable.Set.empty[SourceFile])
     // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
-    private val suspended = guarded(mutable.LinkedHashMap.empty[SourceFile, mutable.LinkedHashSet[Warning]])
+    @scratch private val suspended = guarded(mutable.LinkedHashMap.empty[SourceFile, mutable.LinkedHashSet[Warning]])
 
     // When the REPL creates a new run (ReplDriver.compile), parsing is already done in the old context, with the
     // previous Run. Parser warnings were suspended in the old run and need to be copied over so they are not lost.
@@ -210,10 +213,10 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   // collections below are reached only with the evidence of the monitor of `suspension` (`Sharing.serialised`: with
   // concurrent readers only, as the batch compiler is one thread); the readers outside get a snapshot.
   object suspension extends Sharing.Guard:
-    private val units = guarded(ListBuffer.empty[CompilationUnit])
-    private val hints = guarded(mutable.HashMap.empty[CompilationUnit, (String, Boolean)])
+    @scratch private val units = guarded(ListBuffer.empty[CompilationUnit])
+    @scratch private val hints = guarded(mutable.HashMap.empty[CompilationUnit, (String, Boolean)])
     // Were any units suspended in the typer phase? if so then pipeline tasty can not complete.
-    private val atTyper = guardedVar(false)
+    @scratch private val atTyper = guardedVar(false)
 
     /** Record `unit` as suspended, unless it is already: two readers may suspend it at once, and only the first
      *  records it. The flags of the unit are set under the same monitor. Returns normally; the caller unwinds. */
@@ -278,7 +281,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  completions of different roots run in parallel, so it is reached only with the evidence of its monitor.
    */
   private object lateFiles extends Sharing.Guard:
-    private val files = guarded(mutable.Set[AbstractFile]())
+    @scratch private val files = guarded(mutable.Set[AbstractFile]())
 
     /** Is `file` newly entered? */
     def enter(file: AbstractFile)(using Context): Boolean = locked(files().add(file))
@@ -286,12 +289,12 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     def size(using Context): Int = locked(files().size)
 
   /** A cache for static references to packages and classes */
-  val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
+  @cache val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
 
   /** Actions that need to be performed at the end of the current compilation run */
-  private val finalizeActions = ListBuffer.empty[() => Unit]
+  @scratch @guardedBy("writer") private val finalizeActions = ListBuffer.empty[() => Unit]
 
-  private var _progress: Progress | Null = null // Set if progress reporting is enabled
+  @scratch @guardedBy("writer") private var _progress: Progress | Null = null // Set if progress reporting is enabled
 
   private inline def trackProgress(using Context)(inline op: Context ?=> Progress => Unit): Unit =
     foldProgress(())(op)
@@ -315,7 +318,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  the skipped statements and the completion bookkeeping of a request are
    *  on its `Reader`.
    */
-  var isTargeted: Boolean = false
+  @scratch @guardedBy("writer") var isTargeted: Boolean = false
 
   /** A run with a degraded completion whose state is unknown (an exception
    *  other than a cyclic reference or a cancellation unwound through it,
@@ -326,6 +329,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  run's state is as before.
    */
   def isTainted: Boolean = myTainted
+  @scratch @benignRace("only ever set to true, by whichever reader meets the unwound completion first")
   private var myTainted: Boolean = false
   def markTainted(): Unit = myTainted = true
 
@@ -339,7 +343,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  for a test. (Per run, not per reader: an interactive request may meet a
    *  tree an earlier request's error left inconsistent.)
    */
-  @volatile private[dotc] var errorsToBeReported = false
+  @scratch @volatile private[dotc] var errorsToBeReported = false
 
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>
@@ -385,9 +389,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
           progress.tickSubphase()
 
   /** if true, then we are done writing pipelined TASTy files (i.e. finished in a previous run.) */
-  private var myAsyncTastyWritten = false
+  @scratch @guardedBy("writer") private var myAsyncTastyWritten = false
 
-  private var _asyncTasty: Option[AsyncTastyHolder] = None
+  @scratch @guardedBy("writer") private var _asyncTasty: Option[AsyncTastyHolder] = None
 
   /** populated when this run needs to write pipeline TASTy files. */
   def asyncTasty: Option[AsyncTastyHolder] = _asyncTasty
@@ -423,21 +427,25 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   /** Will be set to true if any of the compiled compilation units contains
    *  a pureFunctions language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var pureFunsImportEncountered = false
   
   /** Will be set to true if any of the compiled compilation units contains
    *  an inlineTraits language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var inlineTraitsImportEncountered = false
 
   /** Will be set to true if experimental.captureChecking is enabled
    *  or any of the compiled compilation units contains a captureChecking language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var ccEnabledSomewhere = Feature.ccEnabledBySetting(using ictx)
 
   /** If -explain-cycles is set, readers trace cyclic reference dependencies (each on its own `Reader.cyclicReferenceTrace`) */
-  var traceCycles: Boolean = false
+  @cache @guardedBy("writer") var traceCycles: Boolean = false
 
+  @scratch @benignRace("only ever set to true: it stops a second enrichment of the same message")
   private var myEnrichedErrorMessage = false
 
   def compile(files: List[AbstractFile]): Unit =
@@ -470,7 +478,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     compileUnits()(using ctx)
   }
 
-  var profile: Profile = NoProfile
+  @scratch @guardedBy("writer") var profile: Profile = NoProfile
 
   private def compileUnits()(using Context) = Stats.maybeMonitored {
     if (!ctx.mode.is(Mode.Interactive)) // IDEs might have multi-threaded access, accesses are synchronized
@@ -585,7 +593,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     compiling = false
   }
 
-  private var myCompilingSuspended: Boolean = false
+  @scratch @guardedBy("writer") private var myCompilingSuspended: Boolean = false
 
   /** Is this run started via a compilingSuspended? */
   def isCompilingSuspended: Boolean = myCompilingSuspended
@@ -738,7 +746,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     start.setRun(this: @unchecked)
   }
 
-  private var myCtx: Context = rootContext(using ictx)
+  @scratch @guardedBy("writer") private var myCtx: Context = rootContext(using ictx)
 
   /** The context created for this run */
   given runContext[Dummy_so_its_a_def]: Context = myCtx
@@ -749,7 +757,7 @@ object Run {
    *  trees (a power of two, 1024 by default). A test knob. Tests lower it to make a
    *  cancellation land inside small statements; a run reads it when created.
    */
-  @sharable @volatile var typerCheckpointMask: Int = 1023
+  @scratch @sharable @volatile var typerCheckpointMask: Int = 1023
 
   /** Process-wide counts of the cyclic references prevented and the
    *  completions unwound in interactive mode, printed at exit when
@@ -757,7 +765,7 @@ object Run {
    *  graceful-degradation design. Measurement scaffolding, read by no one
    *  else: a candidate to drop before upstreaming.
    */
-  object CycleStats:
+  @interned object CycleStats:
     private val enabled = java.lang.Boolean.getBoolean("dotty.interactive.cycleStats")
     @sharable private val preventedBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
     @sharable private val unwoundBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
@@ -811,11 +819,12 @@ object Run {
 
   // Phases and the units they enter advance it, in the run's own write action; only the late units a reader's
   // completion compiles (`currentLateUnitCount`) are counted from a reader.
-  private class Progress(cb: ProgressCallback, private val run: Run, val initialTraversals: Int):
+  @scratch @guardedBy("writer") private class Progress(cb: ProgressCallback, private val run: Run, val initialTraversals: Int):
     export cb.{cancel, isCancelled}
 
     var totalTraversals: Int = initialTraversals  // track how many phases we expect to run
     var currentUnitCount: Int = 0 // current unit count in the current (sub)phase
+    @benignRace("a progress count for the callback: a lost increment from two readers' late compilations skews a percentage")
     var currentLateUnitCount: Int = 0 // current late unit count
     var completedTraversalCount: Int = 0 // completed traversals over all files
     var currentCompletedSubtraversalCount: Int = 0 // completed subphases in the current phase

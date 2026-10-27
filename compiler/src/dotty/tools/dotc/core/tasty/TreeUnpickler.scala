@@ -47,7 +47,7 @@ import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 
 import scala.annotation.constructorOnly
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, treeState}
 import scala.compiletime.uninitialized
 
 /** Unpickler for typed trees

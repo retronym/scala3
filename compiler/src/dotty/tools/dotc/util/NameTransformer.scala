@@ -5,21 +5,22 @@ package util
 
 import core.Names.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{cache, publishedBy, sharable}
 
 /** Provides functions to encode and decode Scala symbolic names.
  */
 object NameTransformer {
 
   // the tables are filled when the object is initialised and only read after
+  @cache @publishedBy("init")
   private val hexArray = Array('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F')
   private val nops = 128
   private val ncodes = 26 * 26
 
   private class OpCodes(val op: Char, val code: String, val next: OpCodes)
 
-  @sharable private val op2code = new Array[String](nops)
-  @sharable private val code2op = new Array[OpCodes](ncodes)
+  @sharable @cache @publishedBy("init") private val op2code = new Array[String](nops)
+  @sharable @cache @publishedBy("init") private val code2op = new Array[OpCodes](ncodes)
   private def enterOp(op: Char, code: String) = {
     op2code(op.toInt) = code
     val c = (code.charAt(1) - 'a') * 26 + code.charAt(2) - 'a'

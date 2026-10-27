@@ -16,6 +16,7 @@ import dotty.tools.tasty.TastyVersion
 
 import dotty.tools.io.AbstractFile
 
+import scala.annotation.internal.benignRace
 
 object DottyUnpickler {
 
@@ -98,6 +99,7 @@ class DottyUnpickler(
 
   // read without a claim (`ClassSymbol.rootTreeContaining`), so the sorted names are held by a final field: a reader
   // that sees the holder sees the array filled. A race computes the names twice, each equal.
+  @benignRace("an immutable holder: its array is published by the final field")
   private var ids: SortedIds | Null = null
 
   override def mightContain(id: String)(using Context): Boolean = {

@@ -14,6 +14,7 @@ import unpickleScala2.Scala2Erasure
 import Decorators.*
 import Definitions.MaxImplementedFunctionArity
 import scala.annotation.tailrec
+import scala.annotation.internal.{interned, publishedBy}
 import dotty.tools.dotc.transform.DesugarSpecializedTraits
 import dotty.tools.dotc.util.Property
 
@@ -189,7 +190,7 @@ object TypeErasure:
     + (semiEraseVCs.toInt     << 3)
     + (sourceLanguage.ordinal << 4)
 
-  // filled in this object's initialiser, only read after
+  @interned @publishedBy("init") // filled in this object's initialiser, only read after
   private val erasures = new Array[TypeErasure](1 << (SourceLanguage.bits + 4))
 
   for
