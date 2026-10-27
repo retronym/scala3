@@ -5,6 +5,7 @@ package dotty.tools.dotc.util
 import java.lang.ref.{ReferenceQueue, WeakReference}
 
 import scala.annotation.{ constructorOnly, tailrec }
+import scala.annotation.internal.{interned, publishedBy}
 
 import dotty.tools.*
 
@@ -341,6 +342,7 @@ object WeakHashSet {
    */
   // `tail` is set as the entry is made, and changed in place only under the set's monitor (`remove`, the batch `resize`):
   // to an entry further down, or, in a concurrent set, in copies that are published whole (see `ConcurrentWeakHashSet`).
+  @interned @publishedBy("Publish")
   class Entry[A](@constructorOnly element: A, val hash:Int, var tail: Entry[A] | Null, @constructorOnly queue: ReferenceQueue[A]) extends WeakReference[A](element, queue)
 
 }

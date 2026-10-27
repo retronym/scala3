@@ -28,7 +28,7 @@ import collection.mutable
 import io.AbstractFile
 import util.{SourceFile, NoSource, Property, SourcePosition, SrcPos, EqHashMap, WrappedSourceFile}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, lazyFact, publishedBy, sharable, treeState}
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
@@ -58,6 +58,7 @@ object Symbols extends SymUtils {
     type ThisName <: Name
 
     // set from `NoCoord` by the unpickler of a root's TASTy, and by `BodyEdit` in a write action (no readers)
+    @lazyFact @benignRace("an Int set from NoCoord by the root's unpickler, always to the coordinate its TASTy gives")
     private var myCoord: Coord = initCoord
 
     //assert(id != 723)
@@ -79,6 +80,7 @@ object Symbols extends SymUtils {
 
     // assigned by the typing of the symbol's own definition (no check-then-set); read for a local symbol's inline
     // proxies and by signature help, which take the tree of whichever typing stored last
+    @treeState @benignRace("assigned from the symbol's own definition when it is typed; a second typing stores an equal tree")
     private var myDefTree: Tree | Null = null
 
     /** The tree defining the symbol at pickler time, EmptyTree if none was retained */
@@ -107,7 +109,7 @@ object Symbols extends SymUtils {
      *  mode, several readers) that finds the period current sees the
      *  denotation stored before it, never the previous one.
      */
-    private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
+    @cache @publishedBy("Publish") private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
     private[core] var checkedPeriod: Published[Period] = Published(Nowhere)
 
     /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
@@ -493,6 +495,7 @@ object Symbols extends SymUtils {
     type TreeOrProvider = tpd.TreeProvider | tpd.Tree
 
     // a `TreeProvider` is replaced by the tree it yields; the TASTy reads run under the completion lock (I91)
+    @treeState @benignRace("a provider is replaced by the tree it unpickles; a second unpickling yields an equal tree")
     private var myTree: TreeOrProvider = tpd.EmptyTree
 
     /** If this is a top-level class and `-Yretain-trees` (or `-from-tasty`) is set.
@@ -552,6 +555,7 @@ object Symbols extends SymUtils {
 
     // a function of the class's file, TASTy info and annotations: `NoSource` until known, then the base's one
     // `SourceFile` for it
+    @cache @benignRace("every reader stores the base's SourceFile for the same file, or NoSource while it is not known")
     private var mySource: SourceFile = NoSource
 
     final def sourceOfClass(using Context): SourceFile = atPhaseNoLater(flattenPhase) {

@@ -25,6 +25,7 @@ import typer.ProtoTypes.NoViewsAllowed
 import reporting.Message
 import collection.mutable.ListBuffer
 
+import scala.annotation.internal.{benignRace, guardedBy, lazyFact}
 import java.lang.invoke.VarHandle
 import scala.compiletime.uninitialized
 
@@ -204,7 +205,7 @@ object Denotations {
 
     // as `SymDenotation`'s other lazy facts: set by a completion under its claim (`InProgress` while it runs),
     // and by the setters of a symbol that no other reader has yet
-    protected var myInfo: Type = initInfo
+    @lazyFact @guardedBy("completionLock") protected var myInfo: Type = initInfo
 
     /** The type info.
      *  The info is an instance of TypeType iff this is a type denotation
@@ -257,7 +258,7 @@ object Denotations {
     // concurrent bring-forward's newer run with the old run it read; that is repaired, as a reader that sees the
     // old run goes through `current`, whose `toNewRun` takes the claim and writes the run again. Read without
     // the claim for the same reason.
-    private var myValidFor: Period = Nowhere
+    @lazyFact @guardedBy("completionLock") private var myValidFor: Period = Nowhere
 
     final def validFor: Period = myValidFor
     final def validFor_=(p: Period): Unit = {
@@ -722,6 +723,7 @@ object Denotations {
      */
     // changed only under the completion lock (a bring-forward, a transformation) or by a batch base's transformers;
     // a reader walks the ring with no lock, and each new denotation is linked in by one store after its own link
+    @benignRace("linked in by one store after a release fence on a concurrent base; a reader sees the ring before or after")
     protected var nextInRun: SingleDenotation = this
 
     /** The version of this SingleDenotation that was valid in the first phase
