@@ -32,7 +32,7 @@ import scala.annotation.internal.{benignRace, cache, lazyFact, publishedBy, shar
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
-import _root_.dotty.tools.sharing.Published
+import _root_.dotty.tools.sharing.{Payload, Published}
 import dotty.tools.tasty.TastyVersion
 
 import scala.reflect.ClassTag
@@ -109,7 +109,7 @@ object Symbols extends SymUtils {
      *  mode, several readers) that finds the period current sees the
      *  denotation stored before it, never the previous one.
      */
-    @cache @publishedBy("Publish") private var lastDenot: SymDenotation = uninitialized
+    @cache @publishedBy("Publish") private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
     private var checkedPeriod: Published[Period] = Published(Nowhere)
 
     /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
@@ -117,15 +117,14 @@ object Symbols extends SymUtils {
      *  published it is seen whole (`Published`), as in `denot`.
      */
     private def latestDenot: SymDenotation =
-      checkedPeriod.acquire
-      lastDenot
+      lastDenot.after(checkedPeriod.acquired)
 
     /** `latestDenot` for a reader with a context: the acquire only when readers are concurrent, so that the batch
      *  compiler's hottest readers (`isTerm`, `isType`) pay a field test, not a barrier.
      */
     private def latestDenotIn(using Context): SymDenotation =
-      if ctx.base.concurrent then checkedPeriod.acquire
-      lastDenot
+      if ctx.base.concurrent then lastDenot.after(checkedPeriod.acquired)
+      else lastDenot.peek // one thread
 
     private[core] def invalidateDenotCache(): Unit = { checkedPeriod.setPlain(Nowhere) }
 
@@ -134,15 +133,16 @@ object Symbols extends SymUtils {
      */
     private[core] def denot_=(d: SymDenotation): Unit = {
       util.Stats.record("Symbol.denot_=")
-      lastDenot = d
-      checkedPeriod.release(Nowhere)
+      checkedPeriod.publishing(Nowhere):
+        lastDenot := d
     }
 
     /** The current denotation of this symbol */
     final def denot(using Context): SymDenotation = {
       util.Stats.record("Symbol.denot")
-      if checkedPeriod.acquire == ctx.period then lastDenot
-      else computeDenot(lastDenot)
+      val checked = checkedPeriod.acquired
+      if checked.value == ctx.period then lastDenot.after(checked)
+      else computeDenot(lastDenot.after(checked))
     }
 
     private def computeDenot(lastd: SymDenotation)(using Context): SymDenotation = {
@@ -165,8 +165,8 @@ object Symbols extends SymUtils {
       val newd = lastd.current.asInstanceOf[SymDenotation]
       if newd.exists || lastd.initial.validFor.firstPhaseId <= ctx.phaseId then
         // the denotation first, then the period that publishes it
-        lastDenot = newd
-        checkedPeriod.release(ctx.period)
+        checkedPeriod.publishing(ctx.period):
+          lastDenot := newd
       else
         // We are trying to bring forward a symbol that is defined only at a later phase
         // (typically, a nested Java class, invisible before erasure).

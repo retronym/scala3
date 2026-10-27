@@ -48,7 +48,7 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
-import _root_.dotty.tools.sharing.{Published, Stamped}
+import _root_.dotty.tools.sharing.{Payload, Published, Stamped}
 
 object Types extends TypeUtils {
 
@@ -2363,8 +2363,8 @@ object Types extends TypeUtils {
     // Some readers (`signature`, `denotationIsCurrent`, `withDenot`, ...) load it without the period: they take it as a
     // hint and check its `validFor` before use, or recompute, so the annotation is disputed by the extractor on those sites.
     @cache @publishedBy("Publish")
-    private var lastDenotation: Denotation | Null = null
-    private var lastSymbol: Symbol | Null = null
+    private var lastDenotation: Payload[NamedType, "checkedPeriod", Denotation | Null] = Payload(null)
+    private var lastSymbol: Payload[NamedType, "checkedPeriod", Symbol | Null] = Payload(null)
     private var checkedPeriod: Published[Period] = Published(Nowhere)
     @cache @benignRace("a Byte computed from the same prefix, written whole")
     private var myStableHash: Byte = 0
@@ -2396,7 +2396,7 @@ object Types extends TypeUtils {
        *  computed before erasure, since some symbols change their signature at erasure.
        */
       def computeSignature(using Context): Signature =
-        val lastd = lastDenotation
+        val lastd = lastDenotation.peek // a hint: the signature is recomputed in each run
         if lastd != null then sigFromDenot(lastd)
         else if ctx.erasedTypes then atPhase(erasurePhase)(computeSignature)
         else symbol.asSeenFrom(prefix).signature
@@ -2413,7 +2413,7 @@ object Types extends TypeUtils {
      */
     private def currentSignature(using Context): Signature =
       mySignature.peek:
-        val lastd = lastDenotation
+        val lastd = lastDenotation.peek // a hint, as in `signature`
         if lastd != null then sigFromDenot(lastd)
         else if ctx.erasedTypes then atPhase(erasurePhase)(currentSignature)
         else
@@ -2432,7 +2432,8 @@ object Types extends TypeUtils {
       // We can rely on checkedPeriod (unlike in the definition of `denot` below)
       // because SymDenotation#installAfter never changes the symbol.
       // (An acquire read: `setDenot` stores the symbol before the period.)
-      if checkedPeriod.acquire == ctx.period then lastSymbol.asInstanceOf[Symbol]
+      val checked = checkedPeriod.acquired
+      if checked.value == ctx.period then lastSymbol.after(checked).asInstanceOf[Symbol]
       else computeSymbol
 
     private def computeSymbol(using Context): Symbol =
@@ -2440,7 +2441,7 @@ object Types extends TypeUtils {
         case sym: Symbol =>
           if (sym.isValidInCurrentRun) sym else denot.symbol
         case name =>
-          (if (denotationIsCurrent) lastDenotation.asInstanceOf[Denotation] else denot).symbol
+          (if (denotationIsCurrent) lastDenotation.peek.asInstanceOf[Denotation] else denot).symbol
       if checkedPeriod.plain != Nowhere then checkedPeriod.release(ctx.period)
       result
 
@@ -2448,7 +2449,7 @@ object Types extends TypeUtils {
      *  current run.
      */
     def denotationIsCurrent(using Context): Boolean =
-      lastDenotation match
+      lastDenotation.peek match // its validity is checked here
         case null => false
         case ld => ld.validFor.runId == ctx.runId
 
@@ -2463,7 +2464,7 @@ object Types extends TypeUtils {
      */
     final def currentSymbol(using Context): Symbol = designator match {
       case sym: Symbol => sym
-      case _ => if (denotationIsCurrent) lastDenotation.nn.symbol else NoSymbol
+      case _ => if (denotationIsCurrent) lastDenotation.peek.nn.symbol else NoSymbol
     }
 
     /** Like `currentSymbol`, but force the denotation if the symbol isn't valid.
@@ -2479,7 +2480,8 @@ object Types extends TypeUtils {
      *  Used to get the class underlying a ThisType.
      */
     private[Types] def stableInRunSymbol(using Context): Symbol =
-      if checkedPeriod.acquire.runId == ctx.runId then lastSymbol.nn
+      val checked = checkedPeriod.acquired
+      if checked.value.runId == ctx.runId then lastSymbol.after(checked).nn
       else symbol
 
     def info(using Context): Type = denot.info
@@ -2492,11 +2494,11 @@ object Types extends TypeUtils {
       // the period first (an acquire load), then the denotation it publishes:
       // read the other way round, another reader's `setDenot` between the two
       // reads pairs a null denotation with a current period (I78)
-      val checked = checkedPeriod.acquire
-      val lastd = lastDenotation.asInstanceOf[Denotation]
+      val checked = checkedPeriod.acquired
+      val lastd = lastDenotation.after(checked).asInstanceOf[Denotation]
       // Even if checkedPeriod == now we still need to recheck lastDenotation.validFor
       // as it may have been mutated by SymDenotation#installAfter
-      if checked != Nowhere && lastd.validFor.contains(ctx.period) then lastd
+      if checked.value != Nowhere && lastd.validFor.contains(ctx.period) then lastd
       else computeDenot
 
     private def computeDenot(using Context): Denotation = {
@@ -2515,7 +2517,7 @@ object Types extends TypeUtils {
 
       def fromDesignator = designator match {
         case name: Name =>
-          val sym = lastSymbol
+          val sym = lastSymbol.peek // a hint: whether the last one was private
           val allowPrivate = sym == null || (sym == NoSymbol) || sym.lastKnownDenotation.flagsUNSAFE.is(Private)
           finish(memberDenot(name, allowPrivate))
         case sym: Symbol =>
@@ -2530,7 +2532,7 @@ object Types extends TypeUtils {
             finish(symd.current)
       }
 
-      lastDenotation match {
+      lastDenotation.peek match { // its validity is checked below
         case lastd0: SingleDenotation =>
           val lastd = lastd0.skipRemoved
           var needsRecompute = false
@@ -2585,7 +2587,7 @@ object Types extends TypeUtils {
       if (!d.exists && !allowPrivate && ctx.mode.is(Mode.Interactive))
         // In the IDE we might change a public symbol to private, and would still expect to find it.
         d = memberDenot(prefix, name, true)
-      if (!d.exists && ctx.isAfterTyper && lastDenotation.isInstanceOf[SymDenotation])
+      if (!d.exists && ctx.isAfterTyper && lastDenotation.peek.isInstanceOf[SymDenotation])
         // name has changed; try load in earlier phase and make current
         d = atPhase(ctx.phaseId - 1)(memberDenot(name, allowPrivate)).current
       if (d.isOverloaded)
@@ -2645,13 +2647,14 @@ object Types extends TypeUtils {
       if ctx.base.checkNoDoubleBindings then
         checkSymAssign(denot.symbol)
 
-      lastDenotation = denot
-      lastSymbol = denot.symbol
-      // the period publishes the two fields above (a release store)
-      checkedPeriod.release(if prefix.isProvisional then Nowhere else ctx.period)
+      // the period publishes the two fields (a release store after them)
+      val sym = denot.symbol
+      checkedPeriod.publishing(if prefix.isProvisional then Nowhere else ctx.period):
+        lastDenotation := denot
+        lastSymbol := sym
       designator match {
-        case sym: Symbol if designator ne lastSymbol.nn =>
-          designator = lastSymbol.asInstanceOf[Designator{ type ThisName = self.ThisName }]
+        case dsym: Symbol if designator ne sym =>
+          designator = sym.asInstanceOf[Designator{ type ThisName = self.ThisName }]
         case _ =>
       }
       checkDenot()
@@ -2664,7 +2667,7 @@ object Types extends TypeUtils {
     private def checkSymAssign(sym: Symbol)(using Context) = {
       def selfTypeOf(sym: Symbol) =
         if (sym.isClass) sym.asClass.givenSelfType else NoType
-      val lastSym = lastSymbol
+      val lastSym = lastSymbol.peek // a check of this thread's own last store
       assert(
         (lastSym == null)
         ||
@@ -2901,7 +2904,7 @@ object Types extends TypeUtils {
           if denot.symbol.exists then withSym(denot.symbol)
           else if denot.isOverloaded then withName(denot.name)
           else this
-        val lastDenot = adapted.lastDenotation
+        val lastDenot = adapted.lastDenotation.peek // a hint: whether the last one was a SymDenotation
         denot match
           case denot: SymDenotation
           if lastDenot != null
@@ -2911,7 +2914,7 @@ object Types extends TypeUtils {
             // In this case the new SymDenotation might be valid for all phases, which means
             // we would not recompute the denotation when travelling to an earlier phase, maybe
             // in the next run. We fix that problem by creating a UniqueRefDenotation instead.
-            core.println(i"overwrite ${adapted.toString} / ${adapted.lastDenotation}, ${adapted.lastDenotation.getClass} with $denot at ${ctx.phaseId}")
+            core.println(i"overwrite ${adapted.toString} / $lastDenot, ${lastDenot.getClass} with $denot at ${ctx.phaseId}")
             adapted.setDenot(
               UniqueRefDenotation(
                 denot.symbol, denot.info,
@@ -2939,7 +2942,7 @@ object Types extends TypeUtils {
       if (prefix eq this.prefix) this
       else if !NamedType.validPrefix(prefix) then
         throw TypeError(em"invalid new prefix $prefix cannot replace ${this.prefix} in type $this")
-      else if (lastDenotation == null) NamedType(prefix, designator)
+      else if (lastDenotation.peek == null) NamedType(prefix, designator)
       else designator match {
         case sym: Symbol =>
           if (infoDependsOnPrefix(sym, prefix) && !prefix.isArgPrefixOf(sym)) {
