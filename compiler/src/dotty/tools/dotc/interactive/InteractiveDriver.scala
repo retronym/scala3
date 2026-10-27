@@ -491,22 +491,23 @@ class InteractiveDriver(
 
     def skippedAt(target: Span): Option[Run.SkippedStat] = synchronized(skipped.find(_.stat.span.contains(target)))
 
-    /** What a request at `target` finds: the statement typed already, a
-     *  skipped statement to resume into (claimed for this reader: removed from
-     *  `skipped`, in `typing`), or a statement another reader is typing.
+    /** What a request at `target` finds: the statements it touches typed
+     *  already, skipped statements to resume into (the one a point lands in,
+     *  every one a range touches; claimed for this reader together: removed
+     *  from `skipped`, in `typing`), or one that another reader is typing.
      */
     def claim(target: Span): Session.Claim = synchronized {
       // a statement whose typing a cancellation unwound is neither typed nor
       // skipped until a write replaces it: it is not "typed" (finding I56,
       // a read of a unit without the statement, an empty answer)
-      if pendingAbandons.exists(_.stat.span.contains(target)) then Session.Claim.Abandoned
-      else if typing.keySet.iterator().asScala.exists(_.stat.span.contains(target)) then Session.Claim.Wait
-      else skipped.find(_.stat.span.contains(target)) match
-        case None => Session.Claim.Typed
-        case Some(sk) =>
-          skipped = skipped.filterNot(_ eq sk)
-          typing.put(sk, Thread.currentThread)
-          Session.Claim.Claimed(sk)
+      if pendingAbandons.exists(_.stat.span.touches(target)) then Session.Claim.Abandoned
+      else if typing.keySet.iterator().asScala.exists(_.stat.span.touches(target)) then Session.Claim.Wait
+      else skipped.filter(_.stat.span.touches(target)) match
+        case Nil => Session.Claim.Typed
+        case sks =>
+          skipped = skipped.filterNot(sk => sks.exists(_ eq sk))
+          sks.foreach(typing.put(_, Thread.currentThread))
+          Session.Claim.Claimed(sks)
     }
 
     /** Wait until no reader is typing the statement at `target`, polling the
@@ -520,12 +521,12 @@ class InteractiveDriver(
 
     private def awaitTyping0(target: Span): Unit = {
       val since = System.nanoTime()
-      while typing.keySet.iterator().asScala.exists(_.stat.span.contains(target)) do
+      while typing.keySet.iterator().asScala.exists(_.stat.span.touches(target)) do
         if reader.cancelChecker() then
           reader.cancelledByChecker = true
           throw CompilationUnit.CancelledCompilation()
         if writerPending then throw CompilationUnit.CancelledCompilation()
-        giveUpOnLeakedClaims(_.stat.span.contains(target), since)
+        giveUpOnLeakedClaims(_.stat.span.touches(target), since)
         wait(20)
     }
 
@@ -570,6 +571,9 @@ class InteractiveDriver(
       skipped = sk :: skipped
       notifyAll()
     }
+
+    /** The skipped statements that `target`, an offset or a range, touches. */
+    def skippedTouching(target: Span): List[Run.SkippedStat] = synchronized(skipped.filter(_.stat.span.touches(target)))
 
     /** Is this the session of `uri` on the content of `source`? */
     def isOn(uri: URI, source: SourceFile): Boolean =
@@ -728,15 +732,18 @@ class InteractiveDriver(
     private def assertOwnSource(sk: Run.SkippedStat): Unit =
       assert(sk.ctx.source eq unit.source, s"skipped statement at ${sk.stat.span} is from ${sk.ctx.source}, not the session's ${unit.source}")
 
-    /** Type the claimed skipped statement `sk` in the run and context it was
-     *  skipped in, with `target` as the target for the statements nested in
-     *  it, and splice the result into the unit's typed tree. `None` when there
-     *  is no typer state left to resume in: the caller starts a fresh run.
+    /** Type the claimed skipped statements `sks` (the one a point target
+     *  lands in, or all those a range target touches) in the run and contexts
+     *  they were skipped in, with `target` as the target for the statements
+     *  nested in them, and splice the results into the unit's typed tree in
+     *  one pass. `None` when one has no typer state left to resume in: the
+     *  claims are given back and the caller starts a fresh run.
      */
-    def resume(sk: Run.SkippedStat, target: Span): Option[List[Diagnostic]] =
-      liveContext(sk.ctx) match
-        case None => unclaim(sk); None
-        case Some(ctx0) => Some(resumeIn(sk, ctx0, target))
+    def resume(sks: List[Run.SkippedStat], target: Span): Option[List[Diagnostic]] =
+      val inOrder = sks.sortBy(_.stat.span.start)
+      val live = inOrder.map(sk => liveContext(sk.ctx))
+      if live.exists(_.isEmpty) then { inOrder.foreach(unclaim); None }
+      else Some(resumeIn(inOrder.zip(live.map(_.get)), target))
 
     /** The recorded context of a skipped statement, in the nearest typer
      *  state that can still take constraints. A statement skipped inside an
@@ -758,38 +765,53 @@ class InteractiveDriver(
         case null => None
         case ts1 => Some(ctx0.fresh.setTyperState(ts1))
 
-    private def resumeIn(sk: Run.SkippedStat, ctx0: Context, target: Span): List[Diagnostic] =
+    private def resumeIn(batch: List[(Run.SkippedStat, Context)], target: Span): List[Diagnostic] =
       beginTyping()
-      assertOwnSource(sk)
-      reader.clearTargeting()
-      reader.typingTarget = target
-      var released = false
+      batch.foreach((sk, _) => assertOwnSource(sk))
+      val typed = List.newBuilder[(Run.SkippedStat, List[Tree])]
+      // the statements of the batch not yet settled: typed and spliced, given
+      // back, abandoned, or released by a failure (I61)
+      var unsettled = batch.map(_._1)
       try
-        // typed in its own typer state, committed into the session's only once
-        // the statement is typed: a cancellation drops its constraints with it
-        val ctx1 = ctx0.fresh.setNewTyperState()
-        reader.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
-        // a resumed block statement continues the targeting of its block
-        reader.targetingTyperState = ctx1.typerState
-        val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
+        for (sk, ctx0) <- batch do
+          reader.clearTargeting()
+          reader.typingTarget = target
+          try
+            // typed in its own typer state, committed into the session's only once
+            // the statement is typed: a cancellation drops its constraints with it
+            val ctx1 = ctx0.fresh.setNewTyperState()
+            reader.targetNextStats(sk.owner, sk.inBlock)(using ctx1)
+            // a resumed block statement continues the targeting of its block
+            reader.targetingTyperState = ctx1.typerState
+            val (stats, _) = ctx1.typer.typedStats(sk.stat :: Nil, sk.owner)(using ctx1)
+            synchronized {
+              completionLocked(ctx1.typerState.commit()(using ctx0))
+              collectSkipped()
+            }
+            typed += ((sk, stats))
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            // the ones typed so far are kept (spliced below); the aborted one
+            // is replaced or poisons the session; the rest stay skipped
+            deferAbandon(sk)
+            unsettled = unsettled.filterNot(s => (s eq sk) || typed.result().exists(_._1 eq s))
+            unsettled.foreach(unclaim)
+            unsettled = Nil
+            throw ex
         synchronized {
-          completionLocked(ctx1.typerState.commit()(using ctx0))
-          collectSkipped()
-          assert(!skipped.exists(_.stat.span.contains(target)), s"target $target is still skipped in $uri after the resume of ${sk.stat.span}")
-          spliceAll(List((sk, stats)))(using ctx0)
-          typing.remove(sk)
-          notifyAll()
-          released = true
-          diagnostics
+          assert(!skipped.exists(_.stat.span.touches(target)), s"target $target is still skipped in $uri after the resume of ${batch.map(_._1.stat.span).mkString(", ")}")
         }
-      catch case ex: CompilationUnit.CancelledCompilation =>
-        deferAbandon(sk)
-        released = true
-        throw ex
+        diagnostics
       finally
         reader.clearTargeting()
-        // any other exception: the claim is not left behind
-        if !released then releaseFailed(sk)
+        val entries = typed.result()
+        synchronized {
+          if entries.nonEmpty then spliceAll(entries)(using batch.head._2)
+          entries.foreach((sk, _) => typing.remove(sk))
+          notifyAll()
+        }
+        unsettled = unsettled.filterNot(s => entries.exists(_._1 eq s))
+        // any other exception: no claim is left behind
+        unsettled.foreach(releaseFailed)
 
     /** Does `owner` define `name` in this file: the companion of a statement
      *  to replace. A companion is not replaced alone: the synthetic members a
@@ -968,7 +990,7 @@ class InteractiveDriver(
   private object Session:
     enum Claim:
       case Typed, Wait, Abandoned
-      case Claimed(sk: Run.SkippedStat)
+      case Claimed(sks: List[Run.SkippedStat])
 
   // written only by write actions (a run), read by anyone
   @volatile private var mySession: Session | Null = null
@@ -1040,6 +1062,9 @@ class InteractiveDriver(
     val p = uri.getPath
     (if p == null then uri.toString else p).split('/').last
 
+  private def showTarget(target: Span): String =
+    if target.isZeroExtent then s"${target.start}" else s"${target.start}-${target.end}"
+
   /** What the session of `uri` did, for the log. */
   private def sessionSummary(uri: URI): String =
     val trees = sessionOf(uri) match
@@ -1076,9 +1101,11 @@ class InteractiveDriver(
   /** Type `source` only along the path to `target`: of the statements of
    *  the outermost package and of each template on the path, only the one
    *  containing the target, as scalac's `typedStats` does for its target
-   *  position. Or resume the previous targeted run of `uri` if it was on the
+   *  position. A target that is a range (a visible range, for inlay hints and
+   *  semantic tokens) types every statement it touches, at each level. Or
+   *  resume the previous targeted run of `uri` if it was on the
    *  same content: a target within what is typed is served without typing
-   *  anything, a target within a skipped statement types that statement in
+   *  anything, a target within skipped statements types those statements in
    *  the same run and context, so that the denotations and completers of
    *  everything else stay valid. Any other content starts a fresh targeted
    *  run. The compilation unit of `uri` then holds the typed part of the
@@ -1100,7 +1127,7 @@ class InteractiveDriver(
     requestReader()
     val before = mySession
     val skippedBefore = if before == null then -1 else before.skippedNow.size
-    logged(s"runUpTo ${fileNameOf(uri)}@${target.start}")(readUpTo0(uri, source, target)(read)) {
+    logged(s"runUpTo ${fileNameOf(uri)}@${showTarget(target)}")(readUpTo0(uri, source, target)(read)) {
       val s = mySession
       val how =
         if s eq null then "whole-file"
@@ -1140,10 +1167,10 @@ class InteractiveDriver(
                   // a write first (the re-index of the statement), then again
                   result = None
                   done = true
-                case Session.Claim.Claimed(sk) =>
+                case Session.Claim.Claimed(sks) =>
                   // A statement skipped inside a block left a stub in the typed
                   // `Block`; the resume replaces the stub by the typed statement.
-                  result = s.resume(sk, target) match
+                  result = s.resume(sks, target) match
                     case Some(diags) => Some(read(readCtx, s.unit, diags))
                     case None => None // no typer state left to resume in: a fresh run
                   done = true
@@ -1182,7 +1209,7 @@ class InteractiveDriver(
 
   /** A fresh run (a writer: called under the write lock). */
   private def run(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
-    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${target.start}" else " (whole file)"}")(run0(uri, source, target)) {
+    logged(s"run ${fileNameOf(uri)}${if target.exists then s"@${showTarget(target)}" else " (whole file)"}")(run0(uri, source, target)) {
       sessionSummary(uri)
     }
 
