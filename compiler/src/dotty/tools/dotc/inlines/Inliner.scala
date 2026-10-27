@@ -221,6 +221,7 @@ end Inliner
  *  @param  call         the original call to an inlineable method
  *  @param  rhsToInline  the body of the inlineable method that replaces the call.
  */
+// one Inliner per inline call (or per inlined parent trait): its buffers and proxy maps live for that expansion
 class Inliner(val call: tpd.Tree)(using Context):
   import tpd.*
   import Inliner.*
@@ -964,6 +965,8 @@ class Inliner(val call: tpd.Tree)(using Context):
             case info: ConstantType if tpe.symbol.isStableMember => return info
             case _ =>
           }
+          // in the IDE an inline method's body keeps its references to non-public members (PrepareInlineable.checkOnly)
+          if ctx.mode.is(Mode.Interactive) && tpe.isTerm then return tpe
         case _ =>
       }
       super.ensureAccessible(tpe, superAccess, pos)

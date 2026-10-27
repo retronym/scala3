@@ -18,6 +18,7 @@ object MatchTypeTrace:
     case EmptyScrutinee(scrut: Type)
   import TraceEntry.*
 
+  // one trace per `record`, reached through the recording reader's context
   private class MatchTrace:
     var entries: List[TraceEntry] = Nil
 

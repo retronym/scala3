@@ -88,6 +88,8 @@ class DottyUnpickler(
   ): TreeSectionUnpickler =
     new TreeSectionUnpickler(compilationUnitInfo, posUnpicklerOpt, commentUnpicklerOpt, withBestEffortTasty)
 
+  override protected def rootTreesClaim(using Context): AnyRef = treeUnpickler.claimKey
+
   protected def computeRootTrees(using Context): List[Tree] = treeUnpickler.unpickle(mode)
 
   private var ids: Array[String] | Null = null
