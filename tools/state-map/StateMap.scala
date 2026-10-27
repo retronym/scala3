@@ -28,7 +28,7 @@ object Rules:
     Rule("B.unpickler", "B", "a field of a class in `core.tasty`, `core.classfile` or `core.unpickleScala2`: lazy TASTy/classfile reads (`symAtAddr`, `treeAtAddr`)"),
     Rule("B.scope", "B", "a field of `Scopes.MutableScope`: completions enter into shared scopes that rehash on `enter`"),
     Rule("C.caching", "C", "read or written in a stamp, value or setter argument of a `Caching` helper (the lint of `StampedCachesTest`)"),
-    Rule("C.stamped", "C", "read or written in a cell or setter argument of a `Stamped` helper: a value and its stamp as one immutable cell"),
+    Rule("C.stamped", "C", "the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object"),
     Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
     Rule("C.publish", "C", "named by a `VarHandle` in `util/Publish.java`, or read or written in a method that calls `util.Publish` on the same object (the value the stamp publishes)"),
     Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
@@ -56,7 +56,7 @@ object Rules:
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
     Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.claim` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
-    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; in a `Stamped` cell/setter argument → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
+    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: in a `Caching` stamp/value/setter argument → Caching; the field a `Stamped` extension is called on → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
   )
 
   val reach: List[Rule] = List(
@@ -179,7 +179,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       (owner, fn.name) match
         case ("dotty.tools.sharing.Caching", "stamped" | "stampedIf" | "stampedWhen" | "peek") =>
           Some("Caching" -> Set("stamp", "value", "setStamp", "setValue"))
-        case ("dotty.tools.sharing.Stamped", "cached" | "cachedIf" | "peek") => Some("Stamped" -> Set("cell", "setCell"))
+        case ("dotty.tools.sharing.Stamped", "cached" | "cachedIf" | "peek") => Some("Stamped" -> Set("field"))
         // a claim's protection is its key's kind (`claimProtection`), read where the call's `ClaimKind` is known
         case ("dotty.tools.sharing.Sharing", "claim" | "claimAt") => Some("claim" -> Set("op"))
         case ("dotty.tools.sharing.Sharing", "once") => Some("claim" -> Set("compute"))
@@ -461,7 +461,7 @@ object StateMap:
   // one entry per line, so that a diff of two extractions is a diff of fields
   def jtop(kvs: (String, String)*): String = kvs.map((k, v) => s"${jstr(k)}: $v").mkString("{\n", ",\n", "\n}\n")
 
-  // `fields` are the stamp and value of a `Caching` call, the cell of a `Stamped` one
+  // `fields` are the stamp and value of a `Caching` call, the receiver of a `Stamped` one
   final case class CachingSite(file: String, line: Int, protection: String, helper: String, fields: List[String])
 
   /** The `Caching` and `Stamped` helper calls in the compiler's sources, by text (`Caching`'s as `StampedCachesTest`
@@ -469,14 +469,18 @@ object StateMap:
   def cachingSites(repoRoot: Path): List[CachingSite] =
     val src = repoRoot.resolve("compiler/src/dotty/tools/dotc")
     val CachingCall = raw"""Caching\.(stamped|stampedIf|stampedWhen|peek)\(\s*(\w+)\s*,\s*(\w+)\s*\)""".r
-    val StampedCall = raw"""Stamped\.(cached|cachedIf|peek)\(\s*(\w+)\s*\)""".r
+    val StampedCall = raw"""(\w+)\.(cached|cachedIf|peek)\b""".r
     Files.walk(src).iterator.asScala.filter(_.toString.endsWith(".scala")).toList.sorted
       .flatMap { p =>
         val text = Files.readString(p)
         val rel = repoRoot.relativize(p).toString
         def line(m: scala.util.matching.Regex.Match) = text.substring(0, m.start).count(_ == '\n') + 1
         CachingCall.findAllMatchIn(text).map(m => CachingSite(rel, line(m), "Caching", m.group(1), List(m.group(2), m.group(3)))).toList
-          ++ StampedCall.findAllMatchIn(text).map(m => CachingSite(rel, line(m), "Stamped", m.group(1), List(m.group(2)))).toList
+          ++ { // a call on a field declared `Stamped[...]` in the file, not another `cached` or `peek`
+            val stampedFields = raw"""var (\w+)\s*:\s*Stamped\[""".r.findAllMatchIn(text).map(_.group(1)).toSet
+            StampedCall.findAllMatchIn(text).filter(m => stampedFields(m.group(1)))
+              .map(m => CachingSite(rel, line(m), "Stamped", m.group(2), List(m.group(1)))).toList
+          }
       }
 
   def main(args: Array[String]): Unit =
