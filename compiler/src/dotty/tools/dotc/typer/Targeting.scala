@@ -21,7 +21,10 @@ import collection.mutable
  *
  *   - always typed: imports and exports shape later contexts; package clauses
  *     are containers; zero-extent and synthetic definitions are what the next
- *     statement is built from.
+ *     statement is built from. A synthetic definition at the package level
+ *     (the `<src>$package` object holding a file's top-level definitions, a
+ *     case class's companion) is skipped like any other: nothing after it is
+ *     built from its typed tree, and typed whole it is the whole file.
  *   - source check: a span is an offset in its own source; an inlined macro
  *     body carries the macro's. (`Targeting.of`)
  *   - typed whole: a class or block reached other than along the path (typed
@@ -83,7 +86,7 @@ private[typer] final class Targeting(
     val skipped =
       stat.span.exists && !stat.span.isZeroExtent
       && !stat.isInstanceOf[untpd.PackageDef]
-      && !isSyntheticDef(stat) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
+      && !(isSyntheticDef(stat) && !exprOwner.is(PackageClass)) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
       && !neededInBlock.contains(stat)
       && !stat.span.touches(target)
       && !(stat eq nextAfterTarget)
