@@ -51,6 +51,44 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   private[dotc] val comparers = new mutable.ArrayBuffer[TypeComparer]
   private[dotc] var comparersInUse: Int = 0
 
+  // ---- Inlining overflow (`Inlines.inlineCall`, `Implicits.tryImplicit`) ----
+
+  /** Flag to suppress inlining, set after an overflow and reset when this reader has backed out of the call that
+   *  overflowed. It is the reader's own: another reader's inline calls are not affected.
+   */
+  private[dotc] var stopInlining: Boolean = false
+
+  /** The printer's recursion limit for this reader. The base's initial context holds one `DefaultMessageLimiter`,
+   *  which every context derived from it shares; its depth counter is a plain field, so readers printing at once
+   *  added up their depths in it, and a lost update left it high for good (labels printed with `...`). Used in its
+   *  place on a concurrent base (`PlainPrinter.limiter`).
+   */
+  private[dotc] val messageLimiter: printing.DefaultMessageLimiter = printing.DefaultMessageLimiter()
+
+  // ---- The stamp of what the request read (`InteractiveDriver.withCancelChecker`) ----
+
+  /** The driver's write count when this reader last left the read or write lock, or -1: what the request's result
+   *  was computed from. The request is served again if a write action ran after it.
+   */
+  private[dotc] var resultStamp: Long = -1
+
+  // ---- Rec types opened by `findMember` (`Type.goRec`), on a concurrent base ----
+
+  /** The prefix each rec type is opened with in this reader's `findMember`s in progress: the re-entry guard that a
+   *  batch base keeps in `RecType.openedWithPrefix`, where another reader would set and reset it.
+   */
+  private[dotc] val openedRecTypes = java.util.IdentityHashMap[core.Types.RecType, core.Types.Type]()
+
+  // ---- Debug output (`reporting.trace`, `-explain-cycles`) ----
+
+  /** The margin of `trace` output. */
+  private[dotc] var indent: Int = 0
+
+  /** The cyclic references being completed by this reader, pushed and popped by `CyclicReference.trace` when
+   *  `Run.traceCycles` is set.
+   */
+  private[dotc] val cyclicReferenceTrace: CyclicReference.Trace = new CyclicReference.Trace()
+
   // ---- Fuel for recursive operations (`Context.handleRecursive`) ----
 
   // `recursiveOperations` is preallocated with `maxFuel` slots, so that
@@ -82,6 +120,28 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   /** The set of named types on which a currently active invocation
    *  of underlying during a controlled operation exists. */
   private[dotc] val pendingUnderlying: util.HashSet[Type] = util.HashSet[Type]()
+
+  /** The types whose base type for a class is being computed
+   *  (`ClassDenotation.baseTypeOf`) on this reader, with several readers: the
+   *  in-progress mark that the single-reader cache keeps as a `NoPrefix`
+   *  sentinel, per class denotation as that cache is.
+   */
+  private val pendingBaseTypes: util.EqHashMap[AnyRef, util.EqHashSet[Type]] = util.EqHashMap()
+  def pendingBaseTypesOf(cls: AnyRef): util.EqHashSet[Type] =
+    pendingBaseTypes.getOrElseUpdate(cls, util.EqHashSet[Type]())
+
+  // ---- The typer's name-resolution scratch (`Typer.findRef`) ----
+
+  /** The set of all root import symbols that have been encountered as a
+   *  qualifier of an import so far, during one lookup (saved and restored
+   *  around `Typer.findRef`).
+   */
+  var unimported: Set[Symbol] = Set()
+
+  /** Temporary data item for a single call to `typedIdent`: the symbol that
+   *  would be found under Scala2 mode but is not in dotty.
+   */
+  var foundUnderScala2: Type = Types.NoType
 
   // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
   //
@@ -191,6 +251,50 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
     if run != null then run.markTainted()
     Run.CycleStats.unwound(sym, ex)
 
+  // ---- Waits on the completion lock (several readers, see `CompletionLock`) ----
+
+  /** The completion root this reader is waiting for, if any (parallel
+   *  readers, `CompletionRoots`): the edge of the wait-for graph that the
+   *  cycle check follows.
+   */
+  @volatile var waitingOn: core.CompletionRoots.Claim | Null = null
+
+  /** The waits this reader backed off from because they would have closed a
+   *  wait-for cycle (`CompletionRoots.backOff`), for tests and the x-ray.
+   */
+  @volatile var waitCyclesBackedOff: Int = 0
+
+  /** How many Namer completions this reader is inside now (parallel
+   *  readers): a reader inside one never backs off from a wait-for cycle
+   *  (I74), since a Namer completion cannot run twice.
+   */
+  @volatile var namerCompletionDepth: Int = 0
+
+  /** The wait-for cycles between Namer completions this reader reported as a
+   *  `CyclicReference` (the single-reader answer, I74). */
+  @volatile var cyclesRaised: Int = 0
+
+  /** Time this reader spent waiting for a statement another reader was
+   *  typing (`InteractiveDriver`'s claims), in nanoseconds.
+   */
+  @volatile var statementWaitNanos: Long = 0L
+
+  /** Time this reader spent blocked on the completion lock, in nanoseconds. */
+  @volatile var lockWaitNanos: Long = 0L
+  @volatile var lockWaitCount: Int = 0
+
+  /** The waits of at least `Reader.recordedWaitNanos`, with what the lock
+   *  holder was doing when the wait began: its root (the outermost
+   *  acquisition) and its innermost, and the holder's thread.
+   */
+  val lockWaits: java.util.concurrent.ConcurrentLinkedQueue[Reader.LockWait] = new java.util.concurrent.ConcurrentLinkedQueue()
+
+  def recordLockWait(nanos: Long, root: AnyRef | Null, current: AnyRef | Null, holder: String): Unit =
+    lockWaitNanos += nanos
+    lockWaitCount += 1
+    if nanos >= Reader.recordedWaitNanos then
+      lockWaits.add(Reader.LockWait(nanos, String.valueOf(root), String.valueOf(current), holder))
+
   // ---- The cancellation checkpoint (`Typer.typed`) ----
 
   private var typedTreeCount = 0
@@ -222,9 +326,18 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
 
   private def pollCancellation()(using Context): Unit =
     if ctx.mode.is(Mode.Interactive) then
-      val run = ctx.run
-      if (run != null && !run.canProgress()) || cancelChecker() then
+      if cancelChecker() then
+        cancelledByChecker = true
         throw CompilationUnit.CancelledCompilation()
+      val run = ctx.run
+      if run != null && !run.canProgress() then
+        throw CompilationUnit.CancelledCompilation()
+
+  /** Did the last cancellation of this reader come from its own checker (the
+   *  client's), as opposed to the driver's sticky flag (a writer pre-empting
+   *  the reader, which the driver retries; see `InteractiveDriver.reading`)?
+   */
+  var cancelledByChecker: Boolean = false
 
   /** Forget the type comparers (`ContextState.reset`, at the start of a run):
    *  a comparer caches what depends on the run's settings and definitions.
@@ -232,8 +345,17 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   private[dotc] def reset(): Unit =
     comparers.clear()
     comparersInUse = 0
+    stopInlining = false
+    indent = 0
+    cyclicReferenceTrace.clear()
 
 object Reader:
+  /** A wait on the completion lock and what the holder was doing. */
+  final case class LockWait(nanos: Long, root: String, current: String, holder: String)
+
+  /** Waits shorter than this are counted but not itemised. */
+  val recordedWaitNanos: Long = 200_000L
+
   private[dotc] val neverCancelled: () => Boolean = () => false
 
   /** The reader of a `ContextBase` before its settings are known: a few fuel

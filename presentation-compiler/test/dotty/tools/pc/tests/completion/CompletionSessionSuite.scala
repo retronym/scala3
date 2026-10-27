@@ -443,6 +443,48 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  @Test def `a-claim-is-released-when-its-typing-throws` =
+    // Finding I61: a resume claims its statement (the session's `typing`),
+    // and gave it back only on a cancellation. Any other exception escaping
+    // the statement's typing (here one thrown by the checker at a typer
+    // checkpoint, in a body that forces no completer, so that the run is not
+    // tainted) left the claim behind, and the next request on the statement
+    // waited for ever for a reader that was gone. The claim is now released
+    // and the session poisoned: the next request starts a fresh run and
+    // answers as a whole-file run does.
+    val terms = (1 to 400).map(i => s"$i + $i").mkString("List(", ", ", ").sum")
+    val code =
+      s"""|object Heavy:
+          |  def light: Int = 1
+          |  def heavy: Int = $terms
+          |  def after: Int = heavy.abs
+          |""".stripMargin
+    val uri = URI.create("file:///Heavy.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atHeavy = code.indexOf(", 200 + 200,") + 2
+    val atAbs = code.indexOf(".abs") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      complete("object Warm { val x = 1.to@@ }") // the compiler access is started by a first request
+      val (thrown, poisonedRun, run2, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("light") + 2)) // heavy and after skipped
+        val run1 = d.runIdOf(uri)
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then throw new IllegalStateException("injected") else false }) { d.runUpTo(uri, src, Span(atHeavy)) }; None }
+          catch case ex: IllegalStateException => Some(ex.getMessage)
+        // the same statement again: with the claim left behind, this waited for ever
+        d.runUpTo(uri, src, Span(atHeavy))
+        val run2 = d.runIdOf(uri)
+        val (session, oracle) = completionsVsOracle(d, uri, src, atAbs)
+        (thrown, run1, run2, session, oracle)
+      }
+      println(s"[a-claim-is-released-when-its-typing-throws] thrown=$thrown run=$poisonedRun->$run2; session: ${session.take(6)}; whole-file: ${oracle.take(6)}")
+      assertEquals(Option("injected"), thrown, "the injected exception escapes the request")
+      assert(run2 != poisonedRun, "the session is poisoned: the next request starts a fresh run")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
   @Test def `cancel-inside-a-given-class-completer` =
     // The shape of finding I18 (a given not found after a cancellation, in
     // the same run): a cancellation lands inside the class completer of a

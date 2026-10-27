@@ -4,6 +4,7 @@ import java.io.File
 import java.net.URI
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 import scala.language.unsafeNulls
 import scala.util.Random
 
@@ -121,10 +122,13 @@ class CompletionSoakSuite extends BasePCSuite:
 
   private def labels(driver: InteractiveDriver, source: SourceFile, offset: Int): List[String] =
     driver.compilationUnits.get(uri) match
-      case Some(unit) =>
-        given Context = driver.currentCtx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using driver.currentCtx))
-        Completion.completions(SourcePosition(source, Span(offset)))._2.map(c => c.label + " " + c.description).sorted.distinct
+      case Some(unit) => labels(driver.currentCtx, unit, source, offset)
       case None => List("<no unit>")
+
+  /** The completions at `offset` in `unit`, under `ctx0`: the read action of a request. */
+  private def labels(ctx0: Context, unit: dotty.tools.dotc.CompilationUnit, source: SourceFile, offset: Int): List[String] =
+    given Context = ctx0.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx0))
+    Completion.completions(SourcePosition(source, Span(offset)))._2.map(c => c.label + " " + c.description).sorted.distinct
 
   /** Symbols of the file still completing, over the packages the file declares. */
   private def touched(driver: InteractiveDriver): List[String] =
@@ -238,6 +242,96 @@ class CompletionSoakSuite extends BasePCSuite:
     // A small file is mostly served from what is typed, so few attempts find typing to land in
     org.junit.Assert.assertTrue(s"[$name seed=$seed] the cancellations must land: $cancelled of ${steps / 5} attempts", cancelled >= 1)
 
+  /** Two readers on one driver: the same random walk, issued from two threads
+   *  at once (step 3 of the multi-reader notes). Each request is a read action
+   *  (`readUpTo`): the completions are computed under the read lock, on the
+   *  unit the request typed, so a fresh run by the other thread's edit cannot
+   *  replace the unit before the answer is read. Every answer must still be
+   *  the whole-file oracle's for the content the request was made on; the
+   *  `Touched` check is at the end, once both threads are done (while the
+   *  other thread completes a symbol, `Touched` is legitimately set).
+   */
+  private def soak2(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean = true): Unit =
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try soak20(name, file, seed, steps, parallel)
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  /** `parallel`: with `-Yinteractive-parallel` (step 4: completions with
+   *  owners, readers outside the lock); without, readers serialised with
+   *  completions (step 3).
+   */
+  private def soak20(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean): Unit =
+    val variants = List("a", "b").map(tag => points(file(tag)))
+    val oracle = variants.map { (content, offsets) =>
+      val d = newDriver()
+      val source = SourceFile.virtual(uri, content)
+      d.run(uri, source)
+      offsets.map(o => o -> labels(d, source, o)).toMap
+    }
+    val driver = new InteractiveDriver(if parallel then settings :+ "-Yinteractive-parallel" else settings, CachedLogicalPackage.none)
+    @volatile var variant = 0 // the content both readers work on; an edit switches it
+    val failure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
+    val counts = new java.util.concurrent.ConcurrentHashMap[String, Int]()
+    def count(k: String) = counts.merge(k, 1, _ + _)
+    def walk(thread: Int): Unit =
+      val rng = new Random(seed * 31 + thread)
+      val log = mutable.ListBuffer.empty[String]
+      def check(step: Int, what: String, offset: Int): Unit =
+        val v = variant
+        val (content, _) = variants(v)
+        val source = SourceFile.virtual(uri, content)
+        val obtained = driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => labels(ctx, unit, source, offset))
+        val expected = oracle(v)(offset)
+        val r = driver.readerOfThisThread
+        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)} tainted=${driver.isTainted(uri)} backoffs=${r.waitCyclesBackedOff} cycles=${r.cyclesPrevented.size} unwound=${r.cancelledCompletions.size}"
+        if expected != obtained then
+          println(s"[soak2 $name seed=$seed reader $thread step $step] at $offset expected ${expected.take(5)} obtained ${obtained.take(5)}; tree: " +
+            (try driver.compilationUnits.get(uri).map { unit =>
+              given Context = driver.currentCtx.fresh.setCompilationUnit(unit)
+              dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(offset)).take(3).map(t => s"${t.getClass.getSimpleName} ${t.show.take(60).replace('\n', ' ')} : ${if t.hasType then t.tpe.show.take(80) else "<untyped>"}").mkString(" <- ")
+            }.getOrElse("<no unit>") catch case scala.util.control.NonFatal(e) => s"<not shown: $e>"))
+        count(what)
+        org.junit.Assert.assertEquals(s"[$name seed=$seed reader $thread step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
+      for step <- 1 to steps if failure.get == null do
+        val (content, offsets) = variants(variant)
+        val offset = offsets(rng.nextInt(offsets.size))
+        rng.nextInt(10) match
+          case 0 =>
+            variant = 1 - variant
+            check(step, "edit+complete", offsets(rng.nextInt(offsets.size)))
+          case 1 | 2 =>
+            val k = 1 + rng.nextInt(3)
+            var p = 0
+            val thrown =
+              try
+                driver.withCancelChecker(() => { if inTyperCheckpoint() then p += 1; p >= k }) {
+                  driver.runUpTo(uri, SourceFile.virtual(uri, content), Span(offset))
+                }
+                false
+              catch case _: CancelledCompilation => true
+            if thrown then count("cancelled")
+            check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))
+          case _ =>
+            check(step, "complete", offset)
+    val threads = (0 until 2).map { i =>
+      val t = new Thread(() =>
+        try walk(i)
+        catch
+          case ex: AssertionError => failure.compareAndSet(null, ex): Unit
+          case ex: CancelledCompilation => failure.compareAndSet(null, new AssertionError(s"reader $i: a cancellation reached the caller of a request without a checker", ex)): Unit
+          case scala.util.control.NonFatal(ex) => failure.compareAndSet(null, ex): Unit, s"soak-reader-$i")
+      // an `Error` (a stack overflow) must fail the test too, not just end the thread
+      t.setUncaughtExceptionHandler((_, ex) => failure.compareAndSet(null, ex): Unit)
+      t.start()
+      t
+    }
+    threads.foreach(_.join())
+    if failure.get != null then throw failure.get
+    val t = touched(driver)
+    org.junit.Assert.assertTrue(s"[$name seed=$seed] symbols still Touched after the two readers: ${t.mkString(", ")}", t.isEmpty)
+    println(s"[soak2 $name seed=$seed] 2 readers x $steps steps: ${counts.asScala.toList.sortBy(_._1).map((k, v) => s"$k=$v").mkString(", ")}")
+
   @Test def `objects-seed-1` = soak("objects", objectsFile(_), 1, 300)
   @Test def `objects-seed-2` = soak("objects", objectsFile(_), 2, 300)
   @Test def `shapes-seed-1` = soak("shapes", shapesFile, 1, 300)
@@ -254,3 +348,10 @@ class CompletionSoakSuite extends BasePCSuite:
    */
   @Test def `shapes-seed-2` = soak("shapes", shapesFile, 2, 300)
   @Test def `shapes-seed-3` = soak("shapes", shapesFile, 3, 300)
+
+  @Test def `two-readers-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300)
+  @Test def `two-readers-objects-seed-2` = soak2("objects", objectsFile(_), 2, 300)
+  @Test def `two-readers-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300)
+  @Test def `two-readers-shapes-seed-2` = soak2("shapes", shapesFile, 2, 300)
+  @Test def `two-readers-serialised-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300, parallel = false)
+  @Test def `two-readers-serialised-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300, parallel = false)

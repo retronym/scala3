@@ -15,7 +15,7 @@ import typer.Nullables
 import core.Decorators.*
 import config.{SourceVersion, Feature}
 import scala.annotation.internal.sharable
-import scala.util.control.{ControlThrowable, NoStackTrace}
+import scala.util.control.NoStackTrace
 import transform.MacroAnnotations.isMacroAnnotation
 import scala.io.Codec
 
@@ -23,9 +23,15 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
 
   override def toString: String = source.toString
 
+  // Written by the parser or the namer before the unit is shared, and after that only by the interactive driver's write
+  // actions (`adopt`, the body edit), which run with no reader.
   var untpdTree: untpd.Tree = untpd.EmptyTree
 
-  var tpdTree: tpd.Tree = tpd.EmptyTree
+  // A persistent value: a reader takes the current tree and a resume publishes a new one with its statements spliced in
+  // (docs/_docs/internals/interactive-multi-reader.md §3.2). The splices are serialised by the session's monitor, which
+  // is not this unit's and is held only for the read-modify-write, so the reads here do not hold it: a reader sees the
+  // tree before or after a splice, both complete. Phases write it in the batch pipeline, one thread.
+  @volatile var tpdTree: tpd.Tree = tpd.EmptyTree
 
   private val myIsJava: Boolean = source.ext.isJava // `source` and `ext` are immutable, so cache the answer
 
@@ -46,6 +52,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   var sourceVersion: Option[SourceVersion] = None
 
   /** Pickled TASTY binaries, indexed by class. */
+  // set by the Pickler (or ReadTasty), after typer
   var pickled: Map[ClassSymbol, () => Array[Byte]] = Map()
 
   /** The fresh name creator for the current unit.
@@ -57,6 +64,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   /** Will be set to `true` if there are inline call that must be inlined after typer.
    *  The information is used in phase `Inlining` in order to avoid traversing trees that need no transformations.
    */
+  // set after typer, by PostTyper and the phases that follow it
   var needsInlining: Boolean = false
 
   /** Set to `true` if there are inline traits (with or without Specialized context bounds)
@@ -71,14 +79,18 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   var unrolledClasses: Set[Symbol] = Set.empty
 
   /** Set to `true` if inliner added anonymous mirrors that need to be completed */
+  // set by the Synthesizer only after typer
   var needsMirrorSupport: Boolean = false
 
   /** Will be set to `true` if contains `Quote`.
    *  The information is used in phase `Staging`/`Splicing`/`PickleQuotes` in order to avoid traversing trees that need no transformations.
    */
+  // Monotone: every writer stores true, among them the typer of an inlined body, which concurrent readers of the unit
+  // may be; it is read by the phases after typer.
   var needsStaging: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
+  // the language imports: set when the unit is parsed (or unpickled), before it is shared
   var needsCaptureChecking: Boolean = false
 
   /** Will be set to true if the unit contains a captureChecking language import */
@@ -96,6 +108,8 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   /** Will be set to true if the unit contains an inlineTrait language import */
   var knowsInlineTraits: Boolean = false
 
+  // Only ever set to true, under the run's `suspension` monitor (`suspend`); the typer phase reads it as a hint, and
+  // a new run resets it with no reader.
   var suspended: Boolean = false
   var suspendedAtInliningPhase: Boolean = false
 
@@ -120,16 +134,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
     // when this unit is unsuspended.
     depRecorder.clear()
     if !suspended then
-      suspended = true
-      val currRun = ctx.run.nn
-      currRun.suspendedUnits += this
-      val isInliningPhase = ctx.phase == Phases.inliningPhase
-      if ctx.settings.XprintSuspension.value then
-        currRun.suspendedHints += (this -> (hint, isInliningPhase))
-      if isInliningPhase then
-        suspendedAtInliningPhase = true
-      else
-        currRun.suspendedAtTyperPhase = true
+      ctx.run.nn.suspension.add(this, hint, ctx.phase == Phases.inliningPhase)
     throw CompilationUnit.SuspendException()
 
   private var myAssignmentSpans: Map[Int, List[Span]] | Null = null
@@ -139,8 +144,12 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
    *  to these variables.
    */
   def assignmentSpans(using Context): Map[Int, List[Span]] =
-    if myAssignmentSpans == null then myAssignmentSpans = Nullables.assignmentSpans
-    myAssignmentSpans.nn
+    myAssignmentSpans match
+      case null =>
+        val spans = Nullables.assignmentSpans
+        myAssignmentSpans = spans
+        spans
+      case spans => spans
 }
 
 @sharable object NoCompilationUnit extends CompilationUnit(NoSource, info = null) {
@@ -165,7 +174,7 @@ object CompilationUnit {
    *  The cause is a `CancellationException` so that clients which classify
    *  exceptions by their cause chain (e.g. Metals) treat it as a cancellation.
    */
-  class CancelledCompilation extends ControlThrowable:
+  class CancelledCompilation extends _root_.dotty.tools.sharing.Cancelled:
     private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
     override def getCause: Throwable = myCause
 

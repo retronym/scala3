@@ -39,6 +39,9 @@ object Periods {
    *  This encoding ensures the < and > operators can be delegated as-is to `code`, making them cheap.
    */
   class Period private[Periods] (private val code: Int) extends AnyVal with Showable {
+
+    /** The encoding, for a field published through `util.Publish` (a plain `int`). */
+    private[dotc] def rawCode: Int = code
     /* VERIFYING CORRECTNESS:
      * `Period` is very performance sensitive, so low-level tricks are useful, but they have to be correct.
      * To avoid introducing incorrect "optimizations", use your favorite SMT solver to check them.
@@ -189,6 +192,9 @@ object Periods {
   }
 
   object Period {
+
+    /** A period from its encoding (see `rawCode`). */
+    private[dotc] def fromCode(code: Int): Period = new Period(code)
 
     /** The single-phase period consisting of given run id and phase id */
     def apply(rid: RunId, pid: PhaseId): Period =

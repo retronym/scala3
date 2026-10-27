@@ -44,7 +44,11 @@ class PlainPrinter(_ctx: Context) extends Printer {
   protected def showUniqueIds = ctx.settings.uniqid.value || Printer.debugPrintUnique
   protected def showNestingLevel = ctx.settings.YprintLevel.value
 
-  protected final def limiter: MessageLimiter = ctx.property(MessageLimiter).get
+  // the base's own limiter is shared by every context derived from the initial one: with several readers each prints
+  // under its own (`Reader.messageLimiter`); a limiter set for one message or summary is that message's
+  protected final def limiter: MessageLimiter = ctx.property(MessageLimiter).get match
+    case _: DefaultMessageLimiter if ctx.base.concurrent => ctx.reader.messageLimiter
+    case l => l
 
   protected def controlled(op: => Text): Text = limiter.controlled(op)
 
