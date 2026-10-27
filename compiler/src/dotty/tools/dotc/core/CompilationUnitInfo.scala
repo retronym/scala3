@@ -12,6 +12,8 @@ class CompilationUnitInfo(
   // Lazy because such information requires reading files, but is not needed from many compilation units.
   tastyInfoLoader: () => Option[TastyInfo] = () => None
 ) {
+  // Two readers may load it: the loader yields an equal `Some` of an immutable `TastyInfo` (final fields, so a plain
+  // race publishes it safely).
   private var cachedTastyInfo: Option[TastyInfo] | Null = null
 
   /** Information about the TASTy from which this class was loaded.

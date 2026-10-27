@@ -16,6 +16,8 @@ object Attachment {
    *  Clients should inherit from Container instead.
    */
   trait LinkSource {
+    // a tree's attachments are its owner's: the completer of its definition, then the one reader that claims its
+    // statement (`Session.claim`)
     private[Attachment] var next: Link[?] | Null
 
     /** Optionally get attachment corresponding to `key` */

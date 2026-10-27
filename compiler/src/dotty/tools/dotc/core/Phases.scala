@@ -49,6 +49,7 @@ object Phases {
     def transform(ref: SingleDenotation)(using Context): SingleDenotation = unsupported("transform")
   }
 
+  // Set by `usePhases` when a run starts, which in the interactive driver is a write action: readers find them settled.
   trait PhasesBase {
     this: ContextBase =>
 
@@ -494,6 +495,7 @@ object Phases {
      */
     def printingContext(ctx: Context): Context = ctx
 
+    // set by `init` when the base plans its phases, before any reader; only read after
     private var myPeriod: Period = Nowhere
     private var myBase: ContextBase = uninitialized
     private var myErasedTypes = false

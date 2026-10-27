@@ -42,6 +42,7 @@ import collection.mutable
  *
  *  Design and findings: docs §3, I19-I28.
  */
+// one per statement sequence typed (`Targeting.of`)
 private[typer] final class Targeting(
     typer: Typer, stats: List[untpd.Tree], exprOwner: Symbol, inBlock: Boolean, buf: mutable.ListBuffer[tpd.Tree])(using Context):
   import Targeting.*

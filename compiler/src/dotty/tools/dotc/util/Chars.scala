@@ -28,20 +28,14 @@ object Chars:
       )
     if (0 <= num && num < base) num else -1
   }
-  /** Buffer for creating '\ u XXXX' strings. */
-  private val char2uescapeArray = Array[Char]('\\', 'u', 0, 0, 0, 0)
-
   /** Convert a character to a backslash-u escape */
   def char2uescape(c: Char): String = {
     inline def hexChar(ch: Int): Char =
       (( if (ch < 10) '0' else 'A' - 10 ) + ch).toChar
 
-    char2uescapeArray(2) = hexChar((c >> 12)     )
-    char2uescapeArray(3) = hexChar((c >>  8) % 16)
-    char2uescapeArray(4) = hexChar((c >>  4) % 16)
-    char2uescapeArray(5) = hexChar((c      ) % 16)
-
-    new String(char2uescapeArray)
+    // a buffer of its own: a shared one would be written by two readers at once
+    val buf = Array[Char]('\\', 'u', hexChar(c >> 12), hexChar((c >> 8) % 16), hexChar((c >> 4) % 16), hexChar(c % 16))
+    new String(buf)
   }
 
   /** Is character a line break? */

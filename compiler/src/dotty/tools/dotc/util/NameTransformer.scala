@@ -11,6 +11,7 @@ import scala.annotation.internal.sharable
  */
 object NameTransformer {
 
+  // the tables are filled when the object is initialised and only read after
   private val hexArray = Array('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F')
   private val nops = 128
   private val ncodes = 26 * 26

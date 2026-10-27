@@ -8,6 +8,7 @@ import dotty.tools.dotc.printing.Showable
 import dotty.tools.dotc.reporting.Message
 import dotty.tools.dotc.util.{NoSourcePosition, SrcPos}
 
+
 // If possible, we want to directly reference a Showable to avoid allocating a closure for every `handleRecursive` call
 type RecursiveOperationDetails = Showable | (() => String)
 
@@ -20,6 +21,7 @@ type RecursiveOperationDetails = Showable | (() => String)
  * @param details the operation details
  * @param pos the operation position
  */
+// the operations of a reader's stack (`Reader.recursiveOperations`) are changed by that reader only
 final class RecursiveOperation(var title: String, var details: RecursiveOperationDetails, var pos: SrcPos | Null):
   def explanation(using Context): String =
     try

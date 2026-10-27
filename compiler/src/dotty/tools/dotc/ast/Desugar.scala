@@ -119,6 +119,10 @@ object desugar {
      */
     override def ensureCompletions(using Context): Unit = {
       def completeConstructor(sym: Symbol) =
+        // another reader completing the class pushes the attachments as it
+        // completes the constructor: wait for it, then look (I72: "missing
+        // original symbol for type tree" when the peek saw its `InProgress`)
+        sym.denot.awaitOtherReader()
         sym.infoOrCompleter match {
           case completer: Namer#ClassCompleter if !sym.isCompleting =>
             // An example, derived from tests/run/t6385.scala

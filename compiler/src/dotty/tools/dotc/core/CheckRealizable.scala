@@ -65,7 +65,8 @@ class CheckRealizable(using Context) {
   /** A set of all fields that have already been checked. Used
    *  to avoid infinite recursions when analyzing recursive types.
    */
-  private val checkedFields: mutable.Set[Symbol] = mutable.LinkedHashSet.empty[Symbol]
+  // one instance per realizability check
+  private val checkedFields: mutable.Set[Symbol] = mutable.LinkedHashSet[Symbol]()
 
   /** Is symbol's definition a lazy or erased val?
    *  (note we exclude modules here, because their realizability is ensured separately)

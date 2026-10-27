@@ -189,6 +189,7 @@ object TypeErasure:
     + (semiEraseVCs.toInt     << 3)
     + (sourceLanguage.ordinal << 4)
 
+  // filled in this object's initialiser, only read after
   private val erasures = new Array[TypeErasure](1 << (SourceLanguage.bits + 4))
 
   for

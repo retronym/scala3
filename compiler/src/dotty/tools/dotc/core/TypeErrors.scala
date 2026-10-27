@@ -89,6 +89,7 @@ end MissingType
  * so it requires knowing denot already.
  * @param denot
  */
+// One cycle, thrown and caught on the stack of the reader that met it.
 class CyclicReference(
     val denot: SymDenotation,
     val optTrace: Array[CyclicReference.TraceElement] | Null)(using Context)
@@ -146,9 +147,8 @@ object CyclicReference:
     val run = ctx.run
     if run == null then null
     else
-      val trace = run.cyclicReferenceTrace
-      if trace == null then null
-      else trace.toArray
+      if !run.traceCycles then null
+      else ctx.reader.cyclicReferenceTrace.toArray
 
   def apply(denot: SymDenotation)(using Context): CyclicReference =
     val ex = new CyclicReference(denot, traceElements)
@@ -164,12 +164,12 @@ object CyclicReference:
 
   inline def trace[T](info: TraceElement)(inline op: => T)(using Context): T =
     val run = ctx.run
-    val traceCycles = run != null && run.cyclicReferenceTrace != null
+    val traceCycles = run != null && run.traceCycles
     try
-      if traceCycles then run.nn.cyclicReferenceTrace.nn += info
+      if traceCycles then ctx.reader.cyclicReferenceTrace += info
       op
     finally
-      if traceCycles then run.nn.cyclicReferenceTrace.nn.dropRightInPlace(1)
+      if traceCycles then ctx.reader.cyclicReferenceTrace.dropRightInPlace(1)
 
   inline def trace[T](prefix: String, sym: Symbol)(inline op: => T)(using Context): T =
     trace((ctx: Context) ?=> i"$prefix$sym")(op)

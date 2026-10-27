@@ -146,7 +146,9 @@ object CheckShadowing:
   private class ShadowingData:
     import collection.mutable.{Set => MutSet, Map => MutMap, Stack => MutStack}
 
-    private val rootImports = MutSet[SingleDenotation]()
+    // the root imports other than java.lang, asked for a name rather than enumerated: an enumeration of `scala` holds
+    // a synthesized member (`Function23`, `ContextFunction3`) only if earlier code mentioned it
+    private val rootImports = scala.collection.mutable.ArrayBuffer[dotty.tools.dotc.core.Types.TermRef]()
     private val explicitsImports = MutStack[MutSet[tpd.Import]]()
     private val renamedImports = MutStack[MutMap[SimpleName, Name]]() // original name -> renamed name
 
@@ -166,7 +168,7 @@ object CheckShadowing:
     /** Register the Root imports (at once per compilation unit)*/
     def registerRootImports()(using Context) =
       val langPackageName = ctx.definitions.JavaLangPackageVal.name.toSimpleName // excludes lang package
-      rootImports.addAll(ctx.definitions.rootImportTypes.withFilter(_.name.toSimpleName != langPackageName).flatMap(_.typeMembers))
+      rootImports.addAll(ctx.definitions.rootImportTypes.filter(_.name.toSimpleName != langPackageName))
 
     /* Register an import encountered in the current scope **/
     def registerImport(imp: tpd.Import)(using Context) =
@@ -197,7 +199,8 @@ object CheckShadowing:
         })
 
     private def lookForRootShadowedType(symbol: Symbol)(using Context): Option[Symbol] =
-      rootImports.find(p => p.name.toSimpleName == symbol.name.toSimpleName).map(_.symbol)
+      val name = symbol.name.toTypeName
+      rootImports.iterator.map(_.member(name)).find(_.exists).map(_.symbol)
 
     private def lookForImportedShadowedType(symbol: Symbol)(using Context): Option[Symbol] =
       explicitsImports

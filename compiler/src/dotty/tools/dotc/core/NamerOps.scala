@@ -168,7 +168,7 @@ object NamerOps:
 
   /** The completer of a constructor proxy apply method */
   class ApplyProxyCompleter(constr: Symbol)(using Context) extends LazyType:
-    def complete(denot: SymDenotation)(using Context): Unit =
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       denot.info = constr.info
 
   /** Add constructor proxy apply methods to `scope`. Proxies are for constructors
@@ -201,7 +201,7 @@ object NamerOps:
   def constructorCompanionCompleter(cls: ClassSymbol)(
       modul: TermSymbol, modcls: ClassSymbol)(using Context): LazyType =
     new LazyType with SymbolLoaders.SecondCompleter {
-      def complete(denot: SymDenotation)(using Context): Unit =
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
         val prefix = modcls.owner.thisType
         denot.info = ClassInfo(
           prefix, modcls, defn.AnyType :: Nil,

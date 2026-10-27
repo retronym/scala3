@@ -12,7 +12,8 @@ import scala.jdk.CollectionConverters.*
  * members at any level, as they are discovered by parsing source files.
  *
  * @param name simple name of the package
- * @note This class is not thread safe
+ * @note This class is not thread safe. It is built by one thread (`LogicalPackagesProvider.root`, `fromMbtIndex`) and then
+ *       only read, from the driver's bases, after `CachedLogicalPackage` published it.
  */
 class ParsedLogicalPackage(
     val name: String,

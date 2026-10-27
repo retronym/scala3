@@ -13,6 +13,7 @@ import core.Names.*
 object ShowPickled {
   import core.unpickleScala2.PickleFormat.*
 
+  // a debugging aid, read by one thread
   case class PickleBufferEntry(num: Int, startIndex: Int, tag: Int, bytes: Array[Byte]) {
     def isName: Boolean = tag == TERMname || tag == TYPEname
     def hasName: Boolean = tag match {

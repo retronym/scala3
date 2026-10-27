@@ -1,5 +1,6 @@
 package dotty.tools.dotc.util
 
+
 object Store {
 
   class Location[T](private[Store] val idx: Int) extends AnyVal
@@ -7,6 +8,7 @@ object Store {
   val empty: Store = new Store(Array())
 }
 
+// Persistent: a new location or value is a copy, filled before it is returned.
 class Store(private val elems: Array[AnyRef | Null]) extends AnyVal {
   import Store.*
 

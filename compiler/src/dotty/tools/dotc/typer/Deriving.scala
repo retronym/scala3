@@ -24,6 +24,7 @@ trait Deriving {
    *                   synthesized infrastructure code that is not connected with a
    *                   `derives` instance.
    */
+  // made by the class completer for one class's `derives` clause
   class Deriver(cls: ClassSymbol, codePos: SrcPos)(using Context) {
 
     /** A buffer for synthesized symbols for type class instances, with what user asked to synthesize. */

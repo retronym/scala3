@@ -16,6 +16,10 @@ import annotation.internal.sharable
 import scala.compiletime.uninitialized
 
 /** A base class for things that have positions (currently: modifiers and trees)
+ *
+ *  A position is set when the item is made, and changed in place only on an item its maker still owns (`withSpan` on a
+ *  synthetic one, the parent that fills in its children's spans) or by the interactive driver's body edit, a write
+ *  action that runs with no reader.
  */
 abstract class Positioned(implicit @constructorOnly src: SourceFile) extends SrcPos, Product, Cloneable {
   import Positioned.{ids, nextId, debugId}

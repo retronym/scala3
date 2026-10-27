@@ -174,6 +174,9 @@ object ProtoTypes {
 
   /** A class marking ignored prototypes that can be revealed by `deepenProto` */
   abstract case class IgnoredProto(ignored: Type) extends CachedGroundType with MatchAlways:
+    // `IgnoredProto` is hash-consed, so this flag is on a type every reader and run can reach. It only goes from false to
+    // true and only words an error message (finding: a message can show the deepened expected type because another
+    // call looked inside).
     private var myWasDeepened = false
     override def revealIgnored = ignored
     override def deepenProto(using Context): Type =
@@ -353,6 +356,7 @@ object ProtoTypes {
   trait FunOrPolyProto extends ProtoType: // common trait of PolyProto and FunProto
     def applyKind: ApplyKind = ApplyKind.Regular
 
+  // shared by the FunProtos derived from one another, which belong to one typing call
   class FunProtoState {
 
     /** The list of typed arguments, if all arguments are typed */
