@@ -139,14 +139,28 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
             report.warning(s"Invalid message filter\n${parseErrors.mkString("\n")}", pos)
             List(MessageFilter.None)
           .merge
-      addSuppression:
-        Suppression(annotPos, filters, range.start, range.end, verbose)
+      val sup = Suppression(annotPos, filters, range.start, range.end, verbose)
+      sup.provenance = ctx.reader.provenance
+      addSuppression(sup)
 
     def addSuppression(sup: Suppression)(using Context): Unit =
       locked:
         val suppressions = bySource().getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
         if sup.start != sup.end then
           suppressions += sup
+
+    /** In interactive mode, after an edit of `source`: each suppression of
+     *  the file replaced by `f`'s result, or removed where it is null.
+     */
+    def editSuppressions(source: SourceFile)(f: Suppression => Suppression | Null)(using Context): Unit =
+      locked:
+        bySource().get(source).foreach { sups =>
+          val kept = sups.flatMap(sup => f(sup) match
+            case null => None
+            case s: Suppression => Some(s))
+          sups.clear()
+          sups ++= kept
+        }
 
     def reportSuspendedMessages(source: SourceFile)(using Context): Unit = {
       val messages = locked:

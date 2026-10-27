@@ -196,6 +196,19 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
    */
   var targetingTyperState: TyperState | Null = null
 
+  /** The fact being computed on this reader whose diagnostics and `@nowarn`s
+   *  are its own: the innermost member statement being typed or Namer
+   *  completion running, under `-Yinteractive-body-edits` (`Provenance`);
+   *  null otherwise.
+   */
+  var provenance: reporting.Provenance | Null = null
+
+  /** `body`, with `p` as the current provenance. */
+  inline def withProvenance[T](p: reporting.Provenance)(inline body: T): T =
+    val saved = provenance
+    provenance = p
+    try body finally provenance = saved
+
   /** Back to the defaults: no target, no pending mark, nothing skipped. */
   def clearTargeting(): Unit =
     typingTarget = Spans.NoSpan
