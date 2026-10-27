@@ -3255,6 +3255,7 @@ object Types extends TypeUtils {
       computed = done
     private def dropFn()(using Sharing.Holds[this.type]): Unit = refFn = null
 
+    @annotation.nowarn("msg=Catching Throwable can lead to unexpected behavior") // rethrown at once
     private def compute()(using Context, Sharing.Holds[this.type]): Unit =
       set(myRef, done = true)
       val result =
