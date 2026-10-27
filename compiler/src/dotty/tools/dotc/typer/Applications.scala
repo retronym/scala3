@@ -546,6 +546,7 @@ trait Applications extends Compatibility {
    *  @param args       the arguments of the application
    *  @param resultType the expected result type of the application
    */
+  // one per application being typed or resolved: not shared
   abstract class Application[Arg](methRef: TermRef, funType: Type, args: List[Arg], resultType: Type)(using Context) {
 
     /** The type of typed arguments: either tpd.Tree or Type */

@@ -38,7 +38,14 @@ object Periods {
    *
    *  This encoding ensures the < and > operators can be delegated as-is to `code`, making them cheap.
    */
-  class Period private[Periods] (private val code: Int) extends AnyVal with Showable {
+  // the constructor and the field `private[dotc]`, not `private[Periods]`: a `Published[Period]` field's operations
+  // expand to them at their site (`Symbol.checkedPeriod`, `NamedType.checkedPeriod`)
+  class Period private[dotc] (private[dotc] val code: Int) extends AnyVal with Showable {
+
+    /** The encoding, for a `Published[Period]` field (stored as a plain `int`) and a `Stamped` cache's stamp.
+     *  Public, so that the inline `dotc.periodStamp` reads it without an accessor (which left a load of its package
+     *  object at every site once `-opt` inlined it). */
+    def rawCode: Int = code
     /* VERIFYING CORRECTNESS:
      * `Period` is very performance sensitive, so low-level tricks are useful, but they have to be correct.
      * To avoid introducing incorrect "optimizations", use your favorite SMT solver to check them.
@@ -189,6 +196,9 @@ object Periods {
   }
 
   object Period {
+
+    /** A period from its encoding (see `rawCode`). */
+    private[dotc] def fromCode(code: Int): Period = new Period(code)
 
     /** The single-phase period consisting of given run id and phase id */
     def apply(rid: RunId, pid: PhaseId): Period =
