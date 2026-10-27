@@ -3969,14 +3969,11 @@ object Types extends TypeUtils {
 
     // Invariants:
     // (1) mySignatureRunId != NoRunId      =>  mySignature != null
-    // (2) myJavaSignatureRunId != NoRunId  =>  myJavaSignature != null
 
     private var mySignature: Signature = uninitialized
     private var mySignatureRunId: RunId = NoRunId
-    private var myJavaSignature: Signature = uninitialized
-    private var myJavaSignatureRunId: RunId = NoRunId
-    private var myScala2Signature: Signature = uninitialized
-    private var myScala2SignatureRunId: RunId = NoRunId
+    private var myJavaSignature: Stamped[Signature] = Stamped.Empty
+    private var myScala2Signature: Stamped[Signature] = Stamped.Empty
 
     /** If `isJava` is false, the Scala signature of this method. Otherwise, its Java signature.
      *
@@ -4013,11 +4010,11 @@ object Types extends TypeUtils {
 
       sourceLanguage match
         case SourceLanguage.Java =>
-          Caching.stampedIf(myJavaSignatureRunId, myJavaSignature)(myJavaSignatureRunId = _, myJavaSignature = _)(
+          Stamped.cachedIf(myJavaSignature)(myJavaSignature = _)(
               ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
             computeSignature
         case SourceLanguage.Scala2 =>
-          Caching.stampedIf(myScala2SignatureRunId, myScala2Signature)(myScala2SignatureRunId = _, myScala2Signature = _)(
+          Stamped.cachedIf(myScala2Signature)(myScala2Signature = _)(
               ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
             computeSignature
         case SourceLanguage.Scala3 =>
