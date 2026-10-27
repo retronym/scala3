@@ -52,9 +52,9 @@ object StampedCachesTest:
     ("Phases.scala", "myPeriod") -> "a phase's period, set once when the phases are made",
     ("Denotations.scala", "myValidFor") -> "a denotation's validity, not a cache stamp",
     ("Symbols.scala", "checkedPeriod") ->
-      "publishes `lastDenot` through `util.Publish` (an acquire load also on batch, measured in step 3); its reentrant plain store first does not fit the helper",
+      "a `Published` field, publishing `lastDenot` (an acquire load also on batch, measured in step 3); a hit moves the stamp without recomputing",
     ("Types.scala", "checkedPeriod") ->
-      "publishes `NamedType`'s `lastDenotation` and `lastSymbol` through `util.Publish`; three fields, and a hit rechecks the denotation's validity",
+      "a `Published` field, publishing `NamedType`'s `lastDenotation` and `lastSymbol`; three fields, and a hit rechecks the denotation's validity",
     ("SymDenotations.scala", "checkedPeriod") ->
       "`InheritedCacheImpl`'s memo of a validity check: a stamp without a value, a stale read only checks again",
     ("Denotations.scala", "validAsSeenFrom") ->

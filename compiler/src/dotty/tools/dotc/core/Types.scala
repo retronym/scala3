@@ -48,9 +48,13 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
-import _root_.dotty.tools.sharing.Stamped
+import _root_.dotty.tools.sharing.{Published, Stamped}
 
 object Types extends TypeUtils {
+
+  // the handle of `NamedType.checkedPeriod` (`Published`): a `val`, the given a reference to it
+  val namedTypeCheckedPeriodHandle: Published.Handle[NamedType, "checkedPeriod"] = Published.handle
+  given Published.Handle[NamedType, "checkedPeriod"] = namedTypeCheckedPeriodHandle
 
   @sharable private var nextId = 0
 
@@ -2361,7 +2365,7 @@ object Types extends TypeUtils {
     @cache @publishedBy("Publish")
     private var lastDenotation: Denotation | Null = null
     private var lastSymbol: Symbol | Null = null
-    private var checkedPeriod: Period = Nowhere
+    private var checkedPeriod: Published[Period] = Published(Nowhere)
     @cache @benignRace("a Byte computed from the same prefix, written whole")
     private var myStableHash: Byte = 0
     private var mySignature: Stamped[PerRun, Signature] = Stamped.Empty
@@ -2428,7 +2432,7 @@ object Types extends TypeUtils {
       // We can rely on checkedPeriod (unlike in the definition of `denot` below)
       // because SymDenotation#installAfter never changes the symbol.
       // (An acquire read: `setDenot` stores the symbol before the period.)
-      if Period.fromCode(util.Publish.namedTypeCheckedPeriod(this)) == ctx.period then lastSymbol.asInstanceOf[Symbol]
+      if checkedPeriod.acquire == ctx.period then lastSymbol.asInstanceOf[Symbol]
       else computeSymbol
 
     private def computeSymbol(using Context): Symbol =
@@ -2437,7 +2441,7 @@ object Types extends TypeUtils {
           if (sym.isValidInCurrentRun) sym else denot.symbol
         case name =>
           (if (denotationIsCurrent) lastDenotation.asInstanceOf[Denotation] else denot).symbol
-      if checkedPeriod != Nowhere then util.Publish.setNamedTypeCheckedPeriod(this, ctx.period.rawCode)
+      if checkedPeriod.plain != Nowhere then checkedPeriod.release(ctx.period)
       result
 
     /** There is a denotation computed which is valid (somewhere in) the
@@ -2475,7 +2479,7 @@ object Types extends TypeUtils {
      *  Used to get the class underlying a ThisType.
      */
     private[Types] def stableInRunSymbol(using Context): Symbol =
-      if Period.fromCode(util.Publish.namedTypeCheckedPeriod(this)).runId == ctx.runId then lastSymbol.nn
+      if checkedPeriod.acquire.runId == ctx.runId then lastSymbol.nn
       else symbol
 
     def info(using Context): Type = denot.info
@@ -2488,7 +2492,7 @@ object Types extends TypeUtils {
       // the period first (an acquire load), then the denotation it publishes:
       // read the other way round, another reader's `setDenot` between the two
       // reads pairs a null denotation with a current period (I78)
-      val checked = Period.fromCode(util.Publish.namedTypeCheckedPeriod(this))
+      val checked = checkedPeriod.acquire
       val lastd = lastDenotation.asInstanceOf[Denotation]
       // Even if checkedPeriod == now we still need to recheck lastDenotation.validFor
       // as it may have been mutated by SymDenotation#installAfter
@@ -2531,7 +2535,7 @@ object Types extends TypeUtils {
           val lastd = lastd0.skipRemoved
           var needsRecompute = false
           if lastd.validFor.runId == ctx.runId
-              && checkedPeriod != Nowhere
+              && checkedPeriod.plain != Nowhere
               && !(ctx.isRechecking
                     && {
                       needsRecompute = currentRechecker.needsRecompute(this, lastd)
@@ -2543,7 +2547,7 @@ object Types extends TypeUtils {
           else
             val newd = lastd match
               case lastd: SymDenotation =>
-                if stillValid(lastd) && checkedPeriod != Nowhere && !needsRecompute
+                if stillValid(lastd) && checkedPeriod.plain != Nowhere && !needsRecompute
                 then finish(lastd.current)
                 else finish(memberDenot(lastd.initial.name, allowPrivate = lastd.is(Private)))
               case _ =>
@@ -2644,7 +2648,7 @@ object Types extends TypeUtils {
       lastDenotation = denot
       lastSymbol = denot.symbol
       // the period publishes the two fields above (a release store)
-      util.Publish.setNamedTypeCheckedPeriod(this, (if (prefix.isProvisional) Nowhere else ctx.period).rawCode)
+      checkedPeriod.release(if prefix.isProvisional then Nowhere else ctx.period)
       designator match {
         case sym: Symbol if designator ne lastSymbol.nn =>
           designator = lastSymbol.asInstanceOf[Designator{ type ThisName = self.ThisName }]

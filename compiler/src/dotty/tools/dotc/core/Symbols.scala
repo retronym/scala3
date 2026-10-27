@@ -32,6 +32,7 @@ import scala.annotation.internal.{benignRace, cache, lazyFact, publishedBy, shar
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
+import _root_.dotty.tools.sharing.Published
 import dotty.tools.tasty.TastyVersion
 
 import scala.reflect.ClassTag
@@ -42,6 +43,10 @@ object Symbols extends SymUtils {
 
   /** Tree attachment containing the identifiers in a tree as a sorted array */
   val Ids: Property.Key[Array[String]] = new Property.Key
+
+  // the handle of `Symbol.checkedPeriod` (`Published`): a `val`, the given a reference to it
+  val checkedPeriodHandle: Published.Handle[Symbol, "checkedPeriod"] = Published.handle
+  given Published.Handle[Symbol, "checkedPeriod"] = checkedPeriodHandle
 
   /** A Symbol represents a Scala definition/declaration or a package.
    *  @param initCoord The coordinates of the symbol (a position or an index)
@@ -100,29 +105,29 @@ object Symbols extends SymUtils {
     /** The last denotation of this symbol, and the period it was last found
      *  valid in. `checkedPeriod` publishes `lastDenot`: it is stored after the
      *  denotation with release semantics and read with acquire semantics
-     *  (`util.Publish`), so that a reader on another thread (interactive
+     *  (`Published`), so that a reader on another thread (interactive
      *  mode, several readers) that finds the period current sees the
      *  denotation stored before it, never the previous one.
      */
     @cache @publishedBy("Publish") private var lastDenot: SymDenotation = uninitialized
-    private var checkedPeriod: Period = Nowhere
+    private var checkedPeriod: Published[Period] = Published(Nowhere)
 
     /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
      *  the period is loaded with acquire semantics first, so that a denotation stored before the period that
-     *  published it is seen whole (`util.Publish`), as in `denot`.
+     *  published it is seen whole (`Published`), as in `denot`.
      */
     private def latestDenot: SymDenotation =
-      util.Publish.symbolCheckedPeriod(this)
+      checkedPeriod.acquire
       lastDenot
 
     /** `latestDenot` for a reader with a context: the acquire only when readers are concurrent, so that the batch
      *  compiler's hottest readers (`isTerm`, `isType`) pay a field test, not a barrier.
      */
     private def latestDenotIn(using Context): SymDenotation =
-      if ctx.base.concurrent then util.Publish.symbolCheckedPeriod(this)
+      if ctx.base.concurrent then checkedPeriod.acquire
       lastDenot
 
-    private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
+    private[core] def invalidateDenotCache(): Unit = { checkedPeriod.setPlain(Nowhere) }
 
     /** Set the denotation of this symbol
      *  `denot` should always be initialized when a new Symbol is created.
@@ -130,13 +135,13 @@ object Symbols extends SymUtils {
     private[core] def denot_=(d: SymDenotation): Unit = {
       util.Stats.record("Symbol.denot_=")
       lastDenot = d
-      util.Publish.setSymbolCheckedPeriod(this, Nowhere.rawCode)
+      checkedPeriod.release(Nowhere)
     }
 
     /** The current denotation of this symbol */
     final def denot(using Context): SymDenotation = {
       util.Stats.record("Symbol.denot")
-      if Period.fromCode(util.Publish.symbolCheckedPeriod(this)) == ctx.period then lastDenot
+      if checkedPeriod.acquire == ctx.period then lastDenot
       else computeDenot(lastDenot)
     }
 
@@ -150,7 +155,7 @@ object Symbols extends SymUtils {
       // reentrant read must find the period current and return `lastDenot`
       // (a stack overflow otherwise). The release store after the new
       // denotation is what publishes it to other threads.
-      checkedPeriod = now
+      checkedPeriod.setPlain(now)
       if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
     }
 
@@ -161,7 +166,7 @@ object Symbols extends SymUtils {
       if newd.exists || lastd.initial.validFor.firstPhaseId <= ctx.phaseId then
         // the denotation first, then the period that publishes it
         lastDenot = newd
-        util.Publish.setSymbolCheckedPeriod(this, ctx.period.rawCode)
+        checkedPeriod.release(ctx.period)
       else
         // We are trying to bring forward a symbol that is defined only at a later phase
         // (typically, a nested Java class, invisible before erasure).
@@ -169,14 +174,14 @@ object Symbols extends SymUtils {
         // previous validity, which means we will try another bring forward when the symbol
         // is referenced at a later phase. Otherwise we'd get stuck on NoDenotation here.
         // See #15562 and test i15562b in ReplCompilerTests
-        util.Publish.setSymbolCheckedPeriod(this, lastd.validFor.rawCode)
+        checkedPeriod.release(lastd.validFor)
       newd
     }
 
     /** The period `lastDenot` was last found valid in (a plain read, for
-     *  tests and tools; the compiler reads it through `Publish`).
+     *  tests and tools; the compiler reads it with acquire semantics).
      */
-    private[dotc] def lastCheckedPeriod: Period = checkedPeriod
+    private[dotc] def lastCheckedPeriod: Period = checkedPeriod.plain
 
     /** The original denotation of this symbol, without forcing anything */
     final def originDenotation: SymDenotation =
