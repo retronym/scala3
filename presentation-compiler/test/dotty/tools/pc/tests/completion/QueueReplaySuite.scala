@@ -41,7 +41,8 @@ class QueueReplaySuite extends BasePCSuite:
     cp.split(java.io.File.pathSeparator).toSeq.map(Paths.get(_))
 
   override protected def scalacOptions(classpath: Seq[Path]): Seq[String] =
-    Seq("-Yexplicit-nulls", "-Wsafe-init", "-language:implicitConversions", "-Yinteractive-log")
+    // the build's options for the compiler's sources (see `XrayServer.buildOptions`)
+    dotty.tools.pc.xray.XrayServer.buildOptions :+ "-Yinteractive-log"
 
   class Token extends CancelToken:
     val cancel = new CompletableFuture[lang.Boolean]()
