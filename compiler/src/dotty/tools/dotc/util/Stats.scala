@@ -7,7 +7,9 @@ import scala.annotation.internal.sharable
 import core.Contexts.*
 import collection.mutable
 
-@sharable object Stats {
+// Diagnostic counters, compiled out while `enabled` is the constant false; switched on, concurrent readers lose counts.
+@sharable
+object Stats {
 
   // when false, Stats.record and Stats.trackTime are elided.
   inline val enabled = false

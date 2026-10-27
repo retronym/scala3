@@ -12,6 +12,7 @@ import printing.Texts.Text
 import util.{Stats, Attachment, Property, SourceFile, NoSource, SrcPos, SourcePosition}
 import config.Config
 import config.Printers.overload
+import java.lang.invoke.VarHandle
 import annotation.internal.sharable
 import annotation.unchecked.uncheckedVariance
 import annotation.constructorOnly
@@ -24,6 +25,7 @@ object Trees {
   type Untyped = Type | Null
 
   /** The total number of created tree nodes, maintained if Stats.enabled */
+  // counts only while `Stats.enabled`, a constant false
   @sharable var ntrees: Int = 0
 
   /** Property key for trees with documentation strings attached */
@@ -52,6 +54,8 @@ object Trees {
    *   - Type checking an untyped tree should remove all embedded `TypedSplice`
    *     nodes.
    */
+  // Its type is set when the tree is made or typed, on a tree the typer still owns (`overwriteType`, `withTypeUnchecked`
+  // on one without a type; a typed tree is copied, not changed), and not after it is published.
   abstract class Tree[+T <: Untyped](implicit @constructorOnly src: SourceFile)
   extends Positioned, SrcPos, Product, Attachment.Container, printing.Showable {
 
@@ -292,6 +296,11 @@ object Trees {
   trait DefTree[+T <: Untyped] extends DenotingTree[T] {
     type ThisTree[+T <: Untyped] <: DefTree[T]
 
+    // Set when the tree is made, and once more by the completer of its symbol (`addAnnotations`, `mergeIfSynthetic`),
+    // on the untyped original that other readers may be reading: Modifiers is immutable, so a reader sees them before
+    // or after, but not the same ones.
+    // a definition's tree belongs to its completer (under the completion lock), then to the one reader that claims its
+    // statement (`Session.claim`)
     private var myMods: untpd.Modifiers | Null = null
 
     private[dotc] def rawMods: untpd.Modifiers = myMods match
@@ -950,8 +959,12 @@ object Trees {
     assert(isEmpty || (tpt ne genericEmptyTree))
 
     def unforcedRhs: LazyTree[T] = preRhs
-    def forceFields()(using Context): Unit = preRhs = force(preRhs)
-    def rhs(using Context): Tree[T] = { forceFields(); preRhs.asInstanceOf[Tree[T]] }
+    def forceFields()(using Context): Unit = rhs
+    def rhs(using Context): Tree[T] =
+      val p = preRhs
+      val r = force(p)
+      if r ne p then preRhs = r
+      r
   }
 
   /** mods def name[tparams](vparams_1)...(vparams_n): tpt = rhs */
@@ -962,8 +975,12 @@ object Trees {
     assert(tpt ne genericEmptyTree)
 
     def unforcedRhs: LazyTree[T] = preRhs
-    def forceFields()(using Context): Unit = preRhs = force(preRhs)
-    def rhs(using Context): Tree[T] = { forceFields(); preRhs.asInstanceOf[Tree[T]] }
+    def forceFields()(using Context): Unit = rhs
+    def rhs(using Context): Tree[T] =
+      val p = preRhs
+      val r = force(p)
+      if r ne p then preRhs = r
+      r
 
     def leadingTypeParams(using Context): List[TypeDef[T]] = paramss match
       case (tparams @ (tparam: TypeDef[?]) :: _) :: _ => tparams.asInstanceOf[List[TypeDef[T]]]
@@ -1004,12 +1021,20 @@ object Trees {
     type ThisTree[+T <: Untyped] = Template[T]
 
     def forceFields()(using Context): Unit =
-      preParentsOrDerived = force(preParentsOrDerived)
-      preBody = force(preBody)
+      parentsOrDerived
+      body
 
     def unforcedBody: LazyTreeList[T] = preBody
-    def body(using Context): List[Tree[T]] = { forceFields(); preBody.asInstanceOf[List[Tree[T]]] }
-    def parentsOrDerived(using Context): List[Tree[T]] = { forceFields(); preParentsOrDerived.asInstanceOf[List[Tree[T]]] }
+    def body(using Context): List[Tree[T]] =
+      val p = preBody
+      val r = force(p)
+      if r ne p then preBody = r
+      r
+    def parentsOrDerived(using Context): List[Tree[T]] =
+      val p = preParentsOrDerived
+      val r = force(p)
+      if r ne p then preParentsOrDerived = r
+      r
 
     def parents(using Context): List[Tree[T]] = parentsOrDerived // overridden by DerivingTemplate
     def derived: List[untpd.Tree] = Nil // overridden by DerivingTemplate
@@ -1153,10 +1178,20 @@ object Trees {
    */
   trait WithLazyFields:
 
-    /** If `x` is lazy, computes the underlying value */
+    /** If `x` is lazy, computes the underlying value: with several readers, the `Lazy` computes it once (a
+     *  `TreeUnpickler.LazyReader` keeps its result under the file's claim), so that readers who force the same field
+     *  get the one tree. The tree is built by whoever held the claim and stored into the field by a plain write, so a
+     *  reader of the field must see its construction: the release before the caller's store and the acquire after
+     *  its read of a field that is not lazy are under the test of the base's flag, a batch base pays the test only.
+     */
     protected def force[T <: AnyRef](x: T | Lazy[T])(using Context): T = x match
-      case x: Lazy[T] @unchecked => x.complete
-      case x: T @unchecked => x
+      case x: Lazy[T] @unchecked =>
+        val t = x.complete
+        if ctx.base.concurrent then VarHandle.releaseFence()
+        t
+      case x: T @unchecked =>
+        if ctx.base.concurrent then VarHandle.acquireFence()
+        x
 
     /** Assigns all lazy fields their underlying non-lazy value. */
     def forceFields()(using Context): Unit
