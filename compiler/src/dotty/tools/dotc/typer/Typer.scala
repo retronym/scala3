@@ -1608,7 +1608,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
   def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
-    // Targeted typing applies to the statements of a block that contains the
+    // Targeted typing applies to the statements of a block that touches the
     // target (see `Targeting`): a skipped one's symbol, indexed just above,
     // completes lazily if a later statement refers to it. A block typed for
     // another reason is typed whole, and so is one inside an inline method
@@ -1619,7 +1619,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // before `x.length`), and a statement typed without the ones before it,
     // or resumed in the context it was skipped in, misses them (I64).
     val reader = ctx.reader
-    if reader.typingTarget.exists && blockSpan.exists && blockSpan.contains(reader.typingTarget)
+    if reader.typingTarget.exists && blockSpan.touches(reader.typingTarget)
        && (ctx.typerState eq reader.targetingTyperState)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
        && !ctx.explicitNulls
@@ -3580,10 +3580,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
-      // only a class that contains the target is typed along the path to it,
+      // only a class that touches the target is typed along the path to it,
       // and not one typed speculatively (a local class in a closure argument)
       val reader = ctx.reader
-      if reader.typingTarget.exists && cdef.span.contains(reader.typingTarget)
+      if cdef.span.touches(reader.typingTarget)
          && (reader.targetingTyperState == null || (ctx.typerState eq reader.targetingTyperState))
       then reader.targetNextStats(dummy)
       val body1 =
