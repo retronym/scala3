@@ -170,6 +170,7 @@ object Flags {
   private inline val MaxFlag = 63
 
   // the flags' names, installed by `newFlags` while this object is initialised
+  @scala.annotation.internal.interned @scala.annotation.internal.publishedBy("init")
   private val flagName = Array.fill(64, 2)("")
 
   private def isDefinedAsFlag(idx: Int) = flagName(idx).exists(_.nonEmpty)

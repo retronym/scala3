@@ -176,6 +176,7 @@ object Sharing:
    *  and `computeInside(onCycle)(op)` to `if insideThread != null then onCycle else inside(op)`.
    */
   trait BlackHole:
+    @scala.annotation.internal.benignRace("written under the claim; read without it only to compare with this thread")
     private var insideThread: Thread | Null = null
     /** `op` with this thread inside, restoring who was inside before (a nested entry by the same thread). */
     protected final inline def inside[T](inline op: T)(using Holds[this.type]): T =

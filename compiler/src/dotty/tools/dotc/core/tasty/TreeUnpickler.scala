@@ -45,7 +45,7 @@ import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 
 import scala.annotation.constructorOnly
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{guardedBy, sharable, treeState}
 import scala.compiletime.uninitialized
 
 /** Unpickler for typed trees
@@ -1921,6 +1921,7 @@ class TreeUnpickler(reader: TastyReader,
 
     // read and written only under the file's claim; a reader that gets it from here has acquired the claim the tree
     // was built under
+    @guardedBy("completionLock")
     private var result: T | Null = null
 
     private def rootKey(using Context): AnyRef = {
