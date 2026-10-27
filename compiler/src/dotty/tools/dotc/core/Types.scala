@@ -4684,8 +4684,7 @@ object Types extends TypeUtils {
 
     private var myEvalued: Stamped[Type] = Stamped.Empty
 
-    private var validUnderlyingNormalizable: Period = Nowhere
-    private var cachedUnderlyingNormalizable: Type = uninitialized
+    private var cachedUnderlyingNormalizable: Stamped[Type] = Stamped.Empty
 
     def isGround(acc: TypeAccumulator[Boolean])(using Context): Boolean =
       if myGround == 0 then myGround = if acc.foldOver(true, this) then 1 else -1
@@ -4757,9 +4756,8 @@ object Types extends TypeUtils {
         case tycon: TypeRef => defn.isCompiletimeAppliedType(tycon.symbol)
         case _ => false
       // otherwise cached when `superType` is (when it is not provisional)
-      Caching.stampedIf(validUnderlyingNormalizable, cachedUnderlyingNormalizable)(
-          validUnderlyingNormalizable = _, cachedUnderlyingNormalizable = _)(
-          ctx.period, _ => isCompiletimeApplied || !superTypeIsProvisional):
+      Stamped.cachedIf(cachedUnderlyingNormalizable)(cachedUnderlyingNormalizable = _)(
+          ctx.period.rawCode, _ => isCompiletimeApplied || !superTypeIsProvisional):
         if isCompiletimeApplied then this else superType.underlyingNormalizable
 
     override def tryNormalize(using Context): Type =
