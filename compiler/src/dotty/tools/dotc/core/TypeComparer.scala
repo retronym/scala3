@@ -3490,6 +3490,7 @@ object TypeComparer {
     case Fail(errorNotes: List[Note])
 
   /** Class for unification variables used in `natValue`. */
+  // a unification variable of one `constValue` call
   private class AnyConstantType extends UncachedGroundType with ValueType {
     var tpe: Type = NoType
   }

@@ -778,7 +778,7 @@ class Setup extends PreRecheck, SymTransformer, SetupAPI:
               then
                 val prevInfo = sym.info
                 new LazyType:
-                  def complete(denot: SymDenotation)(using Context) =
+                  def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]) =
                     assert(ctx.phase == thisPhase.next, i"$sym")
                     sym.info = prevInfo // set info provisionally so we can analyze the symbol in recheck
                     completeDef(tree, sym, this)
@@ -786,7 +786,7 @@ class Setup extends PreRecheck, SymTransformer, SetupAPI:
                       .showing(i"new info of $sym = $result", capt)
               else if sym.is(Method) then
                 new LazyType:
-                  def complete(denot: SymDenotation)(using Context) =
+                  def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]) =
                     sym.info = newInfo
                       .showing(i"new info of $sym = $result", capt)
               else newInfo

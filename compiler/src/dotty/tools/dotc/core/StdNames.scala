@@ -52,6 +52,7 @@ object StdNames {
     protected implicit def fromString(s: String): N
     protected def fromName(name: Name): N = fromString(name.toString)
 
+    // filled by `kw` as the object that defines the names is initialised, read as `keywords` after
     private val kws = mutable.Set[N]()
     protected def kw(name: N): N = { kws += name; name }
 

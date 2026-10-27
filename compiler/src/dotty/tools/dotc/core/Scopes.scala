@@ -19,8 +19,11 @@ import printing.Printer
 import SymDenotations.NoDenotation
 
 import collection.mutable
+import java.lang.invoke.VarHandle
 
 object Scopes {
+
+  given Sharing.ClaimKind[MutableScope] = Sharing.ClaimKind(CompletionLock.scopeWrite, lockWhenSerialised = true)
 
   /** Maximal fill factor of hash table */
   private inline val FillFactor = 2.0/3.0
@@ -43,8 +46,41 @@ object Scopes {
    */
   private type SymbolSynthesizer = Name => Context ?=> Symbol
 
+  /** Diagnostics of changes to published scopes. With `-Ddotc.scopeWrites=<file>`, each change is counted by phase
+   *  and writer, and the counts are written to the file when the JVM exits. A change outside a write action on a
+   *  concurrent base (`unfrozen`) is counted the same way, under `UNFROZEN`, and fails under `-Ycheck-frozen-scopes`.
+   */
+  object ScopeWrites:
+    private val path = System.getProperty("dotc.scopeWrites")
+    val tracing: Boolean = path != null
+    private val counts = new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]()
+
+    private def writer: String =
+      import scala.jdk.CollectionConverters.*
+      StackWalker.getInstance().nn.walk { s =>
+        s.nn.map(f => s"${f.nn.getClassName.nn.stripPrefix("dotty.tools.dotc.")}.${f.nn.getMethodName}")
+          .nn.filter(f => !f.nn.startsWith("core.Scopes"))
+          .nn.limit(8).nn.collect(java.util.stream.Collectors.toList())
+      }.nn.asScala.mkString(" <- ")
+
+    def record(kind: String)(using Context): Unit =
+      counts.computeIfAbsent(s"${ctx.phase.phaseName} $kind <- $writer", _ => new java.util.concurrent.atomic.LongAdder()).nn.increment()
+
+    def unfrozen(kind: String)(using Context): Unit =
+      if tracing then
+        counts.computeIfAbsent(s"UNFROZEN ${ctx.phase.phaseName} $kind <- $writer", _ => new java.util.concurrent.atomic.LongAdder()).nn.increment()
+      if ctx.settings.YcheckFrozenScopes.value then
+        throw AssertionError(s"a published scope changed ($kind) outside a write action: $writer")
+
+    if tracing then
+      Runtime.getRuntime.nn.addShutdownHook(Thread(() =>
+        import scala.jdk.CollectionConverters.*
+        val lines = counts.asScala.toList.map((k, v) => (v.sum, k)).sortBy(-_._1).map((n, k) => s"$n\t$k")
+        java.nio.file.Files.write(java.nio.file.Paths.get(path), lines.asJava): Unit))
+
   class ScopeEntry private[Scopes] (val name: Name, _sym: Symbol, val owner: Scope) {
 
+    // the scope's one writer changes an entry of a published scope (`MutableScope.writing`), or a write action
     var sym: Symbol = _sym
 
     /** the next entry in the hash bucket
@@ -194,7 +230,7 @@ object Scopes {
    *  Note: constructor is protected to force everyone to use the factory methods instead.
    */
   class MutableScope protected[Scopes](initElems: ScopeEntry | Null, initSize: Int, val nestingLevel: Int)
-      extends Scope {
+      extends Scope, Sharing.BlackHole {
 
     /** Scope shares elements with `base` */
     protected[Scopes] def this(base: Scope)(using Context) =
@@ -203,6 +239,8 @@ object Scopes {
 
     def this(nestingLevel: Int) = this(null, 0, nestingLevel)
 
+    // filled while hidden, then frozen: after its owner's completion publishes the scope (`published`) only its one
+    // writer (`writing`) or a write action changes it, building the new entries aside (`extendAside`)
     private[dotc] var lastEntry: ScopeEntry | Null = initElems
 
     /** The size of the scope */
@@ -221,8 +259,25 @@ object Scopes {
     /** The synthesizer to be used, or `null` if no synthesis is done on this scope */
     private var synthesize: SymbolSynthesizer | Null = null
 
-    /** Use specified synthesize for this scope */
-    def useSynthesizer(s: SymbolSynthesizer): Unit = synthesize = s
+    /** The entries the synthesizer made, by the name looked up: kept beside the scope, never entered into it, so that
+     *  what enumerates the scope (`toList`, member names, `-Wshadow`) does not depend on which synthetic names earlier
+     *  code happened to mention, and one name has one symbol however many readers ask for it at once. Shared with
+     *  the scope's clones.
+     */
+    private var synthesized: java.util.concurrent.ConcurrentHashMap[Name, ScopeEntry] | Null = null
+
+    /** Which names the synthesizer can make: a lookup that misses consults the map of synthesized entries only for
+     *  those, so a miss on any other name costs what it did before the map.
+     */
+    private var synthesizable: (Name => Context ?=> Boolean) | Null = null
+
+    /** Use specified synthesize for this scope, for the names `canSynthesize` accepts */
+    def useSynthesizer(canSynthesize: Name => Context ?=> Boolean)(s: SymbolSynthesizer)(using Context): Unit =
+      // the package's own loader may have published the scope already, but no reader exists until `init` returns
+      assert(!ctx.definitions.initialized, "a synthesizer is installed while the base is set up, before any reader")
+      synthesizable = canSynthesize
+      synthesize = s
+      synthesized = new java.util.concurrent.ConcurrentHashMap
 
     protected def newScopeLikeThis(): MutableScope = new MutableScope(nestingLevel)
 
@@ -240,29 +295,94 @@ object Scopes {
         val e = entries(i)
         scope.newScopeEntry(e.name, e.sym)
       }
+      scope.synthesizable = synthesizable
       scope.synthesize = synthesize
+      scope.synthesized = synthesized
       scope
     }
+
+    // the scope whose entries this one makes, when it is built aside to extend that scope (`extendAside`)
+    private var extending: MutableScope | Null = null
+
+    /** Set when the owner's completion publishes this scope (`SymDenotation.lockAndComplete0`). A change after
+     *  that bumps the base's `structureEpoch`, and on a concurrent base must be made by a write action: a scope is
+     *  filled while it is hidden and then frozen (`changed`).
+     */
+    private[dotc] var published = false
+
+    /** `op`'s changes to this scope as one: on a batch base the flat classes of a package are entered in place, one
+     *  structural change however many classes they are, as `extendAside` publishes them on a concurrent base.
+     */
+    private[core] final def asOneChange(op: => Unit)(using Context): Unit =
+      val was = published
+      published = false
+      try op
+      finally
+        published = was
+        changed("extend")
+
+    /** `op` as this scope's one writer (the thread inside its `Sharing.BlackHole`): on a concurrent base, holding a
+     *  claim keyed by the scope, which is how a published scope may change outside a write action (a package's flat
+     *  classes, a classfile completer's deletion of the symbols it found absent). Readers stay lock free: an entry is added by `extendAside`, which replaces the
+     *  scope whole, or removed by `unlink`, which leaves the removed entry's own links as they were.
+     */
+    private[core] final def writing[T](op: => T)(using Context): T =
+      if !ctx.base.concurrent then op
+      else Sharing.claim(this)(inside(op))
+
+    // a change during the base's setup (`Definitions.init`) has no reader
+    private def changed(kind: String)(using Context): Unit =
+      if published then
+        val base = ctx.base
+        base.bumpStructureEpoch()
+        if ScopeWrites.tracing then ScopeWrites.record(kind)
+        if base.concurrent && !isInsideHere && (base.writeActionThread ne Thread.currentThread)
+            && ctx.definitions.initialized then
+          ScopeWrites.unfrozen(kind)
 
     /** create and enter a scope entry with given name and symbol */
     protected def newScopeEntry(name: Name, sym: Symbol)(using Context): ScopeEntry = {
       ensureCapacity(hashTable match { case null => MinHashedScopeSize; case ht => ht.length })
-      val e = new ScopeEntry(name, sym, this)
+      val e = new ScopeEntry(name, sym, if extending == null then this else extending.nn)
       e.prev = lastEntry
       lastEntry = e
-      if (hashTable != null) enterInHash(e)
+      val ht = hashTable
+      if (ht != null) enterInHash(e, ht)
       _size += 1
       elemsCache = null
+      changed("enter")
       e
     }
 
-    private def enterInHash(e: ScopeEntry)(using Context): Unit = {
-      val ht = hashTable.nn // cannot be null here
+    private def enterInHash(e: ScopeEntry, ht: Array[ScopeEntry | Null])(using Context): Unit = {
       val idx = e.name.hashCode & (ht.length - 1)
       e.tail = ht(idx)
       assert(e.tail != e)
       ht(idx) = e
     }
+
+    /** With several readers: extend this scope as a whole, without changing what a reader may be walking. `fill`
+     *  enters into a scope built aside from copies of this scope's entries (owned by this scope); then the copies
+     *  and their table replace this scope's, the table last and after a release fence. A reader finds the old
+     *  table with its chains untouched, or the new one complete (`lookupEntry` pairs the load with an acquire on a
+     *  concurrent base). The caller makes it the only writer (`PackageLoader`: the loader's claim).
+     */
+    private[core] final def extendAside(fill: MutableScope => Unit)(using Context): Unit =
+      val aside = newScopeLikeThis()
+      aside.extending = this
+      val entries = new mutable.ArrayBuffer[ScopeEntry]
+      var e = lastEntry
+      while e != null && e.owner == this do
+        entries += e
+        e = e.prev
+      for i <- entries.length - 1 to 0 by -1 do aside.newScopeEntry(entries(i).name, entries(i).sym)
+      fill(aside)
+      lastEntry = aside.lastEntry
+      _size = aside._size
+      elemsCache = null
+      VarHandle.releaseFence()
+      hashTable = aside.hashTable
+      changed("extend")
 
     /** enter a symbol in this scope. */
     final def enter[T <: Symbol](sym: T)(using Context): T = {
@@ -273,9 +393,18 @@ object Scopes {
     }
 
     final def enter[T <: Symbol](name: Name, sym: T)(using Context): T = {
-      newScopeEntry(name, sym)
+      // a published scope on a concurrent base, outside a write action and its one writer: replaced whole, since an
+      // enter in place can rehash, which rewrites the chains a reader may be walking
+      if needsWriter then writing(extendAside(_.enter(name, sym)))
+      else newScopeEntry(name, sym)
       sym
     }
+
+    // a change to this scope must be made by its one writer (`writing`): it is published, the base concurrent, and
+    // the change is not made by a write action or by the writer already
+    private def needsWriter(using Context): Boolean =
+      published && ctx.base.concurrent && !isInsideHere
+        && (ctx.base.writeActionThread ne Thread.currentThread) && ctx.definitions.initialized
 
     /** enter a symbol, asserting that no symbol with same name exists in scope */
     final def enterUnique(sym: Symbol)(using Context): Unit = {
@@ -289,16 +418,19 @@ object Scopes {
     private def createHash(tableSize: Int)(using Context): Unit =
       if (size > tableSize * FillFactor) createHash(tableSize * 2)
       else {
-        hashTable = new Array[ScopeEntry | Null](tableSize)
-        enterAllInHash(lastEntry)
+        // filled, then published: a lookup on another reader finds the old table or the new one, never one that is
+        // still being filled
+        val ht = new Array[ScopeEntry | Null](tableSize)
+        enterAllInHash(lastEntry, ht)
+        hashTable = ht
         // checkConsistent() // DEBUG
       }
 
-    private def enterAllInHash(e: ScopeEntry | Null, n: Int = 0)(using Context): Unit =
+    private def enterAllInHash(e: ScopeEntry | Null, ht: Array[ScopeEntry | Null], n: Int = 0)(using Context): Unit =
       if (e != null)
         if (n < MaxRecursions) {
-          enterAllInHash(e.prev, n + 1)
-          enterInHash(e)
+          enterAllInHash(e.prev, ht, n + 1)
+          enterInHash(e, ht)
         }
         else {
           var entries: List[ScopeEntry] = List()
@@ -307,11 +439,15 @@ object Scopes {
             entries = ee :: entries
             ee = ee.prev
           }
-          entries foreach enterInHash
+          entries.foreach(enterInHash(_, ht))
         }
 
     /** Remove entry from this scope (which is required to be present) */
-    final def unlink(e: ScopeEntry)(using Context): Unit = {
+    final def unlink(e: ScopeEntry)(using Context): Unit =
+      // in place, by single stores that leave `e`'s own links as they were: a reader at `e` goes on past it
+      if needsWriter then writing(unlink0(e)) else unlink0(e)
+
+    private def unlink0(e: ScopeEntry)(using Context): Unit = {
       if (lastEntry == e)
         lastEntry = e.prev
       else {
@@ -332,6 +468,7 @@ object Scopes {
       }
       elemsCache = null
       _size -= 1
+      changed("unlink")
     }
 
     /** remove symbol from this scope if it is present */
@@ -350,7 +487,10 @@ object Scopes {
     /** Replace symbol `prev` (if it exists in current scope) by symbol `replacement`.
      *  @pre `prev` and `replacement` have the same name.
      */
-    final def replace(prev: Symbol, replacement: Symbol)(using Context): Unit = {
+    final def replace(prev: Symbol, replacement: Symbol)(using Context): Unit =
+      if needsWriter then writing(replace0(prev, replacement)) else replace0(prev, replacement)
+
+    private def replace0(prev: Symbol, replacement: Symbol)(using Context): Unit = {
       require(prev.name == replacement.name)
       var e = lookupEntry(prev.name)
       while (e != null) {
@@ -358,6 +498,7 @@ object Scopes {
         e = lookupNextEntry(e)
       }
       elemsCache = null
+      changed("replace")
     }
 
     /** Lookup a symbol entry matching given name.
@@ -366,6 +507,7 @@ object Scopes {
       var e: ScopeEntry | Null = null
       val ht = hashTable
       if (ht != null) {
+        if ctx.base.concurrent then VarHandle.acquireFence() // a table published by `extendAside`
         e = ht(name.hashCode & (ht.length - 1))
         while ((e != null) && e.name != name)
           e = e.tail
@@ -378,10 +520,24 @@ object Scopes {
       if e != null then e
       else synthesize match
         case null => null
-        case s =>
-          val sym = s(name)
-          if (sym.exists) newScopeEntry(sym.name, sym) else e
+        case s => if synthesizable.nn(name) then synthesizedEntry(s, name) else null
     }
+
+    /** The synthesized entry for `name`, made once: a reader that loses the race to make it takes the winner's, and
+     *  the loser's symbol is never seen. The entry is the scope's (`owner`) but in no chain of it, so
+     *  `lookupNextEntry` finds nothing after it.
+     */
+    private def synthesizedEntry(s: SymbolSynthesizer, name: Name)(using Context): ScopeEntry | Null =
+      val memo = synthesized.nn
+      val known = memo.get(name)
+      if known != null then known
+      else
+        val sym = s(name)
+        if !sym.exists then null
+        else
+          val fresh = new ScopeEntry(sym.name, sym, this)
+          val won = memo.putIfAbsent(name, fresh)
+          if won == null then fresh else won
 
     /** lookup next entry with same name as this one */
     override final def lookupNextEntry(entry: ScopeEntry)(using Context): ScopeEntry | Null = {
@@ -399,16 +555,22 @@ object Scopes {
      *  Does _not_ include the elements of inherited scopes.
      */
     override final def toList(using Context): List[Symbol] = {
-      if (elemsCache == null) {
+      // built in a local and published once: with several readers another
+      // one may enter a symbol (and null the cache) while this one builds it
+      // (I77, a null `elemsCache` in a package's member names)
+      val known = elemsCache
+      if (known != null) known
+      else {
         ensureComplete()
-        elemsCache = Nil
+        var elems: List[Symbol] = Nil
         var e = lastEntry
         while ((e != null) && e.owner == this) {
-          elemsCache = e.sym :: elemsCache.nn
+          elems = e.sym :: elems
           e = e.prev
         }
+        elemsCache = elems
+        elems
       }
-      elemsCache.nn
     }
 
     override def implicitDecls(using Context): List[TermRef] = {
