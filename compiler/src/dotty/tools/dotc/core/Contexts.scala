@@ -305,7 +305,7 @@ object Contexts {
     // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
     // context). A lost update drops a derived context, which is made again. A derived context's fields are plain, so
     // with concurrent readers its store is preceded by a release fence and a lookup is followed by an acquire fence
-    // (as `Caching` does): the reader that finds it sees it complete.
+    // (as `util.Publish` orders a stamp): the reader that finds it sees it complete.
     @cache @benignRace("a lost update only drops a derived context, which is made again; entries are published after a release fence")
     private var related: SimpleIdentityMap[Phase | SourceFile, Context] | Null = null
 

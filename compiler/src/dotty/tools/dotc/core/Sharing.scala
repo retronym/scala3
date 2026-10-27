@@ -31,7 +31,7 @@ import Contexts.*
  *    `BlackHole`. The writer's state is reached through methods that take the claim's evidence, `Holds[key.type]`.
  *  - a short critical section over a collection or a few fields: a `Guard` whose fields are `Guarded`, or
  *    `serialised` and `locking` on another object's monitor. The guarded state is reached with `Monitor[lock.type]`.
- *  - a value paired with the period or run it was computed in: `Caching`.
+ *  - a value paired with the period or run it was computed in: `Stamped`, one field holding both.
  *  - typing that must not write what readers share: `privately`.
  */
 final class Sharing private (val concurrent: Boolean, val parallel: Boolean):

@@ -7,15 +7,14 @@ import org.jetbrains.kotlinx.lincheck.strategy.stress.StressOptions
 import org.junit.Assert.*
 import org.junit.Test
 
-/** `Stamped`'s cache cell under concurrent readers and writers, checked for linearizability by Lincheck, as
- *  `CachingLincheckTest` checks `Caching`'s pair of fields.
+/** A `Stamped` cache under concurrent readers and writers, checked for linearizability by Lincheck.
  *
- *  The cell starts with the value of an earlier stamp (1, value 10); every reader is at stamp 2, whose value is 20,
+ *  The field starts with the value of an earlier stamp (1, value 10); every reader is at stamp 2, whose value is 20,
  *  so `get` returns 20 in any sequential order, and `getProvisional`, whose value -1 is not kept, returns 20 once
  *  some `get` has stored it and -1 before; `peek` returns 20 once it is stored and 0 before. Model checking explores
  *  the interleavings under sequential consistency; that the pair is seen whole without fences is the JMM's guarantee
- *  for final fields, which stress runs on real threads exercise (on Apple silicon as well). `Broken`, a cell whose
- *  stamp and value are updated in place, must fail.
+ *  for final fields, which stress runs on real threads exercise (on Apple silicon as well). `Broken`, a stamp and a
+ *  value updated in place in two fields, must fail.
  */
 class StampedLincheckTest:
   import StampedLincheckTest.*

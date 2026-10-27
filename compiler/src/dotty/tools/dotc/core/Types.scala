@@ -48,7 +48,7 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
-import _root_.dotty.tools.sharing.{Caching, Stamped}
+import _root_.dotty.tools.sharing.Stamped
 
 object Types extends TypeUtils {
 
@@ -3016,8 +3016,8 @@ object Types extends TypeUtils {
     type ThisType = TypeRef
     type ThisName = TypeName
 
-    private var myCanDropAliasPeriod: Period = Nowhere
-    private var myCanDropAlias: Boolean = uninitialized
+    // a `java.lang.Boolean` in the stamped value: `Boolean.valueOf`'s two, so a miss allocates the `Stamped` alone
+    private var myCanDropAlias: Stamped[PerPeriod, Boolean] = Stamped.Empty
 
     /** Given an alias type `type A = B` where a recursive comparison with `B` yields
      *  `false`, can we conclude that the comparison is definitely false?
@@ -3036,7 +3036,7 @@ object Types extends TypeUtils {
      *  based tests.
      */
     def canDropAlias(using Context) =
-      Caching.stamped(myCanDropAliasPeriod, myCanDropAlias)(myCanDropAliasPeriod = _, myCanDropAlias = _)(ctx.period):
+      myCanDropAlias.cached:
         !symbol.canMatchInheritedSymbols
         || !prefix.baseClasses.exists(_.info.decls.lookup(name).is(Deferred))
 
@@ -4663,8 +4663,8 @@ object Types extends TypeUtils {
     @cache @benignRace("a Byte computed from the same tycon and arguments, written whole")
     private var myGround: Byte = 0
 
-    private var myIsStableRunId: RunId = NoRunId
-    private var myIsStable: Boolean = uninitialized
+    // as `TypeRef.myCanDropAlias`
+    private var myIsStable: Stamped[PerRun, Boolean] = Stamped.Empty
 
     private var myEvalued: Stamped[PerRun, Type] = Stamped.Empty
 
@@ -4682,7 +4682,7 @@ object Types extends TypeUtils {
       // stability should not change anymore.
       // We don't cache if the type is provisional because `Type#isStable`
       // calls `Type#stripTypeVar` which might return different results later.
-      Caching.stampedIf(myIsStableRunId, myIsStable)(myIsStableRunId = _, myIsStable = _)(ctx.runId, _ => !isProvisional):
+      myIsStable.cachedIf(_ => !isProvisional):
         computeIsStable
 
     private def computeIsStable(using Context): Boolean = tycon match

@@ -18,7 +18,7 @@ import scala.annotation.implicitNotFound
  *    `BlackHole`. The writer's state is reached through methods that take the claim's evidence, `Holds[key.type]`.
  *  - a short critical section over a collection or a few fields: a `Guard` whose fields are `Guarded`, or
  *    `serialised` and `locking` on another object's monitor. The guarded state is reached with `Monitor[lock.type]`.
- *  - a value paired with the stamp it was computed at: `Caching`.
+ *  - a value paired with the stamp it was computed at: `Stamped`.
  */
 object Sharing:
 

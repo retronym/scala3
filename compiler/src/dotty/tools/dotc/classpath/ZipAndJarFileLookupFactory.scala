@@ -11,7 +11,6 @@ import java.nio.file.attribute.{BasicFileAttributes, FileTime}
 import dotty.tools.io.{AbstractFile, FileZipArchive}
 import dotty.tools.dotc.core.Contexts.*
 import FileUtils.*
-import _root_.dotty.tools.sharing.Caching
 
 /**
  * A trait providing an optional cache for classpath entries obtained from zip and jar files.

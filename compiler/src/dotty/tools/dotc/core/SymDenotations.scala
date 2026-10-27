@@ -28,7 +28,7 @@ import cc.{CapturingType, derivedCapturingType, stripCapturing}
 import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
-import _root_.dotty.tools.sharing.Caching
+import _root_.dotty.tools.sharing.Stamped
 
 object SymDenotations {
 
@@ -2250,18 +2250,14 @@ object SymDenotations {
     @cache @benignRace("an immutable map of names a function of the class; a lost update drops an entry, recomputed on demand")
     private var fullNameCache: SimpleIdentityMap[QualifiedNameKind, Name] = SimpleIdentityMap.empty
 
-    // `Caching` stamps and stores it; the invalidations null the stamp and remove entries from the (synchronised, on a
-    // concurrent base) map, as `stamped` expects of an invalidation
-    @cache @publishedBy("Caching")
-    private var myMemberCache: EqHashMap[Name, PreDenotation] | Null = null
-    private var myMemberCachePeriod: Period = Nowhere
+    // the invalidations clear it (`Stamped.Empty`) and remove entries from the (synchronised, on a concurrent base) map
+    private var myMemberCache: Stamped[PerPeriod, EqHashMap[Name, PreDenotation] | Null] = Stamped.Empty
 
     /** A cache from types T to baseType(T, C) */
     type BaseTypeMap = EqHashMap[CachedType, Type]
-    // as `myMemberCache`: an invalidation nulls the value, which `stampedWhen`'s `isCurrent` tests
-    @cache @publishedBy("Caching")
-    private var myBaseTypeCache: BaseTypeMap | Null = null
-    private var myBaseTypeCachePeriod: Period = Nowhere
+    // valid while the base types are those of its period; `invalidateBaseTypeCache` clears it, whose `null` value
+    // `cachedWhen`'s test then finds
+    private var myBaseTypeCache: Stamped[PerPeriod, BaseTypeMap | Null] = Stamped.Empty
 
     // read once into a local; a reader that finds one invalid stores a fresh one, and a lost store is a lost memo:
     // validity is the cache's own (its run and phase group, and on a concurrent base the structure epoch)
@@ -2271,15 +2267,14 @@ object SymDenotations {
     private var memberNamesCache: MemberNames = MemberNames.None
 
     private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
-      Caching.stamped(myMemberCachePeriod, myMemberCache)(myMemberCachePeriod = _, myMemberCache = _)(ctx.period):
+      myMemberCache.cached:
         ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
       .nn
 
     // `invalidateBaseTypeCache` nulls the cache: with several readers, after
     // another reader found the period current (I67)
     private def baseTypeCache(using Context): BaseTypeMap =
-      Caching.stampedWhen(myBaseTypeCachePeriod, myBaseTypeCache)(myBaseTypeCachePeriod = _, myBaseTypeCache = _)(
-          (period, cache) => cache != null && currentHasSameBaseTypesAs(period), ctx.period):
+      myBaseTypeCache.cachedWhen((stamp, cache) => cache != null && currentHasSameBaseTypesAs(Period.fromCode(stamp))):
         ctx.base.sharing.newEqHashMap()
       .nn
 
@@ -2294,22 +2289,21 @@ object SymDenotations {
     }
 
     def invalidateBaseTypeCache(): Unit = {
-      myBaseTypeCache = null
-      myBaseTypeCachePeriod = Nowhere
+      myBaseTypeCache = Stamped.Empty
     }
 
     def invalidateMemberCaches()(using Context): Unit =
-      myMemberCachePeriod = Nowhere
+      myMemberCache = Stamped.Empty
       invalidateMemberNamesCache()
 
     def invalidateMemberCachesFor(sym: Symbol)(using Context): Unit =
-      myMemberCache match
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(sym.name)
       if !sym.flagsUNSAFE.is(Private) then
         invalidateMemberNamesCache()
         if sym.isWrappedToplevelDef then
-          val outerCache = sym.owner.owner.asClass.classDenot.myMemberCache
+          val outerCache = sym.owner.owner.asClass.classDenot.myMemberCache.value
           if outerCache != null then outerCache.remove(sym.name)
 
     override def copyCaches(from: SymDenotation, phase: Phase)(using Context): this.type = {
@@ -2318,7 +2312,8 @@ object SymDenotations {
           if (from.memberNamesCache.isValidAt(phase)) memberNamesCache = from.memberNamesCache
           if (from.baseDataCache.isValidAt(phase)) {
             baseDataCache = from.baseDataCache
-            myBaseTypeCache = from.baseTypeCache
+            // the copy keeps this cache's stamp, as the plain field did
+            myBaseTypeCache = Stamped(myBaseTypeCache.stamp, from.baseTypeCache)
           }
         case _ =>
       }
@@ -2599,7 +2594,7 @@ object SymDenotations {
      */
     def replace(prev: Symbol, replacement: Symbol)(using Context): Unit = {
       unforcedDecls.openForMutations.replace(prev, replacement)
-      myMemberCache match
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(replacement.name)
     }
@@ -2614,7 +2609,7 @@ object SymDenotations {
       scope.writing:
         scope.unlink(sym, sym.name)
         if sym.name != sym.originalName then scope.unlink(sym, sym.originalName)
-      myMemberCache match
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(sym.name)
       if (!sym.flagsUNSAFE.is(Private)) invalidateMemberNamesCache()

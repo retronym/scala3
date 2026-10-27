@@ -7,24 +7,22 @@ import scala.jdk.CollectionConverters.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** A lint over `compiler/src/dotty/tools/dotc/core` and `cc`: a `private var` that stamps a cache (a `Period`, `RunId` or `Validity`, or
- *  named `…Period`, `…RunId`, `valid…`, `checked…`) is read and written only in the stamp and setter arguments of a
- *  `Caching` helper, or reset (`= Nowhere`, `= NoRunId`). With several readers a plain read of the stamp, then the
- *  value, can pair a current stamp with an old value or the default (docs/_docs/internals/interactive-multi-reader.md
- *  §4.4.1). The exceptions below say why each is one.
+/** A lint over `compiler/src/dotty/tools/dotc/core` and `cc`: no `private var` stamps a cache beside its value (a
+ *  `Period`, `RunId` or `Validity`, or named `…Period`, `…RunId`, `valid…`, `checked…`) but the exceptions below, each
+ *  with its reason. With several readers a plain read of the stamp, then the value, can pair a current stamp with an
+ *  old value or the default (docs/_docs/internals/interactive-multi-reader.md §4.4.1): a stamped cache keeps both in
+ *  one field, a `dotty.tools.sharing.Stamped`.
  */
 class StampedCachesTest:
   import StampedCachesTest.*
 
-  @Test def stampsOnlyThroughCaching(): Unit =
+  @Test def noStampBesideItsValue(): Unit =
     val violations =
       for
         file <- sources
-        text = Files.readString(file)
-        name <- stampFields(text)
+        name <- stampFields(Files.readString(file))
         if !exceptions.contains((file.getFileName.toString, name))
-        line <- strayUses(text, name)
-      yield s"${file.getFileName}:$line: `$name` used outside a `Caching` helper"
+      yield s"${file.getFileName}: `$name` stamps a cache in a field of its own: keep the stamp and the value in a `Stamped`"
     assertTrue(violations.mkString("\n", "\n", ""), violations.isEmpty)
 
   @Test def exceptionsAreCurrent(): Unit =
@@ -32,19 +30,14 @@ class StampedCachesTest:
     val stale = exceptions.keySet -- present
     assertTrue(s"exceptions for fields that are gone: $stale", stale.isEmpty)
 
-  @Test def lintSeesAStrayRead(): Unit =
+  @Test def lintSeesAStampField(): Unit =
     val text =
       """class C:
         |  private var myFooPeriod: Period = Nowhere
         |  private var myFoo: Int = 0
-        |  def foo(using Context) =
-        |    Caching.stamped(myFooPeriod, myFoo)(myFooPeriod = _, myFoo = _)(ctx.period):
-        |      42
-        |  def reset() = myFooPeriod = Nowhere
-        |  def peek(using Context) = if myFooPeriod == ctx.period then myFoo else 0
+        |  private var myBar: Stamped[PerPeriod, Int] = Stamped.Empty
         |""".stripMargin
     assertEquals(List("myFooPeriod"), stampFields(text))
-    assertEquals(List(8), strayUses(text, "myFooPeriod"))
 
 object StampedCachesTest:
   // `cc` for the capture checker's `Validity` stamps on capabilities
@@ -53,7 +46,7 @@ object StampedCachesTest:
   private def sources: List[Path] =
     dirs.flatMap(d => Files.list(d).iterator.asScala.filter(_.toString.endsWith(".scala"))).sortBy(_.toString)
 
-  /** Stamp fields that are not caches, or are caches that are not two plain fields kept through `Caching`. */
+  /** Stamp fields that are not caches, or are caches whose stamp does not pair with one value. */
   private val exceptions: Map[(String, String), String] = Map(
     ("Contexts.scala", "_period") -> "the context's period itself",
     ("Phases.scala", "myPeriod") -> "a phase's period, set once when the phases are made",
@@ -83,38 +76,3 @@ object StampedCachesTest:
     StampField.findAllMatchIn(text).collect {
       case m if m.group(2) == "Period" || m.group(2) == "RunId" || m.group(2) == "Validity" || isStampName(m.group(1).nn) => m.group(1).nn
     }.toList.distinct
-
-  /** The extents of the argument lists of each `Caching.<helper>` call before its block: the stamp, the value, their
-   *  setters and the validity test.
-   */
-  private def cachingArguments(text: String): List[(Int, Int)] =
-    raw"Caching\.\w+\(".r.findAllMatchIn(text).map { m =>
-      var i = m.end - 1
-      var continue = true
-      while continue do
-        var depth = 0
-        var j = i
-        while
-          text(j) match
-            case '(' => depth += 1
-            case ')' => depth -= 1
-            case _ =>
-          j += 1
-          depth > 0
-        do ()
-        i = j
-        continue = i < text.length && text(i) == '('
-      (m.start, i)
-    }.toList
-
-  /** The lines with a use of `name` that is not its declaration, a reset, or in a `Caching` call's arguments. */
-  def strayUses(text: String, name: String): List[Int] =
-    val inCaching = cachingArguments(text)
-    val Reset = raw"\s*=\s*(Nowhere|NoRunId)\b".r
-    raw"\b${java.util.regex.Pattern.quote(name)}\b".r.findAllMatchIn(text).filterNot { m =>
-      val before = text.substring(text.lastIndexOf('\n', m.start) + 1, m.start)
-      before.trim.endsWith("private var")
-        || Reset.findPrefixOf(text.substring(m.end)).isDefined
-        || inCaching.exists((from, to) => from <= m.start && m.end <= to)
-        || before.contains("//") || before.trim.startsWith("*") || before.trim.startsWith("/*")
-    }.map(m => text.substring(0, m.start).count(_ == '\n') + 1).toList.distinct
