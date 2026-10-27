@@ -1246,7 +1246,11 @@ class InteractiveDriver(
       myCtx = myCtx.fresh.setPhase(myInitCtx.base.typerPhase)
 
       val diagnostics = reporter.removeBufferedMessages
-      if target.exists then
+      // A whole-file run leaves a session too, with nothing skipped: the
+      // requests after it on the same content are served from it, instead
+      // of each running again (I58). Without targeting no request reads a
+      // session.
+      if target.exists || targetedRequests then
         val s = Session(uri, source, run, reporter, unit)
         s.setInitial(skipped, diagnostics)
         mySession = s
