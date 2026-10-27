@@ -1296,11 +1296,40 @@ object desugar {
 
   /** Transform extension construct to list of extension methods */
   def extMethods(ext: ExtMethods)(using Context): Tree = flatTree {
+    var firstMethod = true
     ext.methods.map:
       case exp: Export => exp
-      case mdef: DefDef => defDef(extMethod(mdef, ext.paramss))
+      case mdef: DefDef =>
+        // The methods share the extension's parameter trees, on which the Namer
+        // and the typer write and remove attachments (`SymOfTree`, `TypedAhead`)
+        // as each method is completed and typed. With parallel readers, two
+        // of them doing so for sibling methods removed each other's (finding
+        // I86): each method gets parameter trees of its own. Serialised readers
+        // type one at a time and keep the shared trees, as batch compilation does.
+        // The first method keeps the extension's own, which tools that look up a
+        // parameter in the untyped `ExtMethods` (the presentation compiler's
+        // highlight of `Int` in `extension (xs: List[Int])`) find typed in place.
+        val extParamss =
+          if ctx.base.parallel && !firstMethod then mapParamss(ext.paramss)(freshCopy)(freshCopy) else ext.paramss
+        firstMethod = false
+        defDef(extMethod(mdef, extParamss))
       case _ => EmptyTree // we ignore all the other trees. Error was reported during parsing.
   }
+
+  /** A copy of `tree` that shares no node with it, with the same attachments. */
+  private def freshCopy[T <: Tree](tree: T)(using Context): T =
+    val copier = new UntypedTreeMap:
+      override def transform(t: Tree)(using Context): Tree =
+        // `EmptyTree` and the like are singletons, compared by reference
+        if t.isEmpty then return t
+        val t1 = super.transform(t)
+        val copy = if t1 eq t then t.cloneIn(t.source) else t1
+        // a clone shares the original's attachment links, which are mutable
+        copy.removeAllAttachments()
+        for (key, value) <- t.allAttachments.reverse do
+          copy.pushAttachment(key.asInstanceOf[Property.Key[Any]], value)
+        copy
+    copier.transform(tree).asInstanceOf[T]
   /** Type pattern variables get an annotation `@patternType`.
    *  ```
    *    <mods> type t >: Low <: Hi

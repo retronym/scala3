@@ -31,8 +31,9 @@ class Parser extends Phase {
         //  p.in.debugTokenStream = true
         val tree = p.parse()
         ctx.compilationUnit.comments = p.in.comments
-        if (p.firstXmlPos.exists && !firstXmlPos.exists)
-          firstXmlPos = p.firstXmlPos
+        if p.firstXmlPos.exists then synchronized {
+          if !firstXmlPos.exists then firstXmlPos = p.firstXmlPos
+        }
         tree
       }
     if (Config.checkPositions)
@@ -46,16 +47,27 @@ class Parser extends Phase {
         report.inform(s"parsing ${unit.source}")
         ctx.fresh.setCompilationUnit(unit).withRootImports
 
-    val unitContexts0 =
-      for
-        unitContext <- unitContexts
-        if parse(using unitContext)
-      yield unitContext
+    val unitContexts0 = dotty.tools.dotc.interactive.OpenTiming.timed(s"parse ${unitContexts.length} files"):
+      if ctx.base.parallel && unitContexts.lengthCompare(1) > 0 then parseInParallel(unitContexts)
+      else
+        for
+          unitContext <- unitContexts
+          if parse(using unitContext)
+        yield unitContext
 
     record("parsedTrees", ast.Trees.ntrees)
 
     unitContexts0.map(_.compilationUnit)
   }
+
+  /** With parallel readers (`-Yinteractive-parallel`, several files in one
+   *  run: `InteractiveDriver.openAll`), the files are parsed in parallel: a
+   *  parse reads only its own source, and what it shares (the name table, the
+   *  run's reporter) is synchronised on a concurrent base. The first failure
+   *  is rethrown here, after every parse has ended.
+   */
+  private def parseInParallel(unitContexts: List[Context]): List[Context] =
+    inParallel("dotc-parse", unitContexts)(parse)
 
   protected def run(using Context): Unit = unsupported("run")
 }
