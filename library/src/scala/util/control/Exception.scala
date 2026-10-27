@@ -80,8 +80,8 @@ import scala.language.implicitConversions
  *
  *  val goodUrl = "https://www.scala-lang.org/"
  *  // Prints page content,
- *  //   &lt;!DOCTYPE html&gt;
- *  //   &lt;html&gt;
+ *  //   <!DOCTYPE html>
+ *  //   <html>
  *  withThrowableLogging { printUrl(goodUrl) }
  *  ```
  *
@@ -99,7 +99,7 @@ import scala.language.implicitConversions
  *
  *  // Throws NPE not AppException,
  *  //   java.lang.NullPointerException
- *  //     at .calcResult(&lt;console&gt;:17)
+ *  //     at .calcResult(<console>:17)
  *  val result = unwrappingCatch(calcResult)
  *  ```
  *
