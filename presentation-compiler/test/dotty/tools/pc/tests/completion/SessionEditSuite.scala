@@ -82,9 +82,7 @@ class SessionEditSuite extends BasePCSuite:
             val at = if sym.exists && sym.span.exists && sym.source.path == unit.source.path then s" defined@${sym.span.point}" else ""
             s"${t.getClass.getSimpleName}[${t.span.start},${t.span.end}) : $tpe${if sym.exists then s" @ ${sym.showFullName}$at" else ""}"
 
-  /** The diagnostics with a position (a whole run adds its summary, "1 error found"). */
-  private def diagnosticsOf(diags: List[dotty.tools.dotc.reporting.Diagnostic]): String =
-    diags.filter(_.pos.exists).map(d => s"${d.level} ${d.pos.span} ${d.msg.message.linesIterator.next()}").sorted.mkString("\n")
+  private def diagnosticsOf(diags: List[dotty.tools.dotc.reporting.Diagnostic]): String = SessionDiagnostics.of(diags)
 
   /** Every identifier of `content`, hovered on `driver` (targeted), against a fresh whole-file run. */
   private def assertLikeFresh(driver: InteractiveDriver, content: String, what: String): Unit =
@@ -223,3 +221,113 @@ class SessionEditSuite extends BasePCSuite:
     driver.runUpTo(uri, source(edited), at(edited, "A.m1", 3))
     Assert.assertNotEquals(id, runId(driver))
     Assert.assertFalse(driver.bodyEdits)
+
+
+  // ---- Diagnostics are invalidated by what reported them, not where they are (docs §12, "Diagnostics", I69)
+
+  /** An edit, a whole-file run of the edited content in the same run, and
+   *  its diagnostics against a fresh run's.
+   */
+  private def assertEditedLikeFresh(content: String, from: String, to: String, what: String, expected: String): Unit =
+    val driver = newDriver()
+    driver.run(uri, source(content))
+    val id = runId(driver)
+    val edited = content.replace(from, to)
+    Assert.assertNotEquals(what, content, edited)
+    val fresh = diagnosticsOf(newDriver().run(uri, source(edited)))
+    Assert.assertEquals(s"$what: the fresh run", expected, fresh)
+    val obtained = diagnosticsOf(driver.run(uri, source(edited)))
+    Assert.assertTrue(driver.lastEdit(uri), driver.lastEdit(uri).startsWith("body edit"))
+    Assert.assertEquals(s"$what: the session's run", id, runId(driver))
+    Assert.assertEquals(s"$what [${driver.lastEdit(uri)}]", fresh, obtained)
+
+  /** An error reported by typing `d`, positioned in the sibling it inlined
+   *  from: the edit that removes the call removes the error.
+   */
+  @Test def `an-error-the-edited-body-inlined-from-a-sibling-goes` =
+    val content =
+      """|object A {
+         |  transparent inline def need[T]: T = compiletime.summonInline[T]
+         |  def d: Int = need[String].length
+         |  def e: Int = 1
+         |}
+         |""".stripMargin
+    assertEditedLikeFresh(content, "need[String].length", "1 + 2", "a call that inlined an error, removed", "")
+
+  /** A check of the class (made when the class's statement was typed),
+   *  positioned at the edited definition: the edit does not remove it.
+   */
+  @Test def `a-check-of-the-class-positioned-in-the-edited-definition-stays` =
+    val content =
+      """|object A {
+         |  def f(x: Int): Int = x
+         |  def f(x: Int): Int = x + 1
+         |}
+         |""".stripMargin
+    val edited = content.replace("x + 1", "x + 22")
+    val conflict = diagnosticsOf(newDriver().run(uri, source(edited)))
+    Assert.assertTrue(conflict, conflict.contains("Conflicting definitions"))
+    assertEditedLikeFresh(content, "x + 1", "x + 22", "a body edit of a conflicting definition", conflict)
+
+  /** A `@nowarn` inside the edited body, removed: its suppression goes with it. */
+  @Test def `a-nowarn-removed-by-the-edit-unsuppresses` =
+    val content =
+      """|object A {
+         |  def d: Int = {
+         |    @annotation.nowarn def g: Int = { 1; 2 }
+         |    g
+         |  }
+         |  def e: Int = 3
+         |}
+         |""".stripMargin
+    val edited = content.replace("@annotation.nowarn ", "")
+    val warning = diagnosticsOf(newDriver().run(uri, source(edited)))
+    Assert.assertTrue(warning, warning.contains("A pure expression does nothing"))
+    assertEditedLikeFresh(content, "@annotation.nowarn ", "", "a @nowarn removed", warning)
+
+  /** And one added: the old warning goes, the new suppression holds. */
+  @Test def `a-nowarn-added-by-the-edit-suppresses` =
+    val content =
+      """|object A {
+         |  def d: Int = {
+         |    def g: Int = { 1; 2 }
+         |    g
+         |  }
+         |}
+         |""".stripMargin
+    assertEditedLikeFresh(content, "def g", "@annotation.nowarn def g", "a @nowarn added", "")
+
+  /** An error inside the body, fixed by the edit; one in a sibling after it, shifted. */
+  @Test def `an-error-fixed-by-the-edit-goes-a-sibling-error-shifts` =
+    val content =
+      """|object A {
+         |  def d: Int = "no"
+         |  def e: Int = "still"
+         |}
+         |""".stripMargin
+    val edited = content.replace("\"no\"", "1 + 2 + 3")
+    val one = diagnosticsOf(newDriver().run(uri, source(edited)))
+    Assert.assertTrue(one, one.contains("\"still\"") && !one.contains("\"no\""))
+    assertEditedLikeFresh(content, "\"no\"", "1 + 2 + 3", "an error fixed", one)
+
+  /** Until the edited definition is typed again its old diagnostics are
+   *  published, mapped through the edit (no flicker); typing it replaces them.
+   */
+  @Test def `the-edited-definition-s-diagnostics-are-stale-until-it-is-typed` =
+    val content =
+      """|object A {
+         |  def d: Int = { val k = 1; "s" }
+         |  def e: Int = 2
+         |}
+         |""".stripMargin
+    val driver = newDriver()
+    val before = driver.run(uri, source(content)).filter(_.pos.exists)
+    Assert.assertEquals(before.toString, 1, before.size)
+    val edited = content.replace("val k = 1;", "val k = 12;")
+    // a hover in `e`: `d` is not typed
+    val stale = driver.runUpTo(uri, source(edited), at(edited, "2\n", 0)).filter(_.pos.exists)
+    Assert.assertTrue(driver.lastEdit(uri), driver.lastEdit(uri).startsWith("body edit of d"))
+    Assert.assertEquals(driver.untypedSpans(uri).toString, 1, driver.untypedSpans(uri).size)
+    Assert.assertEquals("the old error, moved", List(before.head.pos.start + 1), stale.map(_.pos.start))
+    // the whole-file run types `d`: its own diagnostics
+    Assert.assertEquals(diagnosticsOf(newDriver().run(uri, source(edited))), diagnosticsOf(driver.run(uri, source(edited))))

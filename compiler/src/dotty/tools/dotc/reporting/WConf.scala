@@ -147,6 +147,13 @@ class Suppression(val annotPos: SourcePosition, val filters: List[MessageFilter]
   inline def usedState = 1
   inline def supersededState = 2
   private var _used = unusedState
+  /** The fact that registered it, in interactive mode (`Provenance`). */
+  var provenance: Provenance | Null = null
+  /** This suppression at other offsets (an edit moved its text), with its provenance. */
+  def moved(annotPos: SourcePosition, start: Int, end: Int): Suppression =
+    val sup = Suppression(annotPos, filters, start, end, verbose)
+    sup.provenance = provenance
+    sup
   def used: Boolean = _used == usedState
   def superseded: Boolean = _used == supersededState
   def markUsed(): Unit =

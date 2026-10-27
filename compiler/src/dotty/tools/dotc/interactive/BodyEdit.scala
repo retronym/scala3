@@ -53,6 +53,12 @@ private[interactive] object BodyEdit:
 
     val regionSpan: Span = Span(start, oldEnd)
 
+    /** Does the edit change the text of `sp` (old offsets): overlap it, or
+     *  insert strictly inside it?
+     */
+    def touches(sp: Span): Boolean =
+      sp.exists && (if start == oldEnd then sp.start < start && start < sp.end else sp.start < oldEnd && start < sp.end)
+
     override def toString = s"Region([$start, $oldEnd) -> [$start, $newEnd))"
 
   def region(old: String, now: String): Region =

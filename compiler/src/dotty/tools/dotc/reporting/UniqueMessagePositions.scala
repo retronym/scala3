@@ -34,6 +34,12 @@ trait UniqueMessagePositions extends Reporter {
   def forgetPositions(source: SourceFile): Unit =
     positions.filterInPlace((k, _) => k._1 ne source)
 
+  /** Remember `dia`, reported in `source`, as `markReported` would have. */
+  def rememberPositions(source: SourceFile, dia: Diagnostic): Unit =
+    if dia.pos.exists then
+      for offset <- dia.pos.start to dia.pos.end do
+        positions.getOrElseUpdate((source, offset), dia)
+
   override def markReported(dia: Diagnostic)(using Context): Unit =
     if dia.pos.exists then
       for offset <- dia.pos.start to dia.pos.end do

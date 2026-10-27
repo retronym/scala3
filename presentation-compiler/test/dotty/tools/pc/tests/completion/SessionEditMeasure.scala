@@ -63,7 +63,8 @@ class SessionEditMeasure:
     val driver = new InteractiveDriver(if bodyEdits then settings :+ "-Yinteractive-body-edits" else settings, CachedLogicalPackage.none)
     driver.run(uri, SourceFile.virtual(uri, content))
     val rng = new Random(1)
-    val hover, whole = mutable.ArrayBuffer.empty[Double]
+    val hover, whole, diag = mutable.ArrayBuffer.empty[Double]
+    var diagnostics = 0
     val outcomes = mutable.Map.empty[String, Int].withDefaultValue(0)
     for i <- 0 until edits do
       // an edit inside a body: an integer literal gets one more digit
@@ -91,11 +92,13 @@ class SessionEditMeasure:
       driver.runUpTo(uri, src, Span(at + 1))
       hover += ms(t0)
       outcomes(driver.lastEdit(uri).replaceAll(" of .*", "").replaceAll(" \\(.*", "")) += 1
+      // the invalidation of the diagnostics and suppressions (§12, "Diagnostics")
+      """diagnostics ([0-9.]+) ms""".r.findFirstMatchIn(driver.lastEdit(uri)).foreach(m => diag += m.group(1).toDouble)
       if bodyEdits && i % 9 == 0 then println(s"[measure] $rel #$i ${driver.lastEdit(uri)}")
       val t1 = System.nanoTime()
-      driver.run(uri, src)
+      diagnostics = driver.run(uri, src).size
       whole += ms(t1)
-    s"$rel ${if bodyEdits then "on " else "off"}: hover after edit ${summary(hover.drop(5).toSeq)} | whole-file run after ${summary(whole.drop(5).toSeq)} | ${outcomes.toList.sorted.map((k, n) => s"$n× ${if k.isEmpty then "fresh" else k}").mkString(", ")}"
+    s"$rel ${if bodyEdits then "on " else "off"}: hover after edit ${summary(hover.drop(5).toSeq)} | whole-file run after ${summary(whole.drop(5).toSeq)}${if diag.nonEmpty then s" | diagnostics invalidated ${summary(diag.drop(5).toSeq)} ($diagnostics diagnostics)" else ""} | ${outcomes.toList.sorted.map((k, n) => s"$n× ${if k.isEmpty then "fresh" else k}").mkString(", ")}"
 
   @Test def `edit-then-hover` =
     Assume.assumeTrue(sourcesRoot.exists(r => Files.exists(r.resolve("../../../../../local/measure-edits").normalize)))
