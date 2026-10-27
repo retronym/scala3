@@ -13,5 +13,5 @@ object TestLeaks:
    */
   def leaveTouched(sym: Symbol)(using Context): Unit =
     sym.denot.info = new LazyType:
-      def complete(denot: SymDenotation)(using Context): Unit = denot.info = defn.IntType
+      def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]): Unit = denot.info = defn.IntType
     sym.setFlag(Flags.Touched)

@@ -103,11 +103,11 @@ trait TraceSyntax:
       var finalized = false
       var logctx = ctx
       while logctx.reporter.isInstanceOf[StoreReporter] do logctx = logctx.outer
-      def margin = ctx.base.indentTab * ctx.base.indent
+      def margin = ctx.base.indentTab * ctx.reader.indent
       def doLog(s: String) = if isForced then println(s) else report.log(s)(using logctx)
       def finalize(msg: String) =
         if !finalized then
-          ctx.base.indent -= 1
+          ctx.reader.indent -= 1
           val stop = System.nanoTime
           val diffNs = stop - start
           val diffS = (diffNs / 1000 / 1000).toInt / 1000.0
@@ -118,7 +118,7 @@ trait TraceSyntax:
           finalized = true
       try
         doLog(s"$margin$leading")
-        ctx.base.indent += 1
+        ctx.reader.indent += 1
         val res = op
         finalize(trailing(res))
         res

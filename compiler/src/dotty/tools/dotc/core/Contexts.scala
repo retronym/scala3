@@ -31,6 +31,7 @@ import config.{JavaPlatform, SJSPlatform, Platform, ScalaSettings}
 import StdNames.nme
 import compiletime.uninitialized
 import scala.annotation.internal.sharable
+import java.lang.invoke.VarHandle
 import DenotTransformers.DenotTransformer
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.sbt.interfaces.{IncrementalCallback, ProgressCallback}
@@ -234,10 +235,14 @@ object Contexts {
     def typeAssigner: TypeAssigner = store(typeAssignerLoc)
 
     /** The new implicit references that are introduced by this scope */
+    // Readers that share a context (a completer's creation context) may both compute it and the later store wins:
+    // the values are equivalent, and a `ContextualImplicits` is made of final fields, so either one is safely seen.
     private var implicitsCache: ContextualImplicits | Null = null
     def implicits: ContextualImplicits = {
-      if (implicitsCache == null)
-        implicitsCache = {
+      val cached = implicitsCache
+      if (cached != null) cached
+      else {
+        val result = {
           val infoIfImport = importInfoIfImportContext
           val implicitRefs: List[ImplicitRef] =
             if (isClassDefContext)
@@ -256,7 +261,9 @@ object Contexts {
           if (implicitRefs.isEmpty) outerImplicits
           else new ContextualImplicits(implicitRefs, outerImplicits, infoIfImport)(this)
         }
-      implicitsCache.nn
+        implicitsCache = result
+        result
+      }
     }
 
     /** Either the current scope, or, if the current context owner is a class,
@@ -272,7 +279,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec))
+      base.locked(base.sources().getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using base.mode)
     }
 
     /** SourceFile with given path, memoized */
@@ -281,26 +288,43 @@ object Contexts {
       case Some(file) => getSource(file)
 
     /** AbstractFile with given path, memoized */
-    def getFile(path: String): Option[AbstractFile] = base.files.get(path).orElse(
-      try
-        val file = new PlainFile(Path(path))
-        base.files(path) = file
-        Some(file)
-      catch
-        case ex: InvalidPathException =>
-          report.error(em"invalid file path: ${ex.getMessage}")
-          None
-    )
+    def getFile(path: String): Option[AbstractFile] =
+      base.locked(base.files().get(path))(using base.mode).orElse(
+        try
+          val file = new PlainFile(Path(path))
+          // readers that miss at once store equal files
+          base.locked(base.files()(path) = file)(using base.mode)
+          Some(file)
+        catch
+          case ex: InvalidPathException =>
+            report.error(em"invalid file path: ${ex.getMessage}")
+            None
+      )
 
+    // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
+    // context). A lost update drops a derived context, which is made again. A derived context's fields are plain, so
+    // with concurrent readers its store is preceded by a release fence and a lookup is followed by an acquire fence
+    // (as a `Published` field orders its payloads): the reader that finds it sees it complete.
     private var related: SimpleIdentityMap[Phase | SourceFile, Context] | Null = null
+
+    private def concurrentBase: Boolean =
+      val b: ContextBase | Null = base // `NoContext` has none
+      b != null && b.concurrent
 
     private def lookup(key: Phase | SourceFile): Context | Null =
       util.Stats.record("Context.related.lookup")
-      if related == null then
+      val map = related
+      if map == null then
         related = SimpleIdentityMap.empty
         null
       else
-        related.nn(key)
+        if concurrentBase then VarHandle.acquireFence()
+        map(key)
+
+    private def relate(key: Phase | SourceFile, derived: Context): Unit =
+      val map = related.nn
+      if concurrentBase then VarHandle.releaseFence()
+      related = map.updated(key, derived)
 
     private def withPhase(phase: Phase, pid: PhaseId): Context =
       util.Stats.record("Context.withPhase")
@@ -312,7 +336,7 @@ object Contexts {
         if ctx1 == null then
           util.Stats.record("Context.withPhase.new")
           ctx1 = fresh.setPhase(pid)
-          related = related.nn.updated(phase, ctx1)
+          relate(phase, ctx1)
         ctx1
 
     final def withPhase(phase: Phase): Context = withPhase(phase, phase.id)
@@ -333,7 +357,7 @@ object Contexts {
             // so set `mustExistIfNotNull` to false.
             ctx2.setCompilationUnit(CompilationUnit(source, mustExistIfNotNull = false))
           ctx1 = ctx2
-          related = related.nn.updated(source, ctx2)
+          relate(source, ctx2)
         ctx1
 
     // `creationTrace`-related code. To enable, uncomment the code below and the
@@ -622,10 +646,16 @@ object Contexts {
   class FreshContext(base: ContextBase) extends Context(base) {
     util.Stats.record("Context.fresh")
 
+    // A fresh context's fields are set by whoever makes it (`fresh.setX`, `init`, `FreshContext.initial`) before it is
+    // handed on, and not changed after: so readers that share a context (a completer's creation context) see its
+    // fields as set. The exceptions are a pooled context, which only its reader's pool reuses (`reuseIn`) and which
+    // must not be retained, and `_period`, which `SingleDenotation._goForward` sets and restores on the context it is
+    // given while a denotation transformer runs.
+
     private var _outer: Context = uninitialized
     def outer: Context = _outer
 
-    private var _period: Period = uninitialized
+    private var _period: Period = uninitialized // set while the context is built, before it is shared
     final def period: Period = _period
 
     private var _mode: Mode = uninitialized
@@ -837,7 +867,7 @@ object Contexts {
           .updated(notNullInfosLoc, Nil)
           .updated(compilationUnitLoc, NoCompilationUnit)
           .updated(profilerLoc, Profiler.NoOp)
-      c._searchHistory = new SearchRoot
+      c._searchHistory = new SearchRoot(perThread = base.concurrent)
       c._gadtState = GadtState(GadtConstraint.empty)
       c._inlineTraitState = InlineTraitState()
       c
@@ -896,9 +926,11 @@ object Contexts {
       val result = op(using nestedCtx)
       if commit(result)(using nestedCtx) then
         nestedCtx.typerState.commit()
-        nestedCtx.typerState.setCommittable(true)
       result
     finally
+      // the pooled typer state is reused: committable again whatever happened
+      // (`commit` clears the flag before it merges, and a merge can throw)
+      nestedCtx.typerState.setCommittable(true)
       pool.free()
 
   /** Run `op` with a pool-allocated context that has the given `owner`. */
@@ -959,16 +991,24 @@ object Contexts {
   /** A context base defines state and associated methods that exist once per
    *  logical compiler instance.
    */
-  class ContextBase extends ContextState
+  class ContextBase(sharing: Sharing) extends ContextState(sharing)
                        with Phases.PhasesBase
                        with Plugins {
+
+    /** A base for batch compilation (and Java callers: the sbt bridge). */
+    def this() = this(Sharing.Batch)
+
+    // several readers need a reader per thread, which only the interactive driver's base binds (it overrides `reader`)
+    assert(!sharing.concurrent || getClass != classOf[ContextBase], s"$sharing on a base that does not bind readers to threads")
+
 
     val settings: ScalaSettings = ScalaSettings
 
     /** The initial context */
     val initialCtx: Context = FreshContext.initial(this: @unchecked, settings)
 
-    /** The platform, initialized by `initPlatform()`. */
+    /** The platform, initialized by `initPlatform()`. Set by `initialize`, which a run calls as it begins (an
+     *  interactive run is a write action, with no reader), and read after. */
     private var _platform: Platform | Null = null
 
     /** The platform */
@@ -1019,6 +1059,7 @@ object Contexts {
     protected def fresh()(using Context): FreshContext =
       FreshContext(ctx.base).init(ctx, ctx)
 
+    // the pools are a reader's (`Reader.exploreContextPool` and its siblings)
     private var inUse: Int = 0
     private var pool = new mutable.ArrayBuffer[FreshContext]
 
@@ -1057,16 +1098,68 @@ object Contexts {
       super.fresh().setTyperState(ts)
 
   /** The essential mutable state of a context base, collected into a common class */
-  class ContextState {
+  class ContextState(
+    /** How this base is shared between threads, chosen when it is made: `Sharing.Batch` but for the interactive
+     *  driver's (see `Sharing` and docs/_docs/internals/interactive-multi-reader.md). It picks the interners, the
+     *  caches that are maps and the symbol id counter below, and whether completions take `completionLock`
+     *  (serialised readers) or claim `completionRoots` (parallel readers). */
+    final val sharing: Sharing) extends Sharing.Guard {
+
+    /** `sharing.concurrent` and `sharing.parallel`, copied to the base: a hot test reads one field of it. */
+    final val concurrent: Boolean = sharing.concurrent
+    final val parallel: Boolean = sharing.parallel
+
+    /** `sharing.mode`, copied to the base: the given of the `dotty.tools.sharing` operations (`dotc.sharingMode`),
+     *  a value class over `concurrent`, so that its test reads one field of the base, as a test of `concurrent` does. */
+    final val mode: _root_.dotty.tools.sharing.Mode = sharing.mode
+
+    /** Interactive mode with several readers: the lock every completion
+     *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
+     *  to a new run (`Denotation.current`) and every computation of an
+     *  inherited cache (base classes, member names) runs under, so that the
+     *  lazy facts of the symbol table have one writer at a time while bodies
+     *  are typed concurrently. Reentrant: a completion forces others. Not
+     *  used in batch compilation.
+     */
+    val completionLock: CompletionLock = CompletionLock(this)
+
+    /** The owners of completion roots with parallel readers (see
+     *  `Sharing.Parallel`, `CompletionRoots`).
+     */
+    val completionRoots: CompletionRoots = CompletionRoots(this)
+
+    /** What a `Sharing.claim` takes on a concurrent base (`dotc.claimRegistry`): the root's claim with parallel
+     *  readers, the completion lock (as the key's `ClaimKind` says) with serialised ones. */
+    val claimRegistry: _root_.dotty.tools.sharing.ClaimRegistry =
+      if parallel then completionRoots else completionLock
+
+    /** The stamp of the structure of published scopes: bumped by every change to a scope after its owner's
+     *  completion published it (`MutableScope.published`). A cache computed from scopes can record it, and is
+     *  current while it has not moved.
+     */
+    private val myStructureEpoch = java.util.concurrent.atomic.AtomicInteger()
+    private[dotc] def structureEpoch: Int = myStructureEpoch.get
+    private[dotc] def bumpStructureEpoch(): Unit = myStructureEpoch.incrementAndGet()
+
+    /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
+     *  may change a published scope (`MutableScope.changed`).
+     */
+    @volatile private[dotc] var writeActionThread: Thread | Null = null
+
     // Symbols state
 
     /** Counter for unique symbol ids */
     private var _nextSymId: Int = 0
-    def nextSymId: Int = { _nextSymId += 1; _nextSymId }
+    private val _concurrentSymIds = new java.util.concurrent.atomic.AtomicInteger(0)
+    def nextSymId: Int =
+      if concurrent then _concurrentSymIds.incrementAndGet()
+      else { _nextSymId += 1; _nextSymId }
 
-    /** Sources and Files that were loaded */
-    val sources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
-    val files: util.HashMap[String, AbstractFile] = util.HashMap()
+    /** Sources and Files that were loaded. Readers of a concurrent base share them, so they are reached only with
+     *  the evidence of this base's monitor (`Sharing.serialised`, `locking`).
+     */
+    private[core] val sources = guarded(util.HashMap[AbstractFile, SourceFile]())
+    private[core] val files = guarded(util.HashMap[String, AbstractFile]())
 
     /** Cache for magic offset header lookups, scoped to this compiler instance
      *  so that concurrent compilers in the same classloader don't share stale entries. */
@@ -1078,6 +1171,7 @@ object Contexts {
     /** If coverage option is used, it stores all instrumented statements (for InstrumentCoverage).
      * We need this information to be persisted across different runs, so it's stored here.
      */
+    // written and read by the InstrumentCoverage phase, which runs after the typer on one thread
     private[dotc] var coverage: Coverage | Null = null
 
     /** The reader of batch compilation: the comparer stack, the context
@@ -1092,6 +1186,7 @@ object Contexts {
     /** The fuel settings of a reader (`Context.handleRecursive`), known once
      *  `ContextBase.initialize` has run.
      */
+    // set by `ContextBase.initialize`, which a run calls as it begins (an interactive run is a write action)
     private[dotc] var maxFuel: Int = Reader.initialFuel
     private[dotc] var enrichErrorMessages: Boolean = true
 
@@ -1100,14 +1195,15 @@ object Contexts {
 
     // Types state
     /** A table for hash consing unique types */
-    private[core] val uniques: Uniques = Uniques()
+    private[core] val uniques: Uniques = sharing.newUniques()
 
     /** A table for hash consing unique applied types */
-    private[dotc] val uniqueAppliedTypes: AppliedUniques = AppliedUniques()
+    private[dotc] val uniqueAppliedTypes: AppliedUniques = sharing.newAppliedUniques()
 
     /** A table for hash consing unique named types */
-    private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
+    private[core] val uniqueNamedTypes: NamedTypeUniques = sharing.newNamedTypeUniques()
 
+    // hash-consed: readers that make one at once store the same instance
     var emptyTypeBounds: TypeBounds | Null = null
     var emptyWildcardBounds: WildcardType | Null = null
 
@@ -1115,10 +1211,12 @@ object Contexts {
      *  instead of storing messages directly in ErrorTypes in order
      *  to avoid space leaks - the message usually captures a context.
      */
-    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = mutable.Map()
+    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = sharing.newMap()
 
     // Phases state
 
+    // The phases are set by `usePhases` and `setPhasePlan`, which a run calls as it begins (an interactive run is a
+    // write action, with no reader), and read after.
     private[core] var phasesPlan: List[List[Phase]] = uninitialized
 
     /** Phases by id */
@@ -1132,17 +1230,12 @@ object Contexts {
 
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
 
-    /** Flag to suppress inlining, set after overflow */
-    private[dotc] var stopInlining: Boolean = false
-
     /** Cached -Yno-double-bindings setting. This is accessed from `setDenot`, which
      *  is fairly hot, so we don't want to lookup the setting each time it is called.
      */
     private[dotc] var checkNoDoubleBindings = false
 
-    // Reporters state
-    private[dotc] var indent: Int = 0
-
+    // Reporters state (the margin of `trace` output is `Reader.indent`)
     protected[dotc] val indentTab: String = "  "
 
     private[dotc] var wConfCache: (List[String], WConf) = uninitialized
@@ -1156,13 +1249,16 @@ object Contexts {
       emptyTypeBounds = null
       emptyWildcardBounds = null
       errorTypeMsg.clear()
-      sources.clear()
-      files.clear()
+      alwaysLocked {
+        sources().clear()
+        files().clear()
+      }
       initialReader.reset()  // forces re-evaluation of top and bottom classes in TypeComparer
 
     // Test that access is single threaded
 
     /** The thread on which `checkSingleThreaded was invoked last */
+    // only `Run.compileUnits` calls the check, and not in interactive mode
     @sharable private var thread: Thread | Null = null
 
     /** Check that we are on the same thread as before */

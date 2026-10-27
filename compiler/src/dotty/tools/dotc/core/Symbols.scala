@@ -32,6 +32,7 @@ import scala.annotation.internal.sharable
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
+import _root_.dotty.tools.sharing.{Payload, Published}
 import dotty.tools.tasty.TastyVersion
 
 import scala.reflect.ClassTag
@@ -43,14 +44,21 @@ object Symbols extends SymUtils {
   /** Tree attachment containing the identifiers in a tree as a sorted array */
   val Ids: Property.Key[Array[String]] = new Property.Key
 
+  // the handle of `Symbol.checkedPeriod` (`Published`): a `val`, the given a reference to it
+  val checkedPeriodHandle: Published.Handle[Symbol, "checkedPeriod"] = Published.handle
+  given Published.Handle[Symbol, "checkedPeriod"] = checkedPeriodHandle
+
   /** A Symbol represents a Scala definition/declaration or a package.
-   *  @param myCoord The coordinates of the symbol (a position or an index)
+   *  @param initCoord The coordinates of the symbol (a position or an index)
    *  @param id     A unique identifier of the symbol (unique per ContextBase)
    */
-  class Symbol private[Symbols] (private var myCoord: Coord, val id: Int, val nestingLevel: Int)
+  class Symbol private[Symbols] (initCoord: Coord, val id: Int, val nestingLevel: Int)
     extends ParamInfo, SrcPos, printing.Showable {
 
     type ThisName <: Name
+
+    // set from `NoCoord` by the unpickler of a root's TASTy
+    private var myCoord: Coord = initCoord
 
     //assert(id != 723)
 
@@ -69,6 +77,8 @@ object Symbols extends SymUtils {
       myCoord = c
     }
 
+    // assigned by the typing of the symbol's own definition (no check-then-set); read for a local symbol's inline
+    // proxies and by signature help, which take the tree of whichever typing stored last
     private var myDefTree: Tree | Null = null
 
     /** The tree defining the symbol at pickler time, EmptyTree if none was retained */
@@ -90,26 +100,47 @@ object Symbols extends SymUtils {
       ctx.settings.Whas.safeInit ||        // initialization check
       ctx.settings.YsafeInitGlobal.value
 
-    /** The last denotation of this symbol */
-    private var lastDenot: SymDenotation = uninitialized
-    private var checkedPeriod: Period = Nowhere
+    /** The last denotation of this symbol, and the period it was last found
+     *  valid in. `checkedPeriod` publishes `lastDenot`: it is stored after the
+     *  denotation with release semantics and read with acquire semantics
+     *  (`Published`), so that a reader on another thread (interactive
+     *  mode, several readers) that finds the period current sees the
+     *  denotation stored before it, never the previous one.
+     */
+    private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
+    private var checkedPeriod: Published[Period] = Published(Nowhere)
 
-    private[core] def invalidateDenotCache(): Unit = { checkedPeriod = Nowhere }
+    /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:
+     *  the period is loaded with acquire semantics first, so that a denotation stored before the period that
+     *  published it is seen whole (`Published`), as in `denot`.
+     */
+    private def latestDenot: SymDenotation =
+      lastDenot.after(checkedPeriod.acquired)
+
+    /** `latestDenot` for a reader with a context: the acquire only when readers are concurrent, so that the batch
+     *  compiler's hottest readers (`isTerm`, `isType`) pay a field test, not a barrier.
+     */
+    private def latestDenotIn(using Context): SymDenotation =
+      if ctx.base.concurrent then lastDenot.after(checkedPeriod.acquired)
+      else lastDenot.peek // one thread
+
+    private[core] def invalidateDenotCache(): Unit = { checkedPeriod.setPlain(Nowhere) }
 
     /** Set the denotation of this symbol
      *  `denot` should always be initialized when a new Symbol is created.
      */
     private[core] def denot_=(d: SymDenotation): Unit = {
       util.Stats.record("Symbol.denot_=")
-      lastDenot = d
-      checkedPeriod = Nowhere
+      checkedPeriod.publishing(Nowhere):
+        lastDenot := d
     }
 
     /** The current denotation of this symbol */
     final def denot(using Context): SymDenotation = {
       util.Stats.record("Symbol.denot")
-      if checkedPeriod == ctx.period then lastDenot
-      else computeDenot(lastDenot)
+      val checked = checkedPeriod.acquired
+      if checked.value == ctx.period then lastDenot.after(checked)
+      else computeDenot(lastDenot.after(checked))
     }
 
     private def computeDenot(lastd: SymDenotation)(using Context): SymDenotation = {
@@ -117,7 +148,12 @@ object Symbols extends SymUtils {
       // the JIT (reputedly, cutoff is at 35 bytes)
       util.Stats.record("Symbol.computeDenot")
       val now = ctx.period
-      checkedPeriod = now
+      // The plain store first: `recomputeDenot` brings the denotation forward,
+      // which reads `symbol.denot` on the way (`updateValidity`), and that
+      // reentrant read must find the period current and return `lastDenot`
+      // (a stack overflow otherwise). The release store after the new
+      // denotation is what publishes it to other threads.
+      checkedPeriod.setPlain(now)
       if lastd.validFor.contains(now) then lastd else recomputeDenot(lastd)
     }
 
@@ -126,7 +162,9 @@ object Symbols extends SymUtils {
       util.Stats.record("Symbol.recomputeDenot")
       val newd = lastd.current.asInstanceOf[SymDenotation]
       if newd.exists || lastd.initial.validFor.firstPhaseId <= ctx.phaseId then
-        lastDenot = newd
+        // the denotation first, then the period that publishes it
+        checkedPeriod.publishing(ctx.period):
+          lastDenot := newd
       else
         // We are trying to bring forward a symbol that is defined only at a later phase
         // (typically, a nested Java class, invisible before erasure).
@@ -134,20 +172,25 @@ object Symbols extends SymUtils {
         // previous validity, which means we will try another bring forward when the symbol
         // is referenced at a later phase. Otherwise we'd get stuck on NoDenotation here.
         // See #15562 and test i15562b in ReplCompilerTests
-        checkedPeriod = lastd.validFor
+        checkedPeriod.release(lastd.validFor)
       newd
     }
 
+    /** The period `lastDenot` was last found valid in (a plain read, for
+     *  tests and tools; the compiler reads it with acquire semantics).
+     */
+    private[dotc] def lastCheckedPeriod: Period = checkedPeriod.plain
+
     /** The original denotation of this symbol, without forcing anything */
     final def originDenotation: SymDenotation =
-      lastDenot.initial
+      latestDenot.initial
 
     /** The last known denotation of this symbol, without going through `current` */
     final def lastKnownDenotation: SymDenotation =
-      lastDenot
+      latestDenot
 
     private[dotc] def defRunId: RunId =
-      lastDenot.validFor.runId
+      latestDenot.validFor.runId
 
     private inline def associatedFileMatches(inline filter: AbstractFile => Boolean)(using Context): Boolean =
       try
@@ -174,15 +217,14 @@ object Symbols extends SymUtils {
 
     /** Is symbol valid in current run? */
     final def isValidInCurrentRun(using Context): Boolean =
-      (lastDenot.validFor.runId == ctx.runId || stillValid(lastDenot)) &&
-      (lastDenot.symbol eq this)
+      { val d = latestDenotIn; (d.validFor.runId == ctx.runId || stillValid(d)) && (d.symbol eq this) }
         // the last condition is needed because under ctx.staleOK overwritten
         // members keep denotations pointing to the new symbol, so the validity
         // periods check out OK. But once a package member is overridden it is not longer
         // valid. If the option would be removed, the check would be no longer needed.
 
-    final def isTerm(using Context): Boolean = lastDenot.isTerm
-    final def isType(using Context): Boolean = lastDenot.isType
+    final def isTerm(using Context): Boolean = latestDenotIn.isTerm
+    final def isType(using Context): Boolean = latestDenotIn.isType
     final def asTerm(using Context): TermSymbol = {
       assert(isTerm, s"asTerm called on not-a-Term $this")
       asInstanceOf[TermSymbol]
@@ -202,14 +244,15 @@ object Symbols extends SymUtils {
 
     /** The symbol's signature if it is completed or a method, NotAMethod otherwise. */
     final def signature(using Context): Signature =
-      if lastDenot.isCompleted || lastDenot.is(Method) then
+      val d = latestDenotIn
+      if d.isCompleted || d.is(Method) then
         denot.signature
       else
         Signature.NotAMethod
 
     /** Special cased here, because it may be used on naked symbols in substituters */
     final def isStatic(using Context): Boolean =
-      lastDenot.initial.isStatic
+      latestDenot.initial.isStatic
 
     /** This symbol entered into owner's scope (owner must be a class). */
     final def entered(using Context): this.type = {
@@ -286,7 +329,7 @@ object Symbols extends SymUtils {
      *  Overridden in ClassSymbol
      */
     def compilationUnitInfo(using Context): CompilationUnitInfo | Null =
-      lastDenot.topLevelClass.compilationUnitInfo
+      latestDenot.topLevelClass.compilationUnitInfo
 
     /** The info of the TASTy from which this symbol was loaded, None if not applicable. */
     def tastyInfo(using Context): Option[TastyInfo] =
@@ -425,7 +468,7 @@ object Symbols extends SymUtils {
     protected def prefixString: String = "Symbol"
 
     override def toString: String =
-      lastDenot.toString // + "#" + id // !!! DEBUG
+      latestDenot.toString // + "#" + id // !!! DEBUG
 
     def toText(printer: Printer): Text = printer.toText(this)
 
@@ -449,6 +492,7 @@ object Symbols extends SymUtils {
 
     type TreeOrProvider = tpd.TreeProvider | tpd.Tree
 
+    // a `TreeProvider` is replaced by the tree it yields; the TASTy reads run under the completion lock (I91)
     private var myTree: TreeOrProvider = tpd.EmptyTree
 
     /** If this is a top-level class and `-Yretain-trees` (or `-from-tasty`) is set.
@@ -506,6 +550,8 @@ object Symbols extends SymUtils {
       if compUnitInfo != null || this.is(Package) || this.owner.is(Package) then compUnitInfo
       else super.compilationUnitInfo
 
+    // a function of the class's file, TASTy info and annotations: `NoSource` until known, then the base's one
+    // `SourceFile` for it
     private var mySource: SourceFile = NoSource
 
     final def sourceOfClass(using Context): SourceFile = atPhaseNoLater(flattenPhase) {
@@ -624,7 +670,7 @@ object Symbols extends SymUtils {
       coord: Coord = NoCoord,
       compUnitInfo: CompilationUnitInfo | Null = null)(using Context): ClassSymbol = {
     def completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         denot.info = ClassInfo(owner.thisType, cls, parentTypes.map(_.dealias), decls, selfInfo)
@@ -647,7 +693,7 @@ object Symbols extends SymUtils {
       coord: Coord,
       compUnitInfo: CompilationUnitInfo | Null)(using Context): ClassSymbol = {
     def completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         val parents = parentTypes(cls).map(_.dealias)
@@ -724,7 +770,7 @@ object Symbols extends SymUtils {
       coord: Coord = NoCoord,
       compUnitInfo: CompilationUnitInfo | Null = null)(using Context): TermSymbol = {
     def completer(module: Symbol) = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         denot.info = ClassInfo(owner.thisType, cls, parentTypes.map(_.dealias), decls, TermRef(owner.thisType, module))
@@ -750,7 +796,7 @@ object Symbols extends SymUtils {
       coord: Coord,
       compUnitInfo: CompilationUnitInfo | Null)(using Context): TermSymbol = {
     def completer(module: Symbol) = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val decls = newScope
         val parents = parentTypes(cls).map(_.dealias)
@@ -926,7 +972,7 @@ object Symbols extends SymUtils {
         val odenot = original.denot
         val completer = new LazyType:
 
-          def complete(denot: SymDenotation)(using Context): Unit =
+          def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
 
             val oinfo = original.info match
               case ClassInfo(pre, _, parents, decls, selfInfo) =>

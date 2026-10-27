@@ -5,6 +5,7 @@ import java.net.URI
 import java.nio.file.{Files, Path, Paths}
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 import scala.language.unsafeNulls
 import scala.util.Random
 
@@ -63,14 +64,17 @@ class SessionOracleSuite extends BasePCSuite:
   private def describe(driver: InteractiveDriver, uri: URI, offset: Int): String =
     driver.compilationUnits.get(uri) match
       case None => "<no unit>"
-      case Some(unit) =>
-        given Context = driver.currentCtx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using driver.currentCtx))
-        Interactive.pathTo(unit.tpdTree, Span(offset)).headOption match
-          case None => "<no tree>"
-          case Some(t) =>
-            val sym = t.symbol
-            val tpe = if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"
-            s"${t.getClass.getSimpleName}[${t.span.start},${t.span.end}) : $tpe${if sym.exists then s" @ ${sym.showFullName}" else ""}"
+      case Some(unit) => describe(driver.currentCtx, unit, offset)
+
+  /** The innermost typed tree at `offset` of `unit`, under `ctx0`: the read action of a hover. */
+  private def describe(ctx0: Context, unit: dotty.tools.dotc.CompilationUnit, offset: Int): String =
+    given Context = ctx0.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx0))
+    Interactive.pathTo(unit.tpdTree, Span(offset)).headOption match
+      case None => "<no tree>"
+      case Some(t) =>
+        val sym = t.symbol
+        val tpe = if t.hasType then t.tpe.widenTermRefExpr.show else "<untyped>"
+        s"${t.getClass.getSimpleName}[${t.span.start},${t.span.end}) : $tpe${if sym.exists then s" @ ${sym.showFullName}" else ""}"
 
   private def inTyperCheckpoint(): Boolean =
     Thread.currentThread.getStackTrace.exists(_.getMethodName == "checkCancelledTyping")
@@ -144,6 +148,82 @@ class SessionOracleSuite extends BasePCSuite:
       println(f"[oracle $rel seed=$seed] ${idents.size} identifiers, $requests requests (+$recheck rechecks each), $fresh fresh runs, $cancelled cancellations landed; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms")
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  /** Two readers (step 3 of the multi-reader notes): the hovers of `oracle`
+   *  issued from two threads at once on one driver, each hover a read action
+   *  (`readUpTo`) whose description is computed under the read lock, every
+   *  answer the whole-file oracle's. The whole-file runs and the cancellations
+   *  of the single-reader walk are kept, from either thread.
+   */
+  private def oracle2(rel: String, seed: Int, requests: Int, cancelEvery: Int = 7, parallel: Boolean = true): Unit =
+    val root = sourcesRoot.getOrElse(throw new AssertionError(s"compiler sources not found from ${Paths.get("").toAbsolutePath}"))
+    val path = root.resolve(rel)
+    val content = Files.readString(path)
+    val uri = path.toUri
+    val source = SourceFile.virtual(uri, content)
+    val t0 = System.nanoTime()
+    val whole = newDriver()
+    whole.run(uri, source)
+    val idents = identifierEnds(source)(using whole.currentCtx)
+    val expected = idents.map((o, _) => o -> describe(whole, uri, o)).toMap
+    val tWhole = (System.nanoTime() - t0) / 1e6
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    // `parallel`: `-Yinteractive-parallel` (step 4); without, serialised (step 3)
+    val driver = new InteractiveDriver(if parallel then settings :+ "-Yinteractive-parallel" else settings, CachedLogicalPackage.none)
+    val failure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
+    val counts = new java.util.concurrent.ConcurrentHashMap[String, Int]()
+    def count(k: String) = counts.merge(k, 1, _ + _)
+    def line(o: Int) = content.substring(content.lastIndexOf('\n', o - 1) + 1, content.indexOf('\n', o) max o).trim.take(100)
+    def walk(thread: Int): Unit =
+      val rng = new Random(seed * 31 + thread)
+      val log = mutable.ListBuffer.empty[String]
+      def check(step: Int, what: String, o: Int, name: String): Unit =
+        val obtained = driver.readUpTo(uri, source, Span(o))((ctx, unit, _) => describe(ctx, unit, o))
+        log += s"$step $what `$name`@$o run=${driver.runIdOf(uri)} skipped=${driver.untypedSpans(uri).size}"
+        count(what)
+        if expected(o) != obtained then
+          org.junit.Assert.fail(s"""[oracle2 $rel seed=$seed reader $thread step $step] hover `$name` at $o ($what) differs from the whole-file run
+            |  line:     ${line(o)}
+            |  expected: ${expected(o)}
+            |  obtained: $obtained
+            |  last requests:
+            |${log.takeRight(8).map("    " + _).mkString("\n")}""".stripMargin)
+      for step <- 1 to requests if failure.get == null do
+        val (o, name) = idents(rng.nextInt(idents.size))
+        if step % 40 == 0 then
+          driver.readAll(uri, source)((_, _, _) => ())
+          count("whole-file")
+          for _ <- 1 to 3 do
+            val (p, pn) = idents(rng.nextInt(idents.size))
+            check(step, "after-run", p, pn)
+        if step % cancelEvery == 0 then
+          val k = 1 + rng.nextInt(3)
+          var p = 0
+          val thrown =
+            try
+              driver.withCancelChecker(() => { if inTyperCheckpoint() then p += 1; p >= k }) { driver.runUpTo(uri, source, Span(o)) }
+              false
+            catch case _: CancelledCompilation => true
+          if thrown then count("cancelled")
+        check(step, "hover", o, name)
+    try
+      val threads = (0 until 2).map { i =>
+        val t = new Thread(() =>
+          try walk(i)
+          catch
+          case ex: AssertionError => failure.compareAndSet(null, ex): Unit
+          case ex: CancelledCompilation => failure.compareAndSet(null, new AssertionError(s"reader $i: a cancellation reached the caller of a request without a checker", ex)): Unit
+          case scala.util.control.NonFatal(ex) => failure.compareAndSet(null, ex): Unit, s"oracle-reader-$i")
+        // an `Error` (a stack overflow) must fail the test too, not just end the thread
+        t.setUncaughtExceptionHandler((_, ex) => failure.compareAndSet(null, ex): Unit)
+        t.start()
+        t
+      }
+      threads.foreach(_.join())
+      if failure.get != null then throw failure.get
+      println(f"[oracle2 $rel seed=$seed] ${idents.size} identifiers, 2 readers x $requests requests: ${counts.asScala.toList.sortBy(_._1).map((k, v) => s"$k=$v").mkString(", ")}; whole-file oracle $tWhole%.0f ms, session ${(System.nanoTime() - t0) / 1e6 - tWhole}%.0f ms")
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
   /** The gate: with `-Yno-targeted-requests` a `runUpTo` types the whole
    *  file, as `run` does, and leaves no skipped statement.
    */
@@ -178,3 +258,9 @@ class SessionOracleSuite extends BasePCSuite:
   @Test def `Contexts-seed-1` = oracle("core/Contexts.scala", 1, 300)
   @Test def `Contexts-seed-2` = oracle("core/Contexts.scala", 2, 160)
   @Test def `SimpleIdentityMap-seed-1` = oracle("util/SimpleIdentityMap.scala", 1, 300)
+
+  @Test def `two-readers-ByteCodecs-seed-1` = oracle2("core/classfile/ByteCodecs.scala", 1, 300)
+  @Test def `two-readers-SourceTree-seed-1` = oracle2("interactive/SourceTree.scala", 1, 300)
+  @Test def `two-readers-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300)
+  @Test def `two-readers-Contexts-seed-1` = oracle2("core/Contexts.scala", 1, 200)
+  @Test def `two-readers-serialised-Chars-seed-1` = oracle2("util/Chars.scala", 1, 300, parallel = false)

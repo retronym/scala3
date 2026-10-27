@@ -83,9 +83,13 @@ abstract class AccessProxies {
       reference
     }
 
+    /** Whether accessors are entered in their owner and defined; if not, one is made only to be shown. */
+    protected def entersAccessors(using Context): Boolean = true
+
     /** A fresh accessor symbol */
     private def newAccessorSymbol(owner: Symbol, name: TermName, info: Type, accessed: Symbol)(using Context): TermSymbol = {
-      val sym = newSymbol(owner, name, Synthetic | Method, info, coord = accessed.span).entered
+      val sym = newSymbol(owner, name, Synthetic | Method, info, coord = accessed.span)
+      if entersAccessors then sym.entered
       if accessed.is(Private) then sym.setFlag(Final)
       else if sym.allOverriddenSymbols.exists(!_.is(Deferred)) then sym.setFlag(Override)
       if accessed.is(Erased) then sym.setFlag(Erased)
@@ -96,7 +100,8 @@ abstract class AccessProxies {
     /** An accessor symbol, create a fresh one unless one exists already */
     protected def accessorSymbol(owner: Symbol, accessorName: TermName, accessorInfo: Type, accessed: Symbol)(using Context): Symbol = {
       def refersToAccessed(sym: Symbol) = accessedBy.get(sym).contains(accessed)
-      owner.info.decl(accessorName).suchThat(refersToAccessed).symbol.orElse {
+      if !entersAccessors then newAccessorSymbol(owner, accessorName, accessorInfo, accessed)
+      else owner.info.decl(accessorName).suchThat(refersToAccessed).symbol.orElse {
         val acc = newAccessorSymbol(owner, accessorName, accessorInfo, accessed)
         accessedBy(acc) = accessed
         acc

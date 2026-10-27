@@ -17,6 +17,7 @@ object NameKinds {
   // These are sharable since all NameKinds are created eagerly at the start of the program
   // before any concurrent threads are forked. for this to work, NameKinds should never
   // be created lazily or in modules that start running after compilers are forked.
+  // the name kinds register themselves by tag as this object is initialised
   @sharable private val simpleNameKinds = new Array[ClassifiedNameKind](64)
   @sharable private val qualifiedNameKinds = new Array[QualifiedNameKind](64)
   @sharable private val numberedNameKinds = new Array[NumberedNameKind](64)
