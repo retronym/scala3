@@ -17,6 +17,33 @@ object Cleaner {
     "small", "span", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "var"
   )
 
+  private def backtickRunLength(text: String, from: Int): Int = {
+    var end = from
+    while (end < text.length && text(end) == '`') end += 1
+    end - from
+  }
+
+  /** Index of the next backtick run of exactly `runLength` at or after `from`, or -1 if there is none
+    * before the end of the paragraph (a line that is empty once the comment margin is ignored). */
+  private def closingBacktickRun(text: String, from: Int, runLength: Int): Int = {
+    var i = from
+    while (i < text.length) {
+      text(i) match {
+        case '`' =>
+          val length = backtickRunLength(text, i)
+          if (length == runLength) return i
+          i += length
+        case '\n' =>
+          var j = i + 1
+          while (j < text.length && (text(j) == ' ' || text(j) == '\t' || text(j) == '*')) j += 1
+          if (j >= text.length || text(j) == '\n') return -1
+          i += 1
+        case _ => i += 1
+      }
+    }
+    -1
+  }
+
   private def cleanHtml(text: String): String = {
     val result = StringBuilder()
     var index = 0
@@ -43,6 +70,14 @@ object Cleaner {
         result.append("[[")
         insideLink = true
         index += 2
+      } else if (text(index) == '`') {
+        // Inline code span: a run of 1 or 2 backticks (3 or more start a fence, above) closed by a run of the same length.
+        // Its content is literal in markdown, so '<' there must not be taken for the start of a tag.
+        val runLength = backtickRunLength(text, index)
+        val closeIndex = closingBacktickRun(text, index + runLength, runLength)
+        val endIndex = if (closeIndex == -1) index + runLength else closeIndex + runLength
+        result.append(text.substring(index, endIndex))
+        index = endIndex
       } else if (text(index) == safeTagMarker) {
         // ignore it, it's a character that should never appear in everyday text anyway
         index += 1

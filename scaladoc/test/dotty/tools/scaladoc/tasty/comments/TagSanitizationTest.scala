@@ -44,3 +44,15 @@ class TagSanitizationTest extends BaseHtmlTest:
     val html = docHtml("LinkToTagLike")
     // ensure we don't treat the text between <:< and >:> as a tag content
     assertTrue(html, html.contains("or"))
+
+  @Test def angleBracketsInCodeSpan(): Unit =
+    val html = docHtml("AngleBracketsInCodeSpan")
+    assertEquals(
+      "<p>Inside backticks: <code>x &lt; 0</code>, <code>\"&lt;cycle&gt;\"</code>, <code>&lt;script&gt;alert('hello')&lt;/script&gt;</code>.</p>",
+      html)
+
+  @Test def angleBracketsInCodeSpanWiki(): Unit =
+    // the Cleaner no longer strips tags inside code spans, so check that the wiki renderer escapes them
+    val html = super.docHtml("sanitization", "AngleBracketsInCodeSpan", "wiki")
+    assertFalse(html, html.contains("<script>"))
+    assertTrue(html, html.contains("&lt;script&gt;"))
