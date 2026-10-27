@@ -4219,6 +4219,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       // A map from `enum` symbols to the contexts enclosing their definitions
     val targeting = Targeting.of(this, stats, exprOwner, buf)
     @tailrec def traverse(stats: List[untpd.Tree])(using Context): (List[Tree], Context) = stats match {
+      case (imp: untpd.Import) :: rest if targeting != null && targeting.skipImport(imp) =>
+        traverse(rest)(using ctx.importContext(imp, imp.attachment(SymOfTree)))
       case (imp: untpd.Import) :: rest =>
         val imp1 = typed(imp)
         buf += imp1
