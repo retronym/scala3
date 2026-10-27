@@ -32,6 +32,50 @@ import rewrites.Rewrites.patch
 
 import scala.compiletime.uninitialized
 
+object Namer:
+
+  /** A file's own package-level definitions while the files of an open are indexed in parallel
+   *  (`TyperPhase.indexInParallel`). A package's scope is published, and on a concurrent base an enter outside a
+   *  write action copies it whole (`MutableScope.extendAside`): per symbol and in parallel, that would be quadratic.
+   *  Instead the Namer enters what the file defines in a package here, and looks here before the package's scope
+   *  (as it was before the open); a companion is always in the same file. `Namer.mergeIndexSlices` then enters
+   *  the slices into the packages, serially and in file order.
+   *
+   *  @param ctx   the file's context, for the diagnostics of the merge
+   *  @param lock  shared by the slices of one open: held while a package clause makes or finds its package
+   */
+  final class IndexSlice(val ctx: Context, val lock: AnyRef):
+    // filled by the thread that indexes the file, read by the merge after that thread has ended
+    private[Namer] val scopes = mutable.LinkedHashMap[Symbol, MutableScope]()
+    // the package clauses of the file, with their expanded statements: `invalidateCompanions` runs at the merge
+    private[Namer] val clauses = ListBuffer[(Symbol, List[untpd.Tree])]()
+    // set by the merge: from then on, a context that carries the slice (a completer's) enters and looks up as usual
+    @volatile private[Namer] var merged = false
+
+    /** The part of this slice for package class `pkg`: also where a module defined in it finds its buddy (the
+     *  module class of a module val, or the reverse), the merge or not.
+     */
+    private[Namer] def scope(pkg: Symbol)(using Context): MutableScope =
+      scopes.getOrElseUpdate(pkg, newScope)
+
+    /** Enter `sym` in package class `pkg`'s part of this slice, replacing a symbol of the same name as entering
+     *  in the package would (`PackageClassDenotation.proceedWithEnter`).
+     */
+    private[Namer] def enter(pkg: Symbol, sym: Symbol)(using Context): Unit =
+      val scope = this.scope(pkg)
+      val e = scope.lookupEntry(sym.name)
+      if e != null then scope.unlink(e)
+      scope.enter(sym)
+
+    private[Namer] def lookup(pkg: Symbol, name: Name)(using Context): Symbol =
+      scopes.get(pkg) match
+        case Some(scope) => scope.lookup(name)
+        case None => NoSymbol
+
+  val IndexSliceKey: Property.Key[IndexSlice] = new Property.Key
+
+end Namer
+
 /** This class creates symbols from definitions and imports and gives them
  *  lazy types.
  *
@@ -53,6 +97,7 @@ import scala.compiletime.uninitialized
  *  in a different method.
  */
 class Namer { typer: Typer =>
+  import Namer.*
 
   import untpd.*
 
@@ -144,6 +189,35 @@ class Namer { typer: Typer =>
     sym
   }
 
+  /** The slice of the file being indexed in parallel, if `owner` is a package class and the slice is not yet
+   *  merged; else null.
+   */
+  private def indexSliceFor(owner: Symbol)(using Context): IndexSlice | Null =
+    if owner.is(PackageClass) then indexSlice else null
+
+  /** The slice of the file being indexed in parallel, if it is not yet merged; else null. */
+  private def indexSlice(using Context): IndexSlice | Null =
+    ctx.property(IndexSliceKey) match
+      case Some(slice) if !slice.merged => slice
+      case _ => null
+
+  /** `name` among the declarations of `owner`, a class: in a package, this file's slice first (`IndexSlice`). */
+  private def lookupDecl(owner: Symbol, name: Name)(using Context): Symbol =
+    val slice = indexSliceFor(owner)
+    if slice == null then owner.unforcedDecls.lookup(name)
+    else slice.lookup(owner, name).orElse(owner.unforcedDecls.lookup(name))
+
+  /** `name` in the context's effective scope: in a package, this file's slice first (`IndexSlice`). */
+  private def lookupEffective(name: Name)(using Context): Symbol =
+    val slice = indexSliceFor(ctx.owner)
+    if slice == null then ctx.effectiveScope.lookup(name)
+    else slice.lookup(ctx.owner, name).orElse(ctx.effectiveScope.lookup(name))
+
+  private def lookupAllEffective(name: Name)(using Context): Iterator[Symbol] =
+    val slice = indexSliceFor(ctx.owner)
+    val own = if slice == null then NoSymbol else slice.lookup(ctx.owner, name)
+    if own.exists then Iterator.single(own) else ctx.effectiveScope.lookupAll(name)
+
   /** Check that a new definition with given name and privacy status
    *  in current context would not conflict with existing currently
    *  compiled definitions.
@@ -164,7 +238,7 @@ class Namer { typer: Typer =>
       conflictsDetected = true
 
     def checkNoConflictIn(owner: Symbol) =
-      val preExisting = owner.unforcedDecls.lookup(name)
+      val preExisting = lookupDecl(owner, name)
       if (preExisting.isDefinedInCurrentRun || preExisting.lastKnownDenotation.is(Package))
           && (!preExisting.lastKnownDenotation.is(Private) || preExisting.owner.is(Package))
           && (!preExisting.lastKnownDenotation.isPackageObject
@@ -275,7 +349,11 @@ class Namer { typer: Typer =>
 
     /** Add moduleClass/sourceModule to completer if it is for a module val or class */
     def adjustIfModule(completer: LazyType, tree: MemberDef) =
-      if (tree.mods.is(Module)) adjustModuleCompleter(completer, tree.name)
+      if tree.mods.is(Module) then
+        // indexing in parallel, the buddy is in this file's slice, not yet in the package (`IndexSlice`)
+        val slice = indexSliceFor(ctx.owner)
+        if slice == null then adjustModuleCompleter(completer, tree.name)
+        else adjustModuleCompleter(completer, tree.name, slice.scope(ctx.owner))
       else completer
 
     typr.println(i"creating symbol for $tree in ${ctx.mode}")
@@ -285,7 +363,7 @@ class Namer { typer: Typer =>
         tree: MemberDef, name: Name, flags: FlagSet, owner: Symbol, infoFn: S => Type,
         symFn: (FlagSet, S => Type, Symbol) => S): Symbol = {
       val prev =
-        if (lateCompile && ctx.owner.is(Package)) ctx.effectiveScope.lookup(name)
+        if (lateCompile && ctx.owner.is(Package)) lookupEffective(name)
         else ctx.property(Typer.RefinedSymbols) match
           case Some(refined) => refined(name, tree.nameSpan)
           case None => NoSymbol
@@ -386,22 +464,36 @@ class Namer { typer: Typer =>
     // We do not enter Scala 2 macros defined in Scala 3 as they have an equivalent Scala 3 inline method.
     if sym.exists && !sym.isScala2MacroInScala3 then
       typr.println(s"entered: $sym in ${ctx.owner}")
-      ctx.enter(sym)
+      val slice = indexSliceFor(ctx.owner)
+      if slice == null then ctx.enter(sym)
+      else slice.enter(ctx.owner, sym)
 
-  /** Create package if it does not yet exist. */
-  private def createPackageSymbol(pid: RefTree)(using Context): Symbol = {
+  /** Create package if it does not yet exist. Indexing files in parallel, under the open's lock: the package is
+   *  entered in its owner's scope at once, for the other files' package clauses to find it. The symbols of a
+   *  previous compilation of the file are unlinked after the lock is released, as they are the file's own.
+   */
+  private def createPackageSymbol(pid: RefTree)(using Context): Symbol =
+    val slice = indexSlice
+    if slice == null then createPackageSymbol0(pid, _.unlinkFromFile(ctx.source.path))
+    else
+      val obsolete = ListBuffer[PackageClassDenotation]()
+      val pkg = slice.lock.synchronized(createPackageSymbol0(pid, obsolete += _))
+      obsolete.foreach(_.unlinkFromFile(ctx.source.path))
+      pkg
+
+  /** @param unlinkFromFile  remove the members of an existing package that come from a previous compilation of
+   *                         this file: they are obsolete
+   */
+  private def createPackageSymbol0(pid: RefTree, unlinkFromFile: PackageClassDenotation => Unit)(using Context): Symbol = {
     val pkgOwner = pid match {
       case Ident(_) => if (ctx.owner eq defn.EmptyPackageClass) defn.RootClass else ctx.owner
-      case Select(qual: RefTree, _) => createPackageSymbol(qual).moduleClass
+      case Select(qual: RefTree, _) => createPackageSymbol0(qual, unlinkFromFile).moduleClass
     }
     val existing = pkgOwner.info.decls.lookup(pid.name)
 
     if (existing.is(Package) && (pkgOwner eq existing.owner)) {
       existing.moduleClass.denot match {
-        case d: PackageClassDenotation =>
-          // Remove existing members coming from a previous compilation of this file,
-          // they are obsolete.
-          d.unlinkFromFile(ctx.source.path)
+        case d: PackageClassDenotation => unlinkFromFile(d)
         case _ =>
       }
       existing
@@ -419,6 +511,30 @@ class Namer { typer: Typer =>
         newCompletePackageSymbol(pkgOwner, pname).entered
     }
   }
+
+  /** Enter the slices of the files indexed in parallel (`IndexSlice`) into their packages: serially, in file
+   *  order, and one change per package however many files define something in it. A name a slice defines in a
+   *  package that an earlier slice defined there too is reported here, and the later definition is left out
+   *  (indexing serially, `checkNoConflict` reports it and freshens the name).
+   */
+  def mergeIndexSlices(slices: List[IndexSlice])(using Context): Unit =
+    // before the new definitions are entered: those it looks for are not this file's
+    for slice <- slices; (pkg, xstats) <- slice.clauses do invalidateCompanions(pkg, xstats)(using slice.ctx)
+    val entering = mutable.LinkedHashMap[Symbol, mutable.LinkedHashMap[Name, Symbol]]()
+    val leftOut = mutable.HashSet[Symbol]()
+    for slice <- slices; (pkg, scope) <- slice.scopes; sym <- scope.toList do
+      val names = entering.getOrElseUpdate(pkg, mutable.LinkedHashMap())
+      names.get(sym.name) match
+        case Some(other) =>
+          leftOut += sym
+          // an object is reported once, for its module val
+          if !(sym.is(ModuleClass) && leftOut.contains(sym.sourceModule)) then
+            val shown = if other.is(PhantomSymbol) then other.companionClass.orElse(other) else other
+            report.error(AlreadyDefined(sym.name, pkg, shown)(using slice.ctx), slice.ctx.source.atSpan(sym.span))
+        case None =>
+          names(sym.name) = sym
+    for (pkg, names) <- entering do pkg.asClass.classDenot.enterAll(names.values)
+    slices.foreach(_.merged = true)
 
   /** Expand tree and store in `expandedTree` */
   def expand(tree: Tree)(using Context): Unit = {
@@ -501,7 +617,9 @@ class Namer { typer: Typer =>
       case pcl: PackageDef =>
         val pkg = createPackageSymbol(pcl.pid)
         index(pcl.stats)(using ctx.packageContext(pcl, pkg))
-        invalidateCompanions(pkg, Trees.flatten(pcl.stats map expanded))
+        val xstats = Trees.flatten(pcl.stats map expanded)
+        val slice = indexSlice
+        if slice == null then invalidateCompanions(pkg, xstats) else slice.clauses += ((pkg, xstats))
         setDocstring(pkg, stat)
         ctx
       case imp: Import =>
@@ -758,8 +876,8 @@ class Namer { typer: Typer =>
           else classDef(cdef.name) = cdef
 
       def createLinks(classTree: TypeDef, moduleTree: TypeDef)(using Context) = {
-        val claz = ctx.effectiveScope.lookup(classTree.name)
-        val modl = ctx.effectiveScope.lookup(moduleTree.name)
+        val claz = lookupEffective(classTree.name)
+        val modl = lookupEffective(moduleTree.name)
         modl.registerCompanion(claz)
         claz.registerCompanion(modl)
       }
@@ -801,19 +919,19 @@ class Namer { typer: Typer =>
             enterSymbol(classConstructorCompanion(classSym.asClass))
       else if ctx.owner.is(PackageClass) then
         for case cdef @ TypeDef(moduleName, _) <- moduleDef.values do
-          val moduleSym = ctx.effectiveScope.lookup(moduleName)
+          val moduleSym = lookupEffective(moduleName)
           if moduleSym.isDefinedInCurrentRun then
             val className = moduleName.stripModuleClassSuffix.toTypeName
-            val classSym = ctx.effectiveScope.lookup(className)
+            val classSym = lookupEffective(className)
             if !classSym.isDefinedInCurrentRun then
               val absentClassSymbol = newClassSymbol(ctx.owner, className, EmptyFlags, _ => NoType)
               enterSymbol(absentClassSymbol)
 
         for case cdef @ TypeDef(className, _) <- classDef.values do
-          val classSym = ctx.effectiveScope.lookup(className.encode)
+          val classSym = lookupEffective(className.encode)
           if classSym.isDefinedInCurrentRun then
             val moduleName = className.toTermName
-            val companionVals = ctx.effectiveScope.lookupAll(moduleName.encode)
+            val companionVals = lookupAllEffective(moduleName.encode)
             if companionVals.isEmpty && needsConstructorProxies(classSym) then
               enterSymbol(classConstructorCompanion(classSym.asClass))
             else
