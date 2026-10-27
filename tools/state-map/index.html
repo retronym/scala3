@@ -643,10 +643,39 @@ private def writing[T](body: => T): T =
       base.writeActionThread = null
       lock.unlock()`,
 'Stamped': String.raw`// core/Types.scala: AndType's base classes, valid for one period
-private var myBaseClasses: Stamped[List[ClassSymbol]] = Stamped.Empty
+private var myBaseClasses: Stamped[PerPeriod, List[ClassSymbol]] = Stamped.Empty
 override final def baseClasses(using Context): List[ClassSymbol] =
-  myBaseClasses.cached(ctx.period.rawCode):
-    … // computed; stored as a new Stamped with final fields, so the same code on every base`,
+  myBaseClasses.cached:
+    … // computed; a miss stores a new Stamped(stamp, value), both fields final
+
+// sharingGivens.scala: the current stamp of each kind, from the context
+inline given periodStamp(using c: Context): Stamp[PerPeriod] = Stamp(c.period.rawCode)
+inline given runStamp(using c: Context): Stamp[PerRun] = Stamp(c.runId)`,
+'Publish': String.raw`// core/Symbols.scala: checkedPeriod publishes lastDenot
+private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
+private var checkedPeriod: Published[Period] = Published(Nowhere)
+
+final def denot(using Context): SymDenotation =
+  val checked = checkedPeriod.acquired              // acquire: the evidence a payload is read after
+  if checked.value == ctx.period then lastDenot.after(checked)
+  else computeDenot(lastDenot.after(checked))
+
+private[core] def denot_=(d: SymDenotation): Unit =
+  checkedPeriod.publishing(Nowhere):                // the payload's stores, then the release
+    lastDenot := d
+
+// object Symbols: the field's VarHandle, found when the class is initialised
+given Published.Handle[Symbol, "checkedPeriod"] = checkedPeriodHandle`,
+'holder-volatile': String.raw`// Run.scala: the units and their files, one pair in one volatile field
+@cache @publishedBy("holder") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
+def files: Set[AbstractFile] =
+  val cached = myFilesOf                            // read once: the key and the value from one writer
+  val us = myUnits
+  if us eq cached._1 then cached._2
+  else
+    val fs = …
+    myFilesOf = (us, fs)
+    fs`,
 'synchronized': String.raw`// Run.scala: the suppressions live in their guard, reached only inside locked
 object suppressions extends Sharing.Guard:
   private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
@@ -753,6 +782,10 @@ const SWIM = {
     bars: [[0, 0, 4, 'computes the value', 'act'], [1, 5, 7, 'reads the field', 'act']],
     marks: [[0, 4.3, 'stores a new Stamped']], arrows: [[0, 4.3, 1, 5, 'Stamped(stamp, value)']],
     note: 'Stamp and value are final fields of one object: a reader that loads it sees both, with no fence and no test of the mode.' },
+  Publish: { lanes: ['writer', 'reader'],
+    bars: [[0, 0, 3.5, 'publishing: lastDenot := d', 'hold'], [1, 4.4, 8, 'lastDenot.after(checked)', 'act']],
+    marks: [[0, 3.6, 'release checkedPeriod'], [1, 4.2, 'checkedPeriod.acquired']], arrows: [[0, 3.6, 1, 4.2, 'happens-before']],
+    note: 'The payload is stored before the release that ends publishing, and read only after an acquire of the same publisher: the types allow no other order.' },
   'benign-race': { lanes: ['reader 1', 'reader 2'],
     bars: [[0, 0, 4, 'misses: builds the list', 'act'], [1, 0.6, 4.6, 'misses: builds the same list', 'act']],
     marks: [[0, 4, 'stores'], [1, 4.6, 'stores, equal']],
@@ -826,9 +859,9 @@ const STRATEGIES = [
   { id: 'root-claim', name: 'Root claim', how: 'A claim in `CompletionRoots` keyed by the object (`Sharing.claim`, or a `Once` field or `Sharing.once` for a value computed once): re-entry by the owner is a cycle, another reader waits, and the wait is in the wait-for graph.', use: 'A cycle-breaking sentinel on a shared object (`LazyRef`, `packageObjs`).', cures: ['sentinel', 'cycle'], example: null },
   { id: 'frozen-after-completion', name: 'Fill hidden, then freeze', how: 'A scope is filled while its owner\'s completion hides it, published when the completion returns (`MutableScope.published`), and changed after that only by a write action or its one writer, building new entries aside (`extendAside`). `-Ycheck-frozen-scopes` fails any other change.', use: 'Scopes, which every reader looks up in: a class\'s members, and a package\'s, its flat classes included.', cures: ['inplace', 'unfrozen', 'order'], example: 'core.Scopes.MutableScope#hashTable' },
   { id: 'writer-action', name: 'Write action', how: 'The driver\'s write lock (`InteractiveDriver.writing`): a pending writer cancels readers at their next checkpoint, runs alone, and readers retry. State only writers touch needs nothing else.', use: 'Changes to the source of truth: a fresh run, a re-index, a splice, a body edit.', cures: ['unfrozen', 'stale'], example: null },
-  { id: 'Stamped', name: 'Stamped value (`Stamped`)', how: 'A value and its stamp as one immutable object with final fields, held in one `var` of the owner; a miss stores a new one (`myX.cached(now): compute`, a macro that writes the field it is called on). A reader that loads it sees the pair whole however it was published, so the code is the same on a batch and a concurrent base. An empty cache is a reference to the shared `Stamped.Empty`, smaller than a stamp and a value; a miss allocates.', use: 'A memo that most instances never fill, or whose hit path can afford one dependent load.', cures: ['twofields', 'readtwice'], example: null },
-  { id: 'packed-volatile', name: 'Pack into one value', how: 'Key, stamp and value as one immutable object in one volatile field, so no reader pairs one writer\'s key with another\'s value.', use: 'A cache keyed by more than the stamp, or whose writers may store different values (`asSeenFrom`, `MatchType.reduced`).', cures: ['twofields'], example: null },
-  { id: 'Publish', name: 'Ordered publication (`util.Publish`)', how: 'Acquire/release handles on a period that guards other fields (`Symbol.checkedPeriod`, `NamedType.checkedPeriod`), where the shape is not two fields.', use: 'A validity period read first on a hot path.', cures: ['twofields'], example: null },
+  { id: 'Stamped', name: 'Stamped value (`Stamped`)', how: 'A field declared `Stamped[K, T]`: a value and the stamp it was computed at as one immutable object with final fields, in one `var` of the owner. `myX.cached: compute` (and `cachedIf`, `cachedWhen`, `peek`) is a macro that reads the field once, compares its stamp with the current `Stamp[K]`, a given (`PerPeriod` from the context\'s period, `PerRun` from its run id), and on a miss stores a new pair. A reader that loads it sees the pair whole however it was published, so there are no fences and the code is the same on a batch and a concurrent base; a call site names no stamp, and a field cannot be read with one kind and written with another. An empty cache is the shared `Stamped.Empty`; a miss allocates.', use: 'A memo that most instances never fill, or whose hit path can afford one dependent load.', cures: ['twofields', 'readtwice'], example: null },
+  { id: 'holder-volatile', name: 'Immutable holder', how: 'Key and value as one immutable object in one `@volatile` field, read once into a local, so no reader pairs one writer\'s key with another\'s value.', use: 'A memo keyed by something other than a stamp (`Run.filesOf`, keyed by the unit list), or bookkeeping read for display (`CompletionLock`\'s current root).', cures: ['twofields'], example: null },
+  { id: 'Publish', name: 'Publisher and payloads (`Published`, `Payload`)', how: 'A field declared `Published[T]` publishes the fields declared `Payload[Owner, "field", T]`: a payload is stored only with `:=` inside the publisher\'s `publishing(v) { … }`, which releases the publisher after the stores, and read only with `.after(snap)`, where `snap` is the publisher\'s `acquired` on the same object. The types are opaque, so a plain read or write does not compile; the operations are macros over the field\'s `VarHandle`, a given in the owner\'s companion. `plain`/`setPlain` name the accesses the protocol allows without ordering.', use: 'A validity period that guards other fields on a hot path (`Symbol.checkedPeriod` with `lastDenot`, `NamedType.checkedPeriod` with `lastDenotation` and `lastSymbol`), and lazy trees.', cures: ['twofields'], example: null },
   { id: 'volatile', name: 'One volatile field', how: 'A single field whose every value is complete on its own: a flag, a counter read for display, a reference to an immutable value.', use: 'One field, nothing paired with it.', cures: ['twofields'], example: null },
   { id: 'init-only', name: 'Written before sharing', how: 'Set while the owner is built (`Definitions.init`, a constructor, a synthesizer installed before the scope is published) and only read after.', use: 'Configuration of shared objects.', cures: [], example: null },
   { id: 'concurrent', name: 'Concurrent structure', how: 'A concurrent interner or map in interactive mode (`ConcurrentWeakHashSet`, `ConcurrentHashMap`), chosen per mode by the `Sharing` seam so batch keeps the plain one.', use: 'Interning and counters (kind D); one symbol per name.', cures: ['inplace', 'order'], example: null },
@@ -888,7 +921,7 @@ function renderGuide() {
     <div class="pipeline">
       <div class="step"><b>Fields</b><span>Every <code>var</code> and mutable collection in dotc's classes; lazy vals, modules and synthetics left out.</span></div>
       <div class="step"><b>Kind</b><span>A–E from an annotation (<code>@scratch</code>, <code>@lazyFact</code>, <code>@cache</code>, <code>@interned</code>, <code>@treeState</code>), else the K rules: owner, type and name.</span></div>
-      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: on a <code>Stamped</code> field, a monitor, a claim, <code>Publish</code>, in the batch branch of the seam, or nothing.</span></div>
+      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: inside a claim (<code>Sharing.claim</code>, <code>once</code>) or a monitor (<code>locked</code>, <code>serialised</code>), in a method that takes their evidence or argues it (<code>unguarded</code>, <code>unlocked</code>), in the batch branch of the seam, or nothing. A field declared <code>Stamped</code>, <code>Published</code> or <code>Payload</code> is protected by its type.</span></div>
       <div class="step"><b>Protection</b><span>The one protection of a field's non-batch accesses; <code>partial</code> when some lack it, <code>none</code> when all do. An annotation takes precedence, and the rules' answer is kept beside it.</span></div>
       <div class="step"><b>Check</b><span><code>annotationCheck</code>: the annotation agrees with the rules, disagrees, or is unverified. <code>@frozenAfter</code> is checked when the program runs.</span></div>
       <div class="step"><b>Reach, edges</b><span>Typer or post-typer by the methods that reach a field; edges are field types that are mapped classes, which the diagram draws.</span></div>

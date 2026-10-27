@@ -62,7 +62,7 @@ object Rules:
   )
 
   val reach: List[Rule] = List(
-    Rule("R.post-typer", "post-typer", "the owner is in `cc`, `backend` or `transform` (other than `SetRootTree`, `CookComments`), or is a `Phase` subclass (not `Phase` itself) other than the interactive compiler's (`Parser`, `TyperPhase`, `SetRootTree`, `CookComments`, `InteractiveCompiler.phases`)"),
+    Rule("R.post-typer", "post-typer", "the owner is in `cc`, `backend` or `transform` (other than `SetRootTree`, `CookComments`), or is a `Phase` subclass (not `Phase` itself) other than the interactive compiler's (`Parser`, `TyperPhase`, `SetRootTree`, `CookComments`, `InteractiveCompiler.phases`); in a method that makes the evidence itself with `Sharing.unlocked(why)` or `Sharing.unguarded(why)`, an argued access → synchronized or completion-lock"),
     Rule("R.typer", "typer", "everything else: reachable from the interactive compiler's typer")
   )
 
@@ -100,6 +100,10 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
   val fields = mutable.LinkedHashMap[String, FieldInfo]()
   val accesses = mutable.ArrayBuffer[Access]()
   val publishingMethods = mutable.Set[String]()
+  // methods that make a monitor's or a claim's evidence with `Sharing.unlocked(why)` / `Sharing.unguarded(why)`: an
+  // access there is argued, the reason in the call, and counts as the evidence it stands for
+  val unlockedMethods = mutable.Set[String]()
+  val unguardedMethods = mutable.Set[String]()
   // calls of private and local methods, (callee, caller, protection at the call): an access in a private method
   // inherits the protection that every call of the method has
   val calls = mutable.ArrayBuffer[(String, String, String)]()
@@ -408,6 +412,9 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
           if fsym.exists && (fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.sharing.Publish"
               || fsym.maybeOwner.fullName == "dotty.tools.sharing.PublishedOps" && (fsym.name == "acquire" || fsym.name == "release"))
           then publishingMethods += currentMethod
+          if fsym.exists && fsym.maybeOwner.fullName.replace("$", "").endsWith("Sharing") then
+            if fsym.name == "unlocked" then unlockedMethods += currentMethod
+            else if fsym.name == "unguarded" then unguardedMethods += currentMethod
           protectedCall(fsym) match
             case Some((prot0, names)) =>
               val prot = if prot0 == "claim" then claimProtection(argss) else prot0
@@ -536,6 +543,8 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
   private def siteProt(prot: String, method: String, seen: Set[String]): String =
     if prot != "none" && prot != "concurrent-branch" then prot
     else if c.publishingMethods(method) then "Publish"
+    else if c.unlockedMethods(method) then "synchronized"
+    else if c.unguardedMethods(method) then "completion-lock"
     else methodProt(method, seen)
 
   // a private or local method's protection: the one protection that every call of it has (batch calls aside)
