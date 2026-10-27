@@ -48,7 +48,7 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
-import _root_.dotty.tools.sharing.Caching
+import _root_.dotty.tools.sharing.{Caching, Stamped}
 
 object Types extends TypeUtils {
 
@@ -4686,8 +4686,7 @@ object Types extends TypeUtils {
     private var myIsStableRunId: RunId = NoRunId
     private var myIsStable: Boolean = uninitialized
 
-    private var myEvalRunId: RunId = NoRunId
-    private var myEvalued: Type = uninitialized
+    private var myEvalued: Stamped[Type] = Stamped.Empty
 
     private var validUnderlyingNormalizable: Period = Nowhere
     private var cachedUnderlyingNormalizable: Type = uninitialized
@@ -4785,7 +4784,7 @@ object Types extends TypeUtils {
         && !(args.sizeIs == 1 && defn.isCompiletime_S(tycon.typeSymbol)) // S is a pseudo Match Alias
 
     def tryCompiletimeConstantFold(using Context): Type =
-      Caching.stampedIf(myEvalRunId, myEvalued)(myEvalRunId = _, myEvalued = _)(ctx.runId, _ => !isProvisional):
+      Stamped.cachedIf(myEvalued)(myEvalued = _)(ctx.runId, _ => !isProvisional):
         TypeEval.tryCompiletimeConstantFold(this)
 
     def lowerBound(using Context): Type = tycon.stripTypeVar match {
