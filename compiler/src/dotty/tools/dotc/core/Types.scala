@@ -3686,9 +3686,8 @@ object Types extends TypeUtils {
           case _ => union
 
     private var atomsRunId: RunId = NoRunId
-    private var widenedRunId: RunId = NoRunId
     private var myAtoms: Atoms = uninitialized
-    private var myWidened: Type = uninitialized
+    private var myWidened: Stamped[Type] = Stamped.Empty
 
     private def computeAtoms()(using Context): Atoms =
       val tp1n = tp1.normalized
@@ -3709,7 +3708,7 @@ object Types extends TypeUtils {
     override def widenSingletons(skipSoftUnions: Boolean)(using Context): Type =
       if !isSoft || skipSoftUnions then this
       else
-        Caching.stampedIf(widenedRunId, myWidened)(widenedRunId = _, myWidened = _)(ctx.runId, _ => !isProvisional):
+        Stamped.cachedIf(myWidened)(myWidened = _)(ctx.runId, _ => !isProvisional):
           computeWidenSingletons()
 
     def derivedOrType(tp1: Type, tp2: Type, soft: Boolean = isSoft)(using Context): Type =
