@@ -28,6 +28,12 @@ trait UniqueMessagePositions extends Reporter {
       && (dia.pos.start to dia.pos.end).exists: offset =>
             positions.get((ctx.source, offset)).exists(_.hides(dia))
 
+  /** Forget the positions reported in `source`: its spans have moved (an
+   *  interactive session's edit, docs/_docs/internals/interactive-session.md §12).
+   */
+  def forgetPositions(source: SourceFile): Unit =
+    positions.filterInPlace((k, _) => k._1 ne source)
+
   override def markReported(dia: Diagnostic)(using Context): Unit =
     if dia.pos.exists then
       for offset <- dia.pos.start to dia.pos.end do
