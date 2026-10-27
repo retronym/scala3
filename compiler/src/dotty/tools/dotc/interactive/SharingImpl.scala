@@ -5,16 +5,11 @@ package interactive
 import core.*
 import Contexts.*
 
-/** The concurrent branches of `core.Sharing`'s operations: reached only from a base the interactive driver made
- *  with several readers, never from batch compilation. See `Sharing` for what each operation means.
+/** The concurrent branches of `core.Sharing`'s operations that stay in dotc, since they settle typer states: reached
+ *  only from a base the interactive driver made with several readers, never from batch compilation. A claim's
+ *  concurrent branch is the base's `ClaimRegistry` (`CompletionRoots`, `CompletionLock`).
  */
 object SharingImpl:
-
-  def claim[T](key: AnyRef, kind: Sharing.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T)(using Context): T =
-    val base = ctx.base
-    if base.parallel then base.completionRoots.locked(key, kind.what, () => CompletionRoots.backOff(cycleSubject))(op())
-    else if kind.lockWhenSerialised then base.completionLock.locked(kind.what)(op())
-    else op()
 
   def privately[T](c0: Context, op: Context => T): T =
     val c1 = c0.fresh.setNewTyperState()

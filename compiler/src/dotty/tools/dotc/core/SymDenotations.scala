@@ -28,6 +28,7 @@ import cc.{CapturingType, derivedCapturingType, stripCapturing}
 import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
+import _root_.dotty.tools.sharing.Caching
 
 object SymDenotations {
 

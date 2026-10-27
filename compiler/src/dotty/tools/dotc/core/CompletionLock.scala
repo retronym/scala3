@@ -6,6 +6,8 @@ import java.util.concurrent.locks.ReentrantLock
 
 import Symbols.Symbol
 
+import _root_.dotty.tools.sharing.{ClaimRegistry, Sharing as Shared}
+
 import scala.annotation.internal.{guardedBy, publishedBy, scratch}
 
 /** The completion lock of a `ContextBase` read by several threads
@@ -15,9 +17,14 @@ import scala.annotation.internal.{guardedBy, publishedBy, scratch}
  *  thread that has to wait records how long it waited and what it waited
  *  for (`Reader.recordLockWait`). The labels are kept as objects and only
  *  rendered by a thread that waited. Batch compilation never takes it.
+ *
+ *  With serialised readers, the base's `ClaimRegistry`: a claim takes the lock if its kind says so.
  */
-final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock:
+final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock, ClaimRegistry:
   import CompletionLock.What
+
+  def claim[T](key: AnyRef, kind: Shared.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T): T =
+    if kind.lockWhenSerialised then locked(kind.what)(op()) else op()
 
   // written by the holder only; read by waiters before they block
   @scratch @publishedBy("packed") @volatile private var rootWhat: What | Null = null
@@ -67,32 +74,25 @@ final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock:
 
 object CompletionLock:
 
-  /** What a holder of the lock is doing: a kind and an optional subject (a
-   *  symbol, a completer), rendered only when a waiter reports it.
-   */
-  final class What(val kind: String, val subject: AnyRef | Null):
-    def render: String = subject match
-      case null => kind
-      case sym: Symbol => s"$kind ${nameOf(sym)}"
-      case str: String => s"$kind $str"
-      case l: Label => s"$kind ${l.text}"
-      case other => s"$kind ${other.getClass.getSimpleName}"
-    override def toString: String = render
+  /** What a holder of the lock or a claim is doing (`dotty.tools.sharing.What`), whose subject may be a symbol. */
+  type What = _root_.dotty.tools.sharing.What
+  def What(kind: String, subject: AnyRef | Null): What = SymbolWhat(kind, subject)
 
-  /** A symbol's name and owner's name, read without a context (the waiter
+  /** A `What` that renders a symbol subject by its name and owner's name, read without a context (the waiter
    *  renders it after the fact; the denotation is the last known one).
    */
-  private def nameOf(sym: Symbol): String =
-    try
-      val d = sym.lastKnownDenotation
-      val owner = d.maybeOwner
-      if owner ne Symbols.NoSymbol then s"${owner.lastKnownDenotation.name}.${d.name}" else d.name.toString
-    catch case scala.util.control.NonFatal(_) => s"#${sym.id}"
+  private final class SymbolWhat(kind: String, subject: AnyRef | Null) extends What(kind, subject):
+    override protected def renderSubject(s: AnyRef): String = s match
+      case sym: Symbol =>
+        try
+          val d = sym.lastKnownDenotation
+          val owner = d.maybeOwner
+          if owner ne Symbols.NoSymbol then s"${owner.lastKnownDenotation.name}.${d.name}" else d.name.toString
+        catch case scala.util.control.NonFatal(_) => s"#${sym.id}"
+      case other => super.renderSubject(other)
 
-  /** A subject rendered when a waiter reports it (e.g. the statement a pass
-   *  is typing by then). */
-  final class Label(f: () => String):
-    def text: String = f()
+  type Label = _root_.dotty.tools.sharing.Label
+  def Label(f: () => String): Label = _root_.dotty.tools.sharing.Label(f)
 
   /** The kind of a completion, from its completer. */
   def completionKind(completer: AnyRef): String = completer match

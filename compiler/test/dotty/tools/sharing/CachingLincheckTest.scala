@@ -1,4 +1,4 @@
-package dotty.tools.dotc.core
+package dotty.tools.sharing
 
 import org.jetbrains.kotlinx.lincheck.LinChecker
 import org.jetbrains.kotlinx.lincheck.annotations.Operation

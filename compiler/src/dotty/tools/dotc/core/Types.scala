@@ -48,6 +48,7 @@ import scala.annotation.internal.{benignRace, cache, confined, guardedBy, intern
 import scala.annotation.threadUnsafe
 import scala.annotation.meta.field
 import scala.util.control.NonFatal
+import _root_.dotty.tools.sharing.Caching
 
 object Types extends TypeUtils {
 

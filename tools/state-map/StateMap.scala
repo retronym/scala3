@@ -27,7 +27,7 @@ object Rules:
     Rule("B.lazy", "B", "a field of `LazyRef` or of a lazy annotation (`Annotations.LazyAnnotation`, `LazyBodyAnnotation` and their subclasses)"),
     Rule("B.unpickler", "B", "a field of a class in `core.tasty`, `core.classfile` or `core.unpickleScala2`: lazy TASTy/classfile reads (`symAtAddr`, `treeAtAddr`)"),
     Rule("B.scope", "B", "a field of `Scopes.MutableScope`: completions enter into shared scopes that rehash on `enter`"),
-    Rule("C.caching", "C", "read or written in a stamp, value or setter argument of a `core.Caching` helper (the lint of `StampedCachesTest`)"),
+    Rule("C.caching", "C", "read or written in a stamp, value or setter argument of a `Caching` helper (the lint of `StampedCachesTest`)"),
     Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
     Rule("C.publish", "C", "named by a `VarHandle` in `util/Publish.java`, or read or written in a method that calls `util.Publish` on the same object (the value the stamp publishes)"),
     Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
@@ -149,7 +149,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       "dotty.tools.dotc.util.MutableMap", "dotty.tools.dotc.util.MutableSet", "dotty.tools.dotc.util.GenericHashMap",
       "dotty.tools.dotc.util.GenericHashSet", "dotty.tools.dotc.util.WeakHashSet", "dotty.tools.dotc.util.ConcurrentWeakHashSet",
       "dotty.tools.dotc.util.SyncEqHashMap", "dotty.tools.dotc.util.EqHashMap", "dotty.tools.dotc.core.Scopes.MutableScope",
-      "dotty.tools.dotc.core.Sharing.GuardedVar")
+      "dotty.tools.sharing.Sharing.GuardedVar")
     val concurrentPrefixes = List("java.util.concurrent.", "scala.collection.concurrent.",
       "dotty.tools.dotc.util.ConcurrentWeakHashSet", "dotty.tools.dotc.util.SyncEqHashMap")
 
@@ -169,16 +169,20 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
       }
 
     // ---- the calls whose argument lists protect an access: (owner, method) -> (protection, protected parameter names)
+    // `dotty.tools.sharing`'s operations, also when reached through `core.Sharing`'s exports
+    def sharingName(fullName: String): String =
+      fullName.replace("$", "").replace("dotty.tools.dotc.core.Sharing", "dotty.tools.sharing.Sharing")
+
     def protectedCall(fn: Symbol): Option[(String, Set[String])] =
-      val owner = fn.maybeOwner.fullName.replace("$", "")
+      val owner = sharingName(fn.maybeOwner.fullName)
       (owner, fn.name) match
-        case ("dotty.tools.dotc.core.Caching", "stamped" | "stampedIf" | "stampedWhen" | "peek") =>
+        case ("dotty.tools.sharing.Caching", "stamped" | "stampedIf" | "stampedWhen" | "peek") =>
           Some("Caching" -> Set("stamp", "value", "setStamp", "setValue"))
         // a claim's protection is its key's kind (`claimProtection`), read where the call's `ClaimKind` is known
-        case ("dotty.tools.dotc.core.Sharing", "claim" | "claimAt") => Some("claim" -> Set("op"))
-        case ("dotty.tools.dotc.core.Sharing", "once") => Some("claim" -> Set("compute"))
-        case ("dotty.tools.dotc.core.Sharing", "serialised" | "locking") => Some("synchronized" -> Set("op"))
-        case ("dotty.tools.dotc.core.Sharing.Guard", "locked" | "alwaysLocked") => Some("synchronized" -> Set("op"))
+        case ("dotty.tools.sharing.Sharing", "claim" | "claimAt") => Some("claim" -> Set("op"))
+        case ("dotty.tools.sharing.Sharing", "once") => Some("claim" -> Set("compute"))
+        case ("dotty.tools.sharing.Sharing", "serialised" | "locking") => Some("synchronized" -> Set("op"))
+        case ("dotty.tools.sharing.Sharing.Guard", "locked" | "alwaysLocked") => Some("synchronized" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionLock", "locked") => Some("completion-lock" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionRoots", "locked") => Some("root-claim" -> Set("op"))
         case (_, "synchronized") if owner == "scala.Any" || owner == "java.lang.Object" || owner == "scala.AnyRef" =>
@@ -188,7 +192,7 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
     // The protection of a claim, from its `ClaimKind` argument (the given beside the key's class, or `claimAt`'s
     // explicit kind): `lockWhenSerialised = false` is a root's claim only, otherwise the completion lock as well.
     def claimProtection(argss: List[List[Term]]): String =
-      def isKind(t: Term) = t.tpe.widen.typeSymbol.fullName.replace("$", "") == "dotty.tools.dotc.core.Sharing.ClaimKind"
+      def isKind(t: Term) = sharingName(t.tpe.widen.typeSymbol.fullName) == "dotty.tools.sharing.Sharing.ClaimKind"
       def lockFlag(sym: Symbol): Option[Boolean] =
         var flag: Option[Boolean] = None
         if sym.exists then
@@ -371,10 +375,10 @@ class Collector(includePkgs: List[String], repoRoot: Path, publishHandles: Set[(
           val savedInit = initDepth
           if dd.name == "<init>" then initDepth += 1
           // a method that takes the evidence of a claim (`Sharing.Holds`) runs inside `Sharing.claim`
-          def takes(cls: String) = dd.termParamss.exists(_.params.exists(_.tpt.tpe.dealias.typeSymbol.fullName.replace("$", "") == cls))
+          def takes(cls: String) = dd.termParamss.exists(_.params.exists(p => sharingName(p.tpt.tpe.dealias.typeSymbol.fullName) == cls))
           val evidence =
-            if takes("dotty.tools.dotc.core.Sharing.Holds") then Some("completion-lock")
-            else if takes("dotty.tools.dotc.core.Sharing.Monitor") then Some("synchronized")
+            if takes("dotty.tools.sharing.Sharing.Holds") then Some("completion-lock")
+            else if takes("dotty.tools.sharing.Sharing.Monitor") then Some("synchronized")
             else None
           try evidence match
             case Some(p) => withProt(p)(super.traverseTree(tree)(owner))

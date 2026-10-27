@@ -7,6 +7,8 @@ import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
 import scala.jdk.CollectionConverters.*
 import scala.annotation.internal.{confined, interned, scratch}
 
+import _root_.dotty.tools.sharing.{ClaimRegistry, CycleHandler, Sharing as Shared}
+
 /** Owners of completion roots, with parallel readers (`-Yinteractive-parallel`,
  *  step 4 of `docs/_docs/internals/interactive-multi-reader.md`, §3.1).
  *
@@ -25,11 +27,18 @@ import scala.annotation.internal.{confined, interned, scratch}
  *  completions unwind and release their roots, so that the other reader's
  *  wait ends. The check runs at every slice of a wait, since another
  *  reader's wait may start after this one's.
+ *
+ *  With parallel readers, the base's `ClaimRegistry`: a `Sharing.claim` claims its key here, and a wait-for cycle
+ *  it would close goes to `cycles` (by default the reader backs off, `CompletionRoots.backOff`).
  */
-final class CompletionRoots(currentReader: () => Reader):
+final class CompletionRoots(currentReader: () => Reader, cycles: CycleHandler) extends ClaimRegistry:
   import CompletionRoots.Claim
 
+  def this(currentReader: () => Reader) = this(currentReader, CompletionRoots.BackOff(currentReader))
   def this(base: Contexts.ContextState) = this(() => base.reader)
+
+  def claim[T](key: AnyRef, kind: Shared.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T): T =
+    locked(key, kind.what, () => cycles.waitCycle(cycleSubject))(op())
 
   @interned
   private val claims = new ConcurrentHashMap[AnyRef, Claim]()
@@ -142,9 +151,15 @@ object CompletionRoots:
   /** Back off from a wait that would close a wait-for cycle (see
    *  `SymDenotation.cyclicWait`): unwind as a pre-empted reader does.
    */
-  def backOff(subject: AnyRef)(using Contexts.Context): Nothing =
-    Contexts.ctx.reader.waitCyclesBackedOff += 1
+  def backOff(subject: AnyRef)(using Contexts.Context): Nothing = backOff(Contexts.ctx.reader)
+
+  private def backOff(reader: Reader): Nothing =
+    reader.waitCyclesBackedOff += 1
     throw CompilationUnit.CancelledCompilation()
+
+  /** `backOff` as the `CycleHandler` of a `Sharing.claim`. */
+  final class BackOff(currentReader: () => Reader) extends CycleHandler:
+    def waitCycle(subject: AnyRef): Nothing = backOff(currentReader())
 
   /** A reader's claim on a root, released when its holds come back to 0. */
   final class Claim(val owner: Reader, val what: CompletionLock.What, val ownerName: String):

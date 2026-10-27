@@ -138,7 +138,7 @@ class TreeUnpickler(reader: TastyReader,
   /** The unpickled trees */
   def unpickle(mode: UnpickleMode)(using Context): List[Tree] =
     // the address maps are the file's, as for the completers and the lazy reads: the file's claim
-    Sharing.claimAt(claimKey, Sharing.ClaimKind.lazyTastyRead, this)(unpickle0(mode))
+    Sharing.claimAt(claimKey, Sharing.lazyTastyRead, this)(unpickle0(mode))
 
   /** The file's root, as the completers claim it: the associated file of a root class, or this. */
   def claimKey(using Context): AnyRef =
@@ -1904,7 +1904,7 @@ class TreeUnpickler(reader: TastyReader,
       // reads; with several readers (interactive mode) a lazy read runs under
       // the base's completion lock like a completion (finding I35).
       // with parallel readers, the file's root, as the unpickler's completers claim it
-      Sharing.claimAt(rootKey, Sharing.ClaimKind.lazyTastyRead, owner) {
+      Sharing.claimAt(rootKey, Sharing.lazyTastyRead, owner) {
         // A second read of the same bytes would create the local symbols of the tree again and register them over
         // the first ones in `symAtAddr`, so with several readers the first read's tree is kept and every reader
         // that forces the field gets it. A batch base forces a field once, and keeps nothing.

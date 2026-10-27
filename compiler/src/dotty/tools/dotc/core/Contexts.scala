@@ -280,7 +280,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      base.locked(base.sources().getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using this)
+      base.locked(base.sources().getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using base.mode)
     }
 
     /** SourceFile with given path, memoized */
@@ -290,11 +290,11 @@ object Contexts {
 
     /** AbstractFile with given path, memoized */
     def getFile(path: String): Option[AbstractFile] =
-      base.locked(base.files().get(path))(using this).orElse(
+      base.locked(base.files().get(path))(using base.mode).orElse(
         try
           val file = new PlainFile(Path(path))
           // readers that miss at once store equal files
-          base.locked(base.files()(path) = file)(using this)
+          base.locked(base.files()(path) = file)(using base.mode)
           Some(file)
         catch
           case ex: InvalidPathException =>
@@ -1125,6 +1125,10 @@ object Contexts {
     final val concurrent: Boolean = sharing.concurrent
     final val parallel: Boolean = sharing.parallel
 
+    /** `sharing.mode`, copied to the base: the given of the `dotty.tools.sharing` operations (`dotc.sharingMode`),
+     *  a value class over `concurrent`, so that its test reads one field of the base, as a test of `concurrent` does. */
+    final val mode: _root_.dotty.tools.sharing.Mode = sharing.mode
+
     /** Interactive mode with several readers: the lock every completion
      *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
      *  to a new run (`Denotation.current`) and every computation of an
@@ -1141,6 +1145,12 @@ object Contexts {
      */
     @interned @publishedBy("init")
     val completionRoots: CompletionRoots = CompletionRoots(this)
+
+    /** What a `Sharing.claim` takes on a concurrent base (`dotc.claimRegistry`): the root's claim with parallel
+     *  readers, the completion lock (as the key's `ClaimKind` says) with serialised ones. */
+    @interned @publishedBy("init")
+    val claimRegistry: _root_.dotty.tools.sharing.ClaimRegistry =
+      if parallel then completionRoots else completionLock
 
     /** The stamp of the structure of published scopes: bumped by every change to a scope after its owner's
      *  completion published it (`MutableScope.published`). A cache computed from scopes can record it, and is
