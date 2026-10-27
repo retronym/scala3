@@ -15,6 +15,12 @@ trait ClaimRegistry:
 trait CycleHandler:
   def waitCycle(subject: AnyRef): Nothing
 
+/** A thread's work unwinding because it was cancelled or backs off from a wait-for cycle (a `CycleHandler` may throw
+ *  one): not a failure of what it was computing, which it leaves as it found it, and caught where the work restarts.
+ *  dotc's `CompilationUnit.CancelledCompilation` is one.
+ */
+class Cancelled extends scala.util.control.ControlThrowable
+
 /** What the holder of a claim is doing: a kind and an optional subject, rendered only when a waiter reports it.
  *  `renderSubject` renders a subject that is not a `String` or a `Label`.
  */

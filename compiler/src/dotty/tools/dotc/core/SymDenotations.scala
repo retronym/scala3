@@ -3672,9 +3672,10 @@ object SymDenotations {
           case null => computing(clsd) {
             cacheNow match
               case null =>
-                if (isInside) throw CyclicReference(clsd)
-                setProvisional(false)
-                val computed = inside(clsd.computeBaseData(using this, ctx))
+                val computed = computeInside(throw CyclicReference(clsd)) {
+                  setProvisional(false)
+                  clsd.computeBaseData(using this, ctx)
+                }
                 if (!isProvisional) store(computed)
                 else onBehalf.signalProvisional()
                 computed

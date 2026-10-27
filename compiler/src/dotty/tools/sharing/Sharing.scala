@@ -168,12 +168,12 @@ object Sharing:
    *  {{{
    *  private abstract class InheritedCacheImpl(...) extends InheritedCache, Sharing.BlackHole
    *  // BaseDataImpl.apply, inside `Sharing.claim(this)`: a re-entry by the owner is a cycle
-   *  if isInside then throw CyclicReference(clsd)
-   *  val computed = inside(clsd.computeBaseData(using this, ctx))
+   *  val computed = computeInside(throw CyclicReference(clsd))(clsd.computeBaseData(using this, ctx))
    *  // BaseDataImpl.invalidate, from any thread: an invalidation from inside the computation is ignored
    *  if valid && !isInsideHere then ...
    *  }}}
-   *  `inside(op)` expands to `val was = insideThread; insideThread = currentThread; try op finally insideThread = was`.
+   *  `inside(op)` expands to `val was = insideThread; insideThread = currentThread; try op finally insideThread = was`,
+   *  and `computeInside(onCycle)(op)` to `if insideThread != null then onCycle else inside(op)`.
    */
   trait BlackHole:
     @scala.annotation.internal.benignRace("written under the claim; read without it only to compare with this thread")
@@ -183,6 +183,13 @@ object Sharing:
       val was = insideThread
       insideThread = Thread.currentThread
       try op finally insideThread = was
+    /** `op` as the one computation this black hole guards: entered by the holder of the claim, the only thread that
+     *  can be inside, so finding some thread inside is the holder re-entering its own computation, a cycle,
+     *  `onCycle`. However `op` ends, it leaves: a computation that unwinds (a cancellation, a back-off, a crash) leaves
+     *  what it guards computable by the next caller, which a hand-written "started" flag must remember to do (I97).
+     */
+    protected final inline def computeInside[T](inline onCycle: => Nothing)(inline op: T)(using Holds[this.type]): T =
+      if insideThread != null then onCycle else inside(op)
     /** Is some thread inside? */
     protected final def isInside(using Holds[this.type]): Boolean = insideThread != null
     /** Is this thread inside? */

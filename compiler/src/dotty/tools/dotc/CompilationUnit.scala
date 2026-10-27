@@ -15,7 +15,7 @@ import typer.Nullables
 import core.Decorators.*
 import config.{SourceVersion, Feature}
 import scala.annotation.internal.{benignRace, cache, confined, featureArea, guardedBy, publishedBy, scratch, sharable, treeState}
-import scala.util.control.{ControlThrowable, NoStackTrace}
+import scala.util.control.NoStackTrace
 import transform.MacroAnnotations.isMacroAnnotation
 import scala.io.Codec
 
@@ -177,7 +177,7 @@ object CompilationUnit {
    *  The cause is a `CancellationException` so that clients which classify
    *  exceptions by their cause chain (e.g. Metals) treat it as a cancellation.
    */
-  class CancelledCompilation extends ControlThrowable:
+  class CancelledCompilation extends _root_.dotty.tools.sharing.Cancelled:
     @scratch @publishedBy("init") private val myCause = new java.util.concurrent.CancellationException("compilation cancelled")
     override def getCause: Throwable = myCause
 
