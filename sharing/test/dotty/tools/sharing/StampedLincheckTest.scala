@@ -27,9 +27,11 @@ class StampedLincheckTest:
     LinChecker.check(classOf[Cell], StressOptions().iterations(100).invocationsPerIteration(5000).threads(3).actorsPerThread(3))
 
   @Test def emptyIsNeverCurrent(): Unit =
-    val empty: Stamped[String] = Stamped.Empty
+    val empty: Stamped[Tick, String] = Stamped.Empty
     assertEquals(0, empty.stamp)
-    assertEquals("computed", Stamped.cached(empty)(_ => ())(Now)("computed"))
+    var field = empty
+    assertEquals("computed", field.cached("computed"))
+    assertEquals(Now, field.stamp)
 
   @Test def brokenIsCaught(): Unit =
     val failed =
@@ -40,14 +42,18 @@ class StampedLincheckTest:
 object StampedLincheckTest:
   inline val Now = 2
 
+  // the stamps' kind here, and its current stamp
+  sealed trait Tick
+  given Stamp[Tick] = Stamp(Now)
+
   class Cell:
-    private var cell: Stamped[Int] = Stamped(1, 10)
+    private var cell: Stamped[Tick, Int] = Stamped(1, 10)
 
-    @Operation def get(): Int = Stamped.cached(cell)(cell = _)(Now)(20)
+    @Operation def get(): Int = cell.cached(20)
 
-    @Operation def getProvisional(): Int = Stamped.cachedIf(cell)(cell = _)(Now, _ != -1)(-1)
+    @Operation def getProvisional(): Int = cell.cachedIf(_ != -1)(-1)
 
-    @Operation def peek(): Int = Stamped.peek(cell)(Now)(0)
+    @Operation def peek(): Int = cell.peek(0)
 
   class Broken:
     private var stamp: Int = 1

@@ -40,8 +40,10 @@ object Periods {
    */
   class Period private[Periods] (private val code: Int) extends AnyVal with Showable {
 
-    /** The encoding, for a field published through `util.Publish` (a plain `int`). */
-    private[dotc] def rawCode: Int = code
+    /** The encoding, for a field published through `util.Publish` (a plain `int`) and a `Stamped` cache's stamp.
+     *  Public, so that the inline `dotc.periodStamp` reads it without an accessor (which left a load of its package
+     *  object at every site once `-opt` inlined it). */
+    def rawCode: Int = code
     /* VERIFYING CORRECTNESS:
      * `Period` is very performance sensitive, so low-level tricks are useful, but they have to be correct.
      * To avoid introducing incorrect "optimizations", use your favorite SMT solver to check them.

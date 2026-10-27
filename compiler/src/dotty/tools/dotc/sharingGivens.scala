@@ -13,3 +13,18 @@ inline given sharingMode(using c: Context): _root_.dotty.tools.sharing.Mode = c.
 
 /** The base's claim registry (`ContextState.claimRegistry`): the completion roots or the completion lock. */
 inline given claimRegistry(using c: Context): _root_.dotty.tools.sharing.ClaimRegistry = c.base.claimRegistry
+
+// The stamps of `dotty.tools.sharing.Stamped` caches: a cache valid for one run or for one period, its kind on the
+// field's type (`Stamped[PerRun, T]`), and its current stamp from the context.
+
+/** A cache valid for one run: stamped with the run id. */
+sealed trait PerRun
+
+/** A cache valid for one period: stamped with the period's `rawCode`. */
+sealed trait PerPeriod
+
+inline given runStamp(using c: Context): _root_.dotty.tools.sharing.Stamp[PerRun] =
+  _root_.dotty.tools.sharing.Stamp(c.runId)
+
+inline given periodStamp(using c: Context): _root_.dotty.tools.sharing.Stamp[PerPeriod] =
+  _root_.dotty.tools.sharing.Stamp(c.period.rawCode)
