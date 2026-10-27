@@ -3558,11 +3558,10 @@ object Types extends TypeUtils {
 
   abstract case class AndType(tp1: Type, tp2: Type) extends AndOrType {
     def isAnd: Boolean = true
-    private var myBaseClassesPeriod: Period = Nowhere
-    private var myBaseClasses: List[ClassSymbol] = uninitialized
+    private var myBaseClasses: Stamped[List[ClassSymbol]] = Stamped.Empty
     /** Base classes are the merge of the operand base classes. */
     override final def baseClasses(using Context): List[ClassSymbol] =
-      Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
+      Stamped.cached(myBaseClasses)(myBaseClasses = _)(ctx.period.rawCode):
         val bcs1 = tp1.baseClasses
         val bcs1set = BaseClassSet(bcs1)
         def recur(bcs2: List[ClassSymbol]): List[ClassSymbol] = bcs2 match {
@@ -3644,11 +3643,10 @@ object Types extends TypeUtils {
   abstract case class OrType protected(tp1: Type, tp2: Type) extends AndOrType {
     def isAnd: Boolean = false
     def isSoft: Boolean
-    private var myBaseClassesPeriod: Period = Nowhere
-    private var myBaseClasses: List[ClassSymbol] = uninitialized
+    private var myBaseClasses: Stamped[List[ClassSymbol]] = Stamped.Empty
     /** Base classes are the intersection of the operand base classes. */
     override final def baseClasses(using Context): List[ClassSymbol] =
-      Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
+      Stamped.cached(myBaseClasses)(myBaseClasses = _)(ctx.period.rawCode):
         val bcs1 = tp1.baseClasses
         val bcs1set = BaseClassSet(bcs1)
         def recur(bcs2: List[ClassSymbol]): List[ClassSymbol] = bcs2 match {
