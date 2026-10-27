@@ -159,6 +159,13 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   /** The statements `typedStats` skipped, innermost lists last. */
   val skippedStats: ListBuffer[Run.SkippedStat] = ListBuffer.empty
 
+  /** Are the package-level imports skipped too (`Targeting.skipImport`)? Set
+   *  by an open of several files (`InteractiveDriver.openAll`): the statements
+   *  after an import take the import context the Namer built, and the first
+   *  request on the file types the import, with what it completes.
+   */
+  var deferImports: Boolean = false
+
   /** The owner of the statement list about to be typed by `Typer.typedStats`
    *  that is subject to targeting (the package class, the template's local
    *  dummy, or the owner of a block), set by `targetNextStats` right before
@@ -194,6 +201,7 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
   /** Back to the defaults: no target, no pending mark, nothing skipped. */
   def clearTargeting(): Unit =
     typingTarget = Spans.NoSpan
+    deferImports = false
     targetedStatsOwner = NoSymbol
     targetedStatsInBlock = false
     targetingTyperState = null
@@ -278,6 +286,12 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    *  typing (`InteractiveDriver`'s claims), in nanoseconds.
    */
   @volatile var statementWaitNanos: Long = 0L
+
+  /** The runs this reader started (interactive mode), and of them those
+   *  on the whole file, for tools (the x-ray's replay).
+   */
+  @volatile var runsStarted: Int = 0
+  @volatile var wholeFileRunsStarted: Int = 0
 
   /** Time this reader spent blocked on the completion lock, in nanoseconds. */
   @volatile var lockWaitNanos: Long = 0L
