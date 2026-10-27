@@ -14,6 +14,7 @@ import util.{Property, SourceFile, Spans}
 import Spans.*
 
 import scala.annotation.tailrec
+import scala.annotation.internal.{cache, confined, guardedBy, scratch}
 import scala.collection.{immutable, mutable}
 
 /** Some creators for typed trees */
@@ -1391,7 +1392,7 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
 
     // the trees are read under the file's claim (`rootTreesClaim`), and kept under it, so that readers share one
     // reading: a second one creates the local symbols again. Only with -Yretain-trees, which Metals sets.
-    private var myTrees: List[Tree] | Null = null
+    @cache @guardedBy("completionLock") private var myTrees: List[Tree] | Null = null
 
     /** The claim the trees are read and kept under: the one the unpickler's completers take. */
     protected def rootTreesClaim(using Context): AnyRef = this
@@ -1488,6 +1489,7 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
   /** A key to be used in a context property that tracks the number of inlined trees */
   private val InlinedTrees = Property.Key[Counter]()
   // one outermost inlined call's count, in its context
+  @scratch @confined
   final class Counter {
     var count: Int = 0
   }

@@ -2,6 +2,7 @@ package dotty.tools
 package dotc
 package core
 
+import scala.annotation.internal.guardedBy
 import java.io.{IOException, File}
 import java.nio.channels.ClosedByInterruptException
 
@@ -236,7 +237,7 @@ object SymbolLoaders {
     @volatile private var enterFlatClasses: Option[() => Context ?=> Unit] = None
 
     // the thread entering the flat classes, under the loader's claim: its own lookups do not wait for itself
-    private var flatEnterer: Thread | Null = null
+    @guardedBy("completionLock") private var flatEnterer: Thread | Null = null
 
     /** Enter the flat classes, once. With several readers, under the loader's claim, into a scope built aside and
      *  published whole (`MutableScope.extendAside`): the package's scope is never changed while a reader may be

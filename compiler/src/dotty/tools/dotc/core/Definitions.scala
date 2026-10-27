@@ -3,6 +3,7 @@ package dotc
 package core
 
 import scala.annotation.{threadUnsafe => tu}
+import scala.annotation.internal.{benignRace, cache, guardedBy, lazyFact, publishedBy}
 import Types.*, Contexts.*, Symbols.*, SymDenotations.*, StdNames.*, Names.*, Phases.*
 import Flags.*, Scopes.*, Decorators.*, NameOps.*, Periods.*, NullOpsDecorator.*
 import unpickleScala2.Scala2Unpickler.ensureConstructor
@@ -54,6 +55,7 @@ class Definitions {
   import Definitions.*
 
   // Set by `init`, which each run's root context calls: a write action of the interactive driver, with no reader.
+  @lazyFact @guardedBy("writer")
   private var initCtx: Context = uninitialized
   private given currentContext[Dummy_so_its_a_def]: Context = initCtx
 
@@ -1641,6 +1643,7 @@ class Definitions {
   private class FunType(prefix: String):
     // An element is written once per writer, to the class's reference, which every writer computes equal; the array
     // is replaced and written under the monitor, so a store is not lost to a copy. A reader that misses computes it.
+    @cache @benignRace("every writer stores the class's reference; stores and growth are under the monitor")
     private var classRefs: Array[TypeRef | Null] = new Array(22)
     def apply(n: Int)(using Context): TypeRef =
       val refs = classRefs
@@ -2128,6 +2131,7 @@ class Definitions {
     // the run id and the value in one immutable object, so that a reader on
     // another thread (interactive mode) sees the pair or nothing
     // Readers of one run store equal values, and a `Cached` has only final fields, so a plain race publishes it.
+    @cache @benignRace("readers of one run generate equal values; Cached has final fields only")
     private var cached: PerRun.Cached[T] | Null = null
     def apply()(using Context): T = {
       val c = cached
@@ -2160,7 +2164,9 @@ class Definitions {
   )
 
   // Filled by `valueTypeRef`, from the lazy vals that `init` forces (`ScalaValueClasses`), and only read after.
+  @lazyFact @publishedBy("init")
   private val valueTypeEnc = mutable.Map[TypeName, PrimitiveClassEnc]()
+  @lazyFact @publishedBy("init")
   private val typeTags = mutable.Map[TypeName, Name]().withDefaultValue(nme.specializedTypeNames.Object)
 
 //  private val unboxedTypeRef = mutable.Map[TypeName, TypeRef]()
@@ -2271,6 +2277,7 @@ class Definitions {
 
   @tu lazy val reservedScalaClassNames: Set[Name] = syntheticScalaClasses.map(_.name).toSet + tpnme.Null
 
+  @lazyFact @guardedBy("writer")
   private var isInitialized = false
 
   /** Is the base set up (`init` has run)? Before that there is no reader, so a scope may change freely. */

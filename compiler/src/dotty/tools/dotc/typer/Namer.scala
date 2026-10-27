@@ -13,6 +13,7 @@ import ProtoTypes.*
 import util.Spans.*
 import util.Property
 import collection.mutable, mutable.ListBuffer
+import scala.annotation.internal.{confined, guardedBy, lazyFact, publishedBy, scratch}
 import tpd.tpes
 import Variances.alwaysInvariant
 import config.{Config, Feature, MigrationVersion}
@@ -46,11 +47,11 @@ object Namer:
    */
   final class IndexSlice(val ctx: Context, val lock: AnyRef):
     // filled by the thread that indexes the file, read by the merge after that thread has ended
-    private[Namer] val scopes = mutable.LinkedHashMap[Symbol, MutableScope]()
+    @confined private[Namer] val scopes = mutable.LinkedHashMap[Symbol, MutableScope]()
     // the package clauses of the file, with their expanded statements: `invalidateCompanions` runs at the merge
-    private[Namer] val clauses = ListBuffer[(Symbol, List[untpd.Tree])]()
+    @confined private[Namer] val clauses = ListBuffer[(Symbol, List[untpd.Tree])]()
     // set by the merge: from then on, a context that carries the slice (a completer's) enters and looks up as usual
-    @volatile private[Namer] var merged = false
+    @publishedBy("volatile") @volatile private[Namer] var merged = false
 
     /** The part of this slice for package class `pkg`: also where a module defined in it finds its buddy (the
      *  module class of a module val, or the reverse), the merge or not.
@@ -135,7 +136,7 @@ class Namer { typer: Typer =>
    *  one, so that trees that are shared between different DefDefs can be independently
    *  used as indices. It also contains a scope that contains nested parameters.
    */
-  @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
+  @lazyFact @publishedBy("volatile") @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
   def nestedTyper(using Context): mutable.Map[Symbol, Typer] =
     val m = myNestedTyper
     if m != null then m
@@ -153,7 +154,7 @@ class Namer { typer: Typer =>
           m1
 
   /** We are entering symbols coming from a SourceLoader */
-  private var lateCompile = false
+  @scratch @guardedBy("writer") private var lateCompile = false
 
   /** The symbol of the given expanded tree. */
   def symbolOfTree(tree: Tree)(using Context): Symbol = {

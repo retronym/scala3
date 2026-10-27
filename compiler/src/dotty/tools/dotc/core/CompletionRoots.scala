@@ -5,6 +5,7 @@ package core
 import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
 
 import scala.jdk.CollectionConverters.*
+import scala.annotation.internal.{confined, interned, scratch}
 
 import _root_.dotty.tools.sharing.{ClaimRegistry, CycleHandler, Sharing as Shared}
 
@@ -39,6 +40,7 @@ final class CompletionRoots(currentReader: () => Reader, cycles: CycleHandler) e
   def claim[T](key: AnyRef, kind: Shared.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T): T =
     locked(key, kind.what, () => cycles.waitCycle(cycleSubject))(op())
 
+  @interned
   private val claims = new ConcurrentHashMap[AnyRef, Claim]()
 
   /** Claim `key` for this thread's reader, to do `what`; wait while another
@@ -166,5 +168,7 @@ object CompletionRoots:
   /** A reader's claim on a root, released when its holds come back to 0. */
   final class Claim(val owner: Reader, val what: CompletionLock.What, val ownerName: String):
     // changed only by the owner (`acquire` re-entering, `release`); `@volatile` is not needed for that
+    @scratch @confined
     @volatile var holds: Int = 1
+    @scratch
     val done: CountDownLatch = new CountDownLatch(1)
