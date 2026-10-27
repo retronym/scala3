@@ -12,13 +12,13 @@ core\.SymDenotations\.PackageClassDenotation#(packageObjsCache|packageObjsRunId)
 core\.Types\.LazyRef#(myRef|computed)	B	root-claim	LazyRef.myRef/computed: a claim per lazy reference with parallel readers (I57)
 core\.SymDenotations\.InheritedCacheImpl#dependent	B	batch-only	InheritedCacheImpl.dependent: batch only; a concurrent base pulls, by the structure epoch
 core\.SymDenotations\.InheritedCacheImpl#checkedPeriod	B	*	InheritedCacheImpl.checkedPeriod: a stamp without a value, a stale read only checks again
-core\.SymDenotations\.(MemberNamesImpl#cache|BaseDataImpl#(cache|valid|locked))	B	completion-lock	MemberNamesImpl.cache, BaseDataImpl.cache/valid/locked: computed under Sharing.exclusive
+core\.SymDenotations\.(MemberNamesImpl#cache|BaseDataImpl#(cache|valid|locked))	B	completion-lock	MemberNamesImpl.cache, BaseDataImpl.cache/valid/locked: computed under the cache's claim (Sharing.claim)
 core\.SymDenotations\.ClassDenotation#(myMemberCache|myBaseTypeCache)	C	Stamped	ClassDenotation's member and base-type caches: one Stamped field each
 core\.Types\.(NamedType#mySignature|AndType#myBaseClasses|OrType#.*|MethodOrPoly#my(Java|Scala2)?Signature|TypeRef#myCanDropAlias|AppliedType#(cachedSuper|myEvalued|cachedUnderlyingNormalizable|myIsStable))	C	Stamped	the stamped caches in Types held in one Stamped cell each
 core\.SymDenotations\.ClassDenotation#(memberNamesCache|baseDataCache)	C	*	memberNamesCache, baseDataCache: class 1, fixed (I92), read once
 core\.Types\.Type#mightBeProvisional	C	*	Type.mightBeProvisional: class 1, fixed (I93)
 core\.Types\.AnnotatedType#myIsRefining	C	none	AnnotatedType.isRefining: one byte, as myGround (I94)
-core\.Types\.RecType#openedWithPrefix	C	none	RecType.openedWithPrefix: class 1, open (I96)
+core\.Types\.RecType#openedWithPrefix	C	batch-only	RecType.openedWithPrefix: batch only; a concurrent base keeps the guard per reader (Reader.openedRecTypes)
 typer\.Namer#myNestedTyper	*	volatile	Namer.nestedTyper: class 1, fixed (I90): created under the monitor, published through a volatile field
 typer\.Namer\.TypeDefCompleter#myTypeParams	B	volatile	TypeDefCompleter.myTypeParams: class 1, fixed (I91): indexed under the monitor, published volatile
 core\.OrderingConstraint#myUninstVars	*	volatile	OrderingConstraint.myUninstVars: class 1, fixed, unproven (I91): filled first, published volatile
