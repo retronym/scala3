@@ -126,7 +126,10 @@ object NamerOps:
    *  for a module or module class
    */
   def adjustModuleCompleter(completer: LazyType, name: Name)(using Context): LazyType =
-    val scope = ctx.effectiveScope
+    adjustModuleCompleter(completer, name, ctx.effectiveScope)
+
+  /** As above, finding the module class or source module in `scope` */
+  def adjustModuleCompleter(completer: LazyType, name: Name, scope: Scope)(using Context): LazyType =
     if name.isTermName then
       completer.withModuleClass(findModuleBuddy(name.moduleClassName, scope))
     else
