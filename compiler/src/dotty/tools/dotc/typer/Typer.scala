@@ -4239,11 +4239,17 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           case none =>
             val newCtx = if (ctx.owner.isTerm && adaptCreationContext(mdef)) ctx
               else ctx.withNotNullInfos(initialNotNullInfos)
-            val typedMdef = typed(mdef)(using newCtx)
-            if !ctx.owner.isTerm then
-              ctx.property(RecordedDefContexts) match
-                case Some(recorded) if typedMdef.isInstanceOf[ValOrDefDef] => recorded.put(typedMdef.symbol, (ctx, exprOwner))
-                case _ =>
+            val recordedDefs = if ctx.owner.isTerm then None else ctx.property(RecordedDefContexts)
+            // under the same flag: what typing a member reports is the
+            // member statement's (`Provenance`)
+            val typedMdef = recordedDefs match
+              case Some(_) => mdef.getAttachment(SymOfTree) match
+                case Some(sym) => ctx.reader.withProvenance(reporting.Provenance.Stat(sym))(typed(mdef)(using newCtx))
+                case None => typed(mdef)(using newCtx)
+              case None => typed(mdef)(using newCtx)
+            recordedDefs match
+              case Some(recorded) if typedMdef.isInstanceOf[ValOrDefDef] => recorded.put(typedMdef.symbol, (ctx, exprOwner))
+              case _ =>
             typedMdef match {
               case mdef1: DefDef
               if mdef1.symbol.is(Inline, butNot = Deferred) && !Inlines.bodyToInline(mdef1.symbol).isEmpty =>
