@@ -3967,11 +3967,7 @@ object Types extends TypeUtils {
   /** The superclass of MethodType and PolyType. */
   sealed abstract class MethodOrPoly extends UncachedGroundType with LambdaType with MethodicType {
 
-    // Invariants:
-    // (1) mySignatureRunId != NoRunId      =>  mySignature != null
-
-    private var mySignature: Signature = uninitialized
-    private var mySignatureRunId: RunId = NoRunId
+    private var mySignature: Stamped[Signature] = Stamped.Empty
     private var myJavaSignature: Stamped[Signature] = Stamped.Empty
     private var myScala2Signature: Stamped[Signature] = Stamped.Empty
 
@@ -4018,7 +4014,7 @@ object Types extends TypeUtils {
               ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
             computeSignature
         case SourceLanguage.Scala3 =>
-          Caching.stampedIf(mySignatureRunId, mySignature)(mySignatureRunId = _, mySignature = _)(
+          Stamped.cachedIf(mySignature)(mySignature = _)(
               ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
             computeSignature
     end signature
