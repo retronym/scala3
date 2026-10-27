@@ -2364,13 +2364,11 @@ object Types extends TypeUtils {
     private var checkedPeriod: Period = Nowhere
     @cache @benignRace("a Byte computed from the same prefix, written whole")
     private var myStableHash: Byte = 0
-    private var mySignature: Signature = uninitialized
-    private var mySignatureRunId: RunId = NoRunId
+    private var mySignature: Stamped[Signature] = Stamped.Empty
 
     // Invariants:
     // (1) checkedPeriod != Nowhere     =>  lastDenotation != null
     // (2) lastDenotation != null       =>  lastSymbol != null
-    // (3) mySignatureRunId != NoRunId  =>  mySignature != null
 
     def isType: Boolean = isInstanceOf[TypeRef]
     def isTerm: Boolean = isInstanceOf[TermRef]
@@ -2399,7 +2397,7 @@ object Types extends TypeUtils {
         else if ctx.erasedTypes then atPhase(erasurePhase)(computeSignature)
         else symbol.asSeenFrom(prefix).signature
 
-      Caching.stampedIf(mySignatureRunId, mySignature)(mySignatureRunId = _, mySignature = _)(
+      Stamped.cachedIf(mySignature)(mySignature = _)(
           ctx.runId, sig => !sig.isUnderDefined && !isProvisional):
         computeSignature
     end signature
@@ -2411,7 +2409,7 @@ object Types extends TypeUtils {
      *  some symbols change their signature at erasure.
      */
     private def currentSignature(using Context): Signature =
-      Caching.peek(mySignatureRunId, mySignature)(ctx.runId):
+      Stamped.peek(mySignature)(ctx.runId):
         val lastd = lastDenotation
         if lastd != null then sigFromDenot(lastd)
         else if ctx.erasedTypes then atPhase(erasurePhase)(currentSignature)
