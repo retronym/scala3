@@ -98,15 +98,17 @@ extends TypeError:
   val cycleSym = denot.symbol
 
   // cycleSym.flags would try completing denot and would fail, but here we can use flagsUNSAFE to detect flags
-  // set by the parser.
-  def unsafeFlags = cycleSym.flagsUNSAFE
+  // set by the parser. On `denot` itself, the denotation that cycled, not through `cycleSym.denot`: that
+  // brings the symbol's denotation forward, re-running the transform that just cycled, and the second
+  // cyclic reference replaced the first (with its trace pointing at the cause) with one raised from the reporter.
+  def unsafeFlags = denot.flagsUNSAFE
   def isMethod = unsafeFlags.is(Method)
-  def isVal = !isMethod && cycleSym.isTerm
+  def isVal = !isMethod && denot.isTerm
 
   override def toMessage(using Context): Message =
-    val unsafeFlags = cycleSym.flagsUNSAFE
+    val unsafeFlags = denot.flagsUNSAFE
     val isMethod = unsafeFlags.is(Method)
-    val isVal = !isMethod && cycleSym.isTerm
+    val isVal = !isMethod && denot.isTerm
 
     /* This CyclicReference might have arisen from asking for `m`'s type while trying to infer it.
      * To try to diagnose this, walk the context chain searching for context in
@@ -129,8 +131,8 @@ extends TypeError:
             errorMsg(cx.outer)
         }
 
-      // Give up and give generic errors.
-      else if (cycleSym.isOneOf(GivenOrImplicitVal, butNot = Method) && cycleSym.owner.isTerm)
+      // Give up and give generic errors. The raw flags and the last known owner: nothing forced, nothing brought forward.
+      else if (unsafeFlags.isOneOf(GivenOrImplicitVal, butNot = Method) && cycleSym.lastKnownDenotation.owner.isTerm)
         CyclicReferenceInvolvingImplicit(this)
       else
         CyclicReferenceInvolving(this)
