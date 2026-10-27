@@ -134,7 +134,11 @@ final class CompletionRoots(currentReader: () => Reader, cycles: CycleHandler) e
       // and has not yet cleared it (finding I87)
       if claim.done.getCount == 0 then return null
       chain = claim :: chain
-      if claim.owner eq me then return chain
+      if claim.owner eq me then
+        // the edges were read one after another: a claim released after it was read, whose owner then waited on a
+        // claim of `me`, joins two waits that never coexisted. Claims are not reacquired, so every claim still held
+        // now was held throughout the walk, and the waits on them still stand (I98)
+        return if chain.forall(_.done.getCount != 0) then chain else null
       claim = claim.owner.waitingOn
       steps += 1
     null
