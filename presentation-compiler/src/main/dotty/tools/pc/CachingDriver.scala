@@ -64,10 +64,12 @@ class CachingDriver private (
 
   /** A targeted run leaves a prefix of the typed tree in the compilation unit
    *  of `uri`: it is served as the result of `run` only once it covers the
-   *  whole file.
+   *  whole file. Conversely a whole-file run on the same content serves any
+   *  target.
    */
   override def runUpTo(uri: URI, source: SourceFile, target: Span): List[Diagnostic] =
     if !targetedRequests then run(uri, source) // the driver's own check would call its `run`, not this caching one
+    else if alreadyCompiled(uri, source.textContent()) then previousDiags
     else
       lastCompiledURI = null
       val diags = super.runUpTo(uri, source, target)

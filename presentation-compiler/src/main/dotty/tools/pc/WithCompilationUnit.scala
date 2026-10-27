@@ -14,11 +14,16 @@ import dotty.tools.dotc.core.NameOps.*
 import dotty.tools.dotc.core.Symbols.*
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourceFile
+import dotty.tools.dotc.util.Spans.{NoSpan, Span}
 import dotty.tools.pc.utils.InteractiveEnrichments.*
 
+/** The typed tree of the file of `params`: the whole file, or, with a
+ *  `range`, the statements that touch it (`InteractiveDriver.runUpTo`).
+ */
 class WithCompilationUnit(
     val driver: InteractiveDriver,
-    params: VirtualFileParams
+    params: VirtualFileParams,
+    val range: Span = NoSpan
 ):
   val uri: java.net.URI = params.uri()
   val filePath: java.nio.file.Path = Paths.get(uri)
@@ -26,7 +31,8 @@ class WithCompilationUnit(
   val text: Array[Char] = sourceText.toCharArray()
   val source: SourceFile =
     SourceFile.virtual(filePath.toString, sourceText)
-  driver.run(uri, source)
+  if range.exists then driver.runUpTo(uri, source, range)
+  else driver.run(uri, source)
   given ctx: Context = driver.currentCtx
 
   private val run = driver.currentCtx.run
