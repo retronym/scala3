@@ -207,7 +207,7 @@ const isMarker = f => f.protectionRule === '@sharable' || f.protectionRule === '
 const sourceOf = f => (f.kindSource === 'annotated' || (f.protectionSource === 'annotated' && !isMarker(f))) ? 'annotated' : isMarker(f) ? 'marker' : 'inferred';
 const SOURCES = [['annotated', 'annotated'], ['marker', '@sharable / @unshared'], ['inferred', 'inferred']];
 const isBad = p => p === 'none' || p.startsWith('partial');
-const PROT_SHORT = { 'benign-race': 'benign race', 'static-safe (@sharable)': '@sharable', 'single-threaded (@unshared)': '@unshared',  'Caching': 'Caching', 'Publish': 'Publish', 'packed-volatile': 'packed', 'volatile': 'volatile', 'completion-lock': 'lock', 'root-claim': 'claim', 'thread-confined': 'confined', 'synchronized': 'sync', 'concurrent': 'concurrent', 'batch-only': 'batch', 'post-typer': 'post-typer', 'none': '! none', 'partial': '! partial', 'mixed': 'mixed', 'unknown': '?' };
+const PROT_SHORT = { 'benign-race': 'benign race', 'static-safe (@sharable)': '@sharable', 'single-threaded (@unshared)': '@unshared',  'Caching': 'Caching', 'Stamped': 'Stamped', 'Publish': 'Publish', 'packed-volatile': 'packed', 'volatile': 'volatile', 'completion-lock': 'lock', 'root-claim': 'claim', 'thread-confined': 'confined', 'synchronized': 'sync', 'concurrent': 'concurrent', 'batch-only': 'batch', 'post-typer': 'post-typer', 'none': '! none', 'partial': '! partial', 'mixed': 'mixed', 'unknown': '?' };
 
 const simple = n => n.replace(/\$$/, '').split('.').filter(s => /^[A-Z_]/.test(s)).join('.') || n;
 const isType = n => { const c = classes.get(n); return !!c && (n === 'core.Types.Type' || c.bases.includes('core.Types.Type')); };
@@ -272,7 +272,7 @@ function rowsOf(node) {
 // ---- chips
 // a protection's name in plain words; the id is the chip's tooltip
 const PROT_LABELS = { 'thread-confined': 'one reader only', 'completion-lock': 'completion lock', 'root-claim': 'root claim',
-  'frozen-after-completion': 'frozen once published', 'writer-action': 'write actions only', 'Caching': 'stamped cache',
+  'frozen-after-completion': 'frozen once published', 'writer-action': 'write actions only', 'Caching': 'stamped cache', 'Stamped': 'stamped cell',
   'packed-volatile': 'packed into one value', 'Publish': 'ordered publication', 'volatile': 'one volatile field',
   'init-only': 'written during setup', 'concurrent': 'concurrent structure', 'synchronized': 'monitor',
   'benign-race': 'benign race, argued', 'batch-only': 'batch compiler only', 'post-typer': 'after typer',
@@ -642,12 +642,17 @@ private def writing[T](body: => T): T =
     finally
       base.writeActionThread = null
       lock.unlock()`,
-'Caching': String.raw`// core/Types.scala: AndType's base classes, valid for one period
-private var myBaseClassesPeriod: Period = Nowhere
-private var myBaseClasses: List[ClassSymbol] = uninitialized
-override final def baseClasses(using Context): List[ClassSymbol] =
-  Caching.stamped(myBaseClassesPeriod, myBaseClasses)(myBaseClassesPeriod = _, myBaseClasses = _)(ctx.period):
+'Caching': String.raw`// core/Types.scala: TypeRef's canDropAlias, valid for one period
+private var myCanDropAliasPeriod: Period = Nowhere
+private var myCanDropAlias: Boolean = uninitialized
+def canDropAlias(using Context): Boolean =
+  Caching.stamped(myCanDropAliasPeriod, myCanDropAlias)(myCanDropAliasPeriod = _, myCanDropAlias = _)(ctx.period):
     … // computed; on a concurrent base stored value, fence, stamp; read stamp, fence, value`,
+'Stamped': String.raw`// core/Types.scala: AndType's base classes, valid for one period
+private var myBaseClasses: Stamped[List[ClassSymbol]] = Stamped.Empty
+override final def baseClasses(using Context): List[ClassSymbol] =
+  Stamped.cached(myBaseClasses)(myBaseClasses = _)(ctx.period.rawCode):
+    … // computed; stored as a new cell: final fields, so the same code on every base`,
 'synchronized': String.raw`// Run.scala: the suppressions live in their guard, reached only inside locked
 object suppressions extends Sharing.Guard:
   private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
@@ -754,6 +759,10 @@ const SWIM = {
     bars: [[0, 0, 4, 'computes the value', 'act'], [1, 5, 7, 'reads stamp, fence, value', 'act']],
     marks: [[0, 4.3, 'value, fence, stamp']], arrows: [[0, 4.3, 1, 5, 'stamp = period']],
     note: 'A reader that sees the new stamp sees the value stored before it; one that misses computes an equal value.' },
+  Stamped: { lanes: ['reader 1', 'reader 2'],
+    bars: [[0, 0, 4, 'computes the value', 'act'], [1, 5, 7, 'reads the cell', 'act']],
+    marks: [[0, 4.3, 'stores a new cell']], arrows: [[0, 4.3, 1, 5, 'cell (stamp, value)']],
+    note: 'Stamp and value are final fields of one cell: a reader that loads the cell sees both, with no fence and no test of the mode.' },
   'benign-race': { lanes: ['reader 1', 'reader 2'],
     bars: [[0, 0, 4, 'misses: builds the list', 'act'], [1, 0.6, 4.6, 'misses: builds the same list', 'act']],
     marks: [[0, 4, 'stores'], [1, 4.6, 'stores, equal']],
@@ -828,6 +837,7 @@ const STRATEGIES = [
   { id: 'frozen-after-completion', name: 'Fill hidden, then freeze', how: 'A scope is filled while its owner\'s completion hides it, published when the completion returns (`MutableScope.published`), and changed after that only by a write action or its one writer, building new entries aside (`extendAside`). `-Ycheck-frozen-scopes` fails any other change.', use: 'Scopes, which every reader looks up in: a class\'s members, and a package\'s, its flat classes included.', cures: ['inplace', 'unfrozen', 'order'], example: 'core.Scopes.MutableScope#hashTable' },
   { id: 'writer-action', name: 'Write action', how: 'The driver\'s write lock (`InteractiveDriver.writing`): a pending writer cancels readers at their next checkpoint, runs alone, and readers retry. State only writers touch needs nothing else.', use: 'Changes to the source of truth: a fresh run, a re-index, a splice, a body edit.', cures: ['unfrozen', 'stale'], example: null },
   { id: 'Caching', name: 'Stamped cache (`Caching`)', how: 'A value and its period or run stamp, read stamp-then-value with an acquire fence and written value-then-stamp with release fences on a concurrent base; the local value is returned, never the field again. `StampedCachesTest` is its lint.', use: 'A memo valid for one period, whose writers in that period compute equal values.', cures: ['twofields', 'readtwice'], example: null },
+  { id: 'Stamped', name: 'Stamped cell (`Stamped`)', how: 'A value and its stamp as one immutable object with final fields, held in one field of the owner; a miss stores a new cell. A reader that loads the cell sees the pair whole however it was published, so the code is the same on a batch and a concurrent base. An empty cache is a reference to the shared `Stamped.Empty`, smaller than a stamp and a value; a miss allocates a cell.', use: 'A memo that most instances never fill, or whose hit path can afford one dependent load.', cures: ['twofields', 'readtwice'], example: null },
   { id: 'packed-volatile', name: 'Pack into one value', how: 'Key, stamp and value as one immutable object in one volatile field, so no reader pairs one writer\'s key with another\'s value.', use: 'A cache keyed by more than the stamp, or whose writers may store different values (`asSeenFrom`, `MatchType.reduced`).', cures: ['twofields'], example: null },
   { id: 'Publish', name: 'Ordered publication (`util.Publish`)', how: 'Acquire/release handles on a period that guards other fields (`Symbol.checkedPeriod`, `NamedType.checkedPeriod`), where the shape is not two fields.', use: 'A validity period read first on a hot path.', cures: ['twofields'], example: null },
   { id: 'volatile', name: 'One volatile field', how: 'A single field whose every value is complete on its own: a flag, a counter read for display, a reference to an immutable value.', use: 'One field, nothing paired with it.', cures: ['twofields'], example: null },
@@ -842,7 +852,7 @@ const TECHNIQUES = [
   { id: 'pull', name: 'Pull, do not push', how: 'A cache records the base\'s structure epoch when it is made and is valid while the epoch has not moved; a change to a published scope moves it. No invalidation walks other objects\' caches, so a store that races with one lands in a cache already stale.', cures: ['push'], where: '`InheritedCacheImpl` on a concurrent base' },
   { id: 'aside', name: 'Build aside, publish once', how: 'Fill a fresh table or scope in a local, then publish it with one store after a release fence; readers load it with an acquire fence.', cures: ['inplace'], where: '`MutableScope.createHash`, `extendAside`, flat classes' },
   { id: 'memo', name: 'Synthesize beside, not into', how: 'Members made on a lookup are kept in an interned memo beside the scope and never entered, so an enumeration does not depend on what earlier code mentioned; fixed members are entered with the package.', cures: ['order'], where: '`MutableScope.synthesized`, `scala.Null`' },
-  { id: 'local', name: 'Read once into a local', how: 'Read the field once, compute from the local, return the local.', cures: ['readtwice'], where: 'every `Caching` site, `memberNames`, `baseData`' },
+  { id: 'local', name: 'Read once into a local', how: 'Read the field once, compute from the local, return the local.', cures: ['readtwice'], where: 'every `Caching` and `Stamped` site, `memberNames`, `baseData`' },
   { id: 'stamp', name: 'Stamp the result', how: 'A request\'s result carries the driver\'s write count when it last left a lock; the request is served again if a write ran after it, at most three times.', cures: ['stale'], where: '`Reader.resultStamp`, `InteractiveDriver.servedCurrent`' },
   { id: 'checkonly', name: 'Check, do not generate', how: 'In the IDE nothing runs the code, so what exists only for code generation is not made: inline accessors are checked, not entered.', cures: ['unfrozen'], where: '`PrepareInlineable.checkOnly`' },
   { id: 'byname', name: 'Refer by name during setup', how: 'An eagerly entered definition that is completed during `init` refers to others by name, so nothing binds before the sources being compiled are entered.', cures: ['early'], where: '`Definitions.synthesizeNullClass`' },
@@ -889,7 +899,7 @@ function renderGuide() {
     <div class="pipeline">
       <div class="step"><b>Fields</b><span>Every <code>var</code> and mutable collection in dotc's classes; lazy vals, modules and synthetics left out.</span></div>
       <div class="step"><b>Kind</b><span>A–E from an annotation (<code>@scratch</code>, <code>@lazyFact</code>, <code>@cache</code>, <code>@interned</code>, <code>@treeState</code>), else the K rules: owner, type and name.</span></div>
-      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: under a <code>Caching</code> stamp, a monitor, a claim, <code>Publish</code>, in the batch branch of the seam, or nothing.</span></div>
+      <div class="step"><b>Accesses</b><span>Each read and write classified innermost-first: under a <code>Caching</code> stamp or a <code>Stamped</code> cell, a monitor, a claim, <code>Publish</code>, in the batch branch of the seam, or nothing.</span></div>
       <div class="step"><b>Protection</b><span>The one protection of a field's non-batch accesses; <code>partial</code> when some lack it, <code>none</code> when all do. An annotation takes precedence, and the rules' answer is kept beside it.</span></div>
       <div class="step"><b>Check</b><span><code>annotationCheck</code>: the annotation agrees with the rules, disagrees, or is unverified. <code>@frozenAfter</code> is checked when the program runs.</span></div>
       <div class="step"><b>Reach, edges</b><span>Typer or post-typer by the methods that reach a field; edges are field types that are mapped classes, which the diagram draws.</span></div>

@@ -14,7 +14,8 @@ core\.SymDenotations\.InheritedCacheImpl#dependent	B	batch-only	InheritedCacheIm
 core\.SymDenotations\.InheritedCacheImpl#checkedPeriod	B	*	InheritedCacheImpl.checkedPeriod: a stamp without a value, a stale read only checks again
 core\.SymDenotations\.(MemberNamesImpl#cache|BaseDataImpl#(cache|valid|locked))	B	completion-lock	MemberNamesImpl.cache, BaseDataImpl.cache/valid/locked: computed under Sharing.exclusive
 core\.SymDenotations\.ClassDenotation#(myMemberCache|myMemberCachePeriod|myBaseTypeCache|myBaseTypeCachePeriod)	C	Caching	ClassDenotation's member and base-type caches: through Caching
-core\.Types\.(NamedType#mySignature|NamedType#mySignatureRunId|TypeRef#myCanDropAlias(Period)?|AndType#myBaseClasses(Period)?|OrType#.*|MethodOrPoly#my(Java|Scala2)?Signature(RunId)?|AppliedType#(validSuper|cachedSuper|myIsStable(RunId)?|myEval(RunId|ued)|validUnderlyingNormalizable|cachedUnderlyingNormalizable))	C	Caching	the stamped caches in Types: through Caching (StampedCachesTest)
+core\.Types\.(TypeRef#myCanDropAlias(Period)?|AppliedType#myIsStable(RunId)?)	C	Caching	the stamped caches in Types left on Caching (Booleans): through Caching (StampedCachesTest)
+core\.Types\.(NamedType#mySignature|AndType#myBaseClasses|OrType#.*|MethodOrPoly#my(Java|Scala2)?Signature|AppliedType#(cachedSuper|myEvalued|cachedUnderlyingNormalizable))	C	Stamped	the stamped caches in Types held in one Stamped cell each
 core\.SymDenotations\.ClassDenotation#(memberNamesCache|baseDataCache)	C	*	memberNamesCache, baseDataCache: class 1, fixed (I92), read once
 core\.Types\.Type#mightBeProvisional	C	*	Type.mightBeProvisional: class 1, fixed (I93)
 core\.Types\.AnnotatedType#myIsRefining	C	none	AnnotatedType.isRefining: one byte, as myGround (I94)
