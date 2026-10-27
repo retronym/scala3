@@ -343,25 +343,9 @@ class SessionOracleSuite extends BasePCSuite:
    *  Typed with the build's options (`-Yexplicit-nulls` and the rest), as
    *  the build compiles the file.
    */
-  // the build's options, as the compiler's sources are compiled with them (all but -Werror); keep in step with Build.scala
-  private val buildOptions: List[String] = List(
-    "-feature", "-deprecation", "-unchecked",
-    "-Wconf:msg=package scala contains object and package with same name:i",
-    "-Wconf:src=scaladoc-testcases/.*:s",
-    "-Wconf:src=presentation-compiler-testcases/.*:s",
-    "-Wconf:msg=The RHS of reassignment must be transitively initialized:i",
-    "-Wconf:msg=Could not verify that the method argument is transitively initialized:i",
-    "-Wconf:msg=may cause initialization errors:i",
-    "-Wconf:cat=deprecation&origin=scala\\.collection\\.Iterable\\.stringPrefix:s",
-    "-encoding", "UTF8",
-    "-language:implicitConversions",
-    "--java-output-version:17",
-    "-Yexplicit-nulls",
-    "-Wsafe-init")
-
   private def everyIdentifier(rel: String, editIn: String, flags: List[String]): Unit =
     val root = sourcesRoot.getOrElse(throw new AssertionError(s"compiler sources not found from ${Paths.get("").toAbsolutePath}"))
-    val real = buildOptions ++ settings
+    val real = dotty.tools.pc.xray.XrayServer.buildOptions ++ settings
     val path = root.resolve(rel)
     val uri = path.toUri
     val before = Files.readString(path)
