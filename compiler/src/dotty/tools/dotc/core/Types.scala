@@ -3663,22 +3663,20 @@ object Types extends TypeUtils {
         }
         recur(tp2.baseClasses)
 
-    private var myJoin: Type = uninitialized
-    private var myJoinPeriod: Period = Nowhere
+    private var myJoin: Stamped[Type] = Stamped.Empty
 
     /** Replace or type by the closest non-or type above it */
     def join(using Context): Type =
-      Caching.stamped(myJoinPeriod, myJoin)(myJoinPeriod = _, myJoin = _)(ctx.period):
+      Stamped.cached(myJoin)(myJoin = _)(ctx.period.rawCode):
         val join = TypeOps.orDominator(this)
         core.println(i"join of $this == $join")
         assert(join != this)
         join
 
-    private var myUnion: Type = uninitialized
-    private var myUnionPeriod: Period = Nowhere
+    private var myUnion: Stamped[Type] = Stamped.Empty
 
     override def widenUnionWithoutNull(using Context): Type =
-      Caching.stampedIf(myUnionPeriod, myUnion)(myUnionPeriod = _, myUnion = _)(ctx.period, _ => !isProvisional):
+      Stamped.cachedIf(myUnion)(myUnion = _)(ctx.period.rawCode, _ => !isProvisional):
         val union = TypeComparer.lub(
           tp1.widenUnionWithoutNull, tp2.widenUnionWithoutNull, canConstrain = isSoft, isSoft = isSoft)
         union match
