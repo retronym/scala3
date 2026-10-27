@@ -597,6 +597,8 @@ object Build {
     `scala3-bootstrapped`,
     `scala3-compiler-nonbootstrapped`,
     `scala3-compiler-bootstrapped`,
+    `scala3-sharing-nonbootstrapped`,
+    `scala3-sharing-bootstrapped`,
     `scala3-sbt-bridge-nonbootstrapped`,
     `scala3-sbt-bridge-bootstrapped`,
     `scala-library-nonbootstrapped`,
@@ -641,7 +643,7 @@ object Build {
 
   lazy val `scala3-nonbootstrapped` = project.in(file("."))
     .aggregate(`scala3-interfaces`, `scala3-library-nonbootstrapped` , `scala-library-nonbootstrapped`,
-      `tasty-core-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped`, `scala3-compiler-nonbootstrapped`,
+      `tasty-core-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped`, `scala3-sharing-nonbootstrapped`, `scala3-compiler-nonbootstrapped`,
       `scala3-sbt-bridge-nonbootstrapped`, `scala3-repl-nonbootstrapped`)
     .settings(
       name          := "scala3-nonbootstrapped",
@@ -730,7 +732,7 @@ object Build {
   lazy val `scala3-bootstrapped` = project
     .enablePlugins(ScriptedPlugin)
     .aggregate(`scala3-interfaces`, `scala3-library-bootstrapped` , `scala-library-bootstrapped`,
-      `tasty-core-bootstrapped`, `scala3-directives-parser-bootstrapped`, `scala3-compiler-bootstrapped`, `scala3-sbt-bridge-bootstrapped`,
+      `tasty-core-bootstrapped`, `scala3-directives-parser-bootstrapped`, `scala3-sharing-bootstrapped`, `scala3-compiler-bootstrapped`, `scala3-sbt-bridge-bootstrapped`,
       `scala3-staging`, `scala3-tasty-inspector`, `scala-library-sjs`, `scala3-library-sjs`,
       scaladoc, `scala3-repl`, `scala3-presentation-compiler`)
     .settings(
@@ -1438,12 +1440,63 @@ object Build {
     )
 
   // ==============================================================================================
+  // ======================================= SHARING LIBRARY ======================================
+  // ==============================================================================================
+
+  // `dotty.tools.sharing`, the concurrency primitives of the compiler's shared state
+  // (docs/_docs/internals/interactive-multi-reader.md §11). A module of its own, compiled before the compiler so that
+  // its macros expand in the compiler's run, and depending on the library alone, which keeps it from naming the
+  // compiler. Not published: its classes, TASTy and sources are packaged into the compiler's jars
+  // (`sharingPackagedInCompiler`).
+  def sharingSettings(nonBootstrapped: Boolean) = Def.settings(
+    name          := (if (nonBootstrapped) "scala3-sharing-nonbootstrapped" else "scala3-sharing-bootstrapped"),
+    moduleName    := "scala3-sharing",
+    version       := (if (nonBootstrapped) dottyNonBootstrappedVersion else dottyVersion),
+    crossPaths    := true,
+    autoScalaLibrary := false,
+    Compile / unmanagedSourceDirectories := Seq(baseDirectory.value / "src"),
+    Test    / unmanagedSourceDirectories := Seq(baseDirectory.value / "test"),
+    libraryDependencies ++= Seq(
+      Dependencies.sbtJunitInterface % Test,
+      Dependencies.lincheck % Test,
+    ),
+    publish / skip := true,
+    Test / publishArtifact := false,
+    target := target.value / (if (nonBootstrapped) "scala3-sharing-nonbootstrapped" else "scala3-sharing-bootstrapped"),
+  )
+
+  lazy val `scala3-sharing-nonbootstrapped` = project.in(file("sharing"))
+    .dependsOn(`scala3-library-nonbootstrapped`)
+    .settings(sharingSettings(nonBootstrapped = true))
+    .settings(
+      scalaVersion := referenceVersion,
+      fetchedScalaInstanceSettings,
+    )
+
+  lazy val `scala3-sharing-bootstrapped` = project.in(file("sharing"))
+    .dependsOn(`scala3-library-bootstrapped`)
+    .settings(sharingSettings(nonBootstrapped = false))
+    .settings(
+      scalaVersion := dottyNonBootstrappedVersion,
+      bootstrappedScalaInstanceSettings,
+      bspEnabled := false,
+    )
+
+  // The sharing module inside the compiler's jars, and out of its POM: the compiler is published as one artifact.
+  def sharingPackagedInCompiler(sharing: Project) = Def.settings(
+    Compile / packageBin / mappings ++= (sharing / Compile / packageBin / mappings).value,
+    Compile / packageSrc / mappings ++= (sharing / Compile / packageSrc / mappings).value,
+    projectDependencies := projectDependencies.value.filterNot(_.name == "scala3-sharing"),
+  )
+
+  // ==============================================================================================
   // ======================================= SCALA COMPILER =======================================
   // ==============================================================================================
 
   /* Configuration of the org.scala-lang:scala3-compiler_3:*.**.**-nonbootstrapped project */
   lazy val `scala3-compiler-nonbootstrapped` = project.in(file("compiler"))
-    .dependsOn(`scala3-interfaces`, `tasty-core-nonbootstrapped`, `scala3-library-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped` % Test)
+    .dependsOn(`scala3-interfaces`, `tasty-core-nonbootstrapped`, `scala3-library-nonbootstrapped`, `scala3-sharing-nonbootstrapped` % "compile->compile;test->test", `scala3-directives-parser-nonbootstrapped` % Test)
+    .settings(sharingPackagedInCompiler(`scala3-sharing-nonbootstrapped`))
     .settings(
       name          := "scala3-compiler-nonbootstrapped",
       moduleName    := "scala3-compiler",
@@ -1468,6 +1521,7 @@ object Build {
         Dependencies.sbtCompilerInterface,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),
@@ -1580,8 +1634,9 @@ object Build {
 
   /* Configuration of the org.scala-lang:scala3-compiler_3:*.**.**-bootstrapped project */
   lazy val `scala3-compiler-bootstrapped` = project.in(file("compiler"))
-    .dependsOn(`scala3-interfaces`, `tasty-core-bootstrapped`, `scala3-library-bootstrapped`, `scala3-directives-parser-bootstrapped` % Test)
+    .dependsOn(`scala3-interfaces`, `tasty-core-bootstrapped`, `scala3-library-bootstrapped`, `scala3-sharing-bootstrapped` % "compile->compile;test->test", `scala3-directives-parser-bootstrapped` % Test)
     .settings(publishSettings)
+    .settings(sharingPackagedInCompiler(`scala3-sharing-bootstrapped`))
     .settings(
       name          := "scala3-compiler-bootstrapped",
       moduleName    := "scala3-compiler",
@@ -1606,6 +1661,7 @@ object Build {
         Dependencies.sbtJunitInterface % Test,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),

@@ -64,6 +64,7 @@ object Dependencies {
   val sbtZincApiInfo = "org.scala-sbt" %% "zinc-apiinfo" % "1.12.1"
 
   val scalaCheck = "org.scalacheck" %% "scalacheck" % "1.20.0"
+  val lincheck = "org.jetbrains.kotlinx" % "lincheck-jvm" % "2.39"
 
   /** Version of Scala CLI to download */
   val scalaCliLauncherVersion = "1.18.0"
