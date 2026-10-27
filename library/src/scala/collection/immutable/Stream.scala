@@ -234,8 +234,8 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
    *  Inside, the string representations (w.r.t. the method `toString`)
    *  of all elements of this $coll are separated by the string `sep`.
    *
-   *  Undefined elements are represented with `"_"`, an undefined tail is represented with `"&lt;not computed&gt;"`,
-   *  and cycles are represented with `"&lt;cycle&gt;"`.
+   *  Undefined elements are represented with `"_"`, an undefined tail is represented with `"<not computed>"`,
+   *  and cycles are represented with `"<cycle>"`.
    *
    *  @param sb    the string builder to which elements are appended.
    *  @param start the starting string.
@@ -322,16 +322,16 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
   }
 
   /** Returns a string representation of this collection. Undefined elements are
-   *         represented with `"_"`, an undefined tail is represented with `"&lt;not computed&gt;"`,
-   *         and cycles are represented with `"&lt;cycle&gt;"`
+   *         represented with `"_"`, an undefined tail is represented with `"<not computed>"`,
+   *         and cycles are represented with `"<cycle>"`
    *
    *         Examples:
    *
-   *           - `"Stream(_, &lt;not computed&gt;)"`, a non-empty stream, whose head has not been
+   *           - `"Stream(_, <not computed>)"`, a non-empty stream, whose head has not been
    *             evaluated ;
-   *           - `"Stream(_, 1, _, &lt;not computed&gt;)"`, a stream with at least three elements,
+   *           - `"Stream(_, 1, _, <not computed>)"`, a stream with at least three elements,
    *             the second one has been evaluated ;
-   *           - `"Stream(1, 2, 3, &lt;cycle&gt;)"`, an infinite stream that contains
+   *           - `"Stream(1, 2, 3, <cycle>)"`, an infinite stream that contains
    *             a cycle at the fourth element.
    */
   override def toString() = addStringNoForce(new JStringBuilder(className), "(", ", ", ")").toString
