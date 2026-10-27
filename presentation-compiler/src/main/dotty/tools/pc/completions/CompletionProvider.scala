@@ -70,7 +70,17 @@ class CompletionProvider(
      *  happening.
      */
 
-    val driver = if wasCursorApplied then cachingDriver.freshDriver() else cachingDriver
+    // With body edits (-Yinteractive-body-edits) the placeholder goes through
+    // the session (I82): inside a body it is an edit the session keeps its
+    // run across, far cheaper than a fresh driver's cold run. The real
+    // content is restored once the completions are built, so that the
+    // session, its background pass and its diagnostics never stay on the
+    // placeholder. Without body edits the stock fresh driver stays: through
+    // the session the placeholder would be two runs (it and the restore), and
+    // a previous content's top-level symbols then reach the completion as
+    // stale ones (CompletionMatchSuite.stale2).
+    val placeholderInSession = wasCursorApplied && cachingDriver.bodyEdits
+    val driver = if wasCursorApplied && !placeholderInSession then cachingDriver.freshDriver() else cachingDriver
     // Only the statements up to the one containing the offset are typed
     driver.runUpTo(uri, sourceFile, Span(params.offset()))
 
@@ -161,10 +171,13 @@ class CompletionProvider(
         (items, isIncomplete)
       case None => (Nil, false)
 
-    new CompletionList(
+    val result = new CompletionList(
       isIncomplete,
       items.asJava
     )
+    if placeholderInSession then
+      cachingDriver.runUpTo(uri, SourceFile.virtual(uri, text), Span(params.offset()))
+    result
   end completions
 
   /** In case if completion comes from empty line like:
