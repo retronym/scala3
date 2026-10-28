@@ -55,6 +55,14 @@ private[interactive] final class SessionReporter extends StoreReporter(null) wit
     stores.getOrElseUpdate(p, mutable.ArrayBuffer.empty) += Entry(seq, dia)
     published = null
 
+  // The syntax errors an edit takes in from its new parse (`edit`) are not
+  // reported through this reporter, but a fresh run of the new content
+  // reports them before typing, and the typer reports an error type it is
+  // left with only if no error has been (`Typer.adapt`: `qual.` is typed as
+  // `qual.<error>`, "unspecified error").
+  override def errorsReported: Boolean =
+    super.errorsReported || synchronized(stores.get(Provenance.Parse).exists(_.exists(_.dia.isInstanceOf[Diagnostic.Error])))
+
   override def removeBufferedMessages(using Context): List[Diagnostic] = Nil
   override def pendingMessages(using Context): List[Diagnostic] = Nil
 

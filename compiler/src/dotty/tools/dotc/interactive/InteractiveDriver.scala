@@ -1124,12 +1124,13 @@ class InteractiveDriver(
             case kind1 => (r1, kind1)
         case kind0 => (r0, kind0)
       /** The syntax errors outside `now` are those outside `old`, moved: a
-       *  file that has one elsewhere still keeps its session.
+       *  file that has one elsewhere still keeps its session. One at the
+       *  token after the body is the body's (`BodyEdit.inBody`).
        */
       def sameErrorsOutside(old: Span, now: Span, anchor: Span): Boolean =
         def key(dia: Diagnostic, sp: Span) = (sp, dia.msg.message)
-        val before = pristineErrors.filterNot(e => old.contains(e.pos.span)).map(e => key(e, r.span(e.pos.span, anchor)))
-        val after = errors.filterNot(e => now.contains(e.pos.span)).map(e => key(e, e.pos.span))
+        val before = pristineErrors.filterNot(e => BodyEdit.inBody(e.pos.span, old, oldText)).map(e => key(e, r.span(e.pos.span, anchor)))
+        val after = errors.filterNot(e => BodyEdit.inBody(e.pos.span, now, newText)).map(e => key(e, e.pos.span))
         before.sortBy(_.toString) == after.sortBy(_.toString)
       tCompared = System.nanoTime()
       kind match
