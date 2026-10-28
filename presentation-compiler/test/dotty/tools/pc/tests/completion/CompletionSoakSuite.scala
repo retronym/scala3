@@ -169,10 +169,15 @@ class CompletionSoakSuite extends BasePCSuite:
         val d = s.lastKnownDenotation
         if !ofFile(d) then Nil
         else
-          // not a class left with the completer of a cancellation that unwound: `unforcedDecls` would run it, and it throws
+          // not a class left with the completer of a cancellation that unwound: `unforcedDecls` would run it, and it
+          // throws. The other reader can leave it so between the test and the call (waiting on its root, then meeting
+          // the guard), so a cancellation here means the same
           val nested =
             if d.isClass && !d.infoOrCompleter.isInstanceOf[dotty.tools.dotc.core.SymDenotations.UnwoundCompletion]
-            then d.symbol.asClass.unforcedDecls.toList else Nil
+            then
+              try d.symbol.asClass.unforcedDecls.toList
+              catch case _: CancelledCompilation => Nil
+            else Nil
           // still completing (a leaked `Touched`), state a fresh run cannot recover from. A symbol left with the
           // completer of a cancellation that unwound (`UnwoundCompletion`) is not dirty: it cancels whoever reaches
           // it in this run, which starts a fresh one, and degrades in a later run as a stale completer does.
