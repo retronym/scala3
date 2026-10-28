@@ -50,13 +50,14 @@ object Rules:
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
     Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`: release store, acquire load, a plain access only through `plain`/`setPlain`) or `Payload[O, F, T]` (stored only in a `publishing` block of `F`, read only `after` its acquire, or with `plain`), or `Once[K, T]` (stored only by its `get`, under the claim on its owner, with release semantics, and read with acquire semantics in a concurrent mode)"),
+    Rule("P.claimed", "completion-lock", "declared `Claimed[K, T]` (`dotty.tools.sharing.Claimed`): read with `c()` and stored with `Claimed(v)`, both only with the evidence of the claim on `K` (`Holds[K]`, from `claim`, `once` or `claimAt[K]`, or `unguarded`), so no access outside the claim compiles; `Claimed.initial` only in initialisers"),
     Rule("P.stamped", "Stamped", "declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair"),
     Rule("P.holder", "holder-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
     Rule("P.volatile", "volatile", "`@volatile`, a single value"),
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
     Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.claim` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
-    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: the field a `Stamped` extension is called on → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `sharing.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
+    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: the field a `Stamped` extension is called on → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` (the evidence of `claim` or `once` on a key, or of `claimAt[K]` on a family of keys, such as a TASTy file's, `Holds[TastyFileClaim]`) → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `sharing.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
   )
 
   val reach: List[Rule] = List(
@@ -160,7 +161,7 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
 
     def mutableCollection(tp: TypeRepr): Option[String] = tp.dealias match
       // a `Sharing.Guard`'s state: the value it guards
-      case AppliedType(tc, List(_, t)) if tc.typeSymbol.name == "Guarded" => mutableCollection(t)
+      case AppliedType(tc, List(_, t)) if tc.typeSymbol.name == "Guarded" || tc.typeSymbol.name == "Claimed" => mutableCollection(t)
       case _ => mutableCollection0(tp)
 
     def mutableCollection0(tp: TypeRepr): Option[String] =
@@ -637,6 +638,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     else if reach == "post-typer" then ("post-typer", "P.post-typer", "owner")
     else if publishHandles((f.owner, f.name)) then ("Publish", "P.publish-handle", "lexical")
     else if f.tpe.startsWith("Stamped[") || f.tpe.startsWith("dotty.tools.sharing.Stamped[") then ("Stamped", "P.stamped", "declaration")
+    else if f.tpe.startsWith("Claimed[") || f.tpe.startsWith("dotty.tools.sharing.Claimed[") then ("completion-lock", "P.claimed", "declaration")
     else if f.isVolatile && f.holderType then ("holder-volatile", "P.holder", "annotation")
     else if f.isVolatile then ("volatile", "P.volatile", "annotation")
     else if f.concurrentType then ("concurrent", "P.concurrent-type", "type")
@@ -742,7 +744,9 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     val acc = relevant(f)
     val summary = acc.groupBy(accessProt).view.mapValues(_.size).toMap
     val edges = f.typeClasses.filter(t => t != f.owner && c.classes.contains(t)).distinct
-    val sites = acc.filter(a => accessProt(a) == "none").map(a => s"${a.file}:${a.line} ${if a.write then "write" else "read"} in ${a.method}").distinct.take(40).toList
+    // a `Claimed` field's every access takes the claim's evidence, by its type: a site whose evidence is a given of
+    // its class (a `TreeReader`'s) is not unprotected
+    val sites = if pr == "P.claimed" then Nil else acc.filter(a => accessProt(a) == "none").map(a => s"${a.file}:${a.line} ${if a.write then "write" else "read"} in ${a.method}").distinct.take(40).toList
     val features = (featuresOf(f) ++ (f.ownerArgs ++ f.annotArgs).get("internal.featureArea").toList).distinct
     Placed(f, k, kr, p, pr, ev, features, if k == "C" then "cache" else "semantic", reach, summary, edges, sites,
       ks, ps, ik, ikr, ip, ipr, disagreement)

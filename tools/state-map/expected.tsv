@@ -40,3 +40,6 @@ core\.SymDenotations\.LazyType#myDecls	B	completion-lock	myDecls: the denotation
 core\.Types\.TypeVar#(inst|currentOrigin|owningState)	unclassified	*	TypeVar inst/currentOrigin/owningState: not caches, a type variable's, which belongs to one typer state
 core\.Symbols\.Symbol#myDefTree	unclassified	*	Symbol.myDefTree: not lazy, assigned by its owner
 ast\.Trees\.DefTree#myMods	E	*	Trees.myMods: not lazy, assigned by its owner
+core\.tasty\.TreeUnpickler#(symAtAddr|treeAtAddr|typeAtAddr|rootOwner|seenRoots)	B	completion-lock	TreeUnpickler's address maps, root owner and seen roots: a TASTy file's state, a Claimed[TastyFileClaim, _] field
+core\.tasty\.TreeUnpickler\.(LazyReader#result|OwnerTree#myChildren)	B	completion-lock	a lazy read's kept tree and the owner tree's children: a TASTy file's state, a Claimed[TastyFileClaim, _] field
+ast\.tpd\.TreeProvider#myTrees	*	completion-lock	TreeProvider.myTrees: the root trees kept under the file's claim with -Yretain-trees, a Claimed[TastyFileClaim, _] field (kind: @cache; its lazy init stores a Claimed value, which the C.lazy-init rule does not see)
