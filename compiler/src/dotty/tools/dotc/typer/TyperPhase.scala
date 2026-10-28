@@ -122,6 +122,27 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
       case _ =>
     // serially: the signatures of every member of every unit, so that the parallel readers type bodies and meet
     // no Namer completion of a member, and no wait-for cycle between two of them (I68)
+    // -Ddotc.parallelTyper.classesFirst: the class headers of every unit, then the members (for measurement)
+    val classesOnly = sys.props.contains("dotc.parallelTyper.classesFirst")
+    val log = sys.props.contains("dotc.parallelTyper.log")
+    if log then System.err.nn.println("[parallel-typer] signatures begin")
+    if classesOnly then
+      def classes(sym: Symbol)(using Context): Unit =
+        if sym.exists && sym.isClass then
+          sym.ensureCompleted()
+          for d <- sym.info.decls.toList do
+            if d.isClass && d.source == ctx.source then classes(d)
+      def topClasses(tree: untpd.Tree)(using Context): Unit = tree match
+        case untpd.PackageDef(_, stats) => stats.foreach(topClasses)
+        case _: untpd.MemberDef =>
+          ctx.typer.expanded(tree) match
+            case untpd.Thicket(trees) => trees.foreach(t => if ctx.typer.hasDefinedSymbol(t) then classes(ctx.typer.symbolOfTree(t)))
+            case _ => if ctx.typer.hasDefinedSymbol(tree) then classes(ctx.typer.symbolOfTree(tree))
+        case _ =>
+      for c <- unitContexts do
+        try topClasses(c.compilationUnit.untpdTree)(using c)
+        catch case _: CompilationUnit.SuspendException => ()
+      if log then System.err.nn.println(f"[parallel-typer] class headers done in ${(System.nanoTime() - tSig) / 1e6}%.1f ms")
     for c <- unitContexts do
       try topLevel(c.compilationUnit.untpdTree)(using c)
       catch case _: CompilationUnit.SuspendException => ()
