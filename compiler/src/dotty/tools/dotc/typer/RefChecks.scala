@@ -918,19 +918,45 @@ object RefChecks {
           }
         addDecls(clazz)
 
+        // Only a merge of several members (a `JointRefDenotation`) can fail the check below, and `member` merges
+        // only denotations of distinct symbols. Without a given self type, those symbols are declarations of the
+        // base classes of `clazz`, so a name declared once among them can't need the check, and we skip its lookup.
+        val namesToCheck =
+          if !clazz.is(Module) && clazz.givenSelfType.exists then membersToCheck
+          else
+            val declaredOnce = new mutable.HashSet[Name](membersToCheck.size * 2, mutable.HashSet.defaultLoadFactor)
+            val declaredTwice = new mutable.HashSet[Name](256, mutable.HashSet.defaultLoadFactor)
+            for bc <- clazz.baseClasses; decl <- bc.info.decls do
+              if decl.isTerm && membersToCheck.contains(decl.name) && !declaredOnce.add(decl.name) then
+                declaredTwice += decl.name
+            if config.Config.checkSkippedMemberTypes then
+              for name <- membersToCheck do
+                if !declaredTwice.contains(name) then
+                  for mbrd <- self.member(name).alternatives do
+                    assert(!mbrd.isInstanceOf[JointRefDenotation], i"skipped joint member $mbrd of $clazz")
+            declaredTwice
+
         // For each member, check that the type of its symbol, as seen from `self`
         // can override the info of this member
         withMode(Mode.IgnoreCaptures) {
-          for (name <- membersToCheck)
+          for (name <- namesToCheck)
             for (mbrd <- self.member(name).alternatives) {
               val mbr = mbrd.symbol
-              val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
-              if (!mbrType.overrides(mbrd.info, matchLoosely = true))
-                report.errorOrMigrationWarning(
-                  em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
-                      |  its type             $mbrType
-                      |  does not conform to  ${mbrd.info}""",
-                  (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+              mbrd match
+                case mbrd: JointRefDenotation =>
+                  val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
+                  if (!mbrType.overrides(mbrd.info, matchLoosely = true))
+                    report.errorOrMigrationWarning(
+                      em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
+                          |  its type             $mbrType
+                          |  does not conform to  ${mbrd.info}""",
+                      (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+                case _ =>
+                  // Not a merge of several members, so `member` derived it from `mbr` alone: either `mbr`'s own
+                  // denotation, or `mbr.info.asSeenFrom(self, mbr.owner)` with prefix `self`. Its info is then the
+                  // type the check above would compute, and comparing a type with a rebuilt copy of itself can't fail.
+                  assert(mbrd.isInstanceOf[SymDenotation] || (mbrd.prefix eq self),
+                    i"unexpected member denotation $mbrd: ${mbrd.getClass}, prefix ${mbrd.prefix}, self $self")
           }
         }
       }
