@@ -180,9 +180,12 @@ class Driver {
    */
   final def process(args: Array[String], reporter: Reporter | Null = null,
     callback: interfaces.CompilerCallback | Null = null): Reporter = {
-    val compileCtx = initCtx.fresh
+    val parallel = ParallelBatch.requested(args)
+    val compileCtx = (if parallel then new ParallelBatchContextBase().initialCtx else initCtx).fresh
     if (reporter != null)
       compileCtx.setReporter(reporter)
+    if parallel then
+      compileCtx.setReporter(ParallelBatchReporter(compileCtx.reporter))
     if (callback != null)
       compileCtx.setCompilerCallback(callback)
     process(args, compileCtx)
