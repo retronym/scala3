@@ -1322,11 +1322,31 @@ object Parsers {
     /** Accept identifier or match clause acting as a selector on given tree `t` */
     def selectorOrMatch(t: Tree): Tree =
       atSpan(startOffset(t), in.offset) {
-        if in.token == MATCH then matchClause(t) else Select(t, ident())
+        if in.token == MATCH then matchClause(t) else Select(t, selectorIdent())
       }
 
     def selector(t: Tree): Tree =
-      atSpan(startOffset(t), in.offset) { Select(t, ident()) }
+      atSpan(startOffset(t), in.offset) { Select(t, selectorIdent()) }
+
+    /** The identifier after a `.`. Missing where the `.` ends a line, the
+     *  next line is not skipped: it starts as it would after an identifier,
+     *  with a NEWLINE or an OUTDENT. A `qual.` at the end of an
+     *  indentation-syntax body, which an editor's buffer has on every `.`
+     *  typed there, then keeps the next statement, as the `}` of a braced
+     *  body does.
+     */
+    def selectorIdent(): TermName =
+      if !isIdent && in.isAfterLineEnd && in.token != EOF && in.next.token == EMPTY then
+        val offset = in.offset
+        val token = in.token
+        val length = if in.name != null then in.name.nn.show.length else 0
+        in.handleNewLine(IDENTIFIER)
+        if in.token != token then
+          syntaxError(ExpectedTokenButFound(IDENTIFIER, token), Span(offset, offset + length))
+          lastErrorOffset = offset
+          nme.ERROR
+        else ident()
+      else ident()
 
     /** DotSelectors ::= { `.' id } */
     def dotSelectors(t: Tree): Tree =
