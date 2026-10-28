@@ -83,6 +83,11 @@ class TreeUnpickler(reader: TastyReader,
    */
   private val treeAtAddr = new mutable.HashMap[Addr, Tree]
 
+  // Tests, with the flight recorder on (`util.Chaos.recording`): the thread that put each `PoisonTree`, so that a
+  // "cyclic reference while unpickling" says whether it is a cycle on one thread or a race between readers
+  private val poisonedBy: java.util.concurrent.ConcurrentHashMap[Addr, String] | Null =
+    if util.Chaos.recording then new java.util.concurrent.ConcurrentHashMap[Addr, String] else null
+
   /** A map from addresses of type entries to the types they define.
    *  Currently only populated for types that might be recursively referenced
    *  from within themselves (i.e. RecTypes, LambdaTypes).
@@ -897,19 +902,33 @@ class TreeUnpickler(reader: TastyReader,
       indexParams(PARAM)
     }
 
+    /** With the flight recorder on: who poisoned `addr`, and the readers' last events. */
+    private def poisonDiagnosis(addr: Addr)(using Context): String =
+      if poisonedBy == null then ""
+      else
+        val by = poisonedBy.get(addr)
+        val me = Thread.currentThread.getName
+        val kind = if by == null then "poisoner unknown" else if by == me then "a cycle on this thread" else s"a race with $by"
+        s"""; poisoned by $by on $me: $kind
+           |claims held: ${if ctx.base.parallel then ctx.base.completionRoots.holdersNow else ctx.base.completionLock.holderNow}
+           |the readers' last events:
+           |${util.Chaos.recent(80)}""".stripMargin
+
     /** If definition was already read by a completer, return the previously read tree
      *  or else read definition.
      */
     def readIndexedDef()(using Context): Tree = treeAtAddr.remove(currentAddr) match {
       case Some(tree) =>
-        assert(tree != PoisonTree, s"Cyclic reference while unpickling definition at address ${currentAddr.index} in unit ${ctx.compilationUnit}")
+        assert(tree != PoisonTree, s"Cyclic reference while unpickling definition at address ${currentAddr.index} in unit ${ctx.compilationUnit}${poisonDiagnosis(currentAddr)}")
         skipTree()
         tree
       case none =>
         val start = currentAddr
         treeAtAddr(start) = PoisonTree
+        if poisonedBy != null then poisonedBy.put(start, Thread.currentThread.getName)
         val tree = readNewDef()
         treeAtAddr.remove(start)
+        if poisonedBy != null then poisonedBy.remove(start)
         tree
     }
 

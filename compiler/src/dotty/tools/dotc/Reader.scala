@@ -292,11 +292,13 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
   /** Aborted as the victim of a wait-for cycle: counted, and unwound as a cancelled request, which is retried. */
   override def abort(): Nothing =
     waitCyclesAborted += 1
+    util.Chaos.note(s"aborted as the victim of a wait-for cycle, waiting on ${waitingOn match { case null => "nothing"; case c => s"${c.ownerName}: ${c.what.render}" }}")
     throw CompilationUnit.CancelledCompilation()
 
   override def acquired(): Unit = util.Chaos.at("acquire", oneIn = 8)
 
   override def recordWait(nanos: Long, holderWhat: String, holderName: String): Unit =
+    util.Chaos.note(s"waited ${nanos / 1000} us on $holderName: $holderWhat")
     recordLockWait(nanos, holderWhat, "", holderName)
 
   /** The wait-for cycles between Namer completions this reader reported as a
@@ -374,9 +376,11 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
     if ctx.mode.is(Mode.Interactive) then
       if cancelChecker() then
         cancelledByChecker = true
+        util.Chaos.note(s"cancelled by its checker at typed tree $typedTreeCount")
         throw CompilationUnit.CancelledCompilation()
       val run = ctx.run
       if run != null && !run.canProgress() then
+        util.Chaos.note(s"cancelled: run ${ctx.runId} cannot progress")
         throw CompilationUnit.CancelledCompilation()
 
   /** Did the last cancellation of this reader come from its own checker (the

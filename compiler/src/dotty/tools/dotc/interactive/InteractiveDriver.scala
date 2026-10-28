@@ -140,6 +140,7 @@ class InteractiveDriver(
           return result
         catch case ex: CompilationUnit.CancelledCompilation => ex
         finally lock.unlock()
+      util.Chaos.note(s"read cancelled (by its checker: ${reader.cancelledByChecker}, driver cancelled: $myCancelled): ${cancelled.getMessage}")
       afterCancel()
       // the request's own cancellation (its checker, or a thread interrupt)
       // unwinds to the caller; a writer's cancellation is retried once the
@@ -154,9 +155,11 @@ class InteractiveDriver(
     if lock.isHeldByCurrentThread then body
     else
       writerPending = true
+      util.Chaos.note("writer pending")
       lock.lock()
       try
         writerPending = false
+        util.Chaos.note(s"write action ${myWrites + 1} begins")
         base.writeActionThread = Thread.currentThread
         myWrites += 1 // only the writer writes it
         val result = body
@@ -164,6 +167,7 @@ class InteractiveDriver(
         result
       finally
         base.writeActionThread = null
+        util.Chaos.note(s"write action $myWrites ends")
         lock.unlock()
 
   /** Run `op` under the base's completion lock. A completer writes its type

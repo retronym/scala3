@@ -327,6 +327,26 @@ class CompletionSoakSuite extends BasePCSuite:
     try soak20(name, file, seed, steps, parallel)
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  /** A failure of a two-reader soak, with what was going on at the moment it was caught: the claims held, the
+   *  other reader's stack (still running) and the flight recorder's last events (`-Ddotc.interactive.chaos` or
+   *  `-Ddotc.interactive.trace`), printed and attached as a suppressed exception. The first failure only.
+   */
+  private def withRaceReport(driver: InteractiveDriver, ex: Throwable): Throwable =
+    val me = Thread.currentThread
+    val others = Thread.getAllStackTraces.asScala.toList.collect {
+      case (t, st) if t.getName.startsWith("soak-reader") && (t ne me) =>
+        s"${t.getName} (${t.getState}):\n    " + st.iterator.filter(_.getClassName.startsWith("dotty.tools")).take(30).mkString("\n    ")
+    }
+    val report =
+      s"""race report for ${me.getName}: ${ex}
+         |claims held: ${driver.completionOwnerNow}
+         |${others.mkString("\n")}
+         |the readers' last events:
+         |${dotty.tools.dotc.util.Chaos.recent(200)}""".stripMargin
+    println(report)
+    ex.addSuppressed(new Throwable(report))
+    ex
+
   /** `parallel`: with `-Yinteractive-parallel` (step 4: completions with
    *  owners, readers outside the lock); without, readers serialised with
    *  completions (step 3).
@@ -352,6 +372,7 @@ class CompletionSoakSuite extends BasePCSuite:
         val (content, _) = variants(v)
         val source = SourceFile.virtual(uri, content)
         val runBefore = driver.runIdOf(uri)
+        dotty.tools.dotc.util.Chaos.note(s"soak step $step: $what at $offset, variant $v, run $runBefore")
         val obtained = driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => labels(ctx, unit, source, offset))
         val expected = oracle(v)(offset)
         val r = driver.readerOfThisThread
@@ -367,7 +388,21 @@ class CompletionSoakSuite extends BasePCSuite:
           println(s"[soak2 $name seed=$seed reader $thread step $step] at $offset expected ${expected.take(5)} obtained ${obtained.take(5)}; tree: " +
             (try driver.compilationUnits.get(uri).map { unit =>
               given Context = driver.currentCtx.fresh.setCompilationUnit(unit)
-              dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(offset)).take(3).map(t => s"${t.getClass.getSimpleName} ${t.show.take(60).replace('\n', ' ')} : ${if t.hasType then t.tpe.show.take(80) else "<untyped>"}").mkString(" <- ")
+              val path = dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(offset))
+              path.take(3).map(t => s"${t.getClass.getSimpleName} ${t.show.take(60).replace('\n', ' ')} : ${if t.hasType then t.tpe.show.take(80) else "<untyped>"}").mkString(" <- ") +
+                // the file's own symbols the enclosing statement refers to, as this reader sees them now: a wrong
+                // answer is most often one of them seen mid-completion, unwound or errored by the other reader
+                "\n  symbols referred to: " + path.lift(3).orElse(path.lastOption).toList.flatMap { t =>
+                  val acc = mutable.LinkedHashSet.empty[Symbol]
+                  new dotty.tools.dotc.ast.tpd.TreeTraverser:
+                    def traverse(tree: dotty.tools.dotc.ast.tpd.Tree)(using Context): Unit =
+                      tree match
+                        case r: dotty.tools.dotc.ast.tpd.RefTree if r.symbol.exists && !r.symbol.is(dotty.tools.dotc.core.Flags.Package) && r.symbol.span.exists && r.symbol.sourcePos.source.name == unit.source.name => acc += r.symbol
+                        case _ =>
+                      traverseChildren(tree)
+                  .traverse(t)
+                  acc.toList.take(12).map(sym => s"${sym.showLocated} (${sym.denot.infoOrCompleter.getClass.getSimpleName}, ${sym.denot.flagsString}, valid ${sym.denot.validFor}): ${sym.denot.infoOrCompleter.show.take(80)}")
+                }.mkString("\n    ", "\n    ", "")
             }.getOrElse("<no unit>") catch case scala.util.control.NonFatal(e) => s"<not shown: $e>"))
         count(what)
         org.junit.Assert.assertEquals(s"[$name seed=$seed reader $thread step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
@@ -396,11 +431,11 @@ class CompletionSoakSuite extends BasePCSuite:
       val t = new Thread(() =>
         try walk(i)
         catch
-          case ex: AssertionError => failure.compareAndSet(null, ex): Unit
-          case ex: CancelledCompilation => failure.compareAndSet(null, new AssertionError(s"reader $i: a cancellation reached the caller of a request without a checker", ex)): Unit
-          case scala.util.control.NonFatal(ex) => failure.compareAndSet(null, ex): Unit, s"soak-reader-$i")
+          case ex: AssertionError => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit
+          case ex: CancelledCompilation => failure.compareAndSet(null, withRaceReport(driver, new AssertionError(s"reader $i: a cancellation reached the caller of a request without a checker", ex))): Unit
+          case scala.util.control.NonFatal(ex) => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit, s"soak-reader-$i")
       // an `Error` (a stack overflow) must fail the test too, not just end the thread
-      t.setUncaughtExceptionHandler((_, ex) => failure.compareAndSet(null, ex): Unit)
+      t.setUncaughtExceptionHandler((_, ex) => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit)
       t.start()
       t
     }

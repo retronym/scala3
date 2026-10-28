@@ -239,6 +239,7 @@ object SymDenotations {
       val key = completer.completionRoot(this)
       val roots = ctx.base.completionRoots
       roots.acquire(key, CompletionLock.What(CompletionLock.completionKind(completer), symbol), () => cyclicWait())
+      util.Chaos.note(s"root acquired for $symbol: $key")
       // inside a Namer completion, this reader is never aborted on a cycle (I74)
       val namer = CompletionLock.completionKind(completer) == CompletionLock.namerKind
       val reader = ctx.reader
@@ -259,6 +260,7 @@ object SymDenotations {
           case _ =>
       finally
         if namer then reader.namerCompletionDepth -= 1
+        util.Chaos.note(s"root released for $symbol: $key")
         roots.release(key)
 
     /** A wait for a root would close a wait-for cycle that `CompletionRoots.acquire` has
@@ -405,6 +407,7 @@ object SymDenotations {
           if interactive
              && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
           then
+            util.Chaos.note(s"unwound the completion of $symbol: ${ex.getMessage}")
             util.Chaos.at("onUnwind")
             info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
             myFlags &~= Touched
@@ -3430,7 +3433,17 @@ object SymDenotations {
   final class InProgress(@volatile var current: Type, val owner: Thread, val rootKey: AnyRef) extends LazyType:
     def ownedHere: Boolean = owner eq Thread.currentThread
     def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
-      throw AssertionError(s"$denot: an InProgress is completed through its root, not run")
+      throw AssertionError(s"$denot: an InProgress is completed through its root, not run; ${diagnose()}")
+
+    /** For a failure that meets this: who owns it, what they are doing, and what the readers did last. */
+    def diagnose()(using Context): String =
+      val ownerStack = owner.getStackTrace.iterator.filter(_.getClassName.startsWith("dotty.tools")).take(25).mkString("\n    ")
+      s"""met by ${Thread.currentThread.getName}, owned by ${owner.getName} (${owner.getState}${if ownedHere then ", this thread" else ""}), root $rootKey, current info ${current.getClass.getSimpleName}
+         |claims held: ${ctx.base.completionRoots.holdersNow}
+         |the owner's stack now:
+         |    $ownerStack
+         |the readers' last events:
+         |${util.Chaos.recent(80)}""".stripMargin
     override def completionRoot(symd: SymDenotation)(using Context): AnyRef = rootKey
     override def decls: Scope = current match
       case lt: LazyType => lt.decls
