@@ -17,7 +17,7 @@ import util.*
 import dotty.tools.io.AbstractFile
 import Spans.{Span, NoSpan}
 import scala.annotation.meta.field
-import scala.annotation.internal.{cache, confined, guardedBy, publishedBy, scratch, treeState}
+import scala.annotation.internal.{cache, guardedBy, scratch, treeState}
 
 private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharing: Sharing) extends ContextBase(sharing) {
 
@@ -87,7 +87,7 @@ class InteractiveDriver(
    *  not consume the interrupt flag itself: `Run.Progress.checkCancellation`
    *  already does, and it would hide the interrupt from `cancel()`.
    */
-  @scratch @publishedBy("volatile") @volatile private var myCancelled = false
+  @scratch @volatile private var myCancelled = false
 
   private val myProgressCallback: ProgressCallback = new ProgressCallback:
     // a pending writer cancels readers, not the writer that holds the lock
@@ -114,7 +114,7 @@ class InteractiveDriver(
   // monitor. What is concurrent is the typing of bodies.
 
   @treeState private val regime = new java.util.concurrent.locks.ReentrantReadWriteLock(true)
-  @treeState @publishedBy("volatile") @volatile private var writerPending = false
+  @treeState @volatile private var writerPending = false
 
   /** Run `body` as a reader; retried when a writer cancelled it. A
    *  cancellation unwinding from `body` runs `afterCancel` once the read lock
@@ -240,7 +240,7 @@ class InteractiveDriver(
   }
 
   // written only by write actions (a run, `initialize`), read by anyone
-  @treeState @publishedBy("volatile") @volatile private var myCtx: Context = myInitCtx
+  @treeState @volatile private var myCtx: Context = myInitCtx
 
   /** Does `runUpTo` type only the path to its target? Off with
    *  `-Yno-targeted-requests`, in which case every request types the whole
@@ -305,14 +305,14 @@ class InteractiveDriver(
    *  thread on its previous reader, whose checker belonged to an earlier,
    *  cancelled request (finding I47).
    */
-  @scratch @confined private val myScopeDepth: ThreadLocal[Integer] = ThreadLocal.withInitial(() => Integer.valueOf(0))
+  @scratch private val myScopeDepth: ThreadLocal[Integer] = ThreadLocal.withInitial(() => Integer.valueOf(0))
 
   /** The reader of the last request that typed (not of a scope that only
    *  reads), for the x-ray's status thread and for the tests that read a
    *  request's bookkeeping afterwards from another job; not used by the
    *  compiler.
    */
-  @scratch @publishedBy("volatile") @volatile private var myLastReader: Reader = base.reader
+  @scratch @volatile private var myLastReader: Reader = base.reader
   def readerOfLastRequest: Reader = myLastReader
 
   /** The holder of the completion lock and the root of its work, or "" (for
@@ -368,7 +368,7 @@ class InteractiveDriver(
    *  epoch as well as the runs and the splices; the epoch itself also moves when a reader invalidates a class's own
    *  member caches, which would serve requests again for nothing.
    */
-  @scratch @publishedBy("volatile") @volatile private var myWrites: Int = 0
+  @scratch @volatile private var myWrites: Int = 0
 
   /** Requests served again because a write action ran after what they read, and requests handed their result after
    *  `MaxStaleRetries` such tries (for the tests and the log).
@@ -1298,7 +1298,7 @@ class InteractiveDriver(
   /** With several files in one run (`openAll`), the session of each; empty
    *  otherwise. Replaced, like `mySession`, by any run.
    */
-  @treeState @publishedBy("volatile") @volatile private var myOtherSessions: Map[URI, Session] = Map.empty
+  @treeState @volatile private var myOtherSessions: Map[URI, Session] = Map.empty
 
   private def sessionOf(uri: URI): Session | Null = mySession match
     case s: Session if s.uri == uri => s
@@ -1396,7 +1396,7 @@ class InteractiveDriver(
   /** What the last request did with an edit, for the log and the tests. Written by the edit's request (a write action
    *  when it changes the session, else a plain clear), read by the log from any thread.
    */
-  @scratch @publishedBy("volatile") @volatile private var myLastEdit: String = ""
+  @scratch @volatile private var myLastEdit: String = ""
 
   /** The id of the run that typed `uri`, or -1. */
   def runIdOf(uri: URI): Int = sessionOf(uri) match

@@ -893,7 +893,7 @@ class OrderingConstraint(private val boundsMap: ParamBounds,
         i += 1
     }
 
-  @cache @publishedBy("volatile")
+  @cache
   @volatile private var myUninstVars: mutable.ArrayBuffer[TypeVar] | Null = null
 
   /** The uninstantiated typevars of this constraint */

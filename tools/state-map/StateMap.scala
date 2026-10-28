@@ -44,12 +44,13 @@ object Rules:
   )
 
   val protection: List[Rule] = List(
-    Rule("@guardedBy, @frozenAfter, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, frozen-after-completion, synchronized, thread-confined, Publish, volatile, holder-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@frozenAfter(\"completion\")` (filled while hidden, frozen once its owner's completion publishes it; checked at run time by `-Ycheck-frozen-scopes`); `@confined`; `@publishedBy(\"Publish\" | \"volatile\" | \"holder\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
+    Rule("@guardedBy, @frozenAfter, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, frozen-after-completion, synchronized, thread-confined, Publish, volatile, holder-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@frozenAfter(\"completion\")` (filled while hidden, frozen once its owner's completion publishes it; checked at run time by `-Ycheck-frozen-scopes`); `@confined`; `@publishedBy(\"Publish\" | \"volatile\" | \"holder\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) is unverified (the rules find no protection), or is redundant: it only repeats what a rule finds from the declaration alone (`P.stamped`, `P.publish-handle`, `P.claimed`, `P.guarded`, `P.holder`, `P.volatile`, `P.thread-local`; for a kind, `C.publish`, `C.stamped`), which the compiler or the JVM keeps true, so it can be dropped (validation lists each as `REDUNDANT`)"),
     Rule("@sharable, @unshared", "static-safe (@sharable), single-threaded (@unshared)", "the markers of `-Ycheck-reentrant` on the field or its owner (reentrancy across compiler instances, not sharing within one base), when no annotation above is present"),
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
     Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`: release store, acquire load, a plain access only through `plain`/`setPlain`) or `Payload[O, F, T]` (stored only in a `publishing` block of `F`, read only `after` its acquire, or with `plain`), or `Once[K, T]` (stored only by its `get`, under the claim on its owner, with release semantics, and read with acquire semantics in a concurrent mode)"),
+    Rule("P.guarded", "synchronized", "declared `Guarded[K, T]` or `GuardedVar[K, T]` (`dotty.tools.sharing`): read and written only with the evidence of the monitor of `K` (`Monitor[K]`, from a `Guard`'s `locked`/`alwaysLocked`, `serialised`, `locking`, or `unlocked`), so no access outside it compiles"),
     Rule("P.claimed", "completion-lock", "declared `Claimed[K, T]` (`dotty.tools.sharing.Claimed`): read with `c()` and stored with `Claimed(v)`, both only with the evidence of the claim on `K` (`Holds[K]`, from `claim`, `once` or `claimAt[K]`, or `unguarded`), so no access outside the claim compiles; `Claimed.initial` only in initialisers"),
     Rule("P.stamped", "Stamped", "declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair"),
     Rule("P.holder", "holder-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
@@ -639,6 +640,8 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     else if publishHandles((f.owner, f.name)) then ("Publish", "P.publish-handle", "lexical")
     else if f.tpe.startsWith("Stamped[") || f.tpe.startsWith("dotty.tools.sharing.Stamped[") then ("Stamped", "P.stamped", "declaration")
     else if f.tpe.startsWith("Claimed[") || f.tpe.startsWith("dotty.tools.sharing.Claimed[") then ("completion-lock", "P.claimed", "declaration")
+    else if Seq("Guarded[", "GuardedVar[", "dotty.tools.sharing.Guarded[", "dotty.tools.sharing.Sharing.GuardedVar[").exists(f.tpe.startsWith) then
+      ("synchronized", "P.guarded", "declaration")
     else if f.isVolatile && f.holderType then ("holder-volatile", "P.holder", "annotation")
     else if f.isVolatile then ("volatile", "P.volatile", "annotation")
     else if f.concurrentType then ("concurrent", "P.concurrent-type", "type")
@@ -715,6 +718,10 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
        else None
      }
 
+  // the rules that place a field from its declaration alone, which an annotation can only repeat
+  private val declarationProtRules = Set("P.stamped", "P.publish-handle", "P.claimed", "P.guarded", "P.holder", "P.volatile", "P.thread-local")
+  private val declarationKindRules = Set("C.publish", "C.stamped")
+
   val placed: List[Placed] = c.fields.values.toList.filterNot(excluded).map { f =>
     val (ik, ikr) = kindOf(f)
     val reach = reachOf(f)
@@ -725,8 +732,11 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     // an annotation against the rules: `disagrees` when the rules place the field otherwise (`partial:P` for an
     // annotated P: some accesses lack it), `unverified` when they find no protection to compare with (a lock held
     // further up the stack, confinement), `agrees` otherwise
+    // an annotation that only repeats what the field's declaration says (its type, `@volatile`, a `Published` handle):
+    // the compiler or the JVM keeps it true, so the annotation can go
     val kindCheck =
       if ks != "annotated" then None
+      else if ik == k && declarationKindRules(ikr) then Some(s"kind redundant: $ikr says it from the declaration")
       else if ik == "unclassified" then Some(s"kind unverified: no rule places it")
       else if ik != k then Some(s"kind disagrees: rules say $ik ($ikr)")
       else Some("kind agrees")
@@ -736,6 +746,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
       // frozen after an event: the writes before it are the completer's, which no static rule tells apart, and the
       // ones after are checked when the program runs (`-Ycheck-frozen-scopes`)
       else if p.startsWith("frozen-after-") then Some("protection checked at run time (-Ycheck-frozen-scopes)")
+      else if ip == p && declarationProtRules(ipr) then Some(s"protection redundant: $ipr says it from the declaration")
       else if ip == "none" || ip == "unknown" then Some(s"protection unverified: rules find $ip")
       else if ip != p then Some(s"protection disagrees: rules say $ip ($ipr)")
       else Some("protection agrees")
@@ -789,6 +800,9 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
         val kindOk = kind == "*" || kind == p.inferredKind
         val protOk = prot == "*" || prot.r.matches(p.inferredProtection)
         if !kindOk || !protOk then out += s"MISMATCH $source: ${show(p)}; §8 says ${kind}/${prot}"
+    // annotations that repeat the declaration, to drop
+    for p <- placed; d <- p.disagreement; part <- d.split("; ") if part.contains("redundant") do
+      out += s"REDUNDANT ${p.f.owner}#${p.f.name}: ${p.protRule}, ${p.kindRule}: $part"
     // the Stamped call sites, by text, against the fields the rules put under Stamped
     val byFileName = placed.map(p => ((p.f.file, p.f.name), p)).toMap
     for (prot, ss) <- sites.groupBy(_.protection).toList.sortBy(_._1) do

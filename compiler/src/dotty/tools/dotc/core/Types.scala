@@ -2362,7 +2362,6 @@ object Types extends TypeUtils {
     // Published by `checkedPeriod` (release store in `setDenot`, acquire load in `denot`, `symbol`), as `Symbol.lastDenot`.
     // Some readers (`signature`, `denotationIsCurrent`, `withDenot`, ...) `peek` at it without the period: they take it
     // as a hint and check its `validFor` before use, or recompute.
-    @cache @publishedBy("Publish")
     private var lastDenotation: Payload[NamedType, "checkedPeriod", Denotation | Null] = Payload(null)
     private var lastSymbol: Payload[NamedType, "checkedPeriod", Symbol | Null] = Payload(null)
     private[core] var checkedPeriod: Published[Period] = Published(Nowhere)

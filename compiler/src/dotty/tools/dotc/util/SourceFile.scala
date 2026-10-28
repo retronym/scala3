@@ -185,7 +185,7 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
 
   // volatile: the table is filled before it is stored, and readers on other threads must see it whole. Readers may each
   // compute it, from the same text; the TASTy unpickler may set it from the pickled line sizes.
-  @cache @publishedBy("volatile")
+  @cache
   @volatile private var lineIndicesCache: Array[Int] = uninitialized
   private def lineIndices: Array[Int] =
     val cached = lineIndicesCache

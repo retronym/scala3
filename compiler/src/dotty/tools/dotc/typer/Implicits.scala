@@ -2015,7 +2015,7 @@ final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
     var nestedSearches: Int = 0
     var dictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
   private val shared = State()
-  @scratch @confined private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
+  @scratch private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
   private def state: State = if local == null then shared else local.get.nn
 
   /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */

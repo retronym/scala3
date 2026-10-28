@@ -13,7 +13,7 @@ import ProtoTypes.*
 import util.Spans.*
 import util.Property
 import collection.mutable, mutable.ListBuffer
-import scala.annotation.internal.{confined, guardedBy, lazyFact, publishedBy, scratch}
+import scala.annotation.internal.{confined, guardedBy, lazyFact, scratch}
 import tpd.tpes
 import Variances.alwaysInvariant
 import config.{Config, Feature, MigrationVersion}
@@ -51,7 +51,7 @@ object Namer:
     // the package clauses of the file, with their expanded statements: `invalidateCompanions` runs at the merge
     @confined private[Namer] val clauses = ListBuffer[(Symbol, List[untpd.Tree])]()
     // set by the merge: from then on, a context that carries the slice (a completer's) enters and looks up as usual
-    @publishedBy("volatile") @volatile private[Namer] var merged = false
+    @volatile private[Namer] var merged = false
 
     /** The part of this slice for package class `pkg`: also where a module defined in it finds its buddy (the
      *  module class of a module val, or the reverse), the merge or not.
@@ -136,7 +136,7 @@ class Namer { typer: Typer =>
    *  one, so that trees that are shared between different DefDefs can be independently
    *  used as indices. It also contains a scope that contains nested parameters.
    */
-  @lazyFact @publishedBy("volatile") @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
+  @lazyFact @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
   def nestedTyper(using Context): mutable.Map[Symbol, Typer] =
     val m = myNestedTyper
     if m != null then m

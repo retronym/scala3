@@ -1163,7 +1163,7 @@ object Contexts {
     /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
      *  may change a published scope (`MutableScope.changed`).
      */
-    @scratch @publishedBy("volatile") @volatile private[dotc] var writeActionThread: Thread | Null = null
+    @scratch @volatile private[dotc] var writeActionThread: Thread | Null = null
 
     // Symbols state
 
@@ -1177,9 +1177,9 @@ object Contexts {
     /** Sources and Files that were loaded. Readers of a concurrent base share them, so they are reached only with
      *  the evidence of this base's monitor (`Sharing.serialised`, `locking`).
      */
-    @interned @guardedBy("this")
+    @interned
     private[core] val sources = guarded(util.HashMap[AbstractFile, SourceFile]())
-    @cache @guardedBy("this")
+    @cache
     private[core] val files = guarded(util.HashMap[String, AbstractFile]())
 
     /** Cache for magic offset header lookups, scoped to this compiler instance

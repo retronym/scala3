@@ -28,7 +28,7 @@ import collection.mutable
 import io.AbstractFile
 import util.{SourceFile, NoSource, Property, SourcePosition, SrcPos, EqHashMap, WrappedSourceFile}
 
-import scala.annotation.internal.{benignRace, cache, lazyFact, publishedBy, sharable, treeState}
+import scala.annotation.internal.{benignRace, cache, lazyFact, sharable, treeState}
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
@@ -109,7 +109,7 @@ object Symbols extends SymUtils {
      *  mode, several readers) that finds the period current sees the
      *  denotation stored before it, never the previous one.
      */
-    @cache @publishedBy("Publish") private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
+    private var lastDenot: Payload[Symbol, "checkedPeriod", SymDenotation] = uninitialized
     private[core] var checkedPeriod: Published[Period] = Published(Nowhere)
 
     /** The last denotation stored, whatever period it is valid in, for the readers that do not go through `current`:

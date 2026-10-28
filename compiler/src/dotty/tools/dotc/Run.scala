@@ -32,7 +32,7 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable, mutable.ListBuffer
-import scala.annotation.internal.{sharable, scratch, cache, interned, guardedBy, publishedBy, benignRace}
+import scala.annotation.internal.{sharable, scratch, cache, interned, guardedBy, benignRace}
 import scala.io.Codec
 
 import Run.Progress
@@ -66,7 +66,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  return immediately. Currently these early abort operations are
    *  `Typer.typed` and `Implicits.typedImplicit`.
    */
-  @scratch @publishedBy("volatile") @volatile var isCancelled = false
+  @scratch @volatile var isCancelled = false
 
   // `compiling`, `myUnits` and the other run-wide fields marked `@guardedBy("writer")` are set while the run compiles:
   // in the interactive driver that is a write action, so readers see them only after it, and none of them changes then.
@@ -76,7 +76,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   // `files` of `myUnits`, with the units it was made from: one immutable pair in one volatile field, so that a reader
   // that finds the units it asks for finds their files with them
-  @cache @publishedBy("holder") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
+  @cache @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
   // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
   // collections, so they are reached only holding the monitor of `suppressions` (`locked`: with concurrent readers
@@ -343,7 +343,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  for a test. (Per run, not per reader: an interactive request may meet a
    *  tree an earlier request's error left inconsistent.)
    */
-  @scratch @publishedBy("volatile") @volatile private[dotc] var errorsToBeReported = false
+  @scratch @volatile private[dotc] var errorsToBeReported = false
 
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>

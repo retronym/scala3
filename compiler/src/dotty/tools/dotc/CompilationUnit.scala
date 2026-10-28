@@ -31,7 +31,7 @@ class CompilationUnit protected (val source: SourceFile, val info: CompilationUn
   // (docs/_docs/internals/interactive-multi-reader.md §3.2). The splices are serialised by the session's monitor, which
   // is not this unit's and is held only for the read-modify-write, so the reads here do not hold it: a reader sees the
   // tree before or after a splice, both complete. Phases write it in the batch pipeline, one thread.
-  @treeState @publishedBy("volatile") @volatile var tpdTree: tpd.Tree = tpd.EmptyTree
+  @treeState @volatile var tpdTree: tpd.Tree = tpd.EmptyTree
 
   private val myIsJava: Boolean = source.ext.isJava // `source` and `ext` are immutable, so cache the answer
 
