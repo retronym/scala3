@@ -87,6 +87,77 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     val groups = unitContexts.groupBy(c => packageOf(c.compilationUnit.untpdTree)).values.toList
     groups.flatMap(_.zipWithIndex).sortBy(_._2).map(_._1)
 
+  /** Batch compilation with `-Yparallel-typer`: each unit typechecked on a thread of a pool, in a typer state of
+   *  its own (a child of the run's, settled when the unit ends: nothing is committed into the state the readers
+   *  share). A unit whose reader was aborted as the victim of a wait-for cycle is an error. The run's diagnostics
+   *  are issued after the last unit, in a fixed order.
+   */
+  private def typeCheckInParallel(unitContexts: List[Context])(using Context)(using SubPhase): List[Context] =
+    val reporter = ctx.reporter match
+      case r: ParallelBatchReporter => r
+      case r => throw IllegalStateException(s"-Yparallel-typer needs the driver's ParallelBatchReporter, found $r")
+    reporter.startBuffering()
+    val retried = java.util.concurrent.ConcurrentLinkedQueue[Context]()
+    // an aborted unit's state is dropped, not settled: what it reported was typed on the way to the abort
+    def typeCheckPrivately(c0: Context): Boolean =
+      val c1 = c0.fresh.setNewTyperState()
+      val ok = typeCheck(using c1)
+      c1.typerState.settle(c0)(using c1)
+      ok
+    val tSig = System.nanoTime()
+    var signatures = 0
+    def completeSignatures(sym: Symbol)(using Context): Unit =
+      if sym.exists then
+        sym.ensureCompleted()
+        signatures += 1
+        if sym.isClass then
+          for d <- sym.info.decls.toList do
+            if d.source == ctx.source then completeSignatures(d)
+    def topLevel(tree: untpd.Tree)(using Context): Unit = tree match
+      case untpd.PackageDef(_, stats) => stats.foreach(topLevel)
+      case _: untpd.MemberDef =>
+        ctx.typer.expanded(tree) match
+          case untpd.Thicket(trees) => trees.foreach(t => if ctx.typer.hasDefinedSymbol(t) then completeSignatures(ctx.typer.symbolOfTree(t)))
+          case _ => if ctx.typer.hasDefinedSymbol(tree) then completeSignatures(ctx.typer.symbolOfTree(tree))
+      case _ =>
+    // serially: the signatures of every member of every unit, so that the parallel readers type bodies and meet
+    // no Namer completion of a member, and no wait-for cycle between two of them (I68)
+    for c <- unitContexts do
+      try topLevel(c.compilationUnit.untpdTree)(using c)
+      catch case _: CompilationUnit.SuspendException => ()
+    val root = ctx.typerState
+    root.readOnlyRoot = true
+    val t0 = System.nanoTime()
+    var t1 = t0
+    var again: List[Context] = Nil
+    val (done, doneAgain) =
+      try
+        // -Ddotc.parallelTyper.oneThread: the same order (signatures, then bodies) on this thread, to tell what
+        // the order changes from what concurrency changes
+        def body(c: Context) =
+          try typeCheckPrivately(c)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            System.err.nn.println(s"[parallel-typer] aborted: ${c.compilationUnit.source} (${ex.getMessage})")
+            retried.add(c)
+            false
+        val done =
+          if sys.props.contains("dotc.parallelTyper.oneThread") then unitContexts.filter(body)
+          else inParallel("dotc-typer", unitContexts)(c ?=> body(c))
+        t1 = System.nanoTime()
+        again = unitContexts.filter(c => retried.contains(c))
+        // typing a unit consumes what the Namer attached to its untyped trees (an import's symbol, a typed-ahead
+        // tree), so an aborted unit cannot be typed again in this run: it is an error, for now
+        again.foreach(c => report.error(s"-Yparallel-typer: ${c.compilationUnit.source} was aborted as the victim of a wait-for cycle and cannot be typed again in this run"))
+        (done, Nil)
+      finally
+        root.readOnlyRoot = false
+        reporter.issueBuffered()
+    if ctx.settings.verbose.value || sys.props.contains("dotc.parallelTyper.log") then
+      System.err.nn.println(f"[parallel-typer] $signatures signatures completed serially in ${(t0 - tSig) / 1e6}%.1f ms")
+      System.err.nn.println(f"[parallel-typer] ${unitContexts.length} units in ${(t1 - t0) / 1e6}%.1f ms on ${math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)} threads; ${again.length} retried serially in ${(System.nanoTime() - t1) / 1e6}%.1f ms")
+    val ok = (done ++ doneAgain).toSet
+    unitContexts.filter(ok.contains)
+
   protected def discardAfterTyper(unit: CompilationUnit)(using Context): Boolean =
     (unit.isJava && !ctx.settings.XjavaTasty.value) || unit.suspended
 
@@ -126,10 +197,13 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     }
 
     val unitContexts1 = interactive.OpenTiming.timed("typecheck (skipping)")(runSubPhase(Typechecking) {
-      for
-        unitContext <- unitContexts0
-        if typeCheck(using unitContext)
-      yield unitContext
+      if ctx.base.parallel && !ctx.mode.is(Mode.Interactive) && unitContexts0.lengthCompare(1) > 0 then
+        typeCheckInParallel(unitContexts0)
+      else
+        for
+          unitContext <- unitContexts0
+          if typeCheck(using unitContext)
+        yield unitContext
     })
 
     record("total trees after typer", ast.Trees.ntrees)
