@@ -70,6 +70,27 @@ private[interactive] object BodyEdit:
     while q < n - p && old.charAt(old.length - 1 - q) == now.charAt(now.length - 1 - q) do q += 1
     Region(p, old.length - q, now.length - q)
 
+  /** The insertion or deletion `r` moved left over the whitespace it
+   *  rotates through: the same edit, its text `w + s` taken as `s + w`.
+   *  The common prefix ends as late as it can, so a line appended to a
+   *  braceless body (`x\n  def` to `x\n    y\n  def`) is the insertion of
+   *  `  y\n  ` after the old body's last line's indentation, outside the
+   *  body; moved, it is the insertion of `\n    y` at the body's end, as a
+   *  line added inside braces is. Likewise the last line deleted. `r`
+   *  itself if it moves nowhere, or replaces text.
+   */
+  def leftmost(r: Region, old: String, now: String): Region =
+    def isSpace(c: Char) = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+    def slide(text: String, end: Int): Int =
+      var k = 0
+      while r.start - k > 0 && { val c = text.charAt(r.start - k - 1); isSpace(c) && c == text.charAt(end - k - 1) } do k += 1
+      k
+    val k =
+      if r.start == r.oldEnd && r.newEnd > r.start then slide(now, r.newEnd)
+      else if r.start == r.newEnd && r.oldEnd > r.start then slide(old, r.oldEnd)
+      else 0
+    if k == 0 then r else Region(r.start - k, r.oldEnd - k, r.newEnd - k)
+
   /** How an edit is classified. */
   enum Kind:
     /** Only the right-hand side of the member definition `old` differs; `now` is its new parse. */

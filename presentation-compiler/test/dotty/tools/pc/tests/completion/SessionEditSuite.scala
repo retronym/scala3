@@ -331,3 +331,83 @@ class SessionEditSuite extends BasePCSuite:
     Assert.assertEquals("the old error, moved", List(before.head.pos.start + 1), stale.map(_.pos.start))
     // the whole-file run types `d`: its own diagnostics
     Assert.assertEquals(diagnosticsOf(newDriver().run(uri, source(edited))), diagnosticsOf(driver.run(uri, source(edited))))
+
+
+  // ---- Edits at the end of an indentation-syntax body
+
+  private val braceless =
+    """|object M:
+       |  val Reader = 1
+       |  val Writer = 2
+       |  def combine(a: Int, b: Int): Int = (a, b) match
+       |    case (Reader, _) => Reader
+       |    case (_, Reader) => Reader
+       |
+       |  def check(x: Int): Int = x match
+       |    case 0 =>
+       |      val y = x + 1
+       |      y
+       |    case _ =>
+       |      val z = x * 2
+       |      z
+       |  def block(xs: List[Int]): Int =
+       |    val n = xs.size
+       |    n + 1
+       |  def msg: String = "m"
+       |  def show(err: String): String = msg + err
+       |
+       |  /** Next. */
+       |  def next: Int = 1
+       |""".stripMargin
+
+  /** Successive edits from `content`, each a body edit of `name` in the session's run, its answers a fresh run's. */
+  private def assertBodyEdits(content: String, name: String, edits: List[(String, String)]): Unit =
+    val driver = newDriver()
+    driver.run(uri, source(content))
+    val id = runId(driver)
+    var now = content
+    for (from, to) <- edits do
+      val edited = now.replace(from, to)
+      Assert.assertNotEquals(from, now, edited)
+      now = edited
+      driver.runUpTo(uri, source(now), at(now, "def next", 4))
+      Assert.assertTrue(s"$from -> $to: ${driver.lastEdit(uri)}", driver.lastEdit(uri).startsWith(s"body edit of $name"))
+      Assert.assertEquals(id, runId(driver))
+      assertLikeFresh(driver, now, s"after $from -> $to")
+      Assert.assertEquals(id, runId(driver))
+
+  /** A line appended to a braceless body: the common prefix takes the old
+   *  last line's newline and the indentation, so the edit as found starts
+   *  after the body; it is the body's, which the new parse extends.
+   */
+  @Test def `a-line-appended-to-a-braceless-body` =
+    assertBodyEdits(braceless, "combine", List(
+      "    case (_, Reader) => Reader\n" -> "    case (_, Reader) => Reader\n    case (Writer, _) => Writer\n",
+      "    case (Writer, _) => Writer\n" -> "    case (Writer, _) => Writer\n    case _ => 0\n"))
+
+  @Test def `a-line-appended-to-the-last-case-body-of-a-braceless-match` =
+    assertBodyEdits(braceless, "check", List(
+      "      z\n" -> "      z\n      z + 1\n",
+      "      z + 1\n" -> "      z + 1\n    case 1 =>\n      x\n"))
+
+  @Test def `lines-appended-to-a-braceless-block` =
+    assertBodyEdits(braceless, "block", List(
+      "    n + 1\n" -> "    n + 1\n    println(n)\n",
+      "    println(n)\n" -> "    println(n)\n    n + 2\n"))
+
+  @Test def `the-last-line-of-a-braceless-body-deleted` =
+    assertBodyEdits(braceless, "combine", List("    case (_, Reader) => Reader\n" -> ""))
+    assertBodyEdits(braceless, "block", List("    n + 1\n" -> ""))
+
+  /** Lines that are a new sibling, not part of the body before them: a fresh run. */
+  @Test def `a-member-appended-after-a-braceless-body-is-a-fresh-run` =
+    for (what, from, to) <- List(
+        ("a member", "    n + 1\n", "    n + 1\n  def added: Int = 2\n"),
+        ("a statement of the object", "    n + 1\n", "    n + 1\n  println(1)\n")) do
+      val driver = newDriver()
+      driver.run(uri, source(braceless))
+      val id = runId(driver)
+      val edited = braceless.replace(from, to)
+      driver.runUpTo(uri, source(edited), at(edited, "def next", 4))
+      Assert.assertNotEquals(s"$what: ${driver.lastEdit(uri)}", id, runId(driver))
+      assertLikeFresh(driver, edited, s"after $what")
