@@ -33,12 +33,16 @@ object NameKinds {
   /** An abstract base class of classes that define the kind of a derived name info */
   abstract class NameKind(val tag: Int) { self =>
 
+    // not the identity hash: see `SimpleName.hashCode`
+    override def hashCode: Int = tag
+
     /** The info class defined by this kind */
     type ThisInfo <: Info
 
     /** A simple info type; some subclasses of Kind define more refined versions */
     class Info extends NameInfo { this: ThisInfo =>
       def kind: NameKind = self
+      override def hashCode: Int = self.hashCode
       def mkString(underlying: TermName): String = self.mkString(underlying, this)
       override def toString: String = infoString
     }
