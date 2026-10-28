@@ -34,12 +34,10 @@ import mutable.ListBuffer
  *  Design notes: `docs/_docs/internals/interactive-multi-reader.md`, §3 (kind
  *  A) and §8 step 2.
  */
-class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () => Boolean):
+class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () => Boolean)
+extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
 
-  /** The thread this reader was created for, for assertions in tests and the
-   *  x-ray; the compiler does not read it.
-   */
-  val thread: Thread = Thread.currentThread()
+  // `thread`, the thread this reader was created for, is the `Claimant`'s: it orders the parties of a wait-for cycle
 
   // ---- Context pools and the type comparer stack (`Contexts.explore`,
   // `withFreshTyperState`, `runWithOwner`, `comparer`) ----
@@ -274,11 +272,8 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
 
   // ---- Waits on the completion lock (several readers, see `CompletionLock`) ----
 
-  /** The completion root this reader is waiting for, if any (parallel
-   *  readers, `CompletionRoots`): the edge of the wait-for graph that the
-   *  cycle check follows.
-   */
-  @volatile var waitingOn: core.CompletionRoots.Claim | Null = null
+  // `waitingOn`, the completion root this reader is waiting for (parallel readers, `CompletionRoots`), is the
+  // `Claimant`'s: the edge of the wait-for graph that the cycle check follows
 
   /** The waits this reader backed off from because they would have closed a
    *  wait-for cycle (`CompletionRoots.backOff`), for tests and the x-ray.
@@ -290,6 +285,19 @@ class Reader(maxFuel: Int, enrichErrorMessages: Boolean, val cancelChecker: () =
    *  (I74), since a Namer completion cannot run twice.
    */
   @volatile var namerCompletionDepth: Int = 0
+
+  /** A reader typing a body can be the victim of a wait-for cycle; one inside a Namer completion cannot (I74). */
+  override def canAbort: Boolean = namerCompletionDepth == 0
+
+  /** Aborted as the victim of a wait-for cycle: counted, and unwound as a cancelled request, which is retried. */
+  override def abort(): Nothing =
+    waitCyclesBackedOff += 1
+    throw CompilationUnit.CancelledCompilation()
+
+  override def acquired(): Unit = util.Chaos.at("acquire", oneIn = 8)
+
+  override def recordWait(nanos: Long, holderWhat: String, holderName: String): Unit =
+    recordLockWait(nanos, holderWhat, "", holderName)
 
   /** The wait-for cycles between Namer completions this reader reported as a
    *  `CyclicReference` (the single-reader answer, I74). */

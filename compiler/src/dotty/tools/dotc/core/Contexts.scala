@@ -1144,7 +1144,7 @@ object Contexts {
      *  `Sharing.Parallel`, `CompletionRoots`).
      */
     @interned @publishedBy("init")
-    val completionRoots: CompletionRoots = CompletionRoots(this)
+    val completionRoots: _root_.dotty.tools.sharing.PerKeyClaims = CompletionRoots(this)
 
     /** What a `Sharing.claim` takes on a concurrent base (`dotc.claimRegistry`): the root's claim with parallel
      *  readers, the completion lock (as the key's `ClaimKind` says) with serialised ones. */
