@@ -1102,7 +1102,7 @@ class InteractiveDriver(
           p
         case p: untpd.Tree => p
       val t0 = System.nanoTime()
-      val r = BodyEdit.region(oldText, newText)
+      val r0 = BodyEdit.region(oldText, newText)
       src.replaceContent(newText)
       val parseErrors = new StoreReporter(null)
       val parsed = parse(src, parseErrors)
@@ -1114,6 +1114,15 @@ class InteractiveDriver(
         myLastEdit = s"edit refused ($why)"
         false
       val errors = parseErrors.removeBufferedMessages
+      // the region as found, else moved to the end of a body it may extend
+      val (r, kind) = BodyEdit.classify(old, parsed, r0) match
+        case fresh: BodyEdit.Kind.Fresh =>
+          val r1 = BodyEdit.leftmost(r0, oldText, newText)
+          if r1 eq r0 then (r0, fresh)
+          else BodyEdit.classify(old, parsed, r1) match
+            case _: BodyEdit.Kind.Fresh => (r0, fresh)
+            case kind1 => (r1, kind1)
+        case kind0 => (r0, kind0)
       /** The syntax errors outside `now` are those outside `old`, moved: a
        *  file that has one elsewhere still keeps its session.
        */
@@ -1122,7 +1131,6 @@ class InteractiveDriver(
         val before = pristineErrors.filterNot(e => old.contains(e.pos.span)).map(e => key(e, r.span(e.pos.span, anchor)))
         val after = errors.filterNot(e => now.contains(e.pos.span)).map(e => key(e, e.pos.span))
         before.sortBy(_.toString) == after.sortBy(_.toString)
-      val kind = BodyEdit.classify(old, parsed, r)
       tCompared = System.nanoTime()
       kind match
         case BodyEdit.Kind.Fresh(why) => refuse(why)
