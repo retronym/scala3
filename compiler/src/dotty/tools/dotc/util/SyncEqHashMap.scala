@@ -1,6 +1,7 @@
 package dotty.tools.dotc.util
 
 import GenericHashMap.DenseLimit
+import dotty.tools.sharing.Publish
 
 /** An `EqHashMap` for a cache read and filled by several threads
  *  (interactive mode, see `ContextState.sharing`): a hit is found

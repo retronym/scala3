@@ -32,7 +32,7 @@ Kind (after the annotations `@scratch`, `@lazyFact`, `@cache`, `@interned`, `@tr
 - `B.scope`: a field of `MutableScope`.
 - `C.stamped`: the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object.
 - `C.stamp`: a stamp by `StampedCachesTest`'s rule (declared `Period`, `RunId`, `Validity`, or named `…Period`, `…RunId`, `valid…`, `checked…`).
-- `C.publish`: declared `Published[T]`, or accessed in a method that calls `acquire`/`release` on a `Published` field, or `util.Publish`.
+- `C.publish`: declared `Published[T]`, or accessed in a method that calls `acquire`/`release` on a `Published` field, or `sharing.Publish`.
 - `C.packed`: on a type, denotation or symbol, `@volatile` and declared a tuple or a class of two or more `val`s.
 - `D.designator`: `NamedType.myDesignator`, part of the interned key.
 - `C.type-memo`: any other field of a `Type` other than a `TypeVar` (types are hash-consed values).
@@ -56,7 +56,7 @@ Protection (after the annotations `@guardedBy`, `@confined`, `@publishedBy`, `@b
 - `P.on-base` → concurrent: initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`.
 - `P.asserted-completion` → completion-lock: kinds `B.denotation`, `B.completer`, `B.unpickler`, written under `lockAndComplete` or `Sharing.claim` further up the stack.
 - `P.stamped`: declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair.
-- `P.access`: by the accesses outside initialisation and resets. Each access is, innermost first: the field a `Stamped` extension is called on → Stamped; in `synchronized` (or its receiver, `x` of `x.synchronized`), `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once` → completion-lock, or root-claim when the call's `ClaimKind` says `lockWhenSerialised = false`; in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim (an inline method that passes its parameter to one of these protects that parameter too); in a method that calls `util.Publish` → Publish; in the else branch of `if x.concurrent`, `if x.parallel` or `if Config.c && x.concurrent` → batch; in a private or local method, the one protection all its calls have; else none. The field is that one protection, `batch-only`, `partial:P` (some accesses P, some none), `mixed:P,Q`, or `unknown`.
+- `P.access`: by the accesses outside initialisation and resets. Each access is, innermost first: the field a `Stamped` extension is called on → Stamped; in `synchronized` (or its receiver, `x` of `x.synchronized`), `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once` → completion-lock, or root-claim when the call's `ClaimKind` says `lockWhenSerialised = false`; in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim (an inline method that passes its parameter to one of these protects that parameter too); in a method that calls `sharing.Publish` → Publish; in the else branch of `if x.concurrent`, `if x.parallel` or `if Config.c && x.concurrent` → batch; in a private or local method, the one protection all its calls have; else none. The field is that one protection, `batch-only`, `partial:P` (some accesses P, some none), `mixed:P,Q`, or `unknown`.
 
 Reach: `post-typer` for owners in `cc`, `backend`, `transform` (but `SetRootTree`, `CookComments`), and phases other than the interactive compiler's; `typer` otherwise.
 
@@ -77,7 +77,7 @@ Naming conventions and types carry the rules a long way, but not all of it: a fi
 | `@treeState` | kind E: a tree's or a session's tree state |
 | `@guardedBy("completionLock" \| "rootClaim" \| "writer" \| "this" \| "<field>")` | every access holds that lock: the completion lock (`Sharing.claim` on a key whose `ClaimKind` takes it when readers are serialised), a root's claim (`Sharing.claim` on one whose kind does not), a write action of the interactive driver (which runs with no reader), or a monitor |
 | `@confined` | one thread reaches the owner |
-| `@publishedBy("Publish" \| "volatile" \| "packed" \| "init")` | writes are published by `util.Publish`, one volatile value, an immutable value packed into a volatile field, or are made only before the owner is shared |
+| `@publishedBy("Publish" \| "volatile" \| "packed" \| "init")` | writes are published by `sharing.Publish`, one volatile value, an immutable value packed into a volatile field, or are made only before the owner is shared |
 | `@benignRace("why")` | readers may race on it: any writer stores the same or an equal value |
 | `@featureArea("cc")` | a feature area the package and class name do not show; features stay inferred otherwise |
 

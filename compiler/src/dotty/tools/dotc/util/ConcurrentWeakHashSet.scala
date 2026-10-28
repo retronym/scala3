@@ -1,6 +1,7 @@
 package dotty.tools.dotc.util
 
 import WeakHashSet.Entry
+import dotty.tools.sharing.Publish
 
 /** A `WeakHashSet` that several threads read without a lock (interactive
  *  mode, see `ContextState.sharing`): a hash-consing hit, the

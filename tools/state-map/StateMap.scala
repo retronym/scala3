@@ -29,7 +29,7 @@ object Rules:
     Rule("B.scope", "B", "a field of `Scopes.MutableScope`: completions enter into shared scopes that rehash on `enter`"),
     Rule("C.stamped", "C", "the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object"),
     Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
-    Rule("C.publish", "C", "declared `Published[T]`, or read or written in a method that calls `acquire` or `release` on a `Published` field, or `util.Publish`, on the same object (the value the stamp publishes)"),
+    Rule("C.publish", "C", "declared `Published[T]`, or read or written in a method that calls `acquire` or `release` on a `Published` field, or `sharing.Publish`, on the same object (the value the stamp publishes)"),
     Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
     Rule("D.designator", "D", "`myDesignator` of a `NamedType`: part of the interned key, rewritten by `setDenot` (§3 D)"),
     Rule("C.type-memo", "C", "any other field of a `Type` other than a `TypeVar`: types are hash-consed values, so a field on one memoises a function of the type"),
@@ -56,7 +56,7 @@ object Rules:
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
     Rule("P.asserted-completion", "completion-lock", "kind `B.denotation`, `B.completer` or `B.unpickler`: written while the completion lock or the root's claim is held by `lockAndComplete`/`Sharing.claim` further up the stack (dynamic, not visible at the access; evidence `asserted`)"),
-    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: the field a `Stamped` extension is called on → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `util.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
+    Rule("P.access", "(per access)", "every access outside initialisation (constructors, field initialisers) and resets (`= Nowhere`, `= NoRunId`), each classified innermost-first: the field a `Stamped` extension is called on → Stamped; in a `synchronized` block, `Sharing.serialised` or a `Sharing.Guard`'s `locked` → synchronized; in the `op` of `Sharing.claim` or `claimAt`, or the `compute` of `Sharing.once`, → completion-lock or root-claim as the call's `ClaimKind` says (`lockWhenSerialised = false`: root-claim); in the `op` of `CompletionLock.locked`, or in a method that takes a `Sharing.Holds` → completion-lock; in the `op` of `CompletionRoots.locked` → root-claim; in a method that calls `sharing.Publish` → Publish; in the else branch of `if <x>.concurrent`, `if <x>.parallel` or `if Config.<c> && <x>.concurrent` (or the then branch of the negation) → batch; else, in a private or local method, the one protection that every call of the method has (calls in a batch branch aside), recursively; else none. The field's protection: the one protection of all non-batch accesses; `batch-only` if every access is batch; `partial:<P>` if some are P and some none; `mixed:<P,Q>` for two protections; `unknown` if no access is seen")
   )
 
   val reach: List[Rule] = List(
@@ -407,7 +407,7 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
           val (fn, argss) = flatten(app)
           val fsym = fn.symbol
           recordCall(fsym)
-          if fsym.exists && (fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.dotc.util.Publish"
+          if fsym.exists && (fsym.maybeOwner.fullName.replace("$", "") == "dotty.tools.sharing.Publish"
               || fsym.maybeOwner.fullName == "dotty.tools.sharing.PublishedOps" && (fsym.name == "acquire" || fsym.name == "release"))
           then publishingMethods += currentMethod
           if fsym.exists && fsym.maybeOwner.fullName.replace("$", "").endsWith("Sharing") then
