@@ -175,7 +175,15 @@ abstract class Reporter extends interfaces.ReporterResult {
    *  Avoid forcing elaboration of the message, but if already `forced`,
    *  then do issue the diagnostic with usual `isHidden` check.
    */
-  def issueUnconfigured(dia: Diagnostic, forced: Boolean = false)(using Context): Unit = dia match
+  /** Tag `dia` with the current provenance, where it is first issued. */
+  private def tag(dia: Diagnostic)(using Context): Unit =
+    if dia.provenance == null then dia.provenance = ctx.reader.provenance
+
+  def issueUnconfigured(dia: Diagnostic, forced: Boolean = false)(using Context): Unit =
+    tag(dia)
+    issueUnconfigured0(dia, forced)
+
+  private def issueUnconfigured0(dia: Diagnostic, forced: Boolean)(using Context): Unit = dia match
     case w: Warning if ctx.settings.silentWarnings.value    =>
     case w: ConditionalWarning if !forced && w.isSummarizedConditional =>
       val key = w.enablingOption.name
@@ -194,16 +202,18 @@ abstract class Reporter extends interfaces.ReporterResult {
             errors = e :: errors
             _errorCount += 1
             if ctx.typerState.isGlobalCommittable then
-              ctx.base.errorsToBeReported = true
+              val run = ctx.run
+              if run != null then run.errorsToBeReported = true
           case i: Info    =>
             infos = i :: infos
             _infoCount += 1
           // match error if d is something else
         }
         markReported(dia)
-  end issueUnconfigured
+  end issueUnconfigured0
 
   def issueIfNotSuppressed(dia: Diagnostic)(using Context): Unit =
+    tag(dia)
 
     def go() =
       import Action.*

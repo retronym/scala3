@@ -265,6 +265,44 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       org.junit.Assert.assertEquals(oracle.mkString("\n"), labels2.mkString("\n"))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
+  @Test def `top-level-definitions-are-skipped-too` =
+    // A file's top-level definitions are wrapped in a synthetic `<file>$package`
+    // object, which is skipped like any other statement (synthetic definitions
+    // are kept only inside blocks, where the next statement is built from
+    // them), and a target in one of its members resumes into it. A case class
+    // is one skipped statement with the synthetic companion its expansion
+    // makes, typed together when a target lands in the class.
+    val code =
+      """|package p
+         |def one(xs: List[Int]): Int = xs.map(_ + 1).sum
+         |def two(xs: List[Int]): Int = xs.map(_ + 2).filter(_ > 0).sum
+         |case class Pair(a: Int, b: Int)
+         |object Other { def o = one(Nil) }
+         |""".stripMargin
+    val uri = URI.create("file:///Top.scala")
+    val src = SourceFile.virtual(uri, code)
+    def spans(d: CachingDriver) = d.untypedSpans(uri).map(sp => code.substring(sp.start, math.min(sp.end, sp.start + 12)).trim).sorted
+    val (runIds, fresh, afterTwo, afterOne, afterPair) = withDriver { d =>
+      val ds1 = d.runUpTo(uri, src, Span(code.indexOf("def o =") + 5))
+      val fresh = spans(d)
+      val ds2 = d.runUpTo(uri, src, Span(code.indexOf(".filter(_ > 0)") + 4))
+      val afterTwo = spans(d)
+      val ds3 = d.runUpTo(uri, src, Span(code.indexOf("xs.map(_ + 1)") + 3))
+      val afterOne = spans(d)
+      val ds4 = d.runUpTo(uri, src, Span(code.indexOf("b: Int") + 1))
+      val afterPair = spans(d)
+      assert(List(ds1, ds2, ds3, ds4).forall(_.forall(_.level < 2)), s"no errors: ${List(ds1, ds2, ds3, ds4).flatten.map(_.msg.message)}")
+      (List.fill(4)(d.runIdOf(uri)), fresh, afterTwo, afterOne, afterPair)
+    }
+    println(s"[top-level-definitions-are-skipped-too] fresh: $fresh; after two: $afterTwo; after one: $afterOne; after Pair: $afterPair")
+    // the package object (its span begins at `one`) and the case class are skipped; `Other` is typed
+    assertEquals(List("case class P", "def one(xs:"), fresh, "the package object and the case class are skipped")
+    // the request in `two` resumed into the package object, where `one` is skipped
+    assertEquals(List("case class P", "def one(xs:"), afterTwo, "resumed into the package object, where `one` stays skipped")
+    assertEquals(List("case class P"), afterOne, "`one` resumed")
+    // the case class resumed (its parameter accessor `a`, a member not touched, is skipped as members are)
+    assert(!afterPair.exists(_.startsWith("case class")), s"the case class resumed: $afterPair")
+
   @Test def `block-statements-are-skipped-too` =
     // In a method body only the statement at the target is typed; a statement
     // before it is typed ahead only if the target's statement refers to it.
@@ -440,6 +478,48 @@ class CompletionSessionSuite extends BaseCompletionSuite:
       assert(thrown, "the cancellation must land")
       assertEquals(run1, run2, "the session is kept: both statements are replaced")
       assertEquals(skippedBefore, skippedAfter, "the aborted statement and the sibling are skipped again")
+      org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  @Test def `a-claim-is-released-when-its-typing-throws` =
+    // Finding I61: a resume claims its statement (the session's `typing`),
+    // and gave it back only on a cancellation. Any other exception escaping
+    // the statement's typing (here one thrown by the checker at a typer
+    // checkpoint, in a body that forces no completer, so that the run is not
+    // tainted) left the claim behind, and the next request on the statement
+    // waited for ever for a reader that was gone. The claim is now released
+    // and the session poisoned: the next request starts a fresh run and
+    // answers as a whole-file run does.
+    val terms = (1 to 400).map(i => s"$i + $i").mkString("List(", ", ", ").sum")
+    val code =
+      s"""|object Heavy:
+          |  def light: Int = 1
+          |  def heavy: Int = $terms
+          |  def after: Int = heavy.abs
+          |""".stripMargin
+    val uri = URI.create("file:///Heavy.scala")
+    val src = SourceFile.virtual(uri, code)
+    val atHeavy = code.indexOf(", 200 + 200,") + 2
+    val atAbs = code.indexOf(".abs") + 3
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try
+      complete("object Warm { val x = 1.to@@ }") // the compiler access is started by a first request
+      val (thrown, poisonedRun, run2, session, oracle) = withDriver { d =>
+        d.runUpTo(uri, src, Span(code.indexOf("light") + 2)) // heavy and after skipped
+        val run1 = d.runIdOf(uri)
+        val thrown =
+          try { d.withCancelChecker(() => { if inTyperCheckpoint() then throw new IllegalStateException("injected") else false }) { d.runUpTo(uri, src, Span(atHeavy)) }; None }
+          catch case ex: IllegalStateException => Some(ex.getMessage)
+        // the same statement again: with the claim left behind, this waited for ever
+        d.runUpTo(uri, src, Span(atHeavy))
+        val run2 = d.runIdOf(uri)
+        val (session, oracle) = completionsVsOracle(d, uri, src, atAbs)
+        (thrown, run1, run2, session, oracle)
+      }
+      println(s"[a-claim-is-released-when-its-typing-throws] thrown=$thrown run=$poisonedRun->$run2; session: ${session.take(6)}; whole-file: ${oracle.take(6)}")
+      assertEquals(Option("injected"), thrown, "the injected exception escapes the request")
+      assert(run2 != poisonedRun, "the session is poisoned: the next request starts a fresh run")
       org.junit.Assert.assertEquals(oracle.mkString("\n"), session.mkString("\n"))
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 

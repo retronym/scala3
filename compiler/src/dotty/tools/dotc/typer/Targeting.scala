@@ -3,24 +3,30 @@ package dotc
 package typer
 
 import core.*
+import scala.annotation.internal.{confined, scratch}
 import Contexts.*, Symbols.*, Names.*, NameOps.*, Flags.*, Types.*
 import ast.{tpd, untpd}
 import util.Spans.*
 import collection.mutable
 
 /** Targeted typing of one statement list (interactive mode, see
- *  `Run.typingTarget` and `InteractiveDriver.runUpTo`).
+ *  `Reader.typingTarget` and `InteractiveDriver.runUpTo`).
  *
  *  Of the statements of a package, a template or a block on the path to the
- *  target only the statement whose span contains the target is typed (a class
+ *  target only those whose span touches the target are typed: the one that
+ *  contains a point target, every one that overlaps a range target (a class
  *  and its synthetic companion share the span, so both are); `skip` records
- *  the others on the run, with the context they would have been typed in, for
+ *  the others on the reader, with the context they would have been typed in, for
  *  the driver to type later in the same run. The rules, in the order `skip`
  *  applies them:
  *
  *   - always typed: imports and exports shape later contexts; package clauses
  *     are containers; zero-extent and synthetic definitions are what the next
- *     statement is built from.
+ *     statement is built from. (An open of several files skips the package-level
+ *     imports too, `skipImport`: the Namer's import context stands in.) A synthetic definition at the package level
+ *     (the `<src>$package` object holding a file's top-level definitions, a
+ *     case class's companion) is skipped like any other: nothing after it is
+ *     built from its typed tree, and typed whole it is the whole file.
  *   - source check: a span is an offset in its own source; an inlined macro
  *     body carries the macro's. (`Targeting.of`)
  *   - typed whole: a class or block reached other than along the path (typed
@@ -29,8 +35,9 @@ import collection.mutable
  *   - inline: never inside an inline method: its body is registered whole.
  *   - needed-before: the statements before the target's that it names are
  *     typed in order, so a chain of locals is not typed ahead recursively.
- *   - next-after: a target between statements types the next one (scaladoc
- *     completion needs the documented def).
+ *   - next-after: a point target between statements types the next one
+ *     (scaladoc completion needs the documented def); a range types only what
+ *     it touches.
  *   - the expansion of a kept definition that holds the target or comes next
  *     after it is typed whole (an `extension` block expands into methods whose
  *     own spans need not contain a target in the block's comment).
@@ -39,15 +46,16 @@ import collection.mutable
  *
  *  Design and findings: docs §3, I19-I28.
  */
-private[typer] final class Targeting(
+// one per statement sequence typed (`Targeting.of`)
+@scratch @confined private[typer] final class Targeting(
     typer: Typer, stats: List[untpd.Tree], exprOwner: Symbol, inBlock: Boolean, buf: mutable.ListBuffer[tpd.Tree])(using Context):
   import Targeting.*
 
-  private val run = ctx.run.nn
-  private val target = run.typingTarget
+  private val reader = ctx.reader
+  private val target = reader.typingTarget
 
   private val nextAfterTarget: untpd.Tree | Null =
-    if !stats.exists(_.span.contains(target)) then
+    if target.isZeroExtent && !stats.exists(_.span.touches(target)) then
       stats.find(s => s.span.exists && s.span.start >= target.end).orNull
     else null
 
@@ -57,13 +65,14 @@ private[typer] final class Targeting(
   private val neededInBlock: Set[untpd.Tree] =
     if !inBlock then Set.empty
     else
-      val targetIdx = stats.indexWhere(_.span.contains(target))
+      // the statements touching a range are consecutive: what they name
+      val targetIdx = stats.indexWhere(_.span.touches(target))
       if targetIdx < 0 then Set.empty
       else
         val before = stats.take(targetIdx).toArray
         val defined = before.map(definedNames)
         val needed = new Array[Boolean](before.length)
-        var wanted = usedNames(stats(targetIdx))
+        var wanted = stats.drop(targetIdx).takeWhile(_.span.touches(target)).foldLeft(Set.empty[Name])(_ ++ usedNames(_))
         var i = before.length - 1
         while i >= 0 do
           if !needed(i) && defined(i).exists(wanted) then
@@ -79,19 +88,43 @@ private[typer] final class Targeting(
     val skipped =
       stat.span.exists && !stat.span.isZeroExtent
       && !stat.isInstanceOf[untpd.PackageDef]
-      && !isSyntheticDef(stat) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
+      && !(isSyntheticDef(stat) && !exprOwner.is(PackageClass)) // a desugaring's `$anonfun` in a closure's block, a pattern's temporaries: the statement after them needs them
       && !neededInBlock.contains(stat)
-      && !stat.span.contains(target)
+      && !stat.span.touches(target)
       && !(stat eq nextAfterTarget)
       && !forcedSpan.contains(stat.span)
     if skipped then
       if inBlock then buf ++= stubsOf(stat)
-      run.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock)
+      reader.skippedStats += Run.SkippedStat(stat, ctx, exprOwner, inBlock)
     else stat match
       case _: untpd.DefTree | _: untpd.ExtMethods =>
-        if stat.span.contains(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
+        if stat.span.touches(target) || (stat eq nextAfterTarget) then forcedSpan = stat.span
       case _ =>
     skipped
+
+  /** Is the package-level import `imp` skipped (`Reader.deferImports`, the
+   *  open of several files)? If so it is recorded like a statement, and the
+   *  statements after it are typed in the import context the Namer built from
+   *  the untyped import and its symbol, which is the context `typedStats`
+   *  builds from the typed import. The first request on the file types it,
+   *  and with it completes what its qualifier names: on the open that was
+   *  most of the serial cost, loading packages and completing the objects
+   *  the files import, which readers then do side by side.
+   */
+  def skipImport(imp: untpd.Import)(using Context): Boolean =
+    reader.deferImports && !inBlock && exprOwner.is(PackageClass)
+    && imp.span.exists && !imp.span.touches(target) && imp.hasAttachment(typer.SymOfTree)
+    && {
+      // The import's symbol is completed here, by the one thread of the open, not left to the readers: a
+      // reader completing it holds it while it types the qualifier, and another reader's completion of an
+      // object resolves that object's parents through the imports of its file, so readers on files that
+      // import each other's objects close a wait-for cycle (eight readers on the largest files first:
+      // `Cyclic reference involving module class Symbols$` on an import line, then names resolving wrongly in
+      // a hundred files). Completed before any reader runs, the symbol is never waited on.
+      imp.attachment(typer.SymOfTree).ensureCompleted()
+      reader.skippedStats += Run.SkippedStat(imp, ctx, exprOwner, inBlock)
+      true
+    }
 
   /** A skipped definition of a block leaves a typed stub in the block: its
    *  name and symbol, no right-hand side, an untyped type tree, so that a
@@ -118,17 +151,17 @@ private[typer] final class Targeting(
 private[typer] object Targeting:
 
   /** The targeting of the list `stats` owned by `exprOwner`, if it is subject
-   *  to it: there is a target, `Run.targetNextStats` marked this very list,
+   *  to it: there is a target, `Reader.targetNextStats` marked this very list,
    *  and it is a list of the request's own source. Consumes the mark.
    */
   def of(typer: Typer, stats: List[untpd.Tree], exprOwner: Symbol, buf: mutable.ListBuffer[tpd.Tree])(using Context): Targeting | Null =
-    val run = ctx.run.nn
-    if !run.typingTarget.exists then null
+    val reader = ctx.reader
+    if !reader.typingTarget.exists then null
     else
-      val marked = exprOwner eq run.targetedStatsOwner
-      val inBlock = run.targetedStatsInBlock
-      run.targetedStatsOwner = NoSymbol
-      run.targetedStatsInBlock = false
+      val marked = exprOwner eq reader.targetedStatsOwner
+      val inBlock = reader.targetedStatsInBlock
+      reader.targetedStatsOwner = NoSymbol
+      reader.targetedStatsInBlock = false
       if marked && (ctx.compilationUnit ne NoCompilationUnit) && (ctx.source eq ctx.compilationUnit.source)
       then new Targeting(typer, stats, exprOwner, inBlock, buf)
       else null

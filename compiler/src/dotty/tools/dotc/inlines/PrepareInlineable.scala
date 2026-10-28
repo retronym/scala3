@@ -100,6 +100,14 @@ object PrepareInlineable {
       override def transform(tree: Tree)(using Context): Tree =
         postTransform(super.transform(preTransform(tree)))
 
+      /** In the IDE nothing runs the inlined code, so an access to a non-public member needs no accessor:
+       *  the reference stays as written, and only the checks on it are made. Entering an accessor would
+       *  change the class's scope after the class was completed and published to other readers.
+       */
+      protected def checkOnly(using Context): Boolean = ctx.mode.is(Mode.Interactive)
+
+      override protected def entersAccessors(using Context): Boolean = !checkOnly
+
       protected def checkUnstableAccessor(accessedTree: Tree, accessor: Symbol)(using Context): Unit =
         if ctx.settings.Whas.unstableInlineAccessors then
           val accessorTree = accessorDef(accessor, accessedTree.symbol)
@@ -118,11 +126,13 @@ object PrepareInlineable {
             report.error("Private constructors used in inline methods require @publicInBinary", tree.srcPos)
             tree
           }
+          else if checkOnly && !ctx.settings.Whas.unstableInlineAccessors then
+            tree
           else
             val accessor = useAccessor(tree)
             if tree != accessor then
               checkUnstableAccessor(tree, accessor.symbol)
-            accessor
+            if checkOnly then tree else accessor
         case _ =>
           tree
       }
@@ -166,7 +176,8 @@ object PrepareInlineable {
 
       def preTransform(tree: Tree)(using Context): Tree = tree match {
         case tree: (Apply | TypeApply | RefTree)
-        if needsAccessor(tree) && tree.isTerm && !tree.symbol.isConstructor =>
+        if needsAccessor(tree) && tree.isTerm && !tree.symbol.isConstructor
+            && !(checkOnly && !ctx.settings.Whas.unstableInlineAccessors) =>
           val refPart = funPart(tree)
           val argss = allArgss(tree)
           val qual = qualifier(refPart)
@@ -207,6 +218,7 @@ object PrepareInlineable {
             accessed = accessed)
 
           checkUnstableAccessor(tree, accessor)
+          if checkOnly then return tree
 
           val (leadingTypeArgs, otherArgss) = splitArgs(argss)
           val argss1 = joinArgs(

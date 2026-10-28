@@ -32,7 +32,7 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable, mutable.ListBuffer
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, scratch, cache, interned, guardedBy, benignRace}
 import scala.io.Codec
 
 import Run.Progress
@@ -51,6 +51,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  This is usually for the first import suggestion; subsequent suggestions
    *  may get smaller timeouts. @see ImportSuggestions.reduceTimeBudget
    */
+  @scratch @benignRace("a time budget in ms for import suggestions: a lost update only changes how long a later suggestion searches, which the clock decides anyway")
   private var myImportSuggestionBudget: Int =
     Int.MinValue // sentinel value; means whatever is set in command line option
 
@@ -65,51 +66,66 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  return immediately. Currently these early abort operations are
    *  `Typer.typed` and `Implicits.typedImplicit`.
    */
-  @volatile var isCancelled = false
+  @scratch @volatile var isCancelled = false
 
-  private var compiling = false
+  // `compiling`, `myUnits` and the other run-wide fields marked `@guardedBy("writer")` are set while the run compiles:
+  // in the interactive driver that is a write action, so readers see them only after it, and none of them changes then.
+  @scratch @guardedBy("writer") private var compiling = false
 
-  private var myUnits: List[CompilationUnit] = Nil
-  private var myUnitsCached: List[CompilationUnit] = Nil
-  private var myFiles: Set[AbstractFile] = Set.empty
+  @scratch @guardedBy("writer") private var myUnits: List[CompilationUnit] = Nil
 
-  // `@nowarn` annotations by source file, populated during typer
-  private val mySuppressions: mutable.LinkedHashMap[SourceFile, ListBuffer[Suppression]] = mutable.LinkedHashMap.empty
-  // source files whose `@nowarn` annotations are processed
-  private val mySuppressionsComplete: mutable.Set[SourceFile] = mutable.Set.empty
-  // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
-  private val mySuspendedMessages: mutable.LinkedHashMap[SourceFile, mutable.LinkedHashSet[Warning]] = mutable.LinkedHashMap.empty
+  // `files` of `myUnits`, with the units it was made from: one immutable pair in one volatile field, so that a reader
+  // that finds the units it asks for finds their files with them
+  @cache @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
-  object suppressions:
+  // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
+  // collections, so they are reached only holding the monitor of `suppressions` (`locked`: with concurrent readers
+  // only, as the batch compiler is one thread). Nothing issues a message while holding it.
+  object suppressions extends Sharing.Guard:
+    // `@nowarn` annotations by source file, populated during typer
+    @scratch private val bySource = guarded(mutable.LinkedHashMap.empty[SourceFile, ListBuffer[Suppression]])
+    // source files whose `@nowarn` annotations are processed
+    @scratch private val complete = guarded(mutable.Set.empty[SourceFile])
+    // warnings issued before a source file's `@nowarn` annotations are processed, suspended so that `@nowarn` can filter them
+    @scratch private val suspended = guarded(mutable.LinkedHashMap.empty[SourceFile, mutable.LinkedHashSet[Warning]])
+
     // When the REPL creates a new run (ReplDriver.compile), parsing is already done in the old context, with the
     // previous Run. Parser warnings were suspended in the old run and need to be copied over so they are not lost.
     // Same as scala/scala/commit/79ca1408c7.
     def initSuspendedMessages(oldRun: Run | Null) =
-      mySuspendedMessages.clear()
+      // the REPL: one thread, this run is not yet shared and the old one is finished
+      val m: Sharing.Monitor[this.type] = Sharing.unlocked("the REPL is one thread, and neither run is shared")
+      given Sharing.Monitor[this.type] = m // an alias of a value: not a lazy given
+      suspended().clear()
       if oldRun != null then
-        mySuspendedMessages ++= oldRun.mySuspendedMessages
+        val old = oldRun
+        suspended() ++= old.suppressions.suspendedOf(using Sharing.unlocked("the old run is finished"))
 
-    def suppressionsComplete(source: SourceFile) = source == NoSource || mySuppressionsComplete(source)
+    private def suspendedOf(using Sharing.Monitor[this.type]) = suspended()
 
-    def addSuspendedMessage(warning: Warning) =
-      mySuspendedMessages.getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning
+    def suppressionsComplete(source: SourceFile)(using Context) =
+      source == NoSource || locked(complete()(source))
 
-    def nowarnAction(dia: Diagnostic): Action.Warning.type | Action.Verbose.type | Action.Silent.type =
-      mySuppressions.get(dia.pos.source) match
-      case Some(suppressions) =>
-        val matching = suppressions.iterator.filter(_.matches(dia))
-        if matching.hasNext then
-          val s = matching.next()
-          for other <- matching do
-            if !other.used then
-              other.markSuperseded() // superseded unless marked used later
-          s.markUsed()
-          if s.verbose then Action.Verbose
-          else Action.Silent
-        else
+    def addSuspendedMessage(warning: Warning)(using Context) =
+      locked(suspended().getOrElseUpdate(warning.pos.source, mutable.LinkedHashSet.empty) += warning)
+
+    def nowarnAction(dia: Diagnostic)(using Context): Action.Warning.type | Action.Verbose.type | Action.Silent.type =
+      locked:
+        bySource().get(dia.pos.source) match
+        case Some(suppressions) =>
+          val matching = suppressions.iterator.filter(_.matches(dia))
+          if matching.hasNext then
+            val s = matching.next()
+            for other <- matching do
+              if !other.used then
+                other.markSuperseded() // superseded unless marked used later
+            s.markUsed()
+            if s.verbose then Action.Verbose
+            else Action.Silent
+          else
+            Action.Warning
+        case none =>
           Action.Warning
-      case none =>
-        Action.Warning
 
     def registerNowarn(annotPos: SourcePosition, range: Span)(conf: String, pos: SrcPos)(using Context): Unit =
       var verbose = false
@@ -126,31 +142,52 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
             report.warning(s"Invalid message filter\n${parseErrors.mkString("\n")}", pos)
             List(MessageFilter.None)
           .merge
-      addSuppression:
-        Suppression(annotPos, filters, range.start, range.end, verbose)
+      val sup = Suppression(annotPos, filters, range.start, range.end, verbose)
+      sup.provenance = ctx.reader.provenance
+      addSuppression(sup)
 
-    def addSuppression(sup: Suppression): Unit =
-      val suppressions = mySuppressions.getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
-      if sup.start != sup.end then
-        suppressions += sup
+    def addSuppression(sup: Suppression)(using Context): Unit =
+      locked:
+        val suppressions = bySource().getOrElseUpdate(sup.annotPos.source, ListBuffer.empty)
+        if sup.start != sup.end then
+          suppressions += sup
+
+    /** In interactive mode, after an edit of `source`: each suppression of
+     *  the file replaced by `f`'s result, or removed where it is null.
+     */
+    def editSuppressions(source: SourceFile)(f: Suppression => Suppression | Null)(using Context): Unit =
+      locked:
+        bySource().get(source).foreach { sups =>
+          val kept = sups.flatMap(sup => f(sup) match
+            case null => None
+            case s: Suppression => Some(s))
+          sups.clear()
+          sups ++= kept
+        }
 
     def reportSuspendedMessages(source: SourceFile)(using Context): Unit = {
-      // sort suppressions. they are not added in any particular order because of lazy type completion
-      for (sups <- mySuppressions.get(source))
-        mySuppressions(source) = sups.sortBy(sup => 0 - sup.start)
-      mySuppressionsComplete += source
-      mySuspendedMessages.remove(source).foreach(_.foreach(ctx.reporter.issueIfNotSuppressed))
+      val messages = locked:
+        // sort suppressions. they are not added in any particular order because of lazy type completion
+        for (sups <- bySource().get(source))
+          bySource()(source) = sups.sortBy(sup => 0 - sup.start)
+        complete() += source
+        suspended().remove(source)
+      messages.foreach(_.foreach(ctx.reporter.issueIfNotSuppressed))
     }
 
     def runFinished()(using Context): Unit =
       val hasErrors = ctx.reporter.hasErrors
       // report suspended messages (in case the run finished before typer)
-      mySuspendedMessages.keysIterator.toList.foreach(reportSuspendedMessages)
+      locked(suspended().keysIterator.toList).foreach(reportSuspendedMessages)
       // report unused nowarns only if all all phases are done
       if !hasErrors && ctx.settings.WunusedHas.nowarn then
+        val removed = locked:
+          for
+            source <- bySource().keysIterator.toList
+            sups   <- bySource().remove(source)
+          yield sups
         for
-          source <- mySuppressions.keysIterator.toList
-          sups   <- mySuppressions.remove(source)
+          sups <- removed
         do
           val suppressions = sups.reverse.toList
           for sup <- suppressions do
@@ -170,19 +207,51 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   private def units_=(us: List[CompilationUnit]): Unit =
     myUnits = us
 
-  var suspendedUnits: ListBuffer[CompilationUnit] = ListBuffer.empty
-  var suspendedHints: mutable.Map[CompilationUnit, (String, Boolean)] = mutable.HashMap()
+  // A unit is suspended when a macro interpretation or an inline expansion needs a definition in a unit that is not yet
+  // compiled (`CompilationUnit.suspend`), from whichever reader hits it; the reader unwinds, the run goes on, and the
+  // driver compiles the suspended units again in a new run once this one has finished (`Driver.finish`). The three
+  // collections below are reached only with the evidence of the monitor of `suspension` (`Sharing.serialised`: with
+  // concurrent readers only, as the batch compiler is one thread); the readers outside get a snapshot.
+  object suspension extends Sharing.Guard:
+    @scratch private val units = guarded(ListBuffer.empty[CompilationUnit])
+    @scratch private val hints = guarded(mutable.HashMap.empty[CompilationUnit, (String, Boolean)])
+    // Were any units suspended in the typer phase? if so then pipeline tasty can not complete.
+    @scratch private val atTyper = guardedVar(false)
+
+    /** Record `unit` as suspended, unless it is already: two readers may suspend it at once, and only the first
+     *  records it. The flags of the unit are set under the same monitor. Returns normally; the caller unwinds. */
+    def add(unit: CompilationUnit, hint: => String, isInliningPhase: Boolean)(using Context): Unit =
+      locked:
+        if !unit.suspended then
+          unit.suspended = true
+          units() += unit
+          if ctx.settings.XprintSuspension.value then
+            hints() += (unit -> (hint, isInliningPhase))
+          if isInliningPhase then
+            unit.suspendedAtInliningPhase = true
+          else
+            atTyper() = true
+
+    def snapshotUnits(using Context): List[CompilationUnit] = locked(units().toList)
+    def snapshotHints(using Context): List[(CompilationUnit, (String, Boolean))] = locked(hints().toList)
+    def atTyperPhase(using Context): Boolean = locked(atTyper())
+  end suspension
+
+  /** The units suspended so far, in the order they were suspended. */
+  def suspendedUnits(using Context): List[CompilationUnit] = suspension.snapshotUnits
+  def suspendedHints(using Context): List[(CompilationUnit, (String, Boolean))] = suspension.snapshotHints
 
   /** Were any units suspended in the typer phase? if so then pipeline tasty can not complete. */
-  var suspendedAtTyperPhase: Boolean = false
+  def suspendedAtTyperPhase(using Context): Boolean = suspension.atTyperPhase
 
   def checkSuspendedUnits(newUnits: List[CompilationUnit])(using Context): Unit =
-    if newUnits.isEmpty && suspendedUnits.nonEmpty && !ctx.reporter.errorsReported then
+    val suspended = suspendedUnits
+    if newUnits.isEmpty && suspended.nonEmpty && !ctx.reporter.errorsReported then
       val where =
-        if suspendedUnits.size == 1 then i"in ${suspendedUnits.head}."
+        if suspended.size == 1 then i"in ${suspended.head}."
         else i"""among
                 |
-                |  ${suspendedUnits.toList}%, %
+                |  ${suspended}%, %
                 |"""
       val enableXprintSuspensionHint =
         if ctx.settings.XprintSuspension.value then ""
@@ -198,23 +267,34 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  from TASTY.
    */
   def files: Set[AbstractFile] = {
-    if (myUnits ne myUnitsCached) {
-      myUnitsCached = myUnits
-      myFiles = (myUnits ++ suspendedUnits).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
-    }
-    myFiles
+    val cached = myFilesOf
+    val us = myUnits
+    if us eq cached._1 then cached._2
+    else
+      // `files` has no context of its own; the run's shares the base, which says whether readers are concurrent
+      val fs = (us ++ suspendedUnits(using runContext)).map(_.source.file).collect{ case f: AbstractFile => f }.toSet
+      myFilesOf = (us, fs)
+      fs
   }
 
-  /** The source files of all late entered symbols, as a set */
-  private val lateFiles = mutable.Set[AbstractFile]()
+  /** The source files of all late entered symbols, as a set. A completion of a source-loaded class enters one, and
+   *  completions of different roots run in parallel, so it is reached only with the evidence of its monitor.
+   */
+  private object lateFiles extends Sharing.Guard:
+    @scratch private val files = guarded(mutable.Set[AbstractFile]())
+
+    /** Is `file` newly entered? */
+    def enter(file: AbstractFile)(using Context): Boolean = locked(files().add(file))
+
+    def size(using Context): Int = locked(files().size)
 
   /** A cache for static references to packages and classes */
-  val staticRefs = util.EqHashMap[Name, Denotation](initialCapacity = 1024)
+  @cache val staticRefs = ictx.base.sharing.newEqHashMap[Name, Denotation](initialCapacity = 1024)
 
   /** Actions that need to be performed at the end of the current compilation run */
-  private val finalizeActions = ListBuffer.empty[() => Unit]
+  @scratch @guardedBy("writer") private val finalizeActions = ListBuffer.empty[() => Unit]
 
-  private var _progress: Progress | Null = null // Set if progress reporting is enabled
+  @scratch @guardedBy("writer") private var _progress: Progress | Null = null // Set if progress reporting is enabled
 
   private inline def trackProgress(using Context)(inline op: Context ?=> Progress => Unit): Unit =
     foldProgress(())(op)
@@ -232,152 +312,38 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   def canProgress()(using Context): Boolean =
     foldProgress(true /* not cancelled by default */)(p => !p.checkCancellation())
 
-  // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
-  //
-  // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
-  // a package, a template or a block on the path to the target, only those
-  // whose span contains the target (see `Targeting`); the others are recorded
-  // in `skippedStats` with the context they would have been typed in and the
-  // statement owner, for the driver to type later in this same run when a
-  // request lands in one of them. Their symbols exist (the Namer indexed them)
-  // and complete lazily as usual. Batch compilation never sets any of this.
-
-  /** The offset the run types towards; `NoSpan` for a run that types everything. */
-  var typingTarget: Span = Spans.NoSpan
-
-  /** The statements `typedStats` skipped, innermost lists last. */
-  val skippedStats: ListBuffer[Run.SkippedStat] = ListBuffer.empty
-
   /** Set once by the driver when the run starts with a target: the run is a
    *  targeted session's, and stays so for its later resumes and completion
-   *  (`typingTarget` itself is reset between them).
+   *  (the reader's `typingTarget` itself is reset between them). The target,
+   *  the skipped statements and the completion bookkeeping of a request are
+   *  on its `Reader`.
    */
-  var isTargeted: Boolean = false
-
-  /** The owner of the statement list about to be typed by `Typer.typedStats`
-   *  that is subject to targeting (the package class, the template's local
-   *  dummy, or the owner of a block), set by `targetNextStats` right before
-   *  the call and consumed by it.
-   */
-  var targetedStatsOwner: Symbol = NoSymbol
-
-  /** Set with `targetedStatsOwner` for the statements of a block: skipped
-   *  ones leave a stub in the typed `Block`, and are recorded as block
-   *  statements, which the driver splices back in place (`spliceAll`).
-   */
-  var targetedStatsInBlock: Boolean = false
-
-  /** Mark the next `typedStats` list, owned by `owner`, as subject to
-   *  targeting. Call only when `typingTarget.exists`.
-   */
-  def targetNextStats(owner: Symbol, inBlock: Boolean = false)(using Context): Unit =
-    assert(!targetedStatsOwner.exists, i"targeting of $targetedStatsOwner not consumed before $owner")
-    targetedStatsOwner = owner
-    targetedStatsInBlock = inBlock
-    if !inBlock then targetingTyperState = ctx.typerState
-
-  /** The typer state of the statement list targeting started from: a package
-   *  or class body, or the recorded context of a resumed statement. A block
-   *  is targeted only when it is typed in this state: a block typed under a
-   *  nested state (a closure argument, typed in the state `tryEither` makes
-   *  for the application) or an explore state (an overload or implicit
-   *  candidate) may be typed again or thrown away, and what it skipped would
-   *  be recorded in a context that does not last. Such blocks are typed whole.
-   */
-  var targetingTyperState: TyperState | Null = null
-
-  /** Back to the defaults: no target, no pending mark, nothing skipped. */
-  def clearTargeting(): Unit =
-    typingTarget = Spans.NoSpan
-    targetedStatsOwner = NoSymbol
-    targetedStatsInBlock = false
-    targetingTyperState = null
-    skippedStats.clear()
-
-  /** Interactive mode only: the symbols whose completion was prevented as a
-   *  cyclic reference during this run (`SymDenotation.completeFrom` found
-   *  `Touched` set), and the completions an exception other than a cyclic
-   *  reference unwound through. A request that met either has a degraded
-   *  result somewhere (an error type, a dropped item), and what was computed
-   *  on top of it must not outlive the request: `InteractiveDriver.runUpTo`
-   *  starts a fresh run instead of resuming a run that recorded one (the
-   *  session is tainted). IntelliJ's `RecursionManager` has the same rule
-   *  (`markStack` / `mayCacheNow`). Of the three lists only `completionsUnwound`
-   *  drives behaviour (`isTainted`); `cyclesPrevented` and `leaksHealed` are
-   *  for tests and the x-ray, and not used by the compiler.
-   */
-  val cyclesPrevented: ListBuffer[Symbol] = ListBuffer.empty
-  val completionsUnwound: ListBuffer[(Symbol, Throwable)] = ListBuffer.empty
-  val leaksHealed: ListBuffer[Symbol] = ListBuffer.empty
-
-  /** The symbols whose completion a `CancelledCompilation` unwound through
-   *  (recorded by `SymDenotation.completeFrom`), innermost first. A Namer
-   *  completer that was unwound can not be run again: a method's completer
-   *  had entered its parameters in the nested typer's scope and typed some
-   *  ahead (a retry enters `T$1` next to `T` and the signature mixes the
-   *  two); a class completer had set the class's temporary info, so the
-   *  class is `isCompleted` without parents and is never retried. The
-   *  driver replaces the statement that defines each one in the session, or
-   *  poisons the session (`InteractiveDriver.replaceUnwound`).
-   */
-  val cancelledCompletions: ListBuffer[Symbol] = ListBuffer.empty
-
-  /** The symbols whose completion is in progress (interactive mode only): a
-   *  `Touched` flag on a symbol not in this set is a leak from an earlier
-   *  unwind, not a cycle, and `completeFrom` clears it instead of reporting
-   *  a cyclic reference.
-   */
-  val completing: mutable.HashSet[Symbol] = mutable.HashSet.empty
+  @scratch @guardedBy("writer") var isTargeted: Boolean = false
 
   /** A run with a degraded completion whose state is unknown (an exception
-   *  other than a cyclic reference or a cancellation unwound through it) is
-   *  not resumed: the next request on the same content starts fresh. A
-   *  prevented cyclic reference does not taint: the symbols it unwound
-   *  through are left recomputable (`Touched` cleared), the request's own
-   *  answer degrades at its handlers, and the run's state is as before.
+   *  other than a cyclic reference or a cancellation unwound through it,
+   *  `Reader.recordCompletionUnwound`) is not resumed: the next request on
+   *  the same content starts fresh. A prevented cyclic reference does not
+   *  taint: the symbols it unwound through are left recomputable (`Touched`
+   *  cleared), the request's own answer degrades at its handlers, and the
+   *  run's state is as before.
    */
-  def isTainted: Boolean = completionsUnwound.nonEmpty
+  def isTainted: Boolean = myTainted
+  @scratch @benignRace("only ever set to true, by whichever reader meets the unwound completion first")
+  private var myTainted: Boolean = false
+  def markTainted(): Unit = myTainted = true
 
-  def recordCyclePrevented(sym: Symbol)(using Context): Unit =
-    cyclesPrevented += sym
-    Run.CycleStats.prevented(sym)
-
-  def recordLeakHealed(sym: Symbol)(using Context): Unit =
-    leaksHealed += sym
-    Run.CycleStats.healed(sym)
-
-  def recordCompletionUnwound(sym: Symbol, ex: Throwable)(using Context): Unit =
-    completionsUnwound += ((sym, ex))
-    Run.CycleStats.unwound(sym, ex)
-
-  private var typedTreeCount = 0
-
-  /** The typer polls for cancellation every `checkpointMask + 1` typed trees;
-   *  the mask is read from `Run.typerCheckpointMask` once, when the run is
-   *  created, so the per-tree test reads no volatile.
+  /** Records that some error was reported in a globally committable context.
+   *  The error will not necessarily be emitted, since it could still be that
+   *  the enclosing context will be aborted. The variable is used as a smoke test
+   *  to turn off assertions that might be wrong if the program is erroneous. To
+   *  just test for `ctx.reporter.errorsReported` is not always enough, since it
+   *  could be that the context in which the assertion is tested is a completer context
+   *  that's different from the context where the error was reported. See i13218.scala
+   *  for a test. (Per run, not per reader: an interactive request may meet a
+   *  tree an earlier request's error left inconsistent.)
    */
-  private val checkpointMask: Int = Run.typerCheckpointMask
-
-  /** The number of trees typed in this run so far (every `Typer.typed`).
-   *  For tests and the x-ray; not used by the compiler.
-   */
-  def typedTrees: Int = typedTreeCount
-
-  /** Called by `Typer.typed` for every tree: an increment and a mask test;
-   *  the poll itself is out of line. Every 1024 trees, in interactive mode,
-   *  polls the progress callback and aborts the run with a
-   *  `CancelledCompilation` if it reports cancellation. Batch compilation is
-   *  unaffected: there cancellation keeps skipping the remaining units instead
-   *  (see `didEnterUnit`), so that sbt sees a run that ends normally.
-   *  (Not `inline`: the tests recognise the typer's poll by this frame.)
-   */
-  def checkCancelledTyping()(using Context): Unit =
-    typedTreeCount += 1
-    if (typedTreeCount & checkpointMask) == 0 then pollCancellation()
-
-  private def pollCancellation()(using Context): Unit =
-    if ctx.mode.is(Mode.Interactive) && !canProgress() then
-      throw CompilationUnit.CancelledCompilation()
+  @scratch @volatile private[dotc] var errorsToBeReported = false
 
   def doAdvanceUnit()(using Context): Unit =
     trackProgress: progress =>
@@ -423,9 +389,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
           progress.tickSubphase()
 
   /** if true, then we are done writing pipelined TASTy files (i.e. finished in a previous run.) */
-  private var myAsyncTastyWritten = false
+  @scratch @guardedBy("writer") private var myAsyncTastyWritten = false
 
-  private var _asyncTasty: Option[AsyncTastyHolder] = None
+  @scratch @guardedBy("writer") private var _asyncTasty: Option[AsyncTastyHolder] = None
 
   /** populated when this run needs to write pipeline TASTy files. */
   def asyncTasty: Option[AsyncTastyHolder] = _asyncTasty
@@ -461,21 +427,25 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   /** Will be set to true if any of the compiled compilation units contains
    *  a pureFunctions language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var pureFunsImportEncountered = false
   
   /** Will be set to true if any of the compiled compilation units contains
    *  an inlineTraits language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var inlineTraitsImportEncountered = false
 
   /** Will be set to true if experimental.captureChecking is enabled
    *  or any of the compiled compilation units contains a captureChecking language import.
    */
+  @scratch @benignRace("only ever set to true: a reader that misses it sees what the batch compiler sees before the import")
   var ccEnabledSomewhere = Feature.ccEnabledBySetting(using ictx)
 
-  /** If -explain-cycles is set, a trace of cyclic reference dependencies, otherwise null */
-  var cyclicReferenceTrace: CyclicReference.Trace | Null = null
+  /** If -explain-cycles is set, readers trace cyclic reference dependencies (each on its own `Reader.cyclicReferenceTrace`) */
+  @cache @guardedBy("writer") var traceCycles: Boolean = false
 
+  @scratch @benignRace("only ever set to true: it stops a second enrichment of the same message")
   private var myEnrichedErrorMessage = false
 
   def compile(files: List[AbstractFile]): Unit =
@@ -508,7 +478,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     compileUnits()(using ctx)
   }
 
-  var profile: Profile = NoProfile
+  @scratch @guardedBy("writer") var profile: Profile = NoProfile
 
   private def compileUnits()(using Context) = Stats.maybeMonitored {
     if (!ctx.mode.is(Mode.Interactive)) // IDEs might have multi-threaded access, accesses are synchronized
@@ -600,7 +570,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
     val fusedPhases = runCtx.base.allPhases
     if ctx.settings.explainCyclic.value then
-      cyclicReferenceTrace = new CyclicReference.Trace()
+      traceCycles = true
     runCtx.withProgressCallback: cb =>
       _progress = Progress(cb, this, fusedPhases.map(_.traversals).sum)
     val cancelAsyncTasty: () => Unit =
@@ -623,7 +593,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     compiling = false
   }
 
-  private var myCompilingSuspended: Boolean = false
+  @scratch @guardedBy("writer") private var myCompilingSuspended: Boolean = false
 
   /** Is this run started via a compilingSuspended? */
   def isCompilingSuspended: Boolean = myCompilingSuspended
@@ -643,8 +613,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    *  `rootTreeOrProvider`.
    */
   def lateCompile(file: AbstractFile, typeCheck: Boolean)(using Context): Unit =
-    if (!files.contains(file) && !lateFiles.contains(file)) {
-      lateFiles += file
+    if (!files.contains(file) && lateFiles.enter(file)) {
 
       val unit = CompilationUnit(ctx.getSource(file))
       val unitCtx = runContext.fresh
@@ -739,7 +708,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     // TODO: This makes `runContext` unusable after being reset.
     myCtx = null.asInstanceOf[Context]
     myUnits = Nil
-    myUnitsCached = Nil
+    myFilesOf = (Nil, Set.empty)
   }
 
   /** Produces the following contexts, from outermost to innermost
@@ -777,7 +746,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     start.setRun(this: @unchecked)
   }
 
-  private var myCtx: Context = rootContext(using ictx)
+  @scratch @guardedBy("writer") private var myCtx: Context = rootContext(using ictx)
 
   /** The context created for this run */
   given runContext[Dummy_so_its_a_def]: Context = myCtx
@@ -788,7 +757,7 @@ object Run {
    *  trees (a power of two, 1024 by default). A test knob. Tests lower it to make a
    *  cancellation land inside small statements; a run reads it when created.
    */
-  @sharable @volatile var typerCheckpointMask: Int = 1023
+  @scratch @sharable @volatile var typerCheckpointMask: Int = 1023
 
   /** Process-wide counts of the cyclic references prevented and the
    *  completions unwound in interactive mode, printed at exit when
@@ -796,7 +765,7 @@ object Run {
    *  graceful-degradation design. Measurement scaffolding, read by no one
    *  else: a candidate to drop before upstreaming.
    */
-  object CycleStats:
+  @interned object CycleStats:
     private val enabled = java.lang.Boolean.getBoolean("dotty.interactive.cycleStats")
     @sharable private val preventedBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
     @sharable private val unwoundBy = new java.util.concurrent.ConcurrentHashMap[String, Integer]
@@ -848,11 +817,14 @@ object Run {
       else baseName
 
 
-  private class Progress(cb: ProgressCallback, private val run: Run, val initialTraversals: Int):
+  // Phases and the units they enter advance it, in the run's own write action; only the late units a reader's
+  // completion compiles (`currentLateUnitCount`) are counted from a reader.
+  @scratch @guardedBy("writer") private class Progress(cb: ProgressCallback, private val run: Run, val initialTraversals: Int):
     export cb.{cancel, isCancelled}
 
     var totalTraversals: Int = initialTraversals  // track how many phases we expect to run
     var currentUnitCount: Int = 0 // current unit count in the current (sub)phase
+    @benignRace("a progress count for the callback: a lost increment from two readers' late compilations skews a percentage")
     var currentLateUnitCount: Int = 0 // current late unit count
     var completedTraversalCount: Int = 0 // completed traversals over all files
     var currentCompletedSubtraversalCount: Int = 0 // completed subphases in the current phase
@@ -895,7 +867,7 @@ object Run {
      * - the number of traversals we expect to make over all files
      * - the number of late compilations
      */
-    private def totalProgress(): Int =
+    private def totalProgress()(using Context): Int =
       totalTraversals * work() + run.lateFiles.size
 
     private def work(): Int = run.files.size

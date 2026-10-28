@@ -3,7 +3,7 @@ package core
 
 import scala.collection.mutable
 import scala.annotation.switch
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{cache, interned, publishedBy, sharable}
 import Names.*
 import Symbols.*
 import Contexts.*
@@ -43,7 +43,7 @@ object StdNames {
     inline val Tuple                      = "Tuple"
     inline val Product                    = "Product"
 
-    @sharable
+    @sharable @cache
     private val disallowed = java.util.regex.Pattern.compile("""[<>]""")
     def sanitize(str: String): String = disallowed.matcher(str).replaceAll("""\$""")
   }
@@ -52,6 +52,8 @@ object StdNames {
     protected implicit def fromString(s: String): N
     protected def fromName(name: Name): N = fromString(name.toString)
 
+    // filled by `kw` as the object that defines the names is initialised, read as `keywords` after
+    @interned @publishedBy("init")
     private val kws = mutable.Set[N]()
     protected def kw(name: N): N = { kws += name; name }
 

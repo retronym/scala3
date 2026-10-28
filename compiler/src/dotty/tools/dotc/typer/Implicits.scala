@@ -37,7 +37,7 @@ import transform.Splicer
 import annotation.tailrec
 import NullOpsDecorator.stripNull
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, publishedBy, scratch, sharable}
 import scala.annotation.{nowarn, threadUnsafe}
 import scala.compiletime.uninitialized
 
@@ -106,7 +106,7 @@ object Implicits:
      */
     def companionRefs: TermRefSet = TermRefSet.empty
 
-    private var mySingletonClass: ClassSymbol | Null = null
+    @cache @benignRace("always defn.SingletonClass") private var mySingletonClass: ClassSymbol | Null = null
 
     /** Widen type so that it is neither a singleton type nor a type that inherits from scala.Singleton. */
     private def widenSingleton(tp: Type)(using Context): Type = {
@@ -274,14 +274,18 @@ object Implicits:
    */
   class OfTypeImplicits(tp: Type, override val companionRefs: TermRefSet)(initctx: Context) extends ImplicitRefs(initctx) {
     implicits.println(i"implicit scope of type $tp = ${companionRefs.showAsList}%, %")
-    @threadUnsafe lazy val refs: List[ImplicitRef] = {
+    // Not `@threadUnsafe`: an implicit scope is cached for the run
+    // (`implicitScopeCache`) and read by every reader in interactive mode; an
+    // unsafely published list (its cells' `next` is a var) could be seen cut
+    // short by another thread.
+    lazy val refs: List[ImplicitRef] = {
       val buf = new mutable.ListBuffer[TermRef]
       for (companion <- companionRefs) buf ++= companion.implicitMembers
       buf.toList
     }
 
     /** The candidates that are eligible for expected type `tp` */
-    @threadUnsafe lazy val eligible: List[Candidate] =
+    lazy val eligible: List[Candidate] =
       trace(i"eligible($tp), companions = ${companionRefs.showAsList}%, %", implicitsDetailed, show = true) {
         if (refs.nonEmpty && monitored) record(s"check eligible refs in tpe", refs.length)
         filterMatching(tp)
@@ -305,7 +309,10 @@ object Implicits:
       val refs: List[ImplicitRef],
       val outerImplicits: ContextualImplicits | Null,
       val importInfo: ImportInfo | Null)(initctx: Context) extends ImplicitRefs(initctx) {
-    private val eligibleCache = EqHashMap[Type, List[Candidate]]()
+    private val eligibleCache =
+      // `NoContext.implicits` is made while `NoContext` is constructed, before any base exists
+      val base: ContextBase | Null = irefCtx.base
+      if base == null then EqHashMap[Type, List[Candidate]]() else base.sharing.newEqHashMap[Type, List[Candidate]]()
 
     /** The level increases if current context has a different owner or scope than
      *  the context of the next-outer ImplicitRefs. This is however disabled under
@@ -553,7 +560,8 @@ object Implicits:
   /** An ambiguous implicits failure */
   class AmbiguousImplicits(val alt1: SearchSuccess, val alt2: SearchSuccess, val expectedType: Type, val argument: Tree, val nested: Boolean = false) extends SearchFailureType:
 
-    private[Implicits] var priorityChangeWarnings: List[GivenSearchPriorityWarning] = Nil
+    // set once, on the failure the search that made it returned (`searchImplicit`), before the search's caller sees it
+    @scratch @confined private[Implicits] var priorityChangeWarnings: List[GivenSearchPriorityWarning] = Nil
 
     def priorityChangeWarningNote(using Context): String =
       priorityChangeWarnings.map(_.ambiguousNote).mkString
@@ -632,7 +640,7 @@ import Implicits.*
 trait ImplicitRunInfo:
   self: Run =>
 
-  private val implicitScopeCache = util.EqHashMap[Type, OfTypeImplicits]()
+  private lazy val implicitScopeCache = runContext.base.sharing.newEqHashMap[Type, OfTypeImplicits]()
 
   private def isExcluded(sym: Symbol) =
     if migrateTo3 then false else sym.is(Package) || sym.isPackageObject
@@ -935,7 +943,7 @@ trait Implicits:
     }
   }
 
-  private var synthesizer: Synthesizer | Null = null
+  @cache @benignRace("a Synthesizer holds only handlers built from the typer, no state; two are interchangeable (I91)") private var synthesizer: Synthesizer | Null = null
 
   /** Find an implicit argument for parameter `formal`.
    *  Return a failure as a SearchFailureType in the type of the returned tree.
@@ -1305,15 +1313,15 @@ trait Implicits:
         val history = ctx.searchHistory.nest(cand, pt)
         val typingCtx =
           searchContext().setNewTyperState().setFreshGADTBounds.setSearchHistory(history)
-        val alreadyStoppedInlining = ctx.base.stopInlining
+        val alreadyStoppedInlining = ctx.reader.stopInlining
         val result = typedImplicit(cand, pt, argument, span)(using typingCtx)
         result match
           case res: SearchSuccess =>
             ctx.searchHistory.defineBynameImplicit(wideProto, res)
           case _ =>
-            if !alreadyStoppedInlining && ctx.base.stopInlining then
+            if !alreadyStoppedInlining && ctx.reader.stopInlining then
               // a call overflowed as part of the expansion when typing the implicit
-              ctx.base.stopInlining = false
+              ctx.reader.stopInlining = false
             // Since the search failed, the local typerstate will be discarded
             // without being committed, but type variables local to that state
             // might still appear in an error message, so we run `gc()` here to
@@ -1992,17 +2000,35 @@ end OpenSearch
 /**
  * The state corresponding to the outermost context of an implicit searcch.
  */
-final class SearchRoot extends SearchHistory:
+final class SearchRoot(perThread: Boolean = false) extends SearchHistory:
   val root = this
   val byname = false
   def openSearchPairs = Nil
 
+  // The root of the initial context is shared by every top-level search of a
+  // run: with several readers (`perThread`, an interactive base read by
+  // several threads) its state is per thread, so that two readers' searches
+  // do not count each other's expressions or see each other's dictionary
+  // (finding I55).
+  // the calling thread's: per thread on a concurrent base, the only one otherwise
+  @scratch @confined private final class State:
+    var nestedSearches: Int = 0
+    var dictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  private val shared = State()
+  @scratch private val local: ThreadLocal[State] | Null = if perThread then ThreadLocal.withInitial(() => State()) else null
+  private def state: State = if local == null then shared else local.get.nn
+
+  /** Drop the calling thread's state (see `InteractiveContextBase.unbindThread`). */
+  def clearThread(): Unit = if local != null then local.remove()
+
   /** How many expressions were constructed so far in the current toplevel implicit search?
    */
-  var nestedSearches: Int = 0
+  def nestedSearches: Int = state.nestedSearches
+  def nestedSearches_=(n: Int): Unit = state.nestedSearches = n
 
   /** The dictionary of recursive implicit types and corresponding terms for this search. */
-  var myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = null
+  def myImplicitDictionary: mutable.Map[Type, (TermRef, tpd.Tree)] | Null = state.dictionary
+  def myImplicitDictionary_=(d: mutable.Map[Type, (TermRef, tpd.Tree)] | Null): Unit = state.dictionary = d
   private def implicitDictionary =
     initialize(myImplicitDictionary, myImplicitDictionary = _,  mutable.Map.empty[Type, (TermRef, tpd.Tree)])
 
@@ -2170,7 +2196,9 @@ end SearchRoot
 
 /** A set of term references where equality is =:= */
 sealed class TermRefSet(using Context):
-  private val elems = new java.util.LinkedHashMap[TermSymbol, Type | List[Type]]
+  // filled by `collectCompanions` in `computeIScope`, then only read, once `implicitScopeCache` has published the
+  // `OfTypeImplicits` that holds it
+  @cache @publishedBy("init") private val elems = new java.util.LinkedHashMap[TermSymbol, Type | List[Type]]
 
   def isEmpty = elems.size == 0
 

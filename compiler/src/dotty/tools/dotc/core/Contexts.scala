@@ -30,7 +30,8 @@ import printing.*
 import config.{JavaPlatform, SJSPlatform, Platform, ScalaSettings}
 import StdNames.nme
 import compiletime.uninitialized
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, publishedBy, scratch, sharable}
+import java.lang.invoke.VarHandle
 import DenotTransformers.DenotTransformer
 import dotty.tools.dotc.profile.Profiler
 import dotty.tools.dotc.sbt.interfaces.{IncrementalCallback, ProgressCallback}
@@ -145,6 +146,14 @@ object Contexts {
     def tree: Tree[?]
     def scope: Scope
     def typerState: TyperState
+
+    /** The per-request scratch this context types under (see `Reader`): the
+     *  type comparer stack, the context pools, the recursion guards, and, in
+     *  interactive mode, the target and the cancellation checker. The base's
+     *  (one for batch compilation; the current thread's in interactive mode),
+     *  not a field of the context: contexts are captured and outlive requests.
+     */
+    final def reader: Reader = base.reader
     def gadt: GadtConstraint = gadtState.gadt
     def gadtState: GadtState
     def inlineTraitState: InlineTraitState
@@ -226,10 +235,15 @@ object Contexts {
     def typeAssigner: TypeAssigner = store(typeAssignerLoc)
 
     /** The new implicit references that are introduced by this scope */
+    // Readers that share a context (a completer's creation context) may both compute it and the later store wins:
+    // the values are equivalent, and a `ContextualImplicits` is made of final fields, so either one is safely seen.
+    @cache @benignRace("every writer stores an equivalent ContextualImplicits, whose fields are final")
     private var implicitsCache: ContextualImplicits | Null = null
     def implicits: ContextualImplicits = {
-      if (implicitsCache == null)
-        implicitsCache = {
+      val cached = implicitsCache
+      if (cached != null) cached
+      else {
+        val result = {
           val infoIfImport = importInfoIfImportContext
           val implicitRefs: List[ImplicitRef] =
             if (isClassDefContext)
@@ -248,7 +262,9 @@ object Contexts {
           if (implicitRefs.isEmpty) outerImplicits
           else new ContextualImplicits(implicitRefs, outerImplicits, infoIfImport)(this)
         }
-      implicitsCache.nn
+        implicitsCache = result
+        result
+      }
     }
 
     /** Either the current scope, or, if the current context owner is a class,
@@ -264,7 +280,7 @@ object Contexts {
     /** Sourcefile corresponding to given abstract file, memoized */
     def getSource(file: AbstractFile, codec: => Codec = Codec(settings.encoding.value)) = {
       util.Stats.record("Context.getSource")
-      base.sources.getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec))
+      base.locked(base.sources().getOrElseUpdate(file, SourceFile(file, settings.sourceroot.value, codec)))(using base.mode)
     }
 
     /** SourceFile with given path, memoized */
@@ -273,26 +289,44 @@ object Contexts {
       case Some(file) => getSource(file)
 
     /** AbstractFile with given path, memoized */
-    def getFile(path: String): Option[AbstractFile] = base.files.get(path).orElse(
-      try
-        val file = new PlainFile(Path(path))
-        base.files(path) = file
-        Some(file)
-      catch
-        case ex: InvalidPathException =>
-          report.error(em"invalid file path: ${ex.getMessage}")
-          None
-    )
+    def getFile(path: String): Option[AbstractFile] =
+      base.locked(base.files().get(path))(using base.mode).orElse(
+        try
+          val file = new PlainFile(Path(path))
+          // readers that miss at once store equal files
+          base.locked(base.files()(path) = file)(using base.mode)
+          Some(file)
+        catch
+          case ex: InvalidPathException =>
+            report.error(em"invalid file path: ${ex.getMessage}")
+            None
+      )
 
+    // The contexts derived from this one, shared by the readers of a context they share (a completer's creation
+    // context). A lost update drops a derived context, which is made again. A derived context's fields are plain, so
+    // with concurrent readers its store is preceded by a release fence and a lookup is followed by an acquire fence
+    // (as a `Published` field orders its payloads): the reader that finds it sees it complete.
+    @cache @benignRace("a lost update only drops a derived context, which is made again; entries are published after a release fence")
     private var related: SimpleIdentityMap[Phase | SourceFile, Context] | Null = null
+
+    private def concurrentBase: Boolean =
+      val b: ContextBase | Null = base // `NoContext` has none
+      b != null && b.concurrent
 
     private def lookup(key: Phase | SourceFile): Context | Null =
       util.Stats.record("Context.related.lookup")
-      if related == null then
+      val map = related
+      if map == null then
         related = SimpleIdentityMap.empty
         null
       else
-        related.nn(key)
+        if concurrentBase then VarHandle.acquireFence()
+        map(key)
+
+    private def relate(key: Phase | SourceFile, derived: Context): Unit =
+      val map = related.nn
+      if concurrentBase then VarHandle.releaseFence()
+      related = map.updated(key, derived)
 
     private def withPhase(phase: Phase, pid: PhaseId): Context =
       util.Stats.record("Context.withPhase")
@@ -304,7 +338,7 @@ object Contexts {
         if ctx1 == null then
           util.Stats.record("Context.withPhase.new")
           ctx1 = fresh.setPhase(pid)
-          related = related.nn.updated(phase, ctx1)
+          relate(phase, ctx1)
         ctx1
 
     final def withPhase(phase: Phase): Context = withPhase(phase, phase.id)
@@ -325,7 +359,7 @@ object Contexts {
             // so set `mustExistIfNotNull` to false.
             ctx2.setCompilationUnit(CompilationUnit(source, mustExistIfNotNull = false))
           ctx1 = ctx2
-          related = related.nn.updated(source, ctx2)
+          relate(source, ctx2)
         ctx1
 
     // `creationTrace`-related code. To enable, uncomment the code below and the
@@ -539,21 +573,22 @@ object Contexts {
       // This method is hot, as it must be called every so often in potentially recursive operations
       // to catch stack overflows before they actually happen.
       // Thus, it's important for it not to allocate or do any unnecessary work,
-      // which is why `base.recursiveOperations` is a preallocated array of mutable classes in which we can copy the arguments.
-      // We use the fact that `base.recursiveOperations.length` is set to the max fuel to not have to explicitly load it.
-      // Also, we support `-Xno-enrich-error-messages` by setting `base.recursiveDepth` to `Int.MinValue`, ensuring the throw check never fires.
+      // which is why `reader.recursiveOperations` is a preallocated array of mutable classes in which we can copy the arguments.
+      // We use the fact that `reader.recursiveOperations.length` is set to the max fuel to not have to explicitly load it.
+      // Also, we support `-Xno-enrich-error-messages` by setting `reader.recursiveDepth` to `Int.MinValue`, ensuring the throw check never fires.
       // These two checks don't add overhead because accessing `ops` needs `depth` to be bounds-checked anyway.
-      val depth = base.recursiveDepth
-      val ops = base.recursiveOperations
+      val r = reader
+      val depth = r.recursiveDepth
+      val ops = r.recursiveOperations
       if depth >= ops.length then
         throw RecursionOverflow(ops, title, details, pos)
       if depth >= 0 then
-        base.recursiveDepth = depth + 1
+        r.recursiveDepth = depth + 1
         ops(depth).title = title
         ops(depth).details = details
         ops(depth).pos = pos
       try block
-      finally base.recursiveDepth = depth
+      finally r.recursiveDepth = depth
 
     final def withProperty[T](key: Key[T], value: Option[T]): Context =
       if (property(key) == value) this
@@ -583,7 +618,7 @@ object Contexts {
     def settings: ScalaSettings            = base.settings
     def definitions: Definitions           = base.definitions
     def platform: Platform                 = base.platform
-    def pendingUnderlying: util.HashSet[Type]      = base.pendingUnderlying
+    def pendingUnderlying: util.HashSet[Type]      = reader.pendingUnderlying
     def uniqueNamedTypes: Uniques.NamedTypeUniques = base.uniqueNamedTypes
     def uniques: util.WeakHashSet[Type]            = base.uniques
 
@@ -610,45 +645,64 @@ object Contexts {
   /** A fresh context allows selective modification
    *  of its attributes using the with... methods.
    */
+  @scratch
   class FreshContext(base: ContextBase) extends Context(base) {
     util.Stats.record("Context.fresh")
 
+    // A fresh context's fields are set by whoever makes it (`fresh.setX`, `init`, `FreshContext.initial`) before it is
+    // handed on, and not changed after: so readers that share a context (a completer's creation context) see its
+    // fields as set. The exceptions are a pooled context, which only its reader's pool reuses (`reuseIn`) and which
+    // must not be retained, and `_period`, which `SingleDenotation._goForward` sets and restores on the context it is
+    // given while a denotation transformer runs.
+
+    @publishedBy("init")
     private var _outer: Context = uninitialized
     def outer: Context = _outer
 
-    private var _period: Period = uninitialized
+    @publishedBy("init") private var _period: Period = uninitialized // set while the context is built, before it is shared
     final def period: Period = _period
 
+    @publishedBy("init")
     private var _mode: Mode = uninitialized
     final def mode: Mode = _mode
 
+    @publishedBy("init")
     private var _owner: Symbol = uninitialized
     final def owner: Symbol = _owner
 
+    @publishedBy("init")
     private var _tree: Tree[?] = uninitialized
     final def tree: Tree[?] = _tree
 
+    @publishedBy("init")
     private var _scope: Scope = uninitialized
     final def scope: Scope = _scope
 
+    @publishedBy("init")
     private var _typerState: TyperState = uninitialized
     final def typerState: TyperState = _typerState
 
+    @publishedBy("init")
     private var _gadtState: GadtState = uninitialized
     final def gadtState: GadtState = _gadtState
     
+    @publishedBy("init")
     private var _inlineTraitState: InlineTraitState = uninitialized
     final def inlineTraitState: InlineTraitState = _inlineTraitState
 
+    @publishedBy("init")
     private var _searchHistory: SearchHistory = uninitialized
     final def searchHistory: SearchHistory = _searchHistory
 
+    @publishedBy("init")
     private var _source: SourceFile = uninitialized
     final def source: SourceFile = _source
 
+    @publishedBy("init")
     private var _moreProperties: Map[Key[Any], Any] = uninitialized
     final def moreProperties: Map[Key[Any], Any] = _moreProperties
 
+    @publishedBy("init")
     private var _store: Store = uninitialized
     final def store: Store = _store
 
@@ -828,7 +882,7 @@ object Contexts {
           .updated(notNullInfosLoc, Nil)
           .updated(compilationUnitLoc, NoCompilationUnit)
           .updated(profilerLoc, Profiler.NoOp)
-      c._searchHistory = new SearchRoot
+      c._searchHistory = new SearchRoot(perThread = base.concurrent)
       c._gadtState = GadtState(GadtConstraint.empty)
       c._inlineTraitState = InlineTraitState()
       c
@@ -870,7 +924,7 @@ object Contexts {
 
   /** Run `op` with a pool-allocated FreshContext that has an ExploreTyperState. */
   inline def exploreInFreshCtx[T](inline op: FreshContext ?=> T)(using Context): T =
-    val pool = ctx.base.exploreContextPool
+    val pool = ctx.reader.exploreContextPool
     val nestedCtx = pool.next()
     try op(using nestedCtx)
     finally
@@ -881,21 +935,23 @@ object Contexts {
    *  Commit the typer state if `commit` applied to `op`'s result returns true.
    */
   inline def withFreshTyperState[T](inline op: Context ?=> T, inline commit: T => Context ?=> Boolean)(using Context): T =
-    val pool = ctx.base.freshTSContextPool
+    val pool = ctx.reader.freshTSContextPool
     val nestedCtx = pool.next()
     try
       val result = op(using nestedCtx)
       if commit(result)(using nestedCtx) then
         nestedCtx.typerState.commit()
-        nestedCtx.typerState.setCommittable(true)
       result
     finally
+      // the pooled typer state is reused: committable again whatever happened
+      // (`commit` clears the flag before it merges, and a merge can throw)
+      nestedCtx.typerState.setCommittable(true)
       pool.free()
 
   /** Run `op` with a pool-allocated context that has the given `owner`. */
   inline def runWithOwner[T](owner: Symbol)(inline op: Context ?=> T)(using Context): T =
     if Config.reuseOwnerContexts then
-      val pool = ctx.base.generalContextPool
+      val pool = ctx.reader.generalContextPool
       try op(using pool.next().setOwner(owner).setTyperState(ctx.typerState))
       finally pool.free()
     else
@@ -910,35 +966,35 @@ object Contexts {
    */
   def comparer(using Context): TypeComparer =
     util.Stats.record("comparing")
-    val base = ctx.base
-    if base.comparersInUse > 0
-       && (base.comparers(base.comparersInUse - 1).comparerContext eq ctx)
+    val reader = ctx.reader
+    if reader.comparersInUse > 0
+       && (reader.comparers(reader.comparersInUse - 1).comparerContext eq ctx)
     then
-      base.comparers(base.comparersInUse - 1).currentInstance
+      reader.comparers(reader.comparersInUse - 1).currentInstance
     else
       val result =
-        if base.comparersInUse < base.comparers.size then
-          base.comparers(base.comparersInUse)
+        if reader.comparersInUse < reader.comparers.size then
+          reader.comparers(reader.comparersInUse)
         else
           val result = TypeComparer(ctx)
-          base.comparers += result
+          reader.comparers += result
           result
-      base.comparersInUse += 1
+      reader.comparersInUse += 1
       result.init(ctx)
       result
 
   def currentComparer(using Context): TypeComparer =
-    val base = ctx.base
-    if base.comparersInUse > 0 then
-      base.comparers(base.comparersInUse - 1)
+    val reader = ctx.reader
+    if reader.comparersInUse > 0 then
+      reader.comparers(reader.comparersInUse - 1)
     else
       comparer
 
   inline def comparing[T](inline op: TypeComparer => T)(using Context): T =
     util.Stats.record("comparing")
-    val saved = ctx.base.comparersInUse
+    val saved = ctx.reader.comparersInUse
     try op(comparer)
-    finally ctx.base.comparersInUse = saved
+    finally ctx.reader.comparersInUse = saved
   end comparing
 
   @sharable val NoContext: Context = new FreshContext(null.asInstanceOf[ContextBase]) {
@@ -950,16 +1006,25 @@ object Contexts {
   /** A context base defines state and associated methods that exist once per
    *  logical compiler instance.
    */
-  class ContextBase extends ContextState
+  class ContextBase(sharing: Sharing) extends ContextState(sharing)
                        with Phases.PhasesBase
                        with Plugins {
+
+    /** A base for batch compilation (and Java callers: the sbt bridge). */
+    def this() = this(Sharing.Batch)
+
+    // several readers need a reader per thread, which only the interactive driver's base binds (it overrides `reader`)
+    assert(!sharing.concurrent || getClass != classOf[ContextBase], s"$sharing on a base that does not bind readers to threads")
+
 
     val settings: ScalaSettings = ScalaSettings
 
     /** The initial context */
     val initialCtx: Context = FreshContext.initial(this: @unchecked, settings)
 
-    /** The platform, initialized by `initPlatform()`. */
+    /** The platform, initialized by `initPlatform()`. Set by `initialize`, which a run calls as it begins (an
+     *  interactive run is a write action, with no reader), and read after. */
+    @cache @publishedBy("init")
     private var _platform: Platform | Null = null
 
     /** The platform */
@@ -996,8 +1061,9 @@ object Contexts {
         _platform = newPlatform
       platform.init()
       // See `Context.handleRecursive` for an explanation of these values
-      recursiveOperations = Array.fill[RecursiveOperation](ctx.settings.XmaxFuel.value)(RecursiveOperation.blank())
-      recursiveDepth = if ctx.settings.XnoEnrichErrorMessages.value then Int.MinValue else 0
+      maxFuel = ctx.settings.XmaxFuel.value
+      enrichErrorMessages = !ctx.settings.XnoEnrichErrorMessages.value
+      reader.initFuel(maxFuel, enrichErrorMessages) // the batch reader, or the initializing thread's
       definitions.init()
     }
 
@@ -1009,8 +1075,9 @@ object Contexts {
     protected def fresh()(using Context): FreshContext =
       FreshContext(ctx.base).init(ctx, ctx)
 
-    private var inUse: Int = 0
-    private var pool = new mutable.ArrayBuffer[FreshContext]
+    // the pools are a reader's (`Reader.exploreContextPool` and its siblings)
+    @scratch @confined private var inUse: Int = 0
+    @scratch @confined private var pool = new mutable.ArrayBuffer[FreshContext]
 
     def next()(using Context): FreshContext =
       val base = ctx.base
@@ -1047,117 +1114,166 @@ object Contexts {
       super.fresh().setTyperState(ts)
 
   /** The essential mutable state of a context base, collected into a common class */
-  class ContextState {
+  class ContextState(
+    /** How this base is shared between threads, chosen when it is made: `Sharing.Batch` but for the interactive
+     *  driver's (see `Sharing` and docs/_docs/internals/interactive-multi-reader.md). It picks the interners, the
+     *  caches that are maps and the symbol id counter below, and whether completions take `completionLock`
+     *  (serialised readers) or claim `completionRoots` (parallel readers). */
+    final val sharing: Sharing) extends Sharing.Guard {
+
+    /** `sharing.concurrent` and `sharing.parallel`, copied to the base: a hot test reads one field of it. */
+    final val concurrent: Boolean = sharing.concurrent
+    final val parallel: Boolean = sharing.parallel
+
+    /** `sharing.mode`, copied to the base: the given of the `dotty.tools.sharing` operations (`dotc.sharingMode`),
+     *  a value class over `concurrent`, so that its test reads one field of the base, as a test of `concurrent` does. */
+    final val mode: _root_.dotty.tools.sharing.Mode = sharing.mode
+
+    /** Interactive mode with several readers: the lock every completion
+     *  (`SymDenotation.completeFrom`), every bring-forward of a denotation
+     *  to a new run (`Denotation.current`) and every computation of an
+     *  inherited cache (base classes, member names) runs under, so that the
+     *  lazy facts of the symbol table have one writer at a time while bodies
+     *  are typed concurrently. Reentrant: a completion forces others. Not
+     *  used in batch compilation.
+     */
+    @interned @publishedBy("init")
+    val completionLock: _root_.dotty.tools.sharing.CoarseLock = CompletionLock(this)
+
+    /** The owners of completion roots with parallel readers (see
+     *  `Sharing.Parallel`, `CompletionRoots`).
+     */
+    @interned @publishedBy("init")
+    val completionRoots: _root_.dotty.tools.sharing.PerKeyClaims = CompletionRoots(this)
+
+    /** What a `Sharing.claim` takes on a concurrent base (`dotc.claimRegistry`): the root's claim with parallel
+     *  readers, the completion lock (as the key's `ClaimKind` says) with serialised ones. */
+    @interned @publishedBy("init")
+    val claimRegistry: _root_.dotty.tools.sharing.ClaimRegistry =
+      if parallel then completionRoots else completionLock
+
+    /** The stamp of the structure of published scopes: bumped by every change to a scope after its owner's
+     *  completion published it (`MutableScope.published`). A cache computed from scopes can record it, and is
+     *  current while it has not moved.
+     */
+    private val myStructureEpoch = java.util.concurrent.atomic.AtomicInteger()
+    private[dotc] def structureEpoch: Int = myStructureEpoch.get
+    private[dotc] def bumpStructureEpoch(): Unit = myStructureEpoch.incrementAndGet()
+
+    /** The thread in a write action of the interactive driver, if any: on a concurrent base, the only thread that
+     *  may change a published scope (`MutableScope.changed`).
+     */
+    @scratch @volatile private[dotc] var writeActionThread: Thread | Null = null
+
     // Symbols state
 
     /** Counter for unique symbol ids */
     private var _nextSymId: Int = 0
-    def nextSymId: Int = { _nextSymId += 1; _nextSymId }
+    private val _concurrentSymIds = new java.util.concurrent.atomic.AtomicInteger(0)
+    def nextSymId: Int =
+      if concurrent then _concurrentSymIds.incrementAndGet()
+      else { _nextSymId += 1; _nextSymId }
 
-    /** Sources and Files that were loaded */
-    val sources: util.HashMap[AbstractFile, SourceFile] = util.HashMap[AbstractFile, SourceFile]()
-    val files: util.HashMap[String, AbstractFile] = util.HashMap()
+    /** Sources and Files that were loaded. Readers of a concurrent base share them, so they are reached only with
+     *  the evidence of this base's monitor (`Sharing.serialised`, `locking`).
+     */
+    @interned
+    private[core] val sources = guarded(util.HashMap[AbstractFile, SourceFile]())
+    @cache
+    private[core] val files = guarded(util.HashMap[String, AbstractFile]())
 
     /** Cache for magic offset header lookups, scoped to this compiler instance
      *  so that concurrent compilers in the same classloader don't share stale entries. */
+    @cache @guardedBy("magicHeaderCache")
     private[dotc] val magicHeaderCache: util.HashMap[SourceFile, WrappedSourceFile.MagicHeaderInfo] = util.HashMap()
 
     /** Was best effort file used during compilation? */
+    @scratch @benignRace("only ever set to true, by any reader that loads a best effort file")
     private[core] var usedBestEffortTasty = false
 
     /** If coverage option is used, it stores all instrumented statements (for InstrumentCoverage).
      * We need this information to be persisted across different runs, so it's stored here.
      */
+    // written and read by the InstrumentCoverage phase, which runs after the typer on one thread
+    @scratch @confined
     private[dotc] var coverage: Coverage | Null = null
 
-    // The array will be initialized with a number of slots corresponding to the max fuel,
-    // for now give it 10 slots so a few calls to handleRecursive work for trivial things
-    // before the compiler has really started
-    private[dotc] var recursiveDepth: Int = 0
-    private[dotc] var recursiveOperations: Array[RecursiveOperation] = Array.fill(10)(RecursiveOperation.blank())
+    /** The reader of batch compilation: the comparer stack, the context
+     *  pools, the recursion guards (see `Reader`). `InteractiveContextBase`
+     *  overrides `reader` with the one bound to the current thread.
+     */
+    val initialReader: Reader = Reader.initial()
+
+    /** The reader the current thread types under. */
+    def reader: Reader = initialReader
+
+    /** The fuel settings of a reader (`Context.handleRecursive`), known once
+     *  `ContextBase.initialize` has run.
+     */
+    // set by `ContextBase.initialize`, which a run calls as it begins (an interactive run is a write action)
+    @cache @publishedBy("init")
+    private[dotc] var maxFuel: Int = Reader.initialFuel
+    @cache @publishedBy("init")
+    private[dotc] var enrichErrorMessages: Boolean = true
+
+    /** A reader with this base's fuel and the given cancellation checker. */
+    def newReader(cancelChecker: () => Boolean): Reader = new Reader(maxFuel, enrichErrorMessages, cancelChecker)
 
     // Types state
     /** A table for hash consing unique types */
-    private[core] val uniques: Uniques = Uniques()
+    private[core] val uniques: Uniques = sharing.newUniques()
 
     /** A table for hash consing unique applied types */
-    private[dotc] val uniqueAppliedTypes: AppliedUniques = AppliedUniques()
+    private[dotc] val uniqueAppliedTypes: AppliedUniques = sharing.newAppliedUniques()
 
     /** A table for hash consing unique named types */
-    private[core] val uniqueNamedTypes: NamedTypeUniques = NamedTypeUniques()
+    private[core] val uniqueNamedTypes: NamedTypeUniques = sharing.newNamedTypeUniques()
 
+    // hash-consed: readers that make one at once store the same instance
+    @cache @benignRace("every writer stores the interned instance")
     var emptyTypeBounds: TypeBounds | Null = null
+    @cache @benignRace("every writer stores the interned instance")
     var emptyWildcardBounds: WildcardType | Null = null
-
-    /** Number of findMember calls on stack */
-    private[core] var findMemberCount: Int = 0
-
-    /** List of names which have a findMemberCall on stack,
-     *  after Config.LogPendingFindMemberThreshold is reached.
-     */
-    private[core] var pendingMemberSearches: List[Name] = Nil
-
-    /** The number of recursive invocation of underlying on a NamedType
-     *  during a controlled operation.
-     */
-    private[core] var underlyingRecursions: Int = 0
-
-    /** The set of named types on which a currently active invocation
-     *  of underlying during a controlled operation exists. */
-    private[core] val pendingUnderlying: util.HashSet[Type] = util.HashSet[Type]()
 
     /** A map from ErrorType to associated message. We use this map
      *  instead of storing messages directly in ErrorTypes in order
      *  to avoid space leaks - the message usually captures a context.
      */
-    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = mutable.Map()
+    @cache
+    private[core] val errorTypeMsg: mutable.Map[Types.ErrorType, Message] = sharing.newMap()
 
     // Phases state
 
+    // The phases are set by `usePhases` and `setPhasePlan`, which a run calls as it begins (an interactive run is a
+    // write action, with no reader), and read after.
+    @cache @publishedBy("init")
     private[core] var phasesPlan: List[List[Phase]] = uninitialized
 
     /** Phases by id */
+    @cache @publishedBy("init")
     private[dotc] var phases: Array[Phase] = uninitialized
 
     /** Phases with consecutive Transforms grouped into a single phase, Empty array if fusion is disabled */
+    @cache @publishedBy("init")
     private[core] var fusedPhases: Array[Phase] = Array.empty[Phase]
 
     /** Next denotation transformer id */
+    @cache @publishedBy("init")
     private[core] var nextDenotTransformerId: Array[Periods.PhaseId] = uninitialized
 
+    @cache @publishedBy("init")
     private[core] var denotTransformers: Array[DenotTransformer] = uninitialized
-
-    /** Flag to suppress inlining, set after overflow */
-    private[dotc] var stopInlining: Boolean = false
 
     /** Cached -Yno-double-bindings setting. This is accessed from `setDenot`, which
      *  is fairly hot, so we don't want to lookup the setting each time it is called.
      */
+    @cache @benignRace("set to true from the -Yno-double-bindings setting as a run begins, never reset")
     private[dotc] var checkNoDoubleBindings = false
 
-    /** A variable that records that some error was reported in a globally committable context.
-     *  The error will not necessarlily be emitted, since it could still be that
-     *  the enclosing context will be aborted. The variable is used as a smoke test
-     *  to turn off assertions that might be wrong if the program is erroneous. To
-     *  just test for `ctx.reporter.errorsReported` is not always enough, since it
-     *  could be that the context in which the assertion is tested is a completer context
-     *  that's different from the context where the error was reported. See i13218.scala
-     *  for a test.
-     */
-    private[dotc] var errorsToBeReported = false
-
-    // Reporters state
-    private[dotc] var indent: Int = 0
-
+    // Reporters state (the margin of `trace` output is `Reader.indent`)
     protected[dotc] val indentTab: String = "  "
 
-    val exploreContextPool = ExploreContextPool()
-    val freshTSContextPool = FreshTSContextPool()
-    val generalContextPool = ContextPool()
-
-    private[Contexts] val comparers = new mutable.ArrayBuffer[TypeComparer]
-    private[Contexts] var comparersInUse: Int = 0
-
+    @cache @benignRace("every writer stores an equal (setting, WConf) pair, an immutable value")
     private[dotc] var wConfCache: (List[String], WConf) = uninitialized
 
     private[dotc] val patched: Rewrites.PatchedFiles = Rewrites.newPatchedFiles()
@@ -1168,16 +1284,18 @@ object Contexts {
       uniqueNamedTypes.clear()
       emptyTypeBounds = null
       emptyWildcardBounds = null
-      errorsToBeReported = false
       errorTypeMsg.clear()
-      sources.clear()
-      files.clear()
-      comparers.clear()  // forces re-evaluation of top and bottom classes in TypeComparer
-      comparersInUse = 0
+      alwaysLocked {
+        sources().clear()
+        files().clear()
+      }
+      initialReader.reset()  // forces re-evaluation of top and bottom classes in TypeComparer
 
     // Test that access is single threaded
 
     /** The thread on which `checkSingleThreaded was invoked last */
+    // only `Run.compileUnits` calls the check, and not in interactive mode
+    @scratch @confined
     @sharable private var thread: Thread | Null = null
 
     /** Check that we are on the same thread as before */

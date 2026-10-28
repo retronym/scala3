@@ -13,6 +13,7 @@ import ProtoTypes.*
 import util.Spans.*
 import util.Property
 import collection.mutable, mutable.ListBuffer
+import scala.annotation.internal.{confined, guardedBy, lazyFact, scratch}
 import tpd.tpes
 import Variances.alwaysInvariant
 import config.{Config, Feature, MigrationVersion}
@@ -31,6 +32,50 @@ import config.SourceVersion.*
 import rewrites.Rewrites.patch
 
 import scala.compiletime.uninitialized
+
+object Namer:
+
+  /** A file's own package-level definitions while the files of an open are indexed in parallel
+   *  (`TyperPhase.indexInParallel`). A package's scope is published, and on a concurrent base an enter outside a
+   *  write action copies it whole (`MutableScope.extendAside`): per symbol and in parallel, that would be quadratic.
+   *  Instead the Namer enters what the file defines in a package here, and looks here before the package's scope
+   *  (as it was before the open); a companion is always in the same file. `Namer.mergeIndexSlices` then enters
+   *  the slices into the packages, serially and in file order.
+   *
+   *  @param ctx   the file's context, for the diagnostics of the merge
+   *  @param lock  shared by the slices of one open: held while a package clause makes or finds its package
+   */
+  final class IndexSlice(val ctx: Context, val lock: AnyRef):
+    // filled by the thread that indexes the file, read by the merge after that thread has ended
+    @confined private[Namer] val scopes = mutable.LinkedHashMap[Symbol, MutableScope]()
+    // the package clauses of the file, with their expanded statements: `invalidateCompanions` runs at the merge
+    @confined private[Namer] val clauses = ListBuffer[(Symbol, List[untpd.Tree])]()
+    // set by the merge: from then on, a context that carries the slice (a completer's) enters and looks up as usual
+    @volatile private[Namer] var merged = false
+
+    /** The part of this slice for package class `pkg`: also where a module defined in it finds its buddy (the
+     *  module class of a module val, or the reverse), the merge or not.
+     */
+    private[Namer] def scope(pkg: Symbol)(using Context): MutableScope =
+      scopes.getOrElseUpdate(pkg, newScope)
+
+    /** Enter `sym` in package class `pkg`'s part of this slice, replacing a symbol of the same name as entering
+     *  in the package would (`PackageClassDenotation.proceedWithEnter`).
+     */
+    private[Namer] def enter(pkg: Symbol, sym: Symbol)(using Context): Unit =
+      val scope = this.scope(pkg)
+      val e = scope.lookupEntry(sym.name)
+      if e != null then scope.unlink(e)
+      scope.enter(sym)
+
+    private[Namer] def lookup(pkg: Symbol, name: Name)(using Context): Symbol =
+      scopes.get(pkg) match
+        case Some(scope) => scope.lookup(name)
+        case None => NoSymbol
+
+  val IndexSliceKey: Property.Key[IndexSlice] = new Property.Key
+
+end Namer
 
 /** This class creates symbols from definitions and imports and gives them
  *  lazy types.
@@ -53,6 +98,7 @@ import scala.compiletime.uninitialized
  *  in a different method.
  */
 class Namer { typer: Typer =>
+  import Namer.*
 
   import untpd.*
 
@@ -90,10 +136,25 @@ class Namer { typer: Typer =>
    *  one, so that trees that are shared between different DefDefs can be independently
    *  used as indices. It also contains a scope that contains nested parameters.
    */
-  lazy val nestedTyper: mutable.HashMap[Symbol, Typer] = new mutable.HashMap
+  @lazyFact @volatile private var myNestedTyper: mutable.Map[Symbol, Typer] | Null = null
+  def nestedTyper(using Context): mutable.Map[Symbol, Typer] =
+    val m = myNestedTyper
+    if m != null then m
+    else
+      // filled by completions and consumed by body typing: with several
+      // readers (interactive mode) the two run on different threads, and the
+      // first use of a typer may be on both at once: a map made by each, one
+      // of them lost with the symbols entered in it (finding I90)
+      synchronized:
+        val m0 = myNestedTyper
+        if m0 != null then m0
+        else
+          val m1: mutable.Map[Symbol, Typer] = ctx.base.sharing.newMap()
+          myNestedTyper = m1
+          m1
 
   /** We are entering symbols coming from a SourceLoader */
-  private var lateCompile = false
+  @scratch @guardedBy("writer") private var lateCompile = false
 
   /** The symbol of the given expanded tree. */
   def symbolOfTree(tree: Tree)(using Context): Symbol = {
@@ -129,6 +190,35 @@ class Namer { typer: Typer =>
     sym
   }
 
+  /** The slice of the file being indexed in parallel, if `owner` is a package class and the slice is not yet
+   *  merged; else null.
+   */
+  private def indexSliceFor(owner: Symbol)(using Context): IndexSlice | Null =
+    if owner.is(PackageClass) then indexSlice else null
+
+  /** The slice of the file being indexed in parallel, if it is not yet merged; else null. */
+  private def indexSlice(using Context): IndexSlice | Null =
+    ctx.property(IndexSliceKey) match
+      case Some(slice) if !slice.merged => slice
+      case _ => null
+
+  /** `name` among the declarations of `owner`, a class: in a package, this file's slice first (`IndexSlice`). */
+  private def lookupDecl(owner: Symbol, name: Name)(using Context): Symbol =
+    val slice = indexSliceFor(owner)
+    if slice == null then owner.unforcedDecls.lookup(name)
+    else slice.lookup(owner, name).orElse(owner.unforcedDecls.lookup(name))
+
+  /** `name` in the context's effective scope: in a package, this file's slice first (`IndexSlice`). */
+  private def lookupEffective(name: Name)(using Context): Symbol =
+    val slice = indexSliceFor(ctx.owner)
+    if slice == null then ctx.effectiveScope.lookup(name)
+    else slice.lookup(ctx.owner, name).orElse(ctx.effectiveScope.lookup(name))
+
+  private def lookupAllEffective(name: Name)(using Context): Iterator[Symbol] =
+    val slice = indexSliceFor(ctx.owner)
+    val own = if slice == null then NoSymbol else slice.lookup(ctx.owner, name)
+    if own.exists then Iterator.single(own) else ctx.effectiveScope.lookupAll(name)
+
   /** Check that a new definition with given name and privacy status
    *  in current context would not conflict with existing currently
    *  compiled definitions.
@@ -149,7 +239,7 @@ class Namer { typer: Typer =>
       conflictsDetected = true
 
     def checkNoConflictIn(owner: Symbol) =
-      val preExisting = owner.unforcedDecls.lookup(name)
+      val preExisting = lookupDecl(owner, name)
       if (preExisting.isDefinedInCurrentRun || preExisting.lastKnownDenotation.is(Package))
           && (!preExisting.lastKnownDenotation.is(Private) || preExisting.owner.is(Package))
           && (!preExisting.lastKnownDenotation.isPackageObject
@@ -260,7 +350,11 @@ class Namer { typer: Typer =>
 
     /** Add moduleClass/sourceModule to completer if it is for a module val or class */
     def adjustIfModule(completer: LazyType, tree: MemberDef) =
-      if (tree.mods.is(Module)) adjustModuleCompleter(completer, tree.name)
+      if tree.mods.is(Module) then
+        // indexing in parallel, the buddy is in this file's slice, not yet in the package (`IndexSlice`)
+        val slice = indexSliceFor(ctx.owner)
+        if slice == null then adjustModuleCompleter(completer, tree.name)
+        else adjustModuleCompleter(completer, tree.name, slice.scope(ctx.owner))
       else completer
 
     typr.println(i"creating symbol for $tree in ${ctx.mode}")
@@ -270,8 +364,10 @@ class Namer { typer: Typer =>
         tree: MemberDef, name: Name, flags: FlagSet, owner: Symbol, infoFn: S => Type,
         symFn: (FlagSet, S => Type, Symbol) => S): Symbol = {
       val prev =
-        if (lateCompile && ctx.owner.is(Package)) ctx.effectiveScope.lookup(name)
-        else NoSymbol
+        if (lateCompile && ctx.owner.is(Package)) lookupEffective(name)
+        else ctx.property(Typer.RefinedSymbols) match
+          case Some(refined) => refined(name, tree.nameSpan)
+          case None => NoSymbol
 
       var flags1 = flags
       if name.isTypeName && Feature.ccEnabled then
@@ -369,22 +465,36 @@ class Namer { typer: Typer =>
     // We do not enter Scala 2 macros defined in Scala 3 as they have an equivalent Scala 3 inline method.
     if sym.exists && !sym.isScala2MacroInScala3 then
       typr.println(s"entered: $sym in ${ctx.owner}")
-      ctx.enter(sym)
+      val slice = indexSliceFor(ctx.owner)
+      if slice == null then ctx.enter(sym)
+      else slice.enter(ctx.owner, sym)
 
-  /** Create package if it does not yet exist. */
-  private def createPackageSymbol(pid: RefTree)(using Context): Symbol = {
+  /** Create package if it does not yet exist. Indexing files in parallel, under the open's lock: the package is
+   *  entered in its owner's scope at once, for the other files' package clauses to find it. The symbols of a
+   *  previous compilation of the file are unlinked after the lock is released, as they are the file's own.
+   */
+  private def createPackageSymbol(pid: RefTree)(using Context): Symbol =
+    val slice = indexSlice
+    if slice == null then createPackageSymbol0(pid, _.unlinkFromFile(ctx.source.path))
+    else
+      val obsolete = ListBuffer[PackageClassDenotation]()
+      val pkg = slice.lock.synchronized(createPackageSymbol0(pid, obsolete += _))
+      obsolete.foreach(_.unlinkFromFile(ctx.source.path))
+      pkg
+
+  /** @param unlinkFromFile  remove the members of an existing package that come from a previous compilation of
+   *                         this file: they are obsolete
+   */
+  private def createPackageSymbol0(pid: RefTree, unlinkFromFile: PackageClassDenotation => Unit)(using Context): Symbol = {
     val pkgOwner = pid match {
       case Ident(_) => if (ctx.owner eq defn.EmptyPackageClass) defn.RootClass else ctx.owner
-      case Select(qual: RefTree, _) => createPackageSymbol(qual).moduleClass
+      case Select(qual: RefTree, _) => createPackageSymbol0(qual, unlinkFromFile).moduleClass
     }
     val existing = pkgOwner.info.decls.lookup(pid.name)
 
     if (existing.is(Package) && (pkgOwner eq existing.owner)) {
       existing.moduleClass.denot match {
-        case d: PackageClassDenotation =>
-          // Remove existing members coming from a previous compilation of this file,
-          // they are obsolete.
-          d.unlinkFromFile(ctx.source.path)
+        case d: PackageClassDenotation => unlinkFromFile(d)
         case _ =>
       }
       existing
@@ -402,6 +512,30 @@ class Namer { typer: Typer =>
         newCompletePackageSymbol(pkgOwner, pname).entered
     }
   }
+
+  /** Enter the slices of the files indexed in parallel (`IndexSlice`) into their packages: serially, in file
+   *  order, and one change per package however many files define something in it. A name a slice defines in a
+   *  package that an earlier slice defined there too is reported here, and the later definition is left out
+   *  (indexing serially, `checkNoConflict` reports it and freshens the name).
+   */
+  def mergeIndexSlices(slices: List[IndexSlice])(using Context): Unit =
+    // before the new definitions are entered: those it looks for are not this file's
+    for slice <- slices; (pkg, xstats) <- slice.clauses do invalidateCompanions(pkg, xstats)(using slice.ctx)
+    val entering = mutable.LinkedHashMap[Symbol, mutable.LinkedHashMap[Name, Symbol]]()
+    val leftOut = mutable.HashSet[Symbol]()
+    for slice <- slices; (pkg, scope) <- slice.scopes; sym <- scope.toList do
+      val names = entering.getOrElseUpdate(pkg, mutable.LinkedHashMap())
+      names.get(sym.name) match
+        case Some(other) =>
+          leftOut += sym
+          // an object is reported once, for its module val
+          if !(sym.is(ModuleClass) && leftOut.contains(sym.sourceModule)) then
+            val shown = if other.is(PhantomSymbol) then other.companionClass.orElse(other) else other
+            report.error(AlreadyDefined(sym.name, pkg, shown)(using slice.ctx), slice.ctx.source.atSpan(sym.span))
+        case None =>
+          names(sym.name) = sym
+    for (pkg, names) <- entering do pkg.asClass.classDenot.enterAll(names.values)
+    slices.foreach(_.merged = true)
 
   /** Expand tree and store in `expandedTree` */
   def expand(tree: Tree)(using Context): Unit = {
@@ -484,7 +618,9 @@ class Namer { typer: Typer =>
       case pcl: PackageDef =>
         val pkg = createPackageSymbol(pcl.pid)
         index(pcl.stats)(using ctx.packageContext(pcl, pkg))
-        invalidateCompanions(pkg, Trees.flatten(pcl.stats map expanded))
+        val xstats = Trees.flatten(pcl.stats map expanded)
+        val slice = indexSlice
+        if slice == null then invalidateCompanions(pkg, xstats) else slice.clauses += ((pkg, xstats))
         setDocstring(pkg, stat)
         ctx
       case imp: Import =>
@@ -741,8 +877,8 @@ class Namer { typer: Typer =>
           else classDef(cdef.name) = cdef
 
       def createLinks(classTree: TypeDef, moduleTree: TypeDef)(using Context) = {
-        val claz = ctx.effectiveScope.lookup(classTree.name)
-        val modl = ctx.effectiveScope.lookup(moduleTree.name)
+        val claz = lookupEffective(classTree.name)
+        val modl = lookupEffective(moduleTree.name)
         modl.registerCompanion(claz)
         claz.registerCompanion(modl)
       }
@@ -784,19 +920,19 @@ class Namer { typer: Typer =>
             enterSymbol(classConstructorCompanion(classSym.asClass))
       else if ctx.owner.is(PackageClass) then
         for case cdef @ TypeDef(moduleName, _) <- moduleDef.values do
-          val moduleSym = ctx.effectiveScope.lookup(moduleName)
+          val moduleSym = lookupEffective(moduleName)
           if moduleSym.isDefinedInCurrentRun then
             val className = moduleName.stripModuleClassSuffix.toTypeName
-            val classSym = ctx.effectiveScope.lookup(className)
+            val classSym = lookupEffective(className)
             if !classSym.isDefinedInCurrentRun then
               val absentClassSymbol = newClassSymbol(ctx.owner, className, EmptyFlags, _ => NoType)
               enterSymbol(absentClassSymbol)
 
         for case cdef @ TypeDef(className, _) <- classDef.values do
-          val classSym = ctx.effectiveScope.lookup(className.encode)
+          val classSym = lookupEffective(className.encode)
           if classSym.isDefinedInCurrentRun then
             val moduleName = className.toTermName
-            val companionVals = ctx.effectiveScope.lookupAll(moduleName.encode)
+            val companionVals = lookupAllEffective(moduleName.encode)
             if companionVals.isEmpty && needsConstructorProxies(classSym) then
               enterSymbol(classConstructorCompanion(classSym.asClass))
             else
@@ -902,7 +1038,20 @@ class Namer { typer: Typer =>
   }
 
   /** The completer of a symbol defined by a member def or import (except ClassSymbols) */
-  class Completer(val original: Tree)(ictx: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+  class Completer(val original: Tree)(ictx0: Context) extends LazyType with SymbolLoaders.SecondCompleter {
+
+    /** The context with which this completer was created; with parallel
+     *  readers (`-Yinteractive-parallel`), for the duration of `complete`, the
+     *  same with a fresh committable typer state of its own (§3.1): two
+     *  readers completing two symbols of one file would otherwise both write
+     *  the namer's typer state, which readers' body typing derives from (I48).
+     */
+    protected var ictx: Context = ictx0
+
+    /** `ictx` was replaced or restored: a subclass that derived a context
+     *  from it once derives it again.
+     */
+    protected def rebased(): Unit = ()
 
     protected def localContext(owner: Symbol): FreshContext = ctx.fresh.setOwner(owner).setTree(original)
 
@@ -914,7 +1063,7 @@ class Namer { typer: Typer =>
       if myNotNullInfos == null then ictx else ictx.withNotNullInfos(myNotNullInfos.nn)
 
     // make sure testing contexts are not captured by completers
-    assert(!ictx.reporter.isInstanceOf[ExploringReporter])
+    assert(!ictx0.reporter.isInstanceOf[ExploringReporter])
 
     def setNotNullInfos(infos: List[NotNullInfo]): Unit =
       myNotNullInfos = infos
@@ -951,7 +1100,7 @@ class Namer { typer: Typer =>
       nestedTyper(sym) = typer1
       typer1.indexConstructor(constr, sym)(using localContext(sym).setTyper(typer1))
 
-    final override def complete(denot: SymDenotation)(using Context): Unit = {
+    final override def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]): Unit = {
       if (Config.showCompletions && ctx.typerState != creationContext.typerState) {
         def levels(c: Context): Int =
           if (c.typerState eq creationContext.typerState) 0
@@ -968,14 +1117,100 @@ class Namer { typer: Typer =>
         report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
+        // Interactive: the creation context's typer state may have been
+        // committed since the completer was made (a definition typed ahead
+        // under a nested state, from another file's typing, which then
+        // committed it: its locals keep completers in that state, and the
+        // statement is typed later by a resume or a pass). Complete in the
+        // nearest ancestor state that can still take constraints, as a resume
+        // does (`liveContext`); in place, a commit into the committed state
+        // failed (I65). Not in the ancestor state itself, which may be the
+        // run's, shared by every reader: in a child of it, committed into it
+        // under the completion lock when the completion ends, as a resumed
+        // statement is (typing in the shared state unlocked raced with the
+        // commits of other readers, I70).
+        var commitInto: TyperState | Null = null
+        if ctx.mode.is(Mode.Interactive) && ictx.typerState.hasBeenCommitted then
+          def live(ts: TyperState | Null): TyperState | Null =
+            if ts == null then null
+            else if ts.isCommittable && !ts.hasBeenCommitted then ts
+            else live(ts.previousState)
+          live(ictx.typerState.previousState) match
+            case ts: TyperState =>
+              ictx = ictx.freshOver(ictx.outer).setTyperState(ts.fresh())
+              commitInto = ts
+              rebased()
+            case null =>
+        val saved = ictx
+        // A typer state of its own for what several readers share: members and
+        // top-level definitions. A local is completed only by the reader typing
+        // its enclosing statement, in that statement's typer state, as in the
+        // serialised mode: its inferred type may hold a variable that the
+        // statement's later typing constrains (`val lazyStats = readLater(end,
+        // rdr => ...)`, whose `T` comes from the closure's body); completed in
+        // a state of its own, the variable was dropped with it and later
+        // instantiated to `Nothing` (I66; I62's `val retractedVars` too).
+        val own = ctx.base.parallel && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+        if own then
+          // a typer state of its own, reporting to the creation context's
+          // reporter directly: a buffer flushed when the completion ends
+          // would be captured, with this state, by the completers of the
+          // members it indexes, and their diagnostics, issued when they are
+          // completed later, would land in it after its flush (I59)
+          // a copy of the creation context at its own level (`freshOver` its
+          // outer), not a child of it (`fresh`): for a class owner a child
+          // with the same owner reads as the class's inner scope, where the
+          // self type is visible, and typing the self type itself then looked
+          // names up through `this`, back into the self symbol (I63)
+          ictx = saved.freshOver(saved.outer).setTyperState(saved.typerState.fresh(reporter = saved.reporter))
+          rebased()
+        var completedNormally = false
+        // under `-Yinteractive-body-edits`, what completing a member reports
+        // is the completion's (`Provenance`); a local's is its statement's
+        val reader = ctx.reader
+        val savedProvenance = reader.provenance
+        if ctx.mode.is(Mode.Interactive) && !denot.symbol.maybeOwner.ownersIterator.exists(_.isTerm)
+            && ctx.property(Typer.RecordedDefContexts).isDefined then
+          reader.provenance = reporting.Provenance.Completion(denot.symbol)
         try
           completeInCreationContext(denot)
           if (denot.isCompleted) registerIfChildInCreationContext(denot)
+          completedNormally = true
+          commitInto match
+            case target: TyperState if !own =>
+              // parallel readers: private, settled and dropped (I76); serialised: committed under the lock
+              val c = ictx
+              Sharing.endState(c, c.fresh.setTyperState(target))
+            case _ =>
         catch
           case ex: CompilationUnit.SuspendException =>
             val completer = SuspendCompleter()
             denot.info = completer
             completer.complete(denot)
+        finally
+          reader.provenance = savedProvenance
+          if own then
+            // the completion's result is published fully defined: its type
+            // variables made permanent (not committed into the namer's state,
+            // which other readers derive from); its diagnostics went to the
+            // namer's reporter as they were issued, where every reader of the
+            // session finds them
+            val ts = ictx.typerState
+            try
+              // what the completion left uninstantiated (a local val's inferred
+              // type `Set[A | TermRef]`, `A` from `Set.empty[A]`) would be
+              // interpolated later in the namer's typer state; no other state
+              // knows these variables' constraints, so they are instantiated
+              // here: those in the completed info as `fullyDefinedType` would,
+              // the rest from below (I62)
+              if completedNormally && !ts.ownedVars.isEmpty then
+                given Context = ictx
+                if denot.isCompleted then Inferencing.isFullyDefined(denot.info, ForceDegree.all)
+                ts.ownedVars.foreach(tv => if !tv.isInstantiated then tv.instantiate(fromBelow = true))
+              ts.gc()(using ictx)
+            finally
+              ictx = saved
+              rebased()
     }
 
     private var completedTypeParamSyms: List[TypeSymbol] | Null = null
@@ -998,7 +1233,7 @@ class Namer { typer: Typer =>
               val ann =
                 if cls.is(JavaDefined) then Checking.checkNamedArgumentForJavaAnnotation(annotTree, cls.asClass)
                 else annotTree
-              val ann1 = Annotation.deferred(cls)(typedAheadExpr(ann)(using annotCtx))
+              val ann1 = Annotation.deferred(cls)(Sharing.privately(annotCtx)(typedAheadExpr(ann)))
               sym.addAnnotation(ann1)
               ann
       case _ =>
@@ -1011,7 +1246,7 @@ class Namer { typer: Typer =>
             throw
               if sym.isCompleted then Inlines.MissingInlineInfo()
               else CyclicReference(sym)
-          val mdef = typedAheadExpr(original).asInstanceOf[tpd.DefDef]
+          val mdef = Sharing.privately(ctx)(typedAheadExpr(original)).asInstanceOf[tpd.DefDef]
           PrepareInlineable.wrapRHS(original, mdef.tpt, mdef.rhs)
         PrepareInlineable.registerInlineInfo(sym, rhsToInline)(using localContext(sym))
       case _ =>
@@ -1121,9 +1356,9 @@ class Namer { typer: Typer =>
       knownTypeSig
   }
 
-  class TypeDefCompleter(original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx) with TypeParamsCompleter {
-    private var myTypeParams: List[TypeSymbol] | Null = null
+  class TypeDefCompleter(original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0) with TypeParamsCompleter {
+    @volatile private var myTypeParams: List[TypeSymbol] | Null = null
     private var nestedCtx: Context | Null = null
     assert(!original.isClassDef)
 
@@ -1146,32 +1381,51 @@ class Namer { typer: Typer =>
       }
 
     override def completerTypeParams(sym: Symbol)(using Context): List[TypeSymbol] =
-      initialize(myTypeParams, myTypeParams = _, {
-        //println(i"completing type params of $sym in ${sym.owner}")
-        val newScope = localContext(sym).setNewScope
-        nestedCtx = newScope
-        given Context = newScope
+      val known = myTypeParams
+      if known != null then known
+      else
+        // The parameters are indexed once, under the monitor: two readers asking
+        // at once would index them twice and the second indexing fails on the
+        // symbols the first attached to the trees. Typing the parameters ahead
+        // is outside it, since it can complete other symbols, and the symbols
+        // are published before it, as a cycle through a parameter needs them.
+        var toType: List[TypeDef] = Nil
+        val res = synchronized {
+          val known = myTypeParams
+          if known != null then known
+          else
+            //println(i"completing type params of $sym in ${sym.owner}")
+            val newScope = localContext(sym).setNewScope
+            nestedCtx = newScope
+            given Context = newScope
 
-        def typeParamTrees(tdef: Tree): List[TypeDef] = tdef match
-          case TypeDef(_, original) =>
-            original match
-              case LambdaTypeTree(tparams, _) => tparams
-              case original: DerivedFromParamTree => typeParamTrees(original.watched)
+            def typeParamTrees(tdef: Tree): List[TypeDef] = tdef match
+              case TypeDef(_, original) =>
+                original match
+                  case LambdaTypeTree(tparams, _) => tparams
+                  case original: DerivedFromParamTree => typeParamTrees(original.watched)
+                  case _ => Nil
               case _ => Nil
-          case _ => Nil
 
-        val tparams = typeParamTrees(original)
-        index(tparams)
-        val res = tparams.map(symbolOfTree(_).asType)
-        myTypeParams = res
-        for param <- tparams do typedAheadExpr(param)
+            val tparams = typeParamTrees(original)
+            index(tparams)
+            val res = tparams.map(symbolOfTree(_).asType)
+            toType = tparams
+            myTypeParams = res
+            res
+        }
+        if toType.nonEmpty then
+          given Context = nestedCtx.nn
+          for param <- toType do typedAheadExpr(param)
         res
-      })
     end completerTypeParams
 
     override final def typeSig(sym: Symbol): Type =
       val tparamSyms = completerTypeParams(sym)(using ictx)
-      given ctx: Context = nestedCtx.nn
+      // made when the type parameters were first asked for, possibly under
+      // another completion's typer state (see `Completer.ictx`)
+      val nc = nestedCtx.nn
+      given ctx: Context = if nc.typerState eq ictx.typerState then nc else nc.fresh.setTyperState(ictx.typerState)
 
       def abstracted(tp: TypeBounds): TypeBounds =
         HKTypeLambda.boundsFromParams(tparamSyms, tp)
@@ -1255,11 +1509,14 @@ class Namer { typer: Typer =>
     end typeSig
   }
 
-  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx: Context)
-  extends Completer(original)(ictx), CompleterWithCleanup {
-    withDecls(newScope(using ictx))
+  class ClassCompleter(cls: ClassSymbol, original: TypeDef)(ictx0: Context)
+  extends Completer(original)(ictx0), CompleterWithCleanup {
+    withDecls(newScope(using ictx0))
 
-    protected given completerCtx: Context = localContext(cls)
+    private var myCompleterCtx: Context = localContext(cls)
+    protected given completerCtx[Dummy_so_its_a_def]: Context = myCompleterCtx
+    // derived from `ictx`: again when `ictx` is replaced or restored
+    override protected def rebased(): Unit = myCompleterCtx = localContext(cls)
 
     private var localCtx: Context = uninitialized
 
@@ -1910,7 +2167,7 @@ class Namer { typer: Typer =>
 
   class SuspendCompleter extends LazyType, SymbolLoaders.SecondCompleter {
 
-    final override def complete(denot: SymDenotation)(using Context): Unit =
+    final override def complete(denot: SymDenotation)(using Context, dotty.tools.dotc.core.Sharing.Holds[denot.type]): Unit =
       denot.resetFlag(Touched) // allow one more completion
       ctx.compilationUnit.suspend(i"reset $denot")
   }
@@ -2181,7 +2438,7 @@ class Namer { typer: Typer =>
       && infoDontForceAnnots.abstractTypeMembers.nonEmpty
   end needsTracked
 
-  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = owner.infoOrCompleter match
+  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = { owner.denot.awaitOtherReader(); owner.infoOrCompleter } match // I73
     case info: ClassInfo =>
       info.decls.lookupAll(sym.name).filter(d => d.is(ParamAccessor)).toList
     case _ => List(sym)
@@ -2193,6 +2450,7 @@ class Namer { typer: Typer =>
    */
   def setTrackedConstrParam(param: ValDef)(using Context): Unit =
     val sym = symbolOfTree(param)
+    sym.maybeOwner.maybeOwner.denot.awaitOtherReader() // I73
     sym.maybeOwner.maybeOwner.infoOrCompleter match
       case info: ClassInfo if needsTracked(sym, param, sym.maybeOwner.maybeOwner) =>
         typr.println(i"set tracked $param, $sym: ${sym.info} containing ${sym.info.memberNames(abstractTypeNameFilter).toList}")

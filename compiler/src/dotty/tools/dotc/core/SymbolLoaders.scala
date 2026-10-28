@@ -2,6 +2,7 @@ package dotty.tools
 package dotc
 package core
 
+import scala.annotation.internal.guardedBy
 import java.io.{IOException, File}
 import java.nio.channels.ClosedByInterruptException
 
@@ -204,21 +205,21 @@ object SymbolLoaders {
 
   /** Initialize toplevel class and module symbols in `owner` from class path representation `classRep`
    */
-  def initializeFromClassPath(owner: Symbol, classRep: ClassRepresentation)(using Context): Unit =
+  def initializeFromClassPath(owner: Symbol, classRep: ClassRepresentation, scope: Scope = EmptyScope)(using Context): Unit =
     // module-info is a special class added by JPMS (Java 9+) that cannot be parsed like a normal class
     if classRep.name != "module-info" then
       ((classRep.binary, classRep.source): @unchecked) match {
       case (Some(bin), Some(src)) if needCompile(bin, src) && !binaryOnly(owner, classRep.name) =>
         if (ctx.settings.verbose.value) report.inform("[symloader] picked up newer source file for " + src.path)
-        enterToplevelsFromSource(owner, src)
+        enterToplevelsFromSource(owner, src, scope)
       case (None, Some(src)) =>
         if (ctx.settings.verbose.value) report.inform("[symloader] no class or tasty, picked up source file for " + src.path)
-        enterToplevelsFromSource(owner, src)
+        enterToplevelsFromSource(owner, src, scope)
       case (Some(bin), _) =>
         val completer =
           if bin.ext.isTasty || bin.ext.isBetasty then ctx.platform.newTastyLoader(bin)
           else ctx.platform.newClassLoader(bin)
-        enterClassAndModule(owner, termName(classRep.name), completer)
+        enterClassAndModule(owner, termName(classRep.name), completer, scope = scope)
     }
 
   def needCompile(bin: AbstractFile, src: AbstractFile): Boolean =
@@ -231,7 +232,27 @@ object SymbolLoaders {
     override def sourceModule(using Context): TermSymbol = _sourceModule
     def description(using Context): String = "package loader " + sourceModule.fullName
 
-    private var enterFlatClasses: Option[() => Context ?=> Unit] = None
+    // Read on a lookup of a flat name that misses; with several readers it is cleared only once the flat classes are
+    // published, so a reader that still finds it set waits on the loader's claim (`enterFlat`).
+    @volatile private var enterFlatClasses: Option[() => Context ?=> Unit] = None
+
+    // the thread entering the flat classes, under the loader's claim: its own lookups do not wait for itself
+    @guardedBy("completionLock") private var flatEnterer: Thread | Null = null
+
+    /** Enter the flat classes, once. With several readers, under the loader's claim, into a scope built aside and
+     *  published whole (`MutableScope.extendAside`): the package's scope is never changed while a reader may be
+     *  walking it, it is replaced by a complete one.
+     */
+    private def enterFlat()(using Context): Unit =
+      if !ctx.base.concurrent then for (enter <- enterFlatClasses) enter()
+      else if enterFlatClasses.isDefined && (flatEnterer ne Thread.currentThread) then
+        currentDecls.writing:
+          enterFlatClasses match
+            case Some(enter) =>
+              flatEnterer = Thread.currentThread
+              try enter()
+              finally flatEnterer = null
+            case None =>
 
     Stats.record("package scopes")
 
@@ -246,16 +267,16 @@ object SymbolLoaders {
         val mangled = name.mangled
         val e = super.lookupEntry(mangled)
         if (e != null) e
-        else if (isFlatName(mangled.toSimpleName) && enterFlatClasses.isDefined) {
+        else if (isFlatName(mangled.toSimpleName) && enterFlatClasses.isDefined && (flatEnterer ne Thread.currentThread)) {
           Stats.record("package scopes with flatnames entered")
-          enterFlatClasses.get()
+          enterFlat()
           lookupEntry(name)
         }
         else e
       }
 
       override def ensureComplete()(using Context): Unit =
-        for (enter <- enterFlatClasses) enter()
+        enterFlat()
 
       override def newScopeLikeThis(): PackageScope = new PackageScope
     }
@@ -288,9 +309,11 @@ object SymbolLoaders {
       *                         This is needed when merging entries from a new JAR (REPL :jar/:dep).
       *                         If false, only check isAbsent for flat names (original behavior).
       */
-    def enterClasses(root: SymDenotation, packageName: String, flat: Boolean, forceAbsentCheck: Boolean = false)(using Context) = {
+    def enterClasses(root: SymDenotation, packageName: String, flat: Boolean, forceAbsentCheck: Boolean = false,
+        target: MutableScope | Null = null)(using Context) = {
+      val scope: Scope = if target == null then root.unforcedDecls else target
       def isAbsent(classRep: ClassRepresentation) =
-        !root.unforcedDecls.lookup(classRep.name.toTypeName).exists
+        !scope.lookup(classRep.name.toTypeName).exists
 
       if (!root.isRoot) {
         val classReps = ClassPath.mergeClassesAndSources(
@@ -301,11 +324,11 @@ object SymbolLoaders {
         for (classRep <- classReps)
           if (!maybeModuleClass(classRep) && hasFlatName(classRep) == flat &&
             ((!forceAbsentCheck && !flat) || isAbsent(classRep))) // Check isAbsent: always if forceAbsentCheck, or on 2nd enter of flat names
-            initializeFromClassPath(root.symbol, classRep)
+            initializeFromClassPath(root.symbol, classRep, if target == null then EmptyScope else target)
         for (classRep <- classReps)
           if (maybeModuleClass(classRep) && hasFlatName(classRep) == flat &&
               isAbsent(classRep))
-            initializeFromClassPath(root.symbol, classRep)
+            initializeFromClassPath(root.symbol, classRep, if target == null then EmptyScope else target)
       }
     }
 
@@ -314,13 +337,21 @@ object SymbolLoaders {
       val pre = root.owner.thisType
       root.info = ClassInfo(pre, root.symbol.asClass, Nil, currentDecls, pre.select(sourceModule))
       if (!sourceModule.isCompleted)
-        sourceModule.completer.complete(sourceModule)
+        val m = sourceModule.denot
+        // the module val is a root of this load: the same loader and root key, hidden while it runs (`hideOtherRoots`)
+        m.completer.complete(m)(using summon[Context], Sharing.unguarded("the package's module val is a root of its class's load"))
 
       val packageName = if (root.isEffectiveRoot) "" else root.symbol.javaClassName
 
       enterFlatClasses = Some { () =>
-        enterFlatClasses = None
-        inContext(ctx){enterClasses(root, packageName, flat = true)}
+        if ctx.base.concurrent then
+          currentDecls.extendAside(aside => inContext(ctx){enterClasses(root, packageName, flat = true, target = aside)})
+          // a member looked up between the enter and the publication may have been cached as absent
+          root.asClass.invalidateMemberCaches()
+          enterFlatClasses = None
+        else
+          enterFlatClasses = None
+          currentDecls.asOneChange(inContext(ctx){enterClasses(root, packageName, flat = true)})
       }
       enterClasses(root, packageName, flat = false)
       if (!root.isEmptyPackage)
@@ -413,7 +444,27 @@ abstract class SymbolLoader extends LazyType { self =>
     ctx.profiler.onCompletion(sym, associatedFileName)(body)
   }
 
-  override def complete(root: SymDenotation)(using Context): Unit = profileCompletion(root) {
+  /** A loader's root is its file (the class and module it loads, and the
+   *  TASTy members unpickled from it, `TreeUnpickler`), or the loader.
+   */
+  override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
+    val f = symd.symbol.associatedFile
+    if f == null then this else f
+
+  /** Parallel readers: the other root of this load (the linked class or
+   *  module class, and the module val) is hidden from other readers while
+   *  the loader runs, as the root itself is (`SymDenotation.completeUnderRootClaim`).
+   */
+  private def hideOtherRoots(root: SymDenotation)(using Context): List[SymDenotation] =
+    if !ctx.base.parallel || root.isRoot then Nil
+    else
+      val key = completionRoot(root)
+      val linked = root.scalacLinkedClass
+      val candidates = List(linked, if root.is(ModuleClass) then root.sourceModule else linked.sourceModule)
+      candidates.filter(_.exists).map(_.denot).distinct.filter(d => (d ne root) && (d.infoOrCompleter eq this) && d.hideWhileCompleting(key))
+
+  override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit = profileCompletion(root) {
+    val hidden = hideOtherRoots(root)
     def loadingMessage(ex: IOException): Message = {
       if (ctx.debug) ex.printStackTrace()
       val msg = ex.getMessage()
@@ -468,6 +519,7 @@ abstract class SymbolLoader extends LazyType { self =>
       postProcess(root, other)
       if (!root.isRoot)
         postProcess(other, root.symbol)
+      hidden.foreach(_.publishCompletion())
     }
   }
 
@@ -565,7 +617,7 @@ class SourcefileLoader(srcfile: AbstractFile) extends SymbolLoader {
 class NoLoader extends SymbolLoader with NoCompleter {
   def description(using Context): String = "NoLoader"
   def compilationUnitInfo: CompilationUnitInfo | Null = null
-  override def complete(root: SymDenotation)(using Context): Unit =
+  override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit =
     super[NoCompleter].complete(root)
   def doComplete(root: SymDenotation)(using Context): Unit =
     unsupported("doComplete")

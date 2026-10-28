@@ -4,6 +4,7 @@ package typer
 
 import ast.{tpd, untpd}
 import core.*
+import scala.annotation.internal.{benignRace, cache}
 import printing.{Printer, Showable}
 import util.SimpleIdentityMap
 import Symbols.*, Names.*, Types.*, Contexts.*, StdNames.*, Flags.*
@@ -58,7 +59,7 @@ class ImportInfo(symf: Context ?=> Symbol,
     case _                  => None
   }
 
-  private var mySym: Symbol | Null = null
+  @cache @benignRace("`symf` gives the same symbol each time (I91)") private var mySym: Symbol | Null = null
   def importSym(using Context): Symbol =
     initialize(mySym, mySym = _, symf)
 
@@ -69,45 +70,55 @@ class ImportInfo(symf: Context ?=> Symbol,
   }
 
   /** The names that are excluded from any wildcard import */
-  def excluded: Set[TermName] = { ensureInitialized(); myExcluded.nn }
+  def excluded: Set[TermName] = selectorInfo.excluded
 
   /** A mapping from original to renamed names */
-  def forwardMapping: SimpleIdentityMap[TermName, TermName] = { ensureInitialized(); myForwardMapping.nn }
+  def forwardMapping: SimpleIdentityMap[TermName, TermName] = selectorInfo.forwardMapping
 
   /** A mapping from renamed to original names */
-  def reverseMapping: SimpleIdentityMap[TermName, TermName] = { ensureInitialized(); myReverseMapping.nn }
+  def reverseMapping: SimpleIdentityMap[TermName, TermName] = selectorInfo.reverseMapping
 
   /** Does the import clause contain wildcard selectors (both `_` and `given` count)? */
-  def isWildcardImport: Boolean = { ensureInitialized(); myWildcardImport }
+  def isWildcardImport: Boolean = selectorInfo.wildcardImport
 
   /** Does the import clause have at least one `given` selector? */
-  def isGivenImport: Boolean = { ensureInitialized(); myGivenImport }
+  def isGivenImport: Boolean = selectorInfo.givenImport
 
-  private var myExcluded: Set[TermName] | Null = null
-  private var myForwardMapping: SimpleIdentityMap[TermName, TermName] | Null = null
-  private var myReverseMapping: SimpleIdentityMap[TermName, TermName] | Null = null
-  private var myWildcardImport: Boolean = false
-  private var myGivenImport: Boolean = false
-  private var myWildcardBound: Type = NoType
-  private var myGivenBound: Type = NoType
+  // The facts of the selector list, computed once and published as one
+  // immutable value: an import is read by several readers in interactive mode,
+  // and the fields set one by one behind a marker let a reader see the marker
+  // set and a mapping still null (I60, "tried to cast away nullability" in
+  // `reverseMapping`). A value of final fields is seen whole.
+  private final class SelectorInfo(val excluded: Set[TermName], val forwardMapping: SimpleIdentityMap[TermName, TermName],
+      val reverseMapping: SimpleIdentityMap[TermName, TermName], val wildcardImport: Boolean, val givenImport: Boolean)
+  @cache @benignRace("recomputed from `selectors`; an immutable value of final fields, seen whole (I60)") private var mySelectorInfo: SelectorInfo | Null = null
+  // never reset once set; every writer types the same bound trees (`typedAhead`), so an equal type
+  @cache @benignRace("equal type from the same selectors") private var myWildcardBound: Type = NoType
+  @cache @benignRace("equal type from the same selectors") private var myGivenBound: Type = NoType
 
   /** Compute info relating to the selector list */
-  private def ensureInitialized(): Unit = if myExcluded == null then
-    myExcluded = Set()
-    var forwardMapping: SimpleIdentityMap[TermName, TermName] = SimpleIdentityMap.empty
-    var reverseMapping: SimpleIdentityMap[TermName, TermName] = SimpleIdentityMap.empty
-    for sel <- selectors do
-      if sel.isWildcard then
-        myWildcardImport = true
-        if sel.isGiven then myGivenImport = true
-      else
-        if sel.rename != sel.name then
-          myExcluded = myExcluded.nn + sel.name
-        if !sel.isUnimport then
-          forwardMapping = forwardMapping.updated(sel.name, sel.rename)
-          reverseMapping = reverseMapping.updated(sel.rename, sel.name)
-    myForwardMapping = forwardMapping
-    myReverseMapping = reverseMapping
+  private def selectorInfo: SelectorInfo =
+    val known = mySelectorInfo
+    if known != null then known
+    else
+      var excluded: Set[TermName] = Set()
+      var wildcardImport = false
+      var givenImport = false
+      var forwardMapping: SimpleIdentityMap[TermName, TermName] = SimpleIdentityMap.empty
+      var reverseMapping: SimpleIdentityMap[TermName, TermName] = SimpleIdentityMap.empty
+      for sel <- selectors do
+        if sel.isWildcard then
+          wildcardImport = true
+          if sel.isGiven then givenImport = true
+        else
+          if sel.rename != sel.name then
+            excluded = excluded + sel.name
+          if !sel.isUnimport then
+            forwardMapping = forwardMapping.updated(sel.name, sel.rename)
+            reverseMapping = reverseMapping.updated(sel.rename, sel.name)
+      val info = SelectorInfo(excluded, forwardMapping, reverseMapping, wildcardImport, givenImport)
+      mySelectorInfo = info
+      info
 
   /** The upper bound for `given` wildcards, or `Nothing` if there are none */
   def givenBound(using Context) =
@@ -174,9 +185,9 @@ class ImportInfo(symf: Context ?=> Symbol,
 
   private val isLanguageImport: Boolean = untpd.languageImport(qualifier).isDefined
 
-  private var myUnimported: Symbol | Null = null
+  @cache @benignRace("a function of the import's site, the same each time (I91)") private var myUnimported: Symbol | Null = null
 
-  private var featureCache: SimpleIdentityMap[TermName, java.lang.Boolean] = SimpleIdentityMap.empty
+  @cache @benignRace("a lost update costs a recompute; every writer stores the same boolean for a feature (I80)") private var featureCache: SimpleIdentityMap[TermName, java.lang.Boolean] = SimpleIdentityMap.empty
 
   /** Does this import clause enable or disable `feature`?
    *  @param  feature   See featureImported for a description
@@ -206,17 +217,20 @@ class ImportInfo(symf: Context ?=> Symbol,
    *  means that preceding imports are not considered and the feature is not imported.
    */
   def featureImported(feature: TermName)(using Context): Boolean =
-    if !featureCache.contains(feature) then
-      featureCache = featureCache.updated(feature,
-        mentionsFeature(feature) match
+    // the cache read once and the computed value returned: readers of a file
+    // share its import infos, and another reader's update can drop this one's (I80)
+    featureCache(feature) match
+      case null =>
+        val result: Boolean = mentionsFeature(feature) match
           case Some(bv) => bv
           case None =>
             var c = ctx.outer
             while c.importInfo eq ctx.importInfo do c = c.outer
             val cinfo = c.importInfo
             (cinfo != null) && cinfo.featureImported(feature)(using c)
-      )
-    featureCache(feature).nn
+        featureCache = featureCache.updated(feature, result)
+        result
+      case cached => cached.booleanValue
 
   def toText(printer: Printer): Text = printer.toText(this)
 }

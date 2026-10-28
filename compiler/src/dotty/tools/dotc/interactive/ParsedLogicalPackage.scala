@@ -4,6 +4,7 @@ import scala.collection.mutable
 import dotty.tools.io.AbstractFile
 
 import scala.jdk.CollectionConverters.*
+import scala.annotation.internal.{publishedBy, treeState}
 
 /**
  * Represent a package and its contents in a way that's close to the file system.
@@ -12,8 +13,10 @@ import scala.jdk.CollectionConverters.*
  * members at any level, as they are discovered by parsing source files.
  *
  * @param name simple name of the package
- * @note This class is not thread safe
+ * @note This class is not thread safe. It is built by one thread (`LogicalPackagesProvider.root`, `fromMbtIndex`) and then
+ *       only read, from the driver's bases, after `CachedLogicalPackage` published it.
  */
+@treeState @publishedBy("init")
 class ParsedLogicalPackage(
     val name: String,
     val parent: Option[ParsedLogicalPackage]

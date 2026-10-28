@@ -3,6 +3,7 @@ package dotc
 package core
 
 import scala.annotation.{threadUnsafe => tu}
+import scala.annotation.internal.{benignRace, cache, guardedBy, lazyFact, publishedBy}
 import Types.*, Contexts.*, Symbols.*, SymDenotations.*, StdNames.*, Names.*, Phases.*
 import Flags.*, Scopes.*, Decorators.*, NameOps.*, Periods.*, NullOpsDecorator.*
 import unpickleScala2.Scala2Unpickler.ensureConstructor
@@ -53,6 +54,8 @@ object Definitions {
 class Definitions {
   import Definitions.*
 
+  // Set by `init`, which each run's root context calls: a write action of the interactive driver, with no reader.
+  @lazyFact @guardedBy("writer")
   private var initCtx: Context = uninitialized
   private given currentContext[Dummy_so_its_a_def]: Context = initCtx
 
@@ -82,7 +85,7 @@ class Definitions {
   // See <http://docs.scala-lang.org/sips/pending/repeated-byname.html>.
   private def enterSpecialPolyClass(name: TypeName, paramFlags: FlagSet, parentConstrs: => Seq[Type]): ClassSymbol = {
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
         val paramDecls = newScope
         val typeParam = enterSyntheticTypeParam(cls, paramFlags, paramDecls)
@@ -121,7 +124,7 @@ class Definitions {
   private def newFunctionNType(name: TypeName): Symbol = {
     val impure = name.startsWith("Impure")
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val arity = name.functionArity
         if impure then
           val argParamNames = List.tabulate(arity)(tpnme.syntheticTypeParamName)
@@ -187,7 +190,7 @@ class Definitions {
     val info =
       if (useCompleter)
         new LazyType {
-          def complete(denot: SymDenotation)(using Context): Unit =
+          def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
             denot.info = ptype
         }
       else ptype
@@ -225,10 +228,13 @@ class Definitions {
   @tu lazy val ScalaPackageVal: TermSymbol = requiredPackage(nme.scala)
   @tu lazy val ScalaPackageClass: ClassSymbol = {
     val cls = ScalaPackageVal.moduleClass.asClass
-    cls.info.decls.openForMutations.useSynthesizer(
+    val decls = cls.info.decls.openForMutations
+    // `Null` is one fixed class: entered with the package, so that every enumeration of `scala` has it
+    decls.enter(synthesizeNullClass(cls))
+    // the synthetic function types are a family without end: made on a lookup, and kept beside the scope
+    decls.useSynthesizer(name => name.isTypeName && name.isSyntheticFunction)(
       name =>
         if (name.isTypeName && name.isSyntheticFunction) newFunctionNType(name.asTypeName)
-        else if (name == tpnme.Null) synthesizeNullClass()
         else NoSymbol)
     cls
   }
@@ -518,17 +524,20 @@ class Definitions {
   @tu lazy val NullClass: ClassSymbol = requiredClass("scala.Null")
   def NullType: TypeRef = NullClass.typeRef
 
-  private def synthesizeNullClass(): ClassSymbol = {
+  private def synthesizeNullClass(scalaPackageClass: ClassSymbol): ClassSymbol = {
     // When explicit-nulls is enabled, Null becomes a direct subtype of AnyVal
     val completer = new LazyType {
-      def complete(denot: SymDenotation)(using Context): Unit = {
+      def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
         val cls = denot.asClass.classSymbol
-        val parents = if ctx.explicitNulls then AnyValType :: Nil else ObjectType :: Nil
+        // `AnyVal` by name: `Null` is completed during `init` (`requiredClass` merges it with the package object's
+        // members, which reads its target name), and `AnyValClass` taken then would be the classpath's even when
+        // the library's own `AnyVal` is being compiled
+        val parents = if ctx.explicitNulls then TypeRef(scalaPackageClass.thisType, tpnme.AnyVal) :: Nil else ObjectType :: Nil
         val decls = newScope
-        denot.info = ClassInfo(ScalaPackageClass.thisType, cls, parents, decls)
+        denot.info = ClassInfo(scalaPackageClass.thisType, cls, parents, decls)
       }
     }
-    newPermanentClassSymbol(ScalaPackageClass, tpnme.Null, AbstractFinal, completer)
+    newPermanentClassSymbol(scalaPackageClass, tpnme.Null, AbstractFinal, completer)
   }
 
   @tu lazy val RuntimeNothingClass: Symbol = requiredClass(RuntimeNothingName)
@@ -800,7 +809,7 @@ class Definitions {
     cls.infoOrCompleter match {
       case completer: ClassfileLoader =>
         cls.info = new ClassfileLoader(completer.classfile) {
-          override def complete(root: SymDenotation)(using Context): Unit = {
+          override def complete(root: SymDenotation)(using Context, Sharing.Holds[root.type]): Unit = {
             super.complete(root)
             val constr = cls.primaryConstructor
             val noArgInfo = constr.info match {
@@ -1632,17 +1641,27 @@ class Definitions {
    *  called from a synthesizer installed in ScalaPackageClass.
    */
   private class FunType(prefix: String):
+    // An element is written once per writer, to the class's reference, which every writer computes equal; the array
+    // is replaced and written under the monitor, so a store is not lost to a copy. A reader that misses computes it.
+    @cache @benignRace("every writer stores the class's reference; stores and growth are under the monitor")
     private var classRefs: Array[TypeRef | Null] = new Array(22)
-    def apply(n: Int): TypeRef =
-      while n >= classRefs.length do
-        classRefs = Array.copyOf(classRefs, classRefs.length * 2)
-      if classRefs(n) == null then
+    def apply(n: Int)(using Context): TypeRef =
+      val refs = classRefs
+      val known = if n < refs.length then refs(n) else null
+      if known != null then known
+      else
+        // computed outside the monitor: it may complete symbols
         val funName = s"scala.$prefix$n"
-        classRefs(n) =
+        val ref =
           if prefix.startsWith("Impure")
           then staticRef(funName.toTypeName).symbol.typeRef
           else requiredClassRef(funName)
-      classRefs(n).nn
+        synchronized {
+          while n >= classRefs.length do
+            classRefs = Array.copyOf(classRefs, classRefs.length * 2)
+          classRefs(n) = ref
+        }
+        ref
   end FunType
 
   private def funTypeIdx(isContextual: Boolean, isImpure: Boolean): Int =
@@ -2109,16 +2128,22 @@ class Definitions {
   // ----- primitive value class machinery ------------------------------------------
 
   class PerRun[T](generate: Context ?=> T) {
-    private var current: RunId = NoRunId
-    private var cached: T = uninitialized
+    // the run id and the value in one immutable object, so that a reader on
+    // another thread (interactive mode) sees the pair or nothing
+    // Readers of one run store equal values, and a `Cached` has only final fields, so a plain race publishes it.
+    @cache @benignRace("readers of one run generate equal values; Cached has final fields only")
+    private var cached: PerRun.Cached[T] | Null = null
     def apply()(using Context): T = {
-      if (current != ctx.runId) {
-        cached = generate
-        current = ctx.runId
-      }
-      cached
+      val c = cached
+      if c != null && c.runId == ctx.runId then c.value
+      else
+        val c1 = PerRun.Cached(ctx.runId, generate)
+        cached = c1
+        c1.value
     }
   }
+  object PerRun:
+    final class Cached[T](val runId: RunId, val value: T)
 
   @tu lazy val ScalaNumericValueTypeList: List[TypeRef] = List(
     ByteType, ShortType, CharType, IntType, LongType, FloatType, DoubleType)
@@ -2138,7 +2163,10 @@ class Definitions {
     ScalaNumericBoxedClasses() `union` Set(BoxedUnitClass, BoxedBooleanClass)
   )
 
+  // Filled by `valueTypeRef`, from the lazy vals that `init` forces (`ScalaValueClasses`), and only read after.
+  @lazyFact @publishedBy("init")
   private val valueTypeEnc = mutable.Map[TypeName, PrimitiveClassEnc]()
+  @lazyFact @publishedBy("init")
   private val typeTags = mutable.Map[TypeName, Name]().withDefaultValue(nme.specializedTypeNames.Object)
 
 //  private val unboxedTypeRef = mutable.Map[TypeName, TypeRef]()
@@ -2249,7 +2277,11 @@ class Definitions {
 
   @tu lazy val reservedScalaClassNames: Set[Name] = syntheticScalaClasses.map(_.name).toSet + tpnme.Null
 
+  @lazyFact @guardedBy("writer")
   private var isInitialized = false
+
+  /** Is the base set up (`init` has run)? Before that there is no reader, so a scope may change freely. */
+  private[dotc] def initialized: Boolean = isInitialized
 
   def init()(using Context): Unit = {
     this.initCtx = ctx
@@ -2259,6 +2291,10 @@ class Definitions {
       syntheticCoreMethods
       ScalaValueClasses()
       JavaEnumClass
+      // entered into published packages on first use otherwise, by whichever reader got there first, and listed by
+      // enumerations of the package only from then on
+      FlexibleTypeSymbol
+      ImplicitScrutineeTypeSym
       // end force initialization
       isInitialized = true
     }

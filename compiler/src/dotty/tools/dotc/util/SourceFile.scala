@@ -5,12 +5,13 @@ package util
 import dotty.tools.io.*
 import Spans.*
 import core.Contexts.*
+import core.Sharing
 import core.Decorators.*
 
 import scala.io.Codec
 import Chars.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, publishedBy, sharable}
 import scala.collection.mutable.ArrayBuilder
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.util.chaining.*
@@ -38,7 +39,8 @@ object WrappedSourceFile:
 
   private def lookupMagicHeader(sourceFile: SourceFile)(using Context): MagicHeaderInfo =
     val cache = ctx.base.magicHeaderCache
-    cache.lookup(sourceFile) match
+    // shared by the readers of a concurrent base: a lookup or an update races a grow
+    Sharing.serialised(cache)(cache.lookup(sourceFile)) match
       case null =>
         val magicHeader = ctx.settings.YmagicOffsetHeader.value
         val result =
@@ -59,17 +61,24 @@ object WrappedSourceFile:
                   report.warning(em"original source file not found: $name")
                   NoHeader
               case None => NoHeader
-        cache(sourceFile) = result
+        Sharing.serialised(cache) { cache(sourceFile) = result }
         result
       case result => result
 
 class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec: Codec) extends interfaces.SourceFile {
+  // the file's text, read by whichever reader first needs it (every read gives the same String, which is immutable); the
+  // interactive driver's body edit replaces it in a write action
+  @cache @benignRace("every reader reads the same file; a String is immutable")
   private var myContent: String | Null = null
 
+  // set by `virtual`, as the source file is made
+  @cache @publishedBy("init")
   private var _maybeIncomplete: Boolean = false
 
   def maybeIncomplete: Boolean = _maybeIncomplete
 
+  // only the deprecated `content()` fills it, which the compiler does not call
+  @cache @benignRace("every reader stores the same characters")
   private var cachedCharArrayContent: Array[Char] | Null = null
   @deprecated("Use `textContent` to not require a copy of the data.")
   override def content(): Array[Char] =
@@ -84,6 +93,17 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
         try new String(file.toByteArray, codec.charSet)
         catch case _: FileSystemException => ""
       )
+
+  /** Replace the content, in place. Only for the interactive session's edit
+   *  inside a body (docs/_docs/internals/interactive-session.md §12), which
+   *  keeps every tree, context and unit of the file and shifts their spans:
+   *  they keep referring to this object, which now holds the new content.
+   */
+  private[dotc] def replaceContent(content: String): Unit =
+    myContent = content
+    cachedCharArrayContent = null
+    lineIndicesCache = null.asInstanceOf[Array[Int]]
+    lastLine = 0
 
   override def name: String =
     if file eq null then "" else file.name
@@ -134,7 +154,8 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
    * Note that when the source is from Tasty, textContent() could be empty even though length > 0.
    * Use textContent().length to determine the length of content(). */
   def length: Int =
-    if lineIndicesCache ne null then lineIndicesCache.last
+    val cached = lineIndicesCache
+    if cached ne null then cached.last
     else textContent().length
 
   /** true for all source files except `NoSource` */
@@ -162,11 +183,17 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
     buf.result()
   }
 
-  private var lineIndicesCache: Array[Int] = uninitialized
+  // volatile: the table is filled before it is stored, and readers on other threads must see it whole. Readers may each
+  // compute it, from the same text; the TASTy unpickler may set it from the pickled line sizes.
+  @cache
+  @volatile private var lineIndicesCache: Array[Int] = uninitialized
   private def lineIndices: Array[Int] =
-    if lineIndicesCache eq null then
-      lineIndicesCache = calculateLineIndicesFromContents()
-    lineIndicesCache
+    val cached = lineIndicesCache
+    if cached ne null then cached
+    else
+      val computed = calculateLineIndicesFromContents()
+      lineIndicesCache = computed
+      computed
 
   def initialized: Boolean = lineIndicesCache != null
 
@@ -192,15 +219,19 @@ class SourceFile (val file: AbstractFile | Null, sourceRoot: AbstractFile, codec
       Some(lineToOffset(index))
 
   /** A cache to speed up offsetToLine searches to similar lines */
+  @cache @benignRace("a hint: `bestFit` finds the line from any starting point, and an int is stored whole")
   private var lastLine = 0
 
   /** Convert offset to line in this source file
    *  Lines are numbered from 0
    */
   def offsetToLine(offset: Int): Int = {
-    lastLine = Util.bestFit(lineIndices, lineIndices.length, offset, lastLine)
-    if (offset >= length) lastLine -= 1 // compensate for the sentinel
-    lastLine
+    // the result in a local: `lastLine` is only a hint, shared by the readers of a file
+    val indices = lineIndices
+    var line = Util.bestFit(indices, indices.length, offset, lastLine)
+    lastLine = line
+    if (offset >= length) line -= 1 // compensate for the sentinel
+    line
   }
 
   /** The index of the first character of the line containing position `offset` */

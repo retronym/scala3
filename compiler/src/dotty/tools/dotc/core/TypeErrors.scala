@@ -89,6 +89,8 @@ end MissingType
  * so it requires knowing denot already.
  * @param denot
  */
+// One cycle, thrown and caught on the stack of the reader that met it.
+@scala.annotation.internal.scratch @scala.annotation.internal.confined
 class CyclicReference(
     val denot: SymDenotation,
     val optTrace: Array[CyclicReference.TraceElement] | Null)(using Context)
@@ -98,15 +100,17 @@ extends TypeError:
   val cycleSym = denot.symbol
 
   // cycleSym.flags would try completing denot and would fail, but here we can use flagsUNSAFE to detect flags
-  // set by the parser.
-  def unsafeFlags = cycleSym.flagsUNSAFE
+  // set by the parser. On `denot` itself, the denotation that cycled, not through `cycleSym.denot`: that
+  // brings the symbol's denotation forward, re-running the transform that just cycled, and the second
+  // cyclic reference replaced the first (with its trace pointing at the cause) with one raised from the reporter.
+  def unsafeFlags = denot.flagsUNSAFE
   def isMethod = unsafeFlags.is(Method)
-  def isVal = !isMethod && cycleSym.isTerm
+  def isVal = !isMethod && denot.isTerm
 
   override def toMessage(using Context): Message =
-    val unsafeFlags = cycleSym.flagsUNSAFE
+    val unsafeFlags = denot.flagsUNSAFE
     val isMethod = unsafeFlags.is(Method)
-    val isVal = !isMethod && cycleSym.isTerm
+    val isVal = !isMethod && denot.isTerm
 
     /* This CyclicReference might have arisen from asking for `m`'s type while trying to infer it.
      * To try to diagnose this, walk the context chain searching for context in
@@ -129,8 +133,8 @@ extends TypeError:
             errorMsg(cx.outer)
         }
 
-      // Give up and give generic errors.
-      else if (cycleSym.isOneOf(GivenOrImplicitVal, butNot = Method) && cycleSym.owner.isTerm)
+      // Give up and give generic errors. The raw flags and the last known owner: nothing forced, nothing brought forward.
+      else if (unsafeFlags.isOneOf(GivenOrImplicitVal, butNot = Method) && cycleSym.lastKnownDenotation.owner.isTerm)
         CyclicReferenceInvolvingImplicit(this)
       else
         CyclicReferenceInvolving(this)
@@ -144,9 +148,8 @@ object CyclicReference:
     val run = ctx.run
     if run == null then null
     else
-      val trace = run.cyclicReferenceTrace
-      if trace == null then null
-      else trace.toArray
+      if !run.traceCycles then null
+      else ctx.reader.cyclicReferenceTrace.toArray
 
   def apply(denot: SymDenotation)(using Context): CyclicReference =
     val ex = new CyclicReference(denot, traceElements)
@@ -162,12 +165,12 @@ object CyclicReference:
 
   inline def trace[T](info: TraceElement)(inline op: => T)(using Context): T =
     val run = ctx.run
-    val traceCycles = run != null && run.cyclicReferenceTrace != null
+    val traceCycles = run != null && run.traceCycles
     try
-      if traceCycles then run.nn.cyclicReferenceTrace.nn += info
+      if traceCycles then ctx.reader.cyclicReferenceTrace += info
       op
     finally
-      if traceCycles then run.nn.cyclicReferenceTrace.nn.dropRightInPlace(1)
+      if traceCycles then ctx.reader.cyclicReferenceTrace.dropRightInPlace(1)
 
   inline def trace[T](prefix: String, sym: Symbol)(inline op: => T)(using Context): T =
     trace((ctx: Context) ?=> i"$prefix$sym")(op)

@@ -14,6 +14,8 @@ import util.{Property, SourceFile, Spans}
 import Spans.*
 
 import scala.annotation.tailrec
+import dotty.tools.sharing.Claimed
+import scala.annotation.internal.{cache, confined, scratch}
 import scala.collection.{immutable, mutable}
 
 /** Some creators for typed trees */
@@ -1389,12 +1391,19 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
   trait TreeProvider {
     protected def computeRootTrees(using Context): List[Tree]
 
-    private var myTrees: List[Tree] | Null = null
+    // the trees are read under the file's claim (`rootTreesClaim`), and kept under it, so that readers share one
+    // reading: a second one creates the local symbols again. Only with -Yretain-trees, which Metals sets.
+    @cache private var myTrees: Claimed[Sharing.TastyFileClaim, List[Tree] | Null] = Claimed.initial(null)
+
+    /** The claim the trees are read and kept under: the one the unpickler's completers take. */
+    protected def rootTreesClaim(using Context): AnyRef = this
 
     /** Get trees defined by this provider. Cache them if -Yretain-trees is set. */
     def rootTrees(using Context): List[Tree] =
       if (ctx.settings.YretainTrees.value) {
-        initialize(myTrees, myTrees = _, computeRootTrees)
+        Sharing.claimAt[Sharing.TastyFileClaim](rootTreesClaim, Sharing.lazyTastyRead, this) {
+          initialize(myTrees(), ts => myTrees = Claimed(ts), computeRootTrees)
+        }
       }
       else computeRootTrees
 
@@ -1480,6 +1489,8 @@ object tpd extends Trees.Instance[Type] with TypedTreeInfo {
 
   /** A key to be used in a context property that tracks the number of inlined trees */
   private val InlinedTrees = Property.Key[Counter]()
+  // one outermost inlined call's count, in its context
+  @scratch @confined
   final class Counter {
     var count: Int = 0
   }

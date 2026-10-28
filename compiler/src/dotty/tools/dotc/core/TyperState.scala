@@ -13,7 +13,7 @@ import java.lang.ref.WeakReference
 import util.{Stats, SimpleIdentityMap}
 import Decorators.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{confined, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 
 object TyperState {
@@ -44,6 +44,11 @@ object TyperState {
       ts.upLevels = upLevels
 }
 
+// A typer state is one reader's: with parallel readers each statement and each completion types in a state of its own
+// (`Sharing.privately`, settled when it ends), and a run's root state is read-only once the run opens (`readOnlyRoot`);
+// serialised readers share the root state one at a time under the completion lock, and the batch compiler has one
+// thread.
+@scratch @confined
 class TyperState() {
   import TyperState.{LevelMap, BadTyperStateAssertion}
 
@@ -176,6 +181,7 @@ class TyperState() {
     assert(isCommittable, s"$this is not committable")
     assert(!isCommitted, s"$this is already committed")
     val targetState = ctx.typerState
+    assert(!targetState.readOnlyRoot, s"commit of $this into the run's root state, which several readers share (interactive, -Yinteractive-parallel)")
 
     val nothingToCommit = (constraint eq targetState.constraint) && !reporter.hasUnreportedMessages
     assert(!targetState.isCommitted || nothingToCommit ||
@@ -298,6 +304,28 @@ class TyperState() {
    *  type variable instantiation cannot be retracted anymore. Then, remove
    *  no-longer needed constraint entries.
    */
+  /** The root typer state of an interactive run read by parallel readers
+   *  (`-Yinteractive-parallel`): no state is committed into it once the run is
+   *  opened. Each reader's typer state is private to it and ends with `settle`.
+   */
+  // set by the driver's write action that ends the run, before any reader reads it
+  @publishedBy("init")
+  var readOnlyRoot: Boolean = false
+
+  /** End this typer state without committing it (parallel readers): the
+   *  type variables it owns and left uninstantiated are instantiated from
+   *  below, all of them made permanent (`gc`), and its messages issued to the
+   *  reporter of `into`, as `commit` would; its constraint is then dropped.
+   *  Nothing is shared through a constraint between readers (I76). `ctx` is
+   *  a context of this state.
+   */
+  def settle(into: Context)(using Context): Unit =
+    assert(ctx.typerState eq this, s"settle $this in the context of ${ctx.typerState}")
+    ownedVars.foreach(tv => if !tv.isInstantiated then tv.instantiate(fromBelow = true))
+    gc()
+    reporter.flush()(using into)
+    setCommittable(false)
+
   def gc()(using Context): Unit =
     if !ownedVars.isEmpty then
       Stats.record("typerState.gc")

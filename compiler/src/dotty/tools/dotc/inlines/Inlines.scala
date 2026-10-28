@@ -22,6 +22,7 @@ import staging.StagingLevel
 import cc.CleanupRetains
 
 import collection.mutable
+import scala.annotation.internal.{confined, scratch}
 import reporting.{NotConstant, trace}
 import util.Property
 import util.Spans.{Span, spanCoord}
@@ -100,7 +101,7 @@ object Inlines:
         || (ctx.inlineTraitState.inlineTraitsPhase == InlineTraitState.InlineContext.SpecializedTraits && !tree.symbol.is(Macro) && (tree.symbol.isSpecializedTraitImplementationClass || tree.symbol.isSpecializedTraitInterface) )
       )
       && !ctx.typer.hasInliningErrors
-      && !ctx.base.stopInlining
+      && !ctx.reader.stopInlining
 
     tree match
       case Block(_, expr) =>
@@ -264,7 +265,7 @@ object Inlines:
             throw CyclicReference(ctx.owner)
         new InlineCall(tree0).expand(body)
       else
-        ctx.base.stopInlining = true
+        ctx.reader.stopInlining = true
         val (reason, setting) =
           if reachedInlinedTreesLimit then ("inlined trees", ctx.settings.XmaxInlinedTrees)
           else ("successive inlines", ctx.settings.XmaxInlines)
@@ -279,8 +280,8 @@ object Inlines:
     // attach the method name to the tree2 (expanded tree)
     val tree3 =
       if symbol0.is(Transparent) then tree2.withAttachment(TransparentInlinedCall, symbol0.show) else tree2
-    if ctx.base.stopInlining && enclosingInlineds.isEmpty then
-      ctx.base.stopInlining = false
+    if ctx.reader.stopInlining && enclosingInlineds.isEmpty then
+      ctx.reader.stopInlining = false
         // we have completely backed out of the call that overflowed;
         // reset so that further inline calls can be expanded
     tree3
@@ -1122,7 +1123,8 @@ object Inlines:
                     oldOwners = symbolMap.keys.toList,
                     newOwners = symbolMap.values.toList)(rhs2)
 
-    private class ParamAccessorsMapper:
+    // one per InlineParentTrait, which is one expansion
+    @scratch @confined private class ParamAccessorsMapper:
       private val paramAccessorsTrees: mutable.Map[Symbol, Map[Name, Tree]] = mutable.Map.empty
       private val paramAccessorsNewNames: mutable.Map[(Symbol, Name), Name] = mutable.Map.empty
 
@@ -1160,7 +1162,9 @@ object Inlines:
     enum InlineContext:
       case InlineTraits, SpecializedTraits, None
 
-  class InlineTraitState(
+  // On the initial context, so shared by every reader of a base; only SpecializeInlineTraits and DesugarSpecializedTraits
+  // (phases after typer, one thread) call `inlineParentInlineTraits`, which reads and fills `inlineOrigins`.
+  @scratch @confined class InlineTraitState(
     // For a class symbol created during inlining of an inline trait,
     // the chain of inlined traits which produced it. We don't actually care about the order. 
     // Used as a "seen list" for cycle checking. Persists across invocations of InlineParentTrait

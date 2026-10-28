@@ -4,6 +4,7 @@ import java.io.File
 import java.net.URI
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 import scala.language.unsafeNulls
 import scala.util.Random
 
@@ -11,6 +12,7 @@ import dotty.tools.dotc.CompilationUnit.CancelledCompilation
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Phases
 import dotty.tools.dotc.core.Symbols.*
+import dotty.tools.dotc.core.SymDenotations.SymDenotation
 import dotty.tools.dotc.interactive.{CachedLogicalPackage, Completion, InteractiveDriver}
 import dotty.tools.dotc.util.{SourceFile, SourcePosition}
 import dotty.tools.dotc.util.Spans.Span
@@ -35,7 +37,29 @@ class CompletionSoakSuite extends BasePCSuite:
     List("-color:never", "-Ximport-suggestion-timeout", "0",
       "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator))
 
-  private def newDriver() = new InteractiveDriver(settings, CachedLogicalPackage.none)
+  private def newDriver(bodyEdits: Boolean = false) =
+    new InteractiveDriver(if bodyEdits then settings :+ "-Yinteractive-body-edits" else settings, CachedLogicalPackage.none)
+
+  /** Edits of the objects file's marked text: inside bodies of methods with
+   *  a declared type (one leaving a type error, one in the 120-statement
+   *  method), and one of a signature.
+   */
+  private val objectsEdits: List[String => String] = List(
+    _.replace("xs.map(_ + 5).", "xs.map(_ + 5 * 2)."),
+    _.replace("= xs.map(_ + 12).", "= { val k = 12; xs.map(_ + k) }."),
+    _.replace("    a0 + a119\n", "    a0 + a119 + a7\n"),
+    _.replace("fil@@ter(_ > 20).sum", "fil@@ter(_ > 20).sum + xs.hea"),
+    _.replace("def method30(xs: List[Int]): Int", "def method30(xs: List[Int]): Long"))
+
+  /** Edits of the shapes file: a companion's explicit `apply` (in an object
+   *  no point is in, so skipped whole: refused), a match's scrutinee, an
+   *  extension method (refused), a method without a result type (refused).
+   */
+  private val shapesEdits: List[String => String] = List(
+    _.replace("def apply(x: Int): TestClass = ???", "def apply(x: Int): TestClass = new TestClass(x + 1)"),
+    _.replace("def energy(act: Hobby): Int = act match", "def energy(act: Hobby): Int = (act: Activity | Hobby) match"),
+    _.replace("str.toUpperCase * times", "str.toUpperCase * (times + 1)"),
+    _.replace("def giv = summon[Show[String]].sho@@", "def giv = summon[Show[String]].sho@@ + \"\""))
 
   /** `@@` marks the completion points; the content is the text without them. */
   private def points(marked: String): (String, List[Int]) =
@@ -121,47 +145,78 @@ class CompletionSoakSuite extends BasePCSuite:
 
   private def labels(driver: InteractiveDriver, source: SourceFile, offset: Int): List[String] =
     driver.compilationUnits.get(uri) match
-      case Some(unit) =>
-        given Context = driver.currentCtx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using driver.currentCtx))
-        Completion.completions(SourcePosition(source, Span(offset)))._2.map(c => c.label + " " + c.description).sorted.distinct
+      case Some(unit) => labels(driver.currentCtx, unit, source, offset)
       case None => List("<no unit>")
+
+  /** The completions at `offset` in `unit`, under `ctx0`: the read action of a request. */
+  private def labels(ctx0: Context, unit: dotty.tools.dotc.CompilationUnit, source: SourceFile, offset: Int): List[String] =
+    given Context = ctx0.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using ctx0))
+    Completion.completions(SourcePosition(source, Span(offset)))._2.map(c => c.label + " " + c.description).sorted.distinct
 
   /** Symbols of the file still completing, over the packages the file declares. */
   private def touched(driver: InteractiveDriver): List[String] =
     given Context = driver.currentCtx
     val file = driver.openedFiles.get(uri).map(_.file)
-    def ofFile(s: Symbol) = file.exists(f => s.associatedFile != null && s.associatedFile.path == f.path)
-    def walk(pkg: Symbol): List[String] =
-      pkg.info.decls.toList.flatMap { s =>
-        if s.is(dotty.tools.dotc.core.Flags.Package) then walk(s.moduleClass)
-        else if ofFile(s) then
-          val nested = if s.isClass then s.asClass.unforcedDecls.toList else Nil
-          (s :: nested).filter(_.isCompleting).map(_.show)
-        else Nil
+    // Only the packages the file declares, and only the last known denotation of each symbol: a walk from the
+    // root touched the classpath's classes, and `denot` of one in a context another reader's fresh run has
+    // left behind brings it forward into the wrong run ("invalid in run"). The file's own symbols are current.
+    val content = driver.openedFiles.get(uri).map(_.textContent()).getOrElse("")
+    val declared = content.linesIterator.map(_.trim).filter(_.startsWith("package ")).map(_.stripPrefix("package ").takeWhile(c => c != ' ' && c != '{')).toList
+    val packages = if declared.isEmpty then List(defn.RootClass) else declared.map(n => requiredPackage(n).moduleClass)
+    def ofFile(d: SymDenotation) = file.exists(f => d.symbol.associatedFile != null && d.symbol.associatedFile.path == f.path) // the file's packages hold only its symbols
+    packages.flatMap { pkg =>
+      pkg.lastKnownDenotation.info.decls.toList.flatMap { s =>
+        val d = s.lastKnownDenotation
+        if !ofFile(d) then Nil
+        else
+          // not a class left with the completer of a cancellation that unwound: `unforcedDecls` would run it, and it
+          // throws. The other reader can leave it so between the test and the call (waiting on its root, then meeting
+          // the guard), so a cancellation here means the same
+          val nested =
+            if d.isClass && !d.infoOrCompleter.isInstanceOf[dotty.tools.dotc.core.SymDenotations.UnwoundCompletion]
+            then
+              try d.symbol.asClass.unforcedDecls.toList
+              catch case _: CancelledCompilation => Nil
+            else Nil
+          // still completing (a leaked `Touched`), state a fresh run cannot recover from. A symbol left with the
+          // completer of a cancellation that unwound (`UnwoundCompletion`) is not dirty: it cancels whoever reaches
+          // it in this run, which starts a fresh one, and degrades in a later run as a stale completer does.
+          (s :: nested).map(_.lastKnownDenotation).collect {
+            case d if { d.awaitOtherReader(); d.isCompleting } => d.symbol.show + " (Touched)"
+          }
       }
-    walk(defn.RootClass).distinct // the root scope lists a package once per entry (val and class): dedupe
+    }.distinct
 
   private def inTyperCheckpoint(): Boolean =
     Thread.currentThread.getStackTrace.exists(_.getMethodName == "checkCancelledTyping")
 
-  private def soak(name: String, file: String => String, seed: Int, steps: Int): Unit =
+  /** With `edits`, the driver keeps its run across edits inside bodies
+   *  (`-Yinteractive-body-edits`), and an edit step moves to any variant:
+   *  the two tags (a layout edit) or one of `edits` applied to tag `a`.
+   */
+  private def soak(name: String, file: String => String, seed: Int, steps: Int, edits: List[String => String] = Nil): Unit =
     // A checkpoint every 16 typed trees, so that cancellations land inside
     // the small statements a targeted run types (1024 by default)
     val mask = dotty.tools.dotc.Run.typerCheckpointMask
     dotty.tools.dotc.Run.typerCheckpointMask = 15
-    try soak0(name, file, seed, steps)
+    try soak0(name, file, seed, steps, edits)
     finally dotty.tools.dotc.Run.typerCheckpointMask = mask
 
-  private def soak0(name: String, file: String => String, seed: Int, steps: Int): Unit =
-    val variants = List("a", "b").map(tag => points(file(tag)))
-    // The oracle: a fresh driver, the whole file typed, the completions at every point
+  private def soak0(name: String, file: String => String, seed: Int, steps: Int, edits: List[String => String]): Unit =
+    val variants = List("a", "b").map(tag => points(file(tag))) ++ edits.map(e => points(e(file("a"))))
+    for (v, i) <- variants.zipWithIndex.drop(2) do
+      org.junit.Assert.assertTrue(s"edit $i changes the file", v._1 != variants.head._1)
+    // The oracle: a fresh driver, the whole file typed, the completions at
+    // every point, and the diagnostics
+    val oracleDiagnostics = mutable.ArrayBuffer.empty[String]
     val oracle = variants.map { (content, offsets) =>
       val d = newDriver()
       val source = SourceFile.virtual(uri, content)
-      d.run(uri, source)
+      oracleDiagnostics += SessionDiagnostics.of(d.run(uri, source))
       offsets.map(o => o -> labels(d, source, o)).toMap
     }
-    val driver = newDriver()
+    val driver = newDriver(bodyEdits = edits.nonEmpty)
+    val adopted = mutable.Map.empty[String, Int].withDefaultValue(0)
     val rng = new Random(seed)
     var variant = 0
     var runId = -1
@@ -173,6 +228,9 @@ class CompletionSoakSuite extends BasePCSuite:
       val (content, _) = variants(variant)
       val source = SourceFile.virtual(uri, content)
       val diags = driver.runUpTo(uri, source, Span(offset))
+      if what.startsWith("edit") then
+        adopted(driver.lastEdit(uri).replaceAll(", shifted.*", "").replaceAll(" at \\[.*", "").replaceAll("\\d+", "N")) += 1
+        log += s"$step edit to variant $variant: ${driver.lastEdit(uri)}"
       val obtained = labels(driver, source, offset)
       def treeAt: String =
         driver.compilationUnits.get(uri).map { unit =>
@@ -206,16 +264,34 @@ class CompletionSoakSuite extends BasePCSuite:
         val again = SourceFile.virtual(uri, content + "\n// again")
         driver.runUpTo(uri, again, Span(offset))
         println(s"[soak] the same completion in a fresh run of this driver: ${labels(driver, again, offset)}")
-      org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
+      org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] completions at $offset after $what (variant $variant)\n${log.takeRight(if edits.nonEmpty then 40 else 8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
       val t = touched(driver)
       org.junit.Assert.assertTrue(s"[$name seed=$seed step $step] symbols still Touched after $what: ${t.mkString(", ")}", t.isEmpty)
+    var diagnosticChecks = 0
+    /** With body edits: the session completed (a whole-file run), its
+     *  diagnostics exactly the oracle's for the content (§12).
+     */
+    def checkDiagnostics(step: Int): Unit =
+      if edits.nonEmpty then
+        val (content, _) = variants(variant)
+        val obtained = SessionDiagnostics.of(driver.run(uri, SourceFile.virtual(uri, content)))
+        diagnosticChecks += 1
+        if oracleDiagnostics(variant) != obtained then
+          val (e, o) = (oracleDiagnostics(variant).linesIterator.toList, obtained.linesIterator.toList)
+          println(s"[soak $name seed=$seed step $step] diagnostics differ: missing ${e.diff(o).mkString(" // ")}; extra ${o.diff(e).mkString(" // ")}")
+          println(driver.diagnosticsByProvenance(uri).map((p, d) => s"  $p ${d.pos.span} ${d.msg.message.take(60)}").mkString("\n"))
+        org.junit.Assert.assertEquals(s"[$name seed=$seed step $step] the diagnostics of the completed session (variant $variant)\n${log.takeRight(12).mkString("\n")}", oracleDiagnostics(variant), obtained)
     for step <- 1 to steps do
       val (content, offsets) = variants(variant)
       val offset = offsets(rng.nextInt(offsets.size))
       rng.nextInt(10) match
         case 0 =>
-          variant = 1 - variant
-          check(step, "edit+complete", offsets(rng.nextInt(offsets.size)))
+          // the content an earlier edit reached, before it is left
+          checkDiagnostics(step)
+          // one edit at a time: from `a` to any variant, from any other back to `a`
+          variant = if variants.size == 2 then 1 - variant else if variant == 0 then 1 + rng.nextInt(variants.size - 1) else 0
+          val now = variants(variant)._2
+          check(step, "edit+complete", now(rng.nextInt(now.size)))
         case 1 | 2 =>
           val k = 1 + rng.nextInt(3)
           var p = 0
@@ -234,9 +310,258 @@ class CompletionSoakSuite extends BasePCSuite:
           check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))
         case _ =>
           check(step, "complete", offset)
-    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points")
+    checkDiagnostics(steps + 1)
+    println(s"[soak $name seed=$seed] $steps steps, $fresh runs, $cancelled cancellations landed (${polls} polls), ${variants.head._2.size} points${if edits.nonEmpty then adopted.toList.sorted.map((k, n) => s"$n× $k").mkString("; edits: ", ", ", "") + s"; diagnostics of the completed session checked $diagnosticChecks times" else ""}")
+    if edits.nonEmpty then
+      org.junit.Assert.assertTrue(s"[$name seed=$seed] some body edits keep the run: $adopted", adopted.keys.exists(_.startsWith("body edit")))
     // A small file is mostly served from what is typed, so few attempts find typing to land in
     org.junit.Assert.assertTrue(s"[$name seed=$seed] the cancellations must land: $cancelled of ${steps / 5} attempts", cancelled >= 1)
+
+  /** Two readers on one driver: the same random walk, issued from two threads
+   *  at once (step 3 of the multi-reader notes). Each request is a read action
+   *  (`readUpTo`): the completions are computed under the read lock, on the
+   *  unit the request typed, so a fresh run by the other thread's edit cannot
+   *  replace the unit before the answer is read. Every answer must still be
+   *  the whole-file oracle's for the content the request was made on; the
+   *  `Touched` check is at the end, once both threads are done (while the
+   *  other thread completes a symbol, `Touched` is legitimately set).
+   */
+  private def soak2(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean = true): Unit =
+    val mask = dotty.tools.dotc.Run.typerCheckpointMask
+    dotty.tools.dotc.Run.typerCheckpointMask = 15
+    try soak20(name, file, seed, steps, parallel)
+    finally dotty.tools.dotc.Run.typerCheckpointMask = mask
+
+  /** A failure of a two-reader soak, with what was going on at the moment it was caught: the claims held, the
+   *  other reader's stack (still running) and the flight recorder's last events (`-Ddotc.interactive.chaos` or
+   *  `-Ddotc.interactive.trace`), printed and attached as a suppressed exception. The first failure only.
+   */
+  private def withRaceReport(driver: InteractiveDriver, ex: Throwable): Throwable =
+    val me = Thread.currentThread
+    val others = Thread.getAllStackTraces.asScala.toList.collect {
+      case (t, st) if t.getName.startsWith("soak-reader") && (t ne me) =>
+        s"${t.getName} (${t.getState}):\n    " + st.iterator.filter(_.getClassName.startsWith("dotty.tools")).take(30).mkString("\n    ")
+    }
+    val report =
+      s"""race report for ${me.getName}: ${ex}
+         |claims held: ${driver.completionOwnerNow}
+         |${others.mkString("\n")}
+         |the readers' last events:
+         |${dotty.tools.dotc.util.Chaos.recent(200)}""".stripMargin
+    println(report)
+    ex.addSuppressed(new Throwable(report))
+    ex
+
+  /** `parallel`: with `-Yinteractive-parallel` (step 4: completions with
+   *  owners, readers outside the lock); without, readers serialised with
+   *  completions (step 3).
+   */
+  private def soak20(name: String, file: String => String, seed: Int, steps: Int, parallel: Boolean): Unit =
+    val variants = List("a", "b").map(tag => points(file(tag)))
+    val oracle = variants.map { (content, offsets) =>
+      val d = newDriver()
+      val source = SourceFile.virtual(uri, content)
+      d.run(uri, source)
+      offsets.map(o => o -> labels(d, source, o)).toMap
+    }
+    val driver = new InteractiveDriver(if parallel then settings :+ "-Yinteractive-parallel" else settings, CachedLogicalPackage.none)
+    @volatile var variant = 0 // the content both readers work on; an edit switches it
+    val failure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
+    val counts = new java.util.concurrent.ConcurrentHashMap[String, Int]()
+    def count(k: String) = counts.merge(k, 1, _ + _)
+    def walk(thread: Int): Unit =
+      val rng = new Random(seed * 31 + thread)
+      val log = mutable.ListBuffer.empty[String]
+      def check(step: Int, what: String, offset: Int): Unit =
+        val v = variant
+        val (content, _) = variants(v)
+        val source = SourceFile.virtual(uri, content)
+        val runBefore = driver.runIdOf(uri)
+        dotty.tools.dotc.util.Chaos.note(s"soak step $step: $what at $offset, variant $v, run $runBefore")
+        val obtained = driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => labels(ctx, unit, source, offset))
+        val expected = oracle(v)(offset)
+        val r = driver.readerOfThisThread
+        // fail at the cause: a fresh run should answer right unless the symbol table was left dirty
+        if driver.runIdOf(uri) != runBefore then
+          // a completion the other reader has in progress is not a leak: look again for a moment before failing
+          var dirty = touched(driver)
+          var tries = 0
+          while dirty.nonEmpty && tries < 30 do { Thread.sleep(10); dirty = touched(driver); tries += 1 }
+          org.junit.Assert.assertTrue(s"[$name seed=$seed reader $thread step $step] after the fresh run ${driver.runIdOf(uri)}: ${dirty.mkString(", ")}", dirty.isEmpty)
+        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)} tainted=${driver.isTainted(uri)} cycleAborts=${r.waitCyclesAborted} cycles=${r.cyclesPrevented.size} raised=${r.cyclesRaised} unwound=${r.cancelledCompletions.size}"
+        if expected != obtained then
+          println(s"[soak2 $name seed=$seed reader $thread step $step] at $offset expected ${expected.take(5)} obtained ${obtained.take(5)}; tree: " +
+            (try driver.compilationUnits.get(uri).map { unit =>
+              given Context = driver.currentCtx.fresh.setCompilationUnit(unit)
+              val path = dotty.tools.dotc.interactive.Interactive.pathTo(unit.tpdTree, Span(offset))
+              path.take(3).map(t => s"${t.getClass.getSimpleName} ${t.show.take(60).replace('\n', ' ')} : ${if t.hasType then t.tpe.show.take(80) else "<untyped>"}").mkString(" <- ") +
+                // the file's own symbols the enclosing statement refers to, as this reader sees them now: a wrong
+                // answer is most often one of them seen mid-completion, unwound or errored by the other reader
+                "\n  symbols referred to: " + path.lift(3).orElse(path.lastOption).toList.flatMap { t =>
+                  val acc = mutable.LinkedHashSet.empty[Symbol]
+                  new dotty.tools.dotc.ast.tpd.TreeTraverser:
+                    def traverse(tree: dotty.tools.dotc.ast.tpd.Tree)(using Context): Unit =
+                      tree match
+                        case r: dotty.tools.dotc.ast.tpd.RefTree if r.symbol.exists && !r.symbol.is(dotty.tools.dotc.core.Flags.Package) && r.symbol.span.exists && r.symbol.sourcePos.source.name == unit.source.name => acc += r.symbol
+                        case _ =>
+                      traverseChildren(tree)
+                  .traverse(t)
+                  acc.toList.take(12).map(sym => s"${sym.showLocated} (${sym.denot.infoOrCompleter.getClass.getSimpleName}, ${sym.denot.flagsString}, valid ${sym.denot.validFor}): ${sym.denot.infoOrCompleter.show.take(80)}")
+                }.mkString("\n    ", "\n    ", "")
+            }.getOrElse("<no unit>") catch case scala.util.control.NonFatal(e) => s"<not shown: $e>"))
+        count(what)
+        org.junit.Assert.assertEquals(s"[$name seed=$seed reader $thread step $step] completions at $offset after $what\n${log.takeRight(8).mkString("\n")}\ncontent:\n${content.substring(math.max(0, offset - 80), math.min(content.length, offset + 20))}", expected.mkString("\n"), obtained.mkString("\n"))
+      for step <- 1 to steps if failure.get == null do
+        val (content, offsets) = variants(variant)
+        val offset = offsets(rng.nextInt(offsets.size))
+        rng.nextInt(10) match
+          case 0 =>
+            variant = 1 - variant
+            check(step, "edit+complete", offsets(rng.nextInt(offsets.size)))
+          case 1 | 2 =>
+            val k = 1 + rng.nextInt(3)
+            var p = 0
+            val thrown =
+              try
+                driver.withCancelChecker(() => { if inTyperCheckpoint() then p += 1; p >= k }) {
+                  driver.runUpTo(uri, SourceFile.virtual(uri, content), Span(offset))
+                }
+                false
+              catch case _: CancelledCompilation => true
+            if thrown then count("cancelled")
+            check(step, s"cancel(thrown=$thrown)+complete", if rng.nextBoolean() then offset else offsets(rng.nextInt(offsets.size)))
+          case _ =>
+            check(step, "complete", offset)
+    val threads = (0 until 2).map { i =>
+      val t = new Thread(() =>
+        try walk(i)
+        catch
+          case ex: AssertionError => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit
+          case ex: CancelledCompilation => failure.compareAndSet(null, withRaceReport(driver, new AssertionError(s"reader $i: a cancellation reached the caller of a request without a checker", ex))): Unit
+          case scala.util.control.NonFatal(ex) => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit, s"soak-reader-$i")
+      // an `Error` (a stack overflow) must fail the test too, not just end the thread
+      t.setUncaughtExceptionHandler((_, ex) => failure.compareAndSet(null, withRaceReport(driver, ex)): Unit)
+      t.start()
+      t
+    }
+    threads.foreach(_.join())
+    if failure.get != null then throw failure.get
+    val t = touched(driver)
+    org.junit.Assert.assertTrue(s"[$name seed=$seed] symbols still Touched after the two readers: ${t.mkString(", ")}", t.isEmpty)
+    println(s"[soak2 $name seed=$seed] 2 readers x $steps steps: ${counts.asScala.toList.sortBy(_._1).map((k, v) => s"$k=$v").mkString(", ")}")
+
+  /** A cancellation's landing enumerated, not sampled (the spike): on a
+   *  session on the file, a request at `target` is cancelled at exactly its
+   *  n-th typed tree (`InteractiveDriver.withCancelAtTree`), for every n
+   *  until the request completes, and after each the completion at `target`
+   *  must equal a whole-file run's, and no symbol of the file may be left
+   *  `Touched` or with an unwound completer. With `readers`, a second thread
+   *  completes at random points of the file meanwhile. Reports every n that
+   *  fails, and what it found.
+   */
+  private def cancelAtEveryTree(name: String, file: String => String, readers: Boolean, targetLabel: String, step: Int = 1): Unit =
+    val (content, offsets) = points(file("a"))
+    val source = SourceFile.virtual(uri, content)
+    val oracle =
+      val d = newDriver()
+      d.run(uri, source)
+      offsets.map(o => o -> labels(d, source, o)).toMap
+    val target = offsets.find(o => oracle(o).exists(_.startsWith(targetLabel))).getOrElse(throw AssertionError(s"no point whose completions start with $targetLabel: ${oracle}"))
+    val driver = new InteractiveDriver(settings :+ "-Yinteractive-parallel", CachedLogicalPackage.none)
+    val stop = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val otherFailure = new java.util.concurrent.atomic.AtomicReference[Throwable](null)
+    val other = if !readers then None else Some {
+      val t = new Thread(() =>
+        val rng = new Random(7)
+        try while !stop.get do
+          val o = offsets(rng.nextInt(offsets.size))
+          val src = driver.openedFiles.getOrElse(uri, source) // the content of the moment (a variant per n)
+          val got = driver.readUpTo(uri, src, Span(o))((ctx, unit, _) => labels(ctx, unit, src, o))
+          if got != oracle(o) then throw AssertionError(s"the other reader at $o: expected ${oracle(o).take(3)}, obtained ${got.take(3)}")
+        catch case scala.util.control.NonFatal(ex) => otherFailure.compareAndSet(null, ex): Unit, "cancel-at-other-reader")
+      t.setUncaughtExceptionHandler((_, ex) => otherFailure.compareAndSet(null, ex): Unit) // an `Error` too
+      t.start(); t
+    }
+    val failures = mutable.ListBuffer.empty[String]
+    var n = 1; var cancelled = true; var last = 0
+    try
+      while cancelled && otherFailure.get == null do
+        // content of its own per n (a trailing comment), so that the session is fresh and the statement at
+        // `target` is skipped again: the completion after the cancellation types it, and on the same content the
+        // next n would be served from the tree
+        val sourceN = SourceFile.virtual(uri, content + s"\n// cancel at $n")
+        // a session on the file, from a request elsewhere; the request at `target` then resumes into it
+        driver.withCancelChecker(() => false)(driver.runUpTo(uri, sourceN, Span(offsets.head)))
+        val runBefore = driver.runIdOf(uri)
+        cancelled =
+          try { driver.withCancelAtTree(n)(driver.runUpTo(uri, sourceN, Span(target))); false }
+          catch case _: CancelledCompilation => true
+        if !cancelled then println(s"[cancel-at-every-tree $name] n=$n not cancelled: the request typed ${driver.readerOfLastRequest.typedTrees} trees, run $runBefore -> ${driver.runIdOf(uri)}, skipped ${driver.untypedSpans(uri).size}")
+        if cancelled then
+          last = n
+          val obtained =
+            try driver.readUpTo(uri, sourceN, Span(target))((ctx, unit, _) => labels(ctx, unit, sourceN, target))
+            catch case ex: CancelledCompilation => List(s"<cancellation reached the caller: ${ex.getMessage}>")
+          val dirty = touched(driver)
+          if obtained != oracle(target) || dirty.nonEmpty then
+            failures += s"n=$n (run $runBefore -> ${driver.runIdOf(uri)}, tainted=${driver.isTainted(uri)}): " +
+              (if obtained != oracle(target) then s"expected ${oracle(target).take(3)} obtained ${obtained.take(3)}" else "") +
+              (if dirty.nonEmpty then s" dirty: ${dirty.mkString(", ")}" else "")
+        n += step
+    finally
+      stop.set(true); other.foreach(_.join())
+    println(s"[cancel-at-every-tree $name readers=$readers] target $target, cancelled at every tree up to $last: ${failures.size} failures" + (if failures.nonEmpty then failures.mkString("\n  ", "\n  ", "") else ""))
+    if otherFailure.get != null then throw otherFailure.get
+    org.junit.Assert.assertTrue(failures.mkString("\n"), failures.isEmpty)
+
+  /** The spike widened: for every point of the file, a request there is
+   *  cancelled at each of its typed trees, once inside a fresh run on the
+   *  content and once inside a resume (a session established by a request
+   *  at another point first), and after each the completion at the `show`
+   *  point must equal a whole-file run's and the file's symbols must be
+   *  clean. One reader. Prints, per point and mode, how many landings were
+   *  tried.
+   */
+  private def cancelEverywhereThenShow(name: String, file: String => String, targetLabel: String): Unit =
+    val (content, offsets) = points(file("a"))
+    val source = SourceFile.virtual(uri, content)
+    val oracle =
+      val d = newDriver()
+      d.run(uri, source)
+      offsets.map(o => o -> labels(d, source, o)).toMap
+    val show = offsets.find(o => oracle(o).exists(_.startsWith(targetLabel))).getOrElse(throw AssertionError(s"no point whose completions start with $targetLabel"))
+    val driver = new InteractiveDriver(settings :+ "-Yinteractive-parallel", CachedLogicalPackage.none)
+    val failures = mutable.ListBuffer.empty[String]
+    val tried = mutable.ListBuffer.empty[String]
+    for at <- offsets; resume <- List(false, true) do
+      val establishAt = if resume then offsets.find(_ != at) else None
+      var n = 1; var cancelled = true; var last = 0; var served = false
+      while cancelled do
+        val sourceN = SourceFile.virtual(uri, content + s"\n// cancel at $at tree $n resume=$resume")
+        establishAt.foreach(e => driver.withCancelChecker(() => false)(driver.runUpTo(uri, sourceN, Span(e))))
+        val runBefore = driver.runIdOf(uri)
+        cancelled =
+          try { driver.withCancelAtTree(n)(driver.runUpTo(uri, sourceN, Span(at))); false }
+          catch case _: CancelledCompilation => true
+        if cancelled then
+          last = n
+          val obtained =
+            try driver.readUpTo(uri, sourceN, Span(show))((ctx, unit, _) => labels(ctx, unit, sourceN, show))
+            catch case ex: CancelledCompilation => List(s"<cancellation reached the caller: ${ex.getMessage}>")
+          val dirty = touched(driver)
+          if obtained != oracle(show) || dirty.nonEmpty then
+            failures += s"cancel at $at tree $n ${if resume then "in a resume" else "in a fresh run"} (run $runBefore -> ${driver.runIdOf(uri)}, tainted=${driver.isTainted(uri)}): " +
+              (if obtained != oracle(show) then s"show expected ${oracle(show).take(3)} obtained ${obtained.take(3)}" else "") +
+              (if dirty.nonEmpty then s" dirty: ${dirty.mkString(", ")}" else "")
+        else if n == 1 then served = true
+        n += 1
+      tried += s"$at/${if resume then "resume" else "fresh"}: ${if served then "served" else s"$last trees"}"
+    println(s"[cancel-everywhere-then-show $name] show at $show; landings tried: ${tried.mkString(", ")}; ${failures.size} failures" + (if failures.nonEmpty then failures.mkString("\n  ", "\n  ", "") else ""))
+    org.junit.Assert.assertTrue(failures.mkString("\n"), failures.isEmpty)
+
+  @Test def `cancel-everywhere-then-show-shapes` = cancelEverywhereThenShow("shapes", shapesFile, "show (t: Int)")
+  @Test def `cancel-at-every-tree-shapes` = cancelAtEveryTree("shapes", shapesFile, readers = false, "show (t: Int)")
+  @Test def `cancel-at-every-tree-shapes-two-readers` = cancelAtEveryTree("shapes", shapesFile, readers = true, "show (t: Int)")
 
   @Test def `objects-seed-1` = soak("objects", objectsFile(_), 1, 300)
   @Test def `objects-seed-2` = soak("objects", objectsFile(_), 2, 300)
@@ -254,3 +579,15 @@ class CompletionSoakSuite extends BasePCSuite:
    */
   @Test def `shapes-seed-2` = soak("shapes", shapesFile, 2, 300)
   @Test def `shapes-seed-3` = soak("shapes", shapesFile, 3, 300)
+
+  @Test def `two-readers-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300)
+  @Test def `two-readers-objects-seed-2` = soak2("objects", objectsFile(_), 2, 300)
+  @Test def `two-readers-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300)
+  @Test def `two-readers-shapes-seed-2` = soak2("shapes", shapesFile, 2, 300)
+  @Test def `two-readers-serialised-objects-seed-1` = soak2("objects", objectsFile(_), 1, 300, parallel = false)
+  @Test def `two-readers-serialised-shapes-seed-1` = soak2("shapes", shapesFile, 1, 300, parallel = false)
+  // edits inside bodies keep the run (docs §12)
+  @Test def `objects-body-edits-seed-1` = soak("objects", objectsFile(_), 1, 300, objectsEdits)
+  @Test def `objects-body-edits-seed-2` = soak("objects", objectsFile(_), 2, 300, objectsEdits)
+  @Test def `shapes-body-edits-seed-1` = soak("shapes", shapesFile, 1, 300, shapesEdits)
+  @Test def `shapes-body-edits-seed-2` = soak("shapes", shapesFile, 2, 300, shapesEdits)

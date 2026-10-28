@@ -29,6 +29,8 @@ import util.{SourceFile, Property}
 import ast.{Trees, tpd, untpd}
 import Trees.*
 import Decorators.*
+import Sharing.TastyFileClaim
+import dotty.tools.sharing.Claimed
 import config.Feature
 import quoted.QuotePatterns
 
@@ -45,7 +47,7 @@ import dotty.tools.tasty.TastyFormat.*
 import dotty.tools.tasty.besteffort.BestEffortTastyFormat.ERRORtype
 
 import scala.annotation.constructorOnly
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, treeState}
 import scala.compiletime.uninitialized
 
 /** Unpickler for typed trees
@@ -65,14 +67,17 @@ class TreeUnpickler(reader: TastyReader,
   import TreeUnpickler.*
   import tpd.*
 
-  /** A map from addresses of definition entries to the symbols they define */
-  private val symAtAddr  = new mutable.HashMap[Addr, Symbol]
+  // The file's state, filled by its completers and lazy reads: `Claimed` fields, reached only with the evidence of the
+  // file's claim. A `Claimed` value is the value itself, so a field costs what it did.
 
-  private def addrOfSymbol(sym: Symbol): Option[Addr] = symAtAddr.iterator.collectFirst {
+  /** A map from addresses of definition entries to the symbols they define */
+  private val symAtAddr: Claimed[TastyFileClaim, mutable.HashMap[Addr, Symbol]] = Claimed.initial(new mutable.HashMap)
+
+  private def addrOfSymbol(sym: Symbol)(using Sharing.Holds[TastyFileClaim]): Option[Addr] = symAtAddr().iterator.collectFirst {
     case (addr, s) if s == sym => addr
   }
 
-  private def locatedSymbol(sym: Symbol)(using Context): String =
+  private def locatedSymbol(sym: Symbol)(using Context, Sharing.Holds[TastyFileClaim]): String =
     addrOfSymbol(sym) match
       case Some(addr) => i"local $sym @ ${addr.index}"
       case None => i"external $sym"
@@ -81,16 +86,21 @@ class TreeUnpickler(reader: TastyReader,
    *  Used to remember trees of symbols that are created by a completion. Emptied
    *  once the tree is inlined into a larger tree.
    */
-  private val treeAtAddr = new mutable.HashMap[Addr, Tree]
+  private val treeAtAddr: Claimed[TastyFileClaim, mutable.HashMap[Addr, Tree]] = Claimed.initial(new mutable.HashMap)
+
+  // Tests, with the flight recorder on (`util.Chaos.recording`): the thread that put each `PoisonTree`, so that a
+  // "cyclic reference while unpickling" says whether it is a cycle on one thread or a race between readers
+  private val poisonedBy: java.util.concurrent.ConcurrentHashMap[Addr, String] | Null =
+    if util.Chaos.recording then new java.util.concurrent.ConcurrentHashMap[Addr, String] else null
 
   /** A map from addresses of type entries to the types they define.
    *  Currently only populated for types that might be recursively referenced
    *  from within themselves (i.e. RecTypes, LambdaTypes).
    */
-  private val typeAtAddr = new mutable.HashMap[Addr, Type]
+  private val typeAtAddr: Claimed[TastyFileClaim, mutable.HashMap[Addr, Type]] = Claimed.initial(new mutable.HashMap)
 
   /** If this is a pickled quote, the owner of the quote, otherwise NoSymbol. */
-  private var rootOwner: Symbol = NoSymbol
+  private var rootOwner: Claimed[TastyFileClaim, Symbol] = Claimed.initial(NoSymbol)
 
   /** The root symbol denotation which are defined by the Tasty file associated with this
    *  TreeUnpickler. Set by `enterTopLevel`.
@@ -100,7 +110,7 @@ class TreeUnpickler(reader: TastyReader,
   /** The root symbols that are defined in this Tasty file. This
    *  is a subset of `roots.map(_.symbol)`.
    */
-  private var seenRoots: Set[Symbol] = Set()
+  private var seenRoots: Claimed[TastyFileClaim, Set[Symbol]] = Claimed.initial(Set())
 
   /** The root owner tree. See `OwnerTree` class definition. Set by `enterTopLevel`. */
   private var ownerTree: OwnerTree = uninitialized
@@ -121,8 +131,8 @@ class TreeUnpickler(reader: TastyReader,
 
   private val isOutline = attributes.isOutline
 
-  private def registerSym(addr: Addr, sym: Symbol) =
-    symAtAddr(addr) = sym
+  private inline def registerSym(addr: Addr, sym: Symbol)(using inline h: Sharing.Holds[TastyFileClaim]) =
+    symAtAddr()(addr) = sym
 
   /** Enter all toplevel classes and objects into their scopes
    *  @param roots          a set of SymDenotations that should be overwritten by unpickling
@@ -136,8 +146,17 @@ class TreeUnpickler(reader: TastyReader,
   }
 
   /** The unpickled trees */
-  def unpickle(mode: UnpickleMode)(using Context): List[Tree] = {
-    if mode != UnpickleMode.TopLevel then rootOwner = ctx.owner
+  def unpickle(mode: UnpickleMode)(using Context): List[Tree] =
+    // the address maps are the file's, as for the completers and the lazy reads: the file's claim
+    Sharing.claimAt[TastyFileClaim](claimKey, Sharing.lazyTastyRead, this)(unpickle0(mode))
+
+  /** The file's root, as the completers claim it: the associated file of a root class, or this. */
+  def claimKey(using Context): AnyRef =
+    val f = if roots == null then null else roots.iterator.map(_.symbol.associatedFile).find(_ != null).orNull
+    if f == null then this else f
+
+  private def unpickle0(mode: UnpickleMode)(using Context, Sharing.Holds[TastyFileClaim]): List[Tree] = {
+    if mode != UnpickleMode.TopLevel then rootOwner = Claimed(ctx.owner)
     assert(roots != null, "unpickle without previous enterTopLevel")
     val rdr = new TreeReader(reader)
     mode match {
@@ -153,11 +172,16 @@ class TreeUnpickler(reader: TastyReader,
     val owner = ctx.owner
     val mode = ctx.mode
     val source = ctx.source
-    def complete(denot: SymDenotation)(using Context): Unit =
+    /** One TASTy file is one root (its address maps are shared): the file */
+    override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
+      val f = symd.symbol.associatedFile
+      if f == null then TreeUnpickler.this else f
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       def where =
         val f = denot.symbol.associatedFile
         if f == null then "" else s" in $f"
-      treeAtAddr(currentAddr) =
+      // the completion runs under its file's claim (`completionRoot`), but its evidence names the denotation
+      treeAtAddr()(using Sharing.unguarded("a completion runs under its file's claim, `completionRoot`"))(currentAddr) =
         CyclicReference.trace(i"read the definition of ${denot.symbol}$where"):
           try
             atPhaseBeforeTransforms:
@@ -172,6 +196,11 @@ class TreeUnpickler(reader: TastyReader,
 
   class TreeReader(val reader: TastyReader) {
     import reader.*
+
+    // a reader runs under its file's claim: made by `enter`, `unpickle` or a completion, and kept only by a lazy read
+    // and the owner tree, which run under the claim again
+    private inline given Sharing.Holds[TastyFileClaim] =
+      Sharing.unguarded("a TreeReader runs under its file's claim")
 
     def forkAt(start: Addr): TreeReader = new TreeReader(subReader(start, endAddr))
     def fork: TreeReader = forkAt(currentAddr)
@@ -298,7 +327,7 @@ class TreeUnpickler(reader: TastyReader,
     def readSymRef()(using Context): Symbol = symbolAt(readAddr())
 
     /** The symbol at given address; create a new one if none exists yet */
-    def symbolAt(addr: Addr)(using Context): Symbol = symAtAddr.get(addr) match {
+    def symbolAt(addr: Addr)(using Context): Symbol = symAtAddr().get(addr) match {
       case Some(sym) =>
         sym
       case None =>
@@ -308,7 +337,7 @@ class TreeUnpickler(reader: TastyReader,
     }
 
     /** The symbol defined by current definition */
-    def symbolAtCurrent()(using Context): Symbol = symAtAddr.get(currentAddr) match {
+    def symbolAtCurrent()(using Context): Symbol = symAtAddr().get(currentAddr) match {
       case Some(sym) =>
         assert(ctx.owner == sym.owner, i"owner discrepancy for ${locatedSymbol(sym)}, expected: ${locatedSymbol(ctx.owner)}, found: ${locatedSymbol(sym.owner)}")
         sym
@@ -352,7 +381,7 @@ class TreeUnpickler(reader: TastyReader,
       pickling.println(s"reading type ${astTagToString(tag)} at $start, ${ctx.source}")
 
       def registeringType[T](tp: Type, op: => T): T = {
-        typeAtAddr(start) = tp
+        typeAtAddr()(start) = tp
         op
       }
 
@@ -361,7 +390,7 @@ class TreeUnpickler(reader: TastyReader,
 
         def readMethodic[N <: Name, PInfo <: Type, LT <: LambdaType]
             (companionOp: FlagSet => LambdaTypeCompanion[N, PInfo, LT], nameMap: Name => N): LT = {
-          val result = typeAtAddr.getOrElse(start, {
+          val result = typeAtAddr().getOrElse(start, {
               val nameReader = fork
               nameReader.skipTree() // skip result
               val paramReader = nameReader.fork
@@ -490,7 +519,7 @@ class TreeUnpickler(reader: TastyReader,
         case THIS =>
           ThisType.raw(readType().asInstanceOf[TypeRef])
         case RECtype =>
-          typeAtAddr.get(start) match {
+          typeAtAddr().get(start) match {
             case Some(tp) =>
               skipTree(tag)
               tp
@@ -501,7 +530,7 @@ class TreeUnpickler(reader: TastyReader,
           readTypeRef().asInstanceOf[RecType].recThis
         case SHAREDtype =>
           val ref = readAddr()
-          typeAtAddr.getOrElseUpdate(ref, forkAt(ref).readType())
+          typeAtAddr().getOrElseUpdate(ref, forkAt(ref).readType())
         case BYNAMEtype =>
           ExprType(readType())
         case ERRORtype =>
@@ -535,7 +564,7 @@ class TreeUnpickler(reader: TastyReader,
     }
 
     def readTypeRef(): Type =
-      typeAtAddr(readAddr())
+      typeAtAddr()(readAddr())
 
     def readTreeRef()(using Context): TermRef =
       readType().asInstanceOf[TermRef]
@@ -621,7 +650,7 @@ class TreeUnpickler(reader: TastyReader,
       if nextUnsharedTag == TYPEBOUNDS then name = name.toTypeName
       val typeReader = fork
       val completer = new LazyType {
-        def complete(denot: SymDenotation)(using Context) =
+        def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
           denot.info = typeReader.readType()
       }
       val sym = newSymbol(ctx.owner, name, Flags.Case, completer, coord = coordAt(start))
@@ -671,7 +700,7 @@ class TreeUnpickler(reader: TastyReader,
                 new Completer(subReader(start, end)) with SymbolLoaders.SecondCompleter)
             rootd.flags = flags &~ Touched // allow one more completion
             rootd.setPrivateWithin(privateWithin)
-            seenRoots += rootd.symbol
+            seenRoots = Claimed(seenRoots() + rootd.symbol)
             rootd.symbol
           case _ =>
             val completer = adjustIfModule(new Completer(subReader(start, end)))
@@ -884,19 +913,33 @@ class TreeUnpickler(reader: TastyReader,
       indexParams(PARAM)
     }
 
+    /** With the flight recorder on: who poisoned `addr`, and the readers' last events. */
+    private def poisonDiagnosis(addr: Addr)(using Context): String =
+      if poisonedBy == null then ""
+      else
+        val by = poisonedBy.get(addr)
+        val me = Thread.currentThread.getName
+        val kind = if by == null then "poisoner unknown" else if by == me then "a cycle on this thread" else s"a race with $by"
+        s"""; poisoned by $by on $me: $kind
+           |claims held: ${if ctx.base.parallel then ctx.base.completionRoots.holdersNow else ctx.base.completionLock.holderNow}
+           |the readers' last events:
+           |${util.Chaos.recent(80)}""".stripMargin
+
     /** If definition was already read by a completer, return the previously read tree
      *  or else read definition.
      */
-    def readIndexedDef()(using Context): Tree = treeAtAddr.remove(currentAddr) match {
+    def readIndexedDef()(using Context): Tree = treeAtAddr().remove(currentAddr) match {
       case Some(tree) =>
-        assert(tree != PoisonTree, s"Cyclic reference while unpickling definition at address ${currentAddr.index} in unit ${ctx.compilationUnit}")
+        assert(tree != PoisonTree, s"Cyclic reference while unpickling definition at address ${currentAddr.index} in unit ${ctx.compilationUnit}${poisonDiagnosis(currentAddr)}")
         skipTree()
         tree
       case none =>
         val start = currentAddr
-        treeAtAddr(start) = PoisonTree
+        treeAtAddr()(start) = PoisonTree
+        if poisonedBy != null then poisonedBy.put(start, Thread.currentThread.getName)
         val tree = readNewDef()
-        treeAtAddr.remove(start)
+        treeAtAddr().remove(start)
+        if poisonedBy != null then poisonedBy.remove(start)
         tree
     }
 
@@ -904,7 +947,7 @@ class TreeUnpickler(reader: TastyReader,
       val sctx = sourceChangeContext()
       if (sctx `ne` ctx) return readNewDef()(using sctx)
       val start = currentAddr
-      val sym = symAtAddr(start)
+      val sym = symAtAddr()(start)
       val tag = readByte()
       val end = readEnd()
 
@@ -983,7 +1026,7 @@ class TreeUnpickler(reader: TastyReader,
             // The only case to check here is if `sym` is a root. In this case
             // `companion` might have been entered by the environment but it might
             // be missing from the Tasty file. So we check explicitly for that.
-            def isCodefined = roots.contains(companion.denot) == seenRoots.contains(companion)
+            def isCodefined = roots.contains(companion.denot) == seenRoots().contains(companion)
 
             if (companion.exists && isCodefined) sym.registerCompanion(companion)
             TypeDef(readTemplate(using localCtx))
@@ -994,7 +1037,7 @@ class TreeUnpickler(reader: TastyReader,
             val rhs = readTpt()(using localCtx)
 
             sym.info = new NoCompleter:
-              override def complete(denot: SymDenotation)(using Context): Unit = if !isBestEffortTasty then unsupported("complete")
+              override def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = if !isBestEffortTasty then unsupported("complete")
               override def completerTypeParams(sym: Symbol)(using Context) =
                 rhs.tpe.typeParams
 
@@ -1145,13 +1188,13 @@ class TreeUnpickler(reader: TastyReader,
           def ta = ctx.typeAssigner
           val flags = Flags.JavaDefined | Flags.PrivateLocal | Flags.Invisible
           val ctorCompleter = new LazyType {
-            def complete(denot: SymDenotation)(using Context) =
+            def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
               val sym = denot.symbol
               val pflags = flags | Flags.Param
               val tparamRefs = tparams.map(_.symbol.asType)
               lazy val derivedTparamSyms: List[TypeSymbol] = tparams.map: tdef =>
                 val completer = new LazyType {
-                  def complete(denot: SymDenotation)(using Context) =
+                  def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]) =
                     denot.info = tdef.symbol.asType.info.subst(tparamRefs, derivedTparamRefs)
                 }
                 newSymbol(sym, tdef.name, Flags.JavaDefined | Flags.Param, completer, coord = cls.coord)
@@ -1655,7 +1698,7 @@ class TreeUnpickler(reader: TastyReader,
               val elemtpt = readTpt()
               SeqLiteral(until(end)(readTree()), elemtpt)
             case BIND =>
-              val sym = symAtAddr.getOrElse(start, forkAt(start).createSymbol())
+              val sym = symAtAddr().getOrElse(start, forkAt(start).createSymbol())
               readName()
               readType()
               val body = readTree()
@@ -1679,10 +1722,10 @@ class TreeUnpickler(reader: TastyReader,
               then QuotePatterns.decode(unapply) // decode pre 3.5.0 encoding
               else unapply
             case REFINEDtpt =>
-              val refineCls = symAtAddr.getOrElse(start,
+              val refineCls = symAtAddr().getOrElse(start,
                 newRefinedClassSymbol(coordAt(start))).asClass
               registerSym(start, refineCls)
-              typeAtAddr(start) = refineCls.typeRef
+              typeAtAddr()(start) = refineCls.typeRef
               val parent = readTpt()
               val refinements = readStats(refineCls, end)(using localContext(refineCls))
               RefinedTypeTree(parent, refinements, refineCls)
@@ -1886,13 +1929,42 @@ class TreeUnpickler(reader: TastyReader,
       op: TreeReader => Context ?=> T) extends Trees.Lazy[T] {
     def complete(using Context): T = {
       pickling.println(i"starting to read at ${reader.reader.currentAddr} with owner $owner")
+      // The unpickler's address maps (`symAtAddr`, `treeAtAddr`, `typeAtAddr`)
+      // are one file's shared state, filled by completions and by these lazy
+      // reads; with several readers (interactive mode) a lazy read runs under
+      // the base's completion lock like a completion (finding I35).
+      // with parallel readers, the file's root, as the unpickler's completers claim it
+      Sharing.claimAt[TastyFileClaim](rootKey, Sharing.lazyTastyRead, owner) {
+        // A second read of the same bytes would create the local symbols of the tree again and register them over
+        // the first ones in `symAtAddr`, so with several readers the first read's tree is kept and every reader
+        // that forces the field gets it. A batch base forces a field once, and keeps nothing.
+        if ctx.base.concurrent then
+          val r = result()
+          if r != null then r
+          else
+            val t = complete0
+            result = Claimed(t)
+            t
+        else complete0
+      }
+    }
+
+    // read and written only under the file's claim; a reader that gets it from here has acquired the claim the tree
+    // was built under
+    private var result: Claimed[TastyFileClaim, T | Null] = Claimed.initial(null)
+
+    private def rootKey(using Context): AnyRef = {
+      val f = owner.associatedFile
+      if f == null then TreeUnpickler.this else f
+    }
+
+    private def complete0(using Context): T =
       atPhaseBeforeTransforms {
         op(reader)(using ctx
           .withOwner(owner)
           .withModeBits(mode)
           .withSource(source))
       }
-    }
   }
 
   /** A lazy datastructure that records how definitions are nested in TASTY data.
@@ -1909,20 +1981,21 @@ class TreeUnpickler(reader: TastyReader,
    */
   class OwnerTree(val addr: Addr, tag: Int, reader: TreeReader, val end: Addr) {
 
-    private var myChildren: List[OwnerTree] | Null = null
+    // filled under the file's claim, by `findOwner`
+    private var myChildren: Claimed[TastyFileClaim, List[OwnerTree] | Null] = Claimed.initial(null)
 
     /** All definitions that have the definition at `addr` as closest enclosing definition */
-    def children: List[OwnerTree] = {
-      if (myChildren == null) myChildren = {
+    def children(using Sharing.Holds[TastyFileClaim]): List[OwnerTree] = {
+      if (myChildren() == null) myChildren = Claimed {
         val buf = new ListBuffer[OwnerTree]
         reader.scanTrees(buf, end, if (tag == TEMPLATE) NoMemberDefs else AllDefs)
         buf.toList
       }
-      myChildren.nn
+      myChildren().nn
     }
 
     /** Find the owner of definition at `addr` */
-    def findOwner(addr: Addr)(using Context): Symbol = {
+    def findOwner(addr: Addr)(using Context, Sharing.Holds[TastyFileClaim]): Symbol = {
       def search(cs: List[OwnerTree], current: Symbol): Symbol =
         try cs match {
           case ot :: cs1 =>
@@ -1942,7 +2015,7 @@ class TreeUnpickler(reader: TastyReader,
             pickling.println(i"no owner for $addr among $cs%, %")
             throw ex
         }
-      try search(children, rootOwner)
+      try search(children, rootOwner())
       catch {
         case ex: TreeWithoutOwner =>
           pickling.println(s"ownerTree = $ownerTree")
@@ -1951,7 +2024,7 @@ class TreeUnpickler(reader: TastyReader,
     }
 
     override def toString: String =
-      val children = myChildren
+      val children = myChildren()(using Sharing.unguarded("a debugging print, which may race with a fill"))
       s"OwnerTree(${addr.index}, ${end.index}, ${if (children == null) "?" else children.mkString(" ")})"
   }
 }
