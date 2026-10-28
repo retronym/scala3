@@ -153,6 +153,7 @@ object CyclicReference:
 
   def apply(denot: SymDenotation)(using Context): CyclicReference =
     val ex = new CyclicReference(denot, traceElements)
+    if UnstableReads.on then UnstableReads.cycle(denot.symbol)
     if ex.computeStackTrace then
       cyclicErrors.println(s"Cyclic reference involving $denot")
       val sts = ex.getStackTrace.asInstanceOf[Array[StackTraceElement]]

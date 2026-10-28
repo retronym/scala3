@@ -235,6 +235,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
         if javaCheck(using unitContext) // after typechecking to avoid cycles
       yield unitContext
     }
+    if UnstableReads.on then UnstableReads.validate()
     val newUnits = unitContexts2.map(_.compilationUnit).filterNot(discardAfterTyper)
     ctx.run.nn.checkSuspendedUnits(newUnits)
     newUnits

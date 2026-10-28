@@ -17,14 +17,15 @@ A toy of signature completion, run against random programs under a deterministic
 - **A class's decls must be a fact of their own.** dotc completes a whole class header to read its decls. That nesting turns a cycle through decls, which is harmless, into an unstable read, and makes stability depend on the schedule. With decls as a stage of their own, whether a program needs an unstable read is a property of the program, the same on one worker as on sixteen. Programs without genuine cycles then meet no wait-for cycle at all, and the toy shows 3.4–3.8× on 4 workers and 7–12× on 16.
 - **What remains is detectable.** Cycles through parent constructor arguments still need unstable reads whatever the staging, and their result does depend on the schedule. Because stability is a property of the program, a parallel run that meets one can be abandoned and the run redone serially, deterministically.
 
-Measured in dotc: a serial compile of the compiler makes 4 unstable parent reads. Two are on local classes, which only their own unit's thread can reach. Two are on `object Types`, inside `checkNonCyclic`'s `isInteresting` test, which tolerates a false negative.
+Measured in dotc, with a probe of every read of intermediate completion state (parents of a `TempClassInfo`, `CyclicReference`s made, re-entries, `isCompleting` peeks), on the compiler's 618 sources and the standard library's 722, to the end of the typer: almost every event is a completion looking at itself, or a check's own structural cycle, both the same in every order. What is left are 34 `derivesFrom` answers given while a class's parents were unknown: 2 in the compiler, inside `checkNonCyclic`'s pruning, and 32 in the library, choosing a type parameter's default lower bound under capture checking. Asked again once the classes are complete, all 34 answers stand. Nothing came from implicit search.
 
 The design:
 
 1. **Stages.** A class's decls and type parameters are entered as a stage of their own, eagerly in the serial index, before any typing. Readers that need only decls read them without completing the header.
 2. **Signatures in parallel**, a unit per task, with the claims the spike already has.
-3. **A detector of unstable reads**, at the few sites where a completion reads intermediate state. A read of a non-local symbol in a parallel run abandons the run, which is compiled again serially. The sites that only feed a check are classified and exempt, one by one.
-4. **Determinism repairs**: fresh names drawn per definition, not per unit; `Child` annotations added under the parent's claim, in position order; names hashed by content (done in the spike).
+3. **Validate, then fall back.** At the few sites where a completion reads intermediate state, record the question and the answer (for `derivesFrom`: the class, the base, the answer). Once signatures are complete, ask each again: if every answer stands, the run was as good as a stable one. Otherwise abandon the run and compile serially. On both corpora nothing would fall back.
+4. **`checkNonCyclic` made order independent**: report illegal cycles in a pass after the signatures, on final infos, and prune the completion-time `LazyRef` insertion with facts that do not change during completion.
+5. **Determinism repairs**: fresh names drawn per definition, not per unit; `Child` annotations added under the parent's claim, in position order; names hashed by content (done in the spike).
 
 No claim lending (letting a cycle's closer borrow the claim it waits for, as a serial nesting would): the toy shows it buys nothing once decls are staged.
 
@@ -92,15 +93,33 @@ Implicit search, which catches `CyclicReference` and drops the candidate (an ord
 
 ## 4. Unstable reads in dotc
 
-The probe `-Ddotc.unstableReads` (`core.UnstableReads`, `=stacks` for stacks) counts reads of a class's parents while its info is a `TempClassInfo`, in `ClassDenotation.parentTypes`, through which `baseData`, `derivesFrom` and inherited member lookup all go. dotc documents the hazard: `derivesFrom` "may return a false negative when `this.info.isInstanceOf[TempClassInfo]`".
+The probe `-Ddotc.unstableReads` (`core.UnstableReads`; `=stacks` prints a stack for each new site on a member) records four kinds of event, each keyed by the symbol, whether it is local (reached only from its own unit, so the same in any parallel schedule), whether it happened under `checkNonCyclic` (`Mode.CheckCyclic`), the first compiler frame outside `core`, and, for reads and peeks, where the symbol is among the thread's completions in progress: the innermost (`self`, a completion looking at itself, the same in every order), an enclosing one (`outer`, a re-entry, whose answer depends on where the cycle was entered), or neither.
 
-A serial compile of the compiler's 618 sources, to the end of the typer:
+- `parents`: a class's parents read while its info is a `TempClassInfo` (`ClassDenotation.parentTypes`, through which `baseData`, `derivesFrom` and inherited lookup go). dotc documents the hazard: `derivesFrom` "may return a false negative when `this.info.isInstanceOf[TempClassInfo]`".
+- `cycle`: a `CyclicReference` made, with the frame that threw it. In a valid program each is caught and handled: a check skipped, a `LazyRef`, an implicit candidate dropped.
+- `reentry`: a completion entered again on its own thread (the cycle `lockAndComplete0` throws for).
+- `peek`: `isCompleting` answering true, with its caller.
 
-- 4 reads at 3 sites.
-- 2 on anonymous classes in `cc/Setup.scala`: a local class is reached only from its own unit, on one thread in a fixed order, so these are the same in any parallel schedule.
-- 2 on `object Types`: `Checking.checkNonCyclic` for a type alias in `Types`, asked while a parent type of a class nested in `Types` is typed (`ClassCompleter.typedParentType` → `preCheckKinds` → `dealias` → the alias's completion → `CheckNonCyclicMap.isInteresting` → `derivesFrom`). The read decides whether to look further for a cycle; a false negative skips a check that this valid code passes anyway.
+At the end of the typer, every `derivesFrom` answered from a class with an unknown base (`TempClassInfo` among its base classes) is asked again.
 
-Not probed yet: re-entry into a member in progress (`Touched`), which is an error in valid code unless caught; `CyclicReference`s caught and recovered from (implicit search, `tryEither`, `isCompleting` peeks); `LazyRef`s in progress.
+Serially, to the end of the typer:
+
+| event | compiler (618 files) | library (722 files) | the same in every order? |
+|---|---|---|---|
+| `peek/self`: Namer's inherited-type lookup (`Namer.scala:2507`) finding the member being completed | 10,316 | 3,048 | yes |
+| `cycle` in `CheckNonCyclicMap.apply:373`: the check's own `locked` set | 99 | 93 | yes: structural |
+| `reentry/self` under `checkNonCyclic`, each also a `cycle` thrown by `lockAndComplete0`: a checked bound reaching the symbol being completed (an F-bound, so a `LazyRef`) | 14 | 8 | yes: the innermost completion |
+| `peek/outer`: a local symbol (compiler); an `<import>` symbol, `Typer.scala:594` (library) | 1 | 1 | yes: reached only from its own unit |
+| `parents/self`: local classes in `cc/Setup.scala` | 2 | 0 | yes |
+| `parents/outer` on members | 2 | 32 | no |
+| `derivesFrom` answers that changed once complete | 0 of 2 | 0 of 32 | |
+
+The `parents/outer` reads:
+
+- Compiler: `object Types`, in `Checking.checkNonCyclic` for a type alias in `Types`, asked while a parent type of a class nested in `Types` is typed (`ClassCompleter.typedParentType` → `preCheckKinds` → `dealias` → the alias's completion → `CheckNonCyclicMap.isInteresting` → `derivesFrom`). The answer decides whether to explore a prefix for a cycle.
+- Library: `Typer.typedTypeBoundsTree`, which under capture checking asks `hi.tpe.derivesFromCapSet` to choose a type parameter's default lower bound, for bounds that are collection traits in progress (`MapOps`, `SortedSetOps`, `LinearSeq`, …), reached from `TypeDefCompleter.typeSig` of their own type members (`CC`). No collection trait derives from `CapSet`, so the answer is false whether the parents are known or not.
+
+No `CyclicReference` was caught in implicit search, in either corpus.
 
 ## 5. Design
 
@@ -116,13 +135,15 @@ What cannot move to the index: export forwarders, which are entered by typing th
 
 After the serial index (now with class bodies indexed), complete signatures on the pool, a unit per task: each class's header, then its members' signatures, under the claims the spike already uses (a claim per completion root). Then bodies, as now. Signatures and bodies can be one task per unit, or two passes with a barrier between them. The unstaged toy prefers one: there a barrier between headers and members cost 10–15% of makespan, for nothing.
 
-### 5.3 Detect, then fall back
+### 5.3 Validate, then fall back
 
-Every site that reads intermediate state of a completion records an event: `parentTypes` on a `TempClassInfo` (as the probe does), re-entry into a `Touched` member, a `CyclicReference` caught and recovered from, an `isCompleting` peek that decides something. A wait-for cycle that `CompletionRoots` would abort is an event too.
+Every site that reads intermediate state of a completion records what it asked and what it was told. For `derivesFrom` from a class with an unknown base, the class, the base and the answer: §4's probe does exactly this. For a `CyclicReference` caught and handled, or an `isCompleting` peek that decides something, the symbol and the outcome. Events on local symbols, on the innermost completion (`self`), and a check's structural cycles are the same in every order and are not recorded.
 
-In a parallel batch run, an event on a non-local symbol abandons the run: the compilation is redone from the start on one thread (a fresh base, the spike's code path without the flag). Nothing has been written by then: the typer runs before the pickler, the backend and sbt's callbacks. The decision is deterministic, because whether a program needs an unstable read is a property of the program. The cost is the abandoned attempt, so this is viable only while such programs are rare; §4 says they are rare in the compiler's sources, and §6 measures more.
+Once all signatures are complete, every recorded question is asked again. If every answer stands, the run computed what a run without unstable reads would have, which the toy says is unique. If one does not, the run is abandoned and the compilation redone from the start on one thread (a fresh base, the spike's code path without the flag). Nothing has been written by then: the typer runs before the pickler, the backend and sbt's callbacks. A wait-for cycle that `CompletionRoots` would abort is a fallback too.
 
-Each site is classified. An event whose read only feeds a check that tolerates a false answer (the `isInteresting` above) is exempt, with the reason written at the site. Every other site is a fallback until it is staged away.
+Plain detection (fall back on any unstable read) would have fallen back on both corpora: the compiler for `checkNonCyclic`'s two reads, the library for its 32. Validation keeps both in parallel.
+
+A recorded answer may already have been built on before it is validated (a lower bound chosen, a prefix not explored). That is fine: if it stands, what was built on it is what a stable run builds; if it does not, the whole run is thrown away.
 
 ### 5.4 Determinism repairs
 
@@ -136,11 +157,25 @@ The spike's bodies are deterministic because each unit's fresh names, symbols an
 
 The toy's lending (a waiter that closes a wait-for cycle borrows the claim it waits for, reading the owner's intermediate state as a serial nesting would, while the owner is blocked) is sound in the sense that the run corresponds to a serial nesting, and it never deadlocks. But it does not make the result order independent; it picks a nesting by timing. Once decls are staged, the toy meets no wait-for cycle in programs without genuine cycles, so lending has nothing to do, and the detector of §5.3 must catch what remains anyway.
 
+### 5.6 `checkNonCyclic`
+
+`Checking.checkNonCyclic` runs inside a type member's completion (`TypeDefCompleter.typeSig`) and the unpicklers, and has two jobs. It reports illegal cycles, and it rewrites the info it is given: its result is what becomes `sym.info`, with a `LazyRef` wherever an F-bounded cycle is legal, so that the published info is safe to traverse. Both depend on order in two ways:
+
+- `isInteresting` prunes the exploration with `prefix.derivesFrom(sym.owner)`, which can be falsely negative while the prefix's class is in progress (§4's compiler reads).
+- `checkInfo(tp.info)` forces the infos it explores. Forcing an alias whose completion encloses this one throws a `CyclicReference`, which the check turns into a `LazyRef`, an error, or keeps the type as it was, depending on where the cycle was entered. The probe found none of these on the two corpora (every re-entry under the check was the innermost completion), but nothing prevents them.
+
+A rework that makes it order independent:
+
+- **Report later.** Illegal cycles are reported in a pass after all signatures, when no completion is in progress, as `checkNonCyclicInherited` already is for classes (in the typer, `Typer.scala:3655`). There the exploration reads only final infos.
+- **Protect with stable facts.** At completion time the check only inserts `LazyRef`s, and prunes with what does not change while completions run: ownership and whether a class is defined in this run, both known after indexing. For a prefix whose class is in progress, it either explores (`derivesFrom(cls, defaultIfUnknown = true)`, i.e. `mayDeriveFrom`, which `provablyDisjoint` already uses for soundness) or records the `derivesFrom` answer for §5.3's validation. Exploring more forces more completions, so the first needs measuring; the second needs nothing new.
+- **Re-entry into an enclosing completion** under the check is recorded for validation like any other. It did not occur here.
+
 ## 6. Plan
 
 0. **Toy** (done): `tools/sig-toy/`, the findings of §3.
 1. **Probe, parents** (done): `-Ddotc.unstableReads`, §4.
-2. **Probe, the rest**: re-entry into `Touched` members, caught `CyclicReference`s, `isCompleting` peeks that decide, export forwarders; run over the compiler, the standard library and a slice of the community build. Decides whether whole-run fallback is viable, and which sites to stage first.
+2. **Probe, the rest** (done for the compiler and the library): re-entries, `CyclicReference`s made and where, `isCompleting` peeks, and `derivesFrom` answers asked again at the end of the typer (§4). Left: export forwarders, `LazyRef`s in progress, and a slice of the community build.
+2a. **`checkNonCyclic`**: report in a pass after signatures; prune with stable facts (§5.6).
 3. **Stage decls**: split `ClassCompleter`, index class bodies in the serial index step; the probe's counts before and after; `testCompilation` serially, since this changes the serial compiler.
 4. **Parallel signatures**: in `TyperPhase.typeCheckInParallel`, signatures on the pool, the detector, whole-run fallback, and `-Ddotc.parallelTyper.oneThread` as now to separate order from concurrency.
 5. **Determinism repairs**: fresh names per definition, `addChild` under the parent's claim; the spike's harness (several parallel runs, byte-for-byte) on the compiler and the library.
@@ -155,6 +190,7 @@ The toy's lending (a waiter that closes a wait-for cycle borrows the claim it wa
 
 ## 8. Open questions
 
-- How common are unstable reads beyond the compiler's sources, especially caught `CyclicReference`s in implicit search? If common, whole-run fallback is not viable, and the sites must be staged away or the reads made to wait.
+- How common are unstable reads beyond the compiler and the library, especially `CyclicReference`s caught in implicit search (none in either)? If answers that change are common, whole-run fallback is not viable, and the sites must be staged away or the reads made to wait.
+- Validation asks `derivesFrom` again; the other recorded kinds (a caught `CyclicReference`, a peek that decides) need their own way to be asked again, or to fall back when they occur.
 - Can member lookup in a class whose parents are in progress wait for them instead of reading its own decls, when the waiter is another thread? The toy says the cycles that need it are rare in programs without genuine cycles; dotc's sources need measuring.
 - Is the order of the spike (all signatures, then bodies) worth keeping as the serial compiler's order, so that serial and parallel agree byte for byte? Today they differ in 75 TASTy files, by fresh-name numbers and shared trees, deterministically.
