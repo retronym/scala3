@@ -2399,7 +2399,9 @@ object SymDenotations {
 
     /** The types of the parent classes. */
     def parentTypes(using Context): List[Type] = info match
-      case classInfo: ClassInfo => classInfo.declaredParents
+      case classInfo: ClassInfo =>
+        if UnstableReads.on && classInfo.isInstanceOf[TempClassInfo] then UnstableReads.record(symbol)
+        classInfo.declaredParents
       case _ => Nil
 
     /** The symbols of the parent classes. */
@@ -3769,3 +3771,20 @@ object SymDenotations {
   @interned @benignRace("indentation of a debug print only; a race skews it")
   @sharable private var indent = 0 // for completions printing
 }
+
+/** Probe (`-Ddotc.unstableReads`, `=stacks` for a stack per site of a non-local class): the parents of a class read
+ *  while its info is a `TempClassInfo`, whose parents are not known yet (`Nil`): a read whose answer depends on the
+ *  order the completions ran in. Printed at exit. See docs/_docs/internals/parallel-signatures.md. */
+object UnstableReads:
+  val on: Boolean = System.getProperty("dotc.unstableReads") != null
+  private val stacks: Boolean = System.getProperty("dotc.unstableReads") == "stacks"
+  private val counts = java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]()
+  def record(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    val where = s"${sym.showFullName} (${sym.source.name}) in ${ctx.phase} under ${ctx.owner.showFullName}"
+    counts.computeIfAbsent(where, _ => { if stacks && !sym.isLocal then Thread.dumpStack(); java.util.concurrent.atomic.LongAdder() }).nn.increment()
+  if on then
+    Runtime.getRuntime.addShutdownHook(Thread(() =>
+      import scala.jdk.CollectionConverters.*
+      val all = counts.asScala.toList.sortBy(-_._2.sum)
+      System.err.nn.println(s"[unstable reads] ${all.map(_._2.sum).sum} reads at ${all.size} sites")
+      all.take(40).foreach((k, v) => System.err.nn.println(f"  ${v.sum}%6d $k"))))
