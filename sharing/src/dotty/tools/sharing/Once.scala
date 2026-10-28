@@ -54,35 +54,61 @@ trait OnceOps:
      *  stored the value meanwhile. Another thread waits for an owner's computation at the claim, so `compute` is entered
      *  again only by its owner, re-entering its own computation: the place for a cycle test.
      *
-     *  Expands to
+     *  Expands to a test of the mode, then one path for each, so each holds one copy of `compute` and tests nothing
+     *  again:
      *
      *  {{{
-     *  val v = if mode.concurrent then <acquire field> else <plain field>
-     *  if v != null then v
-     *  else Sharing.claim(owner):
-     *    val v1 = <plain field>                      // ordered by the claim
-     *    if v1 != null then v1
-     *    else { val r = compute; if mode.concurrent then <release field := r> else <field := r>; r }
+     *  if mode.concurrent then
+     *    val v = <acquire field>
+     *    if v != null then v
+     *    else registry.claim(owner, kind, owner, () =>
+     *      val v1 = <plain field>                    // ordered by the claim
+     *      if v1 != null then v1 else { val r = compute; <release field := r>; r })
+     *  else
+     *    val v = <plain field>
+     *    if v != null then v else { val r = compute; <field := r>; r }
      *  }}}
      *
      *  @param compute computes the value, as the one writer; the library stores it
      */
     inline def get(inline compute: Holds[K] ?=> T)(using inline kind: ClaimKind[K])(
         using inline mode: Mode, inline registry: ClaimRegistry): T =
-      val v = if mode.concurrent then Once.acquireRaw[T](field) else Once.plainRaw[T](field)
-      if v != null then v.asInstanceOf[T]
-      else Sharing.claim(Once.owner[K](field)):
-        val v1 = Once.plainRaw[T](field)
-        if v1 != null then v1.asInstanceOf[T]
+      // the claim's expansion, written out so that each path knows its mode: through `Sharing.claim`, each inlined
+      // copy of the store would test it again
+      if mode.concurrent then
+        val v = Once.acquireRaw[T](field)
+        if v != null then v.asInstanceOf[T]
+        else registry.claim(Once.owner[K](field), kind, Once.owner[K](field), () =>
+          val v1 = Once.plainRaw[T](field)
+          if v1 != null then v1.asInstanceOf[T]
+          else
+            val r = compute(using Sharing.evidence[K])
+            Once.releaseRaw[T](field, r)
+            r
+        )
+      else
+        val v = Once.plainRaw[T](field)
+        if v != null then v.asInstanceOf[T]
         else
-          val r = compute
-          if mode.concurrent then Once.releaseRaw[T](field, r) else Once.setPlainRaw[K, T](field, r)
+          val r = compute(using Sharing.evidence[K])
+          Once.setPlainRaw[K, T](field, r)
           r
 
     /** The fact if it is there, else `null`, without claiming: read with acquire semantics in a concurrent mode, so
      *  what it refers to is visible. */
     inline def peek(using inline mode: Mode): T | Null =
       if mode.concurrent then Once.acquireRaw[T](field) else Once.plainRaw[T](field)
+
+    /** The fact if it is there, else `null`, read with acquire semantics whatever the mode: [[peek]] for code that has
+     *  no [[Mode]] at hand (a `toString`, a predicate of the owner's state). The cost in [[Mode.Batch]] is an acquire
+     *  in place of a plain load, as for a [[Published]] field. */
+    inline def acquire: T | Null = Once.acquireRaw[T](field)
+
+    /** Stores the fact as the one writer, outside `get`: say, from a computation that the fact's own `compute` re-enters,
+     *  or from another writer of the owner that finds the value first. With release semantics in a concurrent mode, as
+     *  `get`'s store, so that a reader that finds it sees what it refers to. */
+    inline def set(inline v: T)(using Holds[K])(using inline mode: Mode): Unit =
+      if mode.concurrent then Once.releaseRaw[T](field, v) else Once.setPlainRaw[K, T](field, v)
 
     /** Forgets the fact, as the one writer, so that the next `get` computes it again. */
     inline def reset()(using Holds[K])(using inline mode: Mode): Unit =

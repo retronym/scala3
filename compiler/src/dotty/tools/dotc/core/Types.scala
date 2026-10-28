@@ -3275,12 +3275,11 @@ object Types extends TypeUtils {
     def update(tp: Type)(using Context) =
       // under this reference's claim: usually re-entered from its own computation (`refFn` completes an opaque
       // alias, whose completer updates it); with parallel readers, another reader that completed the alias first
-      // has set the same value. A plain store, outside `get`: a type's structure is in final fields, which the JMM
-      // shows complete to a reader that sees the reference.
+      // has set the same value
       Sharing.claim(this) {
         if myRef.peek == null || !ctx.base.parallel then
           assert(myRef.peek == null || ctx.reporter.errorsReported)
-          myRef.setPlain(tp)
+          myRef.set(tp)
           setComputed(true)
           dropFn()
       }
@@ -3288,7 +3287,7 @@ object Types extends TypeUtils {
     def evaluating(using Context): Boolean = computed && myRef.peek == null
     def completed(using Context): Boolean = myRef.peek != null
     override def underlying(using Context): Type = ref
-    override def toString: String = s"LazyRef(${if (computed) myRef.peek(using _root_.dotty.tools.sharing.Mode.Concurrent) else "..."})"
+    override def toString: String = s"LazyRef(${if (computed) myRef.acquire else "..."})"
     override def equals(other: Any): Boolean = this.eq(other.asInstanceOf[AnyRef])
     override def hashCode: Int = System.identityHashCode(this)
   }

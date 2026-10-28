@@ -13,7 +13,7 @@ import Decorators.*
 import dotty.tools.dotc.core.StdNames.nme
 
 import scala.annotation.internal.sharable
-import _root_.dotty.tools.sharing.{Mode as SharingMode, Once, Published}
+import _root_.dotty.tools.sharing.{Once, Published}
 
 object Annotations {
 
@@ -290,7 +290,7 @@ object Annotations {
         case null => throw AssertionError(s"re-entered the evaluation of $this")
 
     // without a context, so read with acquire semantics whatever the mode
-    private def evaluatedTree: Tree | Null = myTree.peek(using SharingMode.Concurrent)
+    private def evaluatedTree: Tree | Null = myTree.acquire
     override def isEvaluating: Boolean = myTreeFn == null && evaluatedTree == null
     override def isEvaluated: Boolean = evaluatedTree != null
   }
@@ -343,7 +343,7 @@ object Annotations {
         case null => throw AssertionError(s"re-entered the evaluation of $this")
 
     // without a context, so read with acquire semantics whatever the mode
-    private def evaluatedTree: Tree | Null = myTree.peek(using SharingMode.Concurrent)
+    private def evaluatedTree: Tree | Null = myTree.acquire
     override def isEvaluating: Boolean = myTreeFn == null && evaluatedTree == null
     override def isEvaluated: Boolean = evaluatedTree != null
   }
