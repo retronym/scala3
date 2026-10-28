@@ -605,36 +605,41 @@ extension (cls: ClassSymbol) {
       ccState.fieldsWithExplicitTypes             // pick fields with explicit types for classes in this compilation unit
         .getOrElse(cls, cls.info.decls.toList)  // pick all symbols in class scope for other classes
 
-    /** The implied classifier of the LocalCap of the class instance, derived from
+    /** The implied classifier of the LocalCap of an instance of `cls`, and the
+     *  fields contributing LocalCaps to it. The classifier is derived from
      *    - the classifiers of the LocalCaps in the span capture sets of all fields
      *    - the implied classifiers of the parent classes
      *    - if `cls` is a stateful class, the classifier of `cls` itself
-     *  @return The implied classidier, or NoSymbol is there is no LocalCap
-     *          to be generated for the instance.
+     *  The contributing fields are the own fields with LocalCaps in their infos,
+     *  followed by those of the parent classes.
+     *  @return The implied classifier, or NoSymbol is there is no LocalCap
+     *          to be generated for the instance, and the contributing fields.
+     *  Memoized per class for the current unit and iteration, since `knownFields`
+     *  depends on what Setup recorded for the unit's classes.
      */
-    def impliedClassifier(cls: Symbol): Symbol = cls match
+    def classifierAndFields(cls: Symbol): (Symbol, List[Symbol]) = cls match
       case cls: ClassSymbol =>
-        val fieldClassifiers =
-          knownFields(cls).flatMap(classifiersOfLocalCapsInInfo)
-        val parentClassifiers =
-          cls.parentSyms.map(impliedClassifier).collect:
+        val cache = ccState.classifierAndFieldsCache
+        val cached = cache.lookup(cls)
+        if cached != null then cached
+        else
+          val fields = knownFields(cls)
+          val fieldClassifiers = fields.flatMap(classifiersOfLocalCapsInInfo)
+          val parentResults = cls.parentSyms.map(classifierAndFields)
+          val parentClassifiers = parentResults.map(_._1).collect:
             case cl: ClassSymbol => cl
-        val stateClassifiers =
-          if cls.typeRef.isStatefulType(varsOnly = true)
-          then cls.classifier :: Nil
-          else Nil
-        (fieldClassifiers ++ parentClassifiers ++ stateClassifiers).commonAncestor
-      case _ => NoSymbol
+          val stateClassifiers =
+            if cls.typeRef.isStatefulType(varsOnly = true)
+            then cls.classifier :: Nil
+            else Nil
+          val clsfier = (fieldClassifiers ++ parentClassifiers ++ stateClassifiers).commonAncestor
+          val contributing = fields.filter(memberCaps(_).nonEmpty) ++ parentResults.flatMap(_._2)
+          val result = (clsfier, contributing)
+          cache(cls) = result
+          result
+      case _ => (NoSymbol, Nil)
 
-    def contributingFields(cls: Symbol): List[Symbol] = cls match
-      case cls: ClassSymbol =>
-        var ownFields = knownFields(cls).filter(memberCaps(_).nonEmpty)
-        val parentFields = cls.parentSyms.flatMap(contributingFields)
-        ownFields ++ parentFields
-      case _ => Nil
-
-    val impliedClr = impliedClassifier(cls)
-    val contributing = contributingFields(cls)
+    val (impliedClr, contributing) = classifierAndFields(cls)
     def readOnly =
       !cls.typeRef.isStatefulType() && contributing.forall(allLocalCapsInTypeAreRO)
     val impliedSet = core.impliedCaptures(impliedClr, contributing, readOnly)
