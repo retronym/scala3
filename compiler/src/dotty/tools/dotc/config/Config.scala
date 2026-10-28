@@ -17,6 +17,11 @@ object Config {
 
   inline val checkCacheMembersNamed = false
 
+  /** Check that the member types RefChecks skips, those of names declared once among the base classes
+   *  of a class, are indeed not merges of several members.
+   */
+  inline val checkSkippedMemberTypes = false
+
   /** When updating a constraint bound, check that the constrained parameter
    *  does not appear at the top-level of either of its bounds.
    */
