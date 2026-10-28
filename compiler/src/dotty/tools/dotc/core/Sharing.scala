@@ -71,12 +71,6 @@ object Sharing:
   /** A TASTy file's root (`claimAt`): its address maps are filled by its completers and its lazy reads. */
   val lazyTastyRead: ClaimKind[Any] = ClaimKind(CompletionLock.lazyTastyRead, lockWhenSerialised = true)
 
-  /** The family of a TASTy file's claims (`claimAt[TastyFileClaim]`), keyed by the file: its unpickler's address maps,
-   *  filled by its completers and lazy reads, and the root trees kept for it are reached only with
-   *  `Holds[TastyFileClaim]`. A phantom type: nothing is one.
-   */
-  sealed trait TastyFileClaim
-
   /** `op` in `c0`, or, when readers are parallel, in a private child of `c0`'s typer state, settled when it ends
    *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by
    *  one of them (I62, I66, I70, I76).
