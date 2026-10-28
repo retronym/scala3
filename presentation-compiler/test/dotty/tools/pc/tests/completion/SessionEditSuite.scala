@@ -411,3 +411,32 @@ class SessionEditSuite extends BasePCSuite:
       driver.runUpTo(uri, source(edited), at(edited, "def next", 4))
       Assert.assertNotEquals(s"$what: ${driver.lastEdit(uri)}", id, runId(driver))
       assertLikeFresh(driver, edited, s"after $what")
+
+  /** The completions at `offset`, `driver` on `content`. */
+  private def completions(driver: InteractiveDriver, content: String, offset: Int): List[String] =
+    driver.runUpTo(uri, source(content), Span(offset))
+    val unit = driver.compilationUnits(uri)
+    given Context = driver.currentCtx.fresh.setCompilationUnit(unit).withPhase(Phases.typerPhase(using driver.currentCtx))
+    dotty.tools.dotc.interactive.Completion.completions(dotty.tools.dotc.util.SourcePosition(unit.source, Span(offset)))._2
+      .map(c => c.label + " " + c.description).sorted.distinct
+
+  /** A dangling `qual.` at the end of a braceless body, what an editor
+   *  sends on every `.`: the parser reports the missing identifier at the
+   *  next member's token, which is the body's error.
+   */
+  @Test def `a-dangling-select-at-the-end-of-a-braceless-body` =
+    val driver = newDriver()
+    driver.run(uri, source(braceless))
+    val id = runId(driver)
+    var now = braceless
+    for (from, to) <- List("msg + err\n" -> "msg + err.\n", "msg + err.\n" -> "msg + err.le\n", "msg + err.le\n" -> "msg + err.length.\n") do
+      now = now.replace(from, to)
+      val cursor = now.indexOf(to) + to.length - 1
+      val obtained = completions(driver, now, cursor)
+      Assert.assertTrue(s"$from -> $to: ${driver.lastEdit(uri)}", driver.lastEdit(uri).startsWith("body edit of show"))
+      Assert.assertEquals(id, runId(driver))
+      val expected = completions(newDriver(), now, cursor)
+      Assert.assertTrue(s"$from -> $to: ${expected.take(5)}", expected.nonEmpty)
+      Assert.assertEquals(s"$from -> $to", expected, obtained)
+      assertLikeFresh(driver, now, s"after $from -> $to")
+      Assert.assertEquals(id, runId(driver))

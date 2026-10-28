@@ -91,6 +91,38 @@ private[interactive] object BodyEdit:
       else 0
     if k == 0 then r else Region(r.start - k, r.oldEnd - k, r.newEnd - k)
 
+  /** The offset of the first token at or after `from` in `text`: past
+   *  whitespace and comments.
+   */
+  def nextToken(text: String, from: Int): Int =
+    var i = from
+    var more = true
+    while more && i < text.length do
+      val c = text.charAt(i)
+      if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' then i += 1
+      else if text.startsWith("//", i) then
+        while i < text.length && text.charAt(i) != '\n' do i += 1
+      else if text.startsWith("/*", i) then
+        // comments nest
+        var depth = 0
+        while
+          if text.startsWith("/*", i) then { depth += 1; i += 2 }
+          else if text.startsWith("*/", i) then { depth -= 1; i += 2 }
+          else i += 1
+          depth > 0 && i < text.length
+        do ()
+      else more = false
+    math.min(i, text.length)
+
+  /** Is the syntax error at `err` the body `body`'s: inside it, or at the
+   *  first token after it? Where the body is braceless a dangling `qual.`
+   *  at its end has the parser expect an identifier at the next token, the
+   *  next member's, and say so there; inside braces the `}` keeps it in.
+   */
+  def inBody(err: Span, body: Span, text: String): Boolean =
+    body.contains(err)
+    || body.exists && err.exists && body.start <= err.start && err.start <= nextToken(text, body.end)
+
   /** How an edit is classified. */
   enum Kind:
     /** Only the right-hand side of the member definition `old` differs; `now` is its new parse. */
