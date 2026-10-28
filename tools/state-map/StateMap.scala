@@ -187,7 +187,7 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
         case ("dotty.tools.sharing.Sharing", "once") => Some("claim" -> Set("compute"))
         case ("dotty.tools.sharing.Sharing", "serialised" | "locking") => Some("synchronized" -> Set("op"))
         case ("dotty.tools.sharing.Sharing.Guard", "locked" | "alwaysLocked") => Some("synchronized" -> Set("op"))
-        case ("dotty.tools.dotc.core.CompletionLock", "locked") => Some("completion-lock" -> Set("op"))
+        case ("dotty.tools.sharing.CoarseLock", "locked") => Some("completion-lock" -> Set("op"))
         case ("dotty.tools.dotc.core.CompletionRoots", "locked") => Some("root-claim" -> Set("op"))
         case (_, "synchronized") if owner == "scala.Any" || owner == "java.lang.Object" || owner == "scala.AnyRef" =>
           Some("synchronized" -> Set("*"))

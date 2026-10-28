@@ -1138,7 +1138,7 @@ object Contexts {
      *  used in batch compilation.
      */
     @interned @publishedBy("init")
-    val completionLock: CompletionLock = CompletionLock(this)
+    val completionLock: _root_.dotty.tools.sharing.CoarseLock = CompletionLock(this)
 
     /** The owners of completion roots with parallel readers (see
      *  `Sharing.Parallel`, `CompletionRoots`).

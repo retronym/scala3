@@ -2,77 +2,22 @@ package dotty.tools
 package dotc
 package core
 
-import java.util.concurrent.locks.ReentrantLock
-
 import Symbols.Symbol
 
-import _root_.dotty.tools.sharing.{ClaimRegistry, Sharing as Shared}
-
-import scala.annotation.internal.{guardedBy, publishedBy, scratch}
+import _root_.dotty.tools.sharing.CoarseLock
 
 /** The completion lock of a `ContextBase` read by several threads
  *  (interactive mode, step 3 of `docs/_docs/internals/interactive-multi-reader.md`):
- *  a reentrant lock that also keeps what its holder is doing (the outermost
- *  acquisition, the root of the holder's work, and the innermost), so that a
- *  thread that has to wait records how long it waited and what it waited
- *  for (`Reader.recordLockWait`). The labels are kept as objects and only
- *  rendered by a thread that waited. Batch compilation never takes it.
+ *  the library's `CoarseLock`, a reentrant lock that also keeps what its holder
+ *  is doing, so that a thread that has to wait records how long it waited and
+ *  what for (`Reader.recordLockWait`). Batch compilation never takes it.
  *
  *  With serialised readers, the base's `ClaimRegistry`: a claim takes the lock if its kind says so.
  */
-final class CompletionLock(base: Contexts.ContextState) extends ReentrantLock, ClaimRegistry:
-  import CompletionLock.What
-
-  def claim[T](key: AnyRef, kind: Shared.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T): T =
-    if kind.lockWhenSerialised then locked(kind.what)(op()) else op()
-
-  // written by the holder only; read by waiters before they block
-  @scratch @publishedBy("packed") @volatile private var rootWhat: What | Null = null
-  @scratch @publishedBy("packed") @volatile private var currentWhat: What | Null = null
-  @scratch @publishedBy("volatile") @volatile private var holderName: String = ""
-  // the holder's, touched only between `lockFor` having acquired the lock and `unlockFor` releasing it
-  @scratch @guardedBy("completionLock")
-  private val stack = new java.util.ArrayDeque[What]()
-
-  /** Acquire the lock to do `what`. */
-  def lockFor(what: What): Unit =
-    if !tryLock() then
-      // rendered when the wait begins, while the holder is still doing it
-      // (contended acquisitions only)
-      val root = String.valueOf(rootWhat)
-      val current = String.valueOf(currentWhat)
-      val holder = holderName
-      val t0 = System.nanoTime()
-      lock()
-      base.reader.recordLockWait(System.nanoTime() - t0, root, current, holder)
-    if getHoldCount == 1 then
-      rootWhat = what
-      holderName = Thread.currentThread.getName
-    stack.push(what)
-    currentWhat = what
-
-  /** Release an acquisition made by `lockFor`. */
-  def unlockFor(): Unit =
-    stack.pop()
-    currentWhat = stack.peek()
-    if getHoldCount == 1 then
-      rootWhat = null
-      holderName = ""
-    unlock()
-
-  /** Who holds the lock and the root of what it is doing, or "" (for tools:
-   *  the x-ray's owner-of-root display).
-   */
-  def holderNow: String =
-    val r = rootWhat
-    if r == null then "" else s"$holderName: ${r.render}"
-
-  /** Run `op` holding the lock for `what`. */
-  inline def locked[T](what: What)(inline op: T): T =
-    lockFor(what)
-    try op finally unlockFor()
-
 object CompletionLock:
+  /** The completion lock of `base`. */
+  def apply(base: Contexts.ContextState): CoarseLock =
+    CoarseLock((nanos, root, current, holder) => base.reader.recordLockWait(nanos, root, current, holder))
 
   /** What a holder of the lock or a claim is doing (`dotty.tools.sharing.What`), whose subject may be a symbol. */
   type What = _root_.dotty.tools.sharing.What
@@ -81,7 +26,9 @@ object CompletionLock:
   /** A `What` that renders a symbol subject by its name and owner's name, read without a context (the waiter
    *  renders it after the fact; the denotation is the last known one).
    */
-  private final class SymbolWhat(kind: String, subject: AnyRef | Null) extends What(kind, subject):
+  // coarse: every claim but a Namer signature's guards more than one symbol (a TASTy file, a bring-forward, an
+  // inherited cache), so a wait-for cycle through it is broken after a bound (I74)
+  private final class SymbolWhat(kind: String, subject: AnyRef | Null) extends What(kind, subject, coarse = kind != namerKind):
     override protected def renderSubject(s: AnyRef): String = s match
       case sym: Symbol =>
         try
