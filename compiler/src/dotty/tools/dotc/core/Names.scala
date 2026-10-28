@@ -259,6 +259,11 @@ object Names {
   /** A simple name is essentially an interned string */
   final class SimpleName private[Names](private val value: String) extends TermName {
 
+    // names are interned, so equality is identity; the hash is the content's, not the identity hash, so that the
+    // iteration order of a hashed collection of names does not depend on which thread hashed a name first
+    // (-Yparallel-typer: HotSpot's identity hash comes from a per-thread generator)
+    override def hashCode: Int = value.hashCode
+
     override def length: Int = value.length
 
     /** The n-th character */
@@ -337,6 +342,8 @@ object Names {
 
   final class TypeName private[Names](val toTermName: TermName) extends Name {
 
+    override val hashCode: Int = toTermName.hashCode * 31 + 1
+
     type ThisName = TypeName
 
     override def isTypeName: Boolean = true
@@ -378,6 +385,8 @@ object Names {
    */
   final class DerivedName private[Names](override val underlying: TermName, override val info: NameInfo)
   extends TermName {
+
+    override val hashCode: Int = underlying.hashCode * 41 + info.hashCode
 
     override def asSimpleName: Nothing = throw new UnsupportedOperationException(s"$debugString is not a simple name")
 
