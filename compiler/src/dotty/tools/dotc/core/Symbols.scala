@@ -494,8 +494,11 @@ object Symbols extends SymUtils {
 
     type TreeOrProvider = tpd.TreeProvider | tpd.Tree
 
-    // a `TreeProvider` is replaced by the tree it yields; the TASTy reads run under the completion lock (I91)
-    @treeState @benignRace("a provider is replaced by the tree it unpickles; a second unpickling yields an equal tree")
+    // A `TreeProvider` is replaced by the tree it yields on a batch base only. On a concurrent base it stays: a second
+    // unpickling creates the local symbols again, and a plain store would publish a tree whose `tpe` and spans are
+    // mutable. With -Yretain-trees (which interactive mode sets) the provider keeps one reading, under the file's
+    // claim, so a reader gets it by taking the claim; without, each call reads the file again.
+    @treeState @benignRace("a provider is replaced by its tree only on a batch base; the stores of `rootTreeOrProvider_=` (a loader's provider, the typer's tree of a source class) are not ordered for other readers")
     private var myTree: TreeOrProvider = tpd.EmptyTree
 
     /** If this is a top-level class and `-Yretain-trees` (or `-from-tasty`) is set.
@@ -517,7 +520,7 @@ object Symbols extends SymUtils {
         case fn: TreeProvider =>
           if (id.isEmpty || fn.mightContain(id)) {
             val tree = fn.tree
-            myTree = tree
+            if !ctx.base.concurrent then myTree = tree
             tree
           }
           else tpd.EmptyTree

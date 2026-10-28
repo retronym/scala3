@@ -16,10 +16,15 @@ import dotty.tools.tasty.TastyVersion
 
 import dotty.tools.io.AbstractFile
 
+import scala.annotation.internal.benignRace
+
 object DottyUnpickler {
 
   /** Exception thrown if classfile is corrupted */
   class BadSignature(msg: String) extends RuntimeException(msg)
+
+  /** The sorted simple names of a TASTy file, in a final field: published with the holder however it is stored. */
+  private final class SortedIds(val names: Array[String])
 
   class TreeSectionUnpickler(
     compilationUnitInfo: CompilationUnitInfo,
@@ -92,13 +97,16 @@ class DottyUnpickler(
 
   protected def computeRootTrees(using Context): List[Tree] = treeUnpickler.unpickle(mode)
 
-  private var ids: Array[String] | Null = null
+  // read without a claim (`ClassSymbol.rootTreeContaining`), so the sorted names are held by a final field: a reader
+  // that sees the holder sees the array filled. A race computes the names twice, each equal.
+  @benignRace("an immutable holder: its array is published by the final field")
+  private var ids: SortedIds | Null = null
 
   override def mightContain(id: String)(using Context): Boolean = {
     initialize(ids, ids = _,
-        unpickler.nameAtRef.toArray.collect {
+        SortedIds(unpickler.nameAtRef.toArray.collect {
           case name: SimpleName => name.toString
-        }.sorted
-    ).binarySearch(id) >= 0
+        }.sorted)
+    ).names.binarySearch(id) >= 0
   }
 }
