@@ -367,6 +367,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   private def compileUnits()(using Context) = Stats.maybeMonitored {
     if (!ctx.mode.is(Mode.Interactive)) // IDEs might have multi-threaded access, accesses are synchronized
       ctx.base.checkSingleThreaded()
+    ast.Positioned.primeSpans = !ctx.settings.YnoPrimeSpans.value
 
     compiling = true
 
