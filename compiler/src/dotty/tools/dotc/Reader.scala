@@ -275,13 +275,13 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
   // `waitingOn`, the completion root this reader is waiting for (parallel readers, `CompletionRoots`), is the
   // `Claimant`'s: the edge of the wait-for graph that the cycle check follows
 
-  /** The waits this reader backed off from because they would have closed a
-   *  wait-for cycle (`CompletionRoots.backOff`), for tests and the x-ray.
+  /** The waits on which this reader was aborted as a victim, because they would have closed a
+   *  wait-for cycle (`CompletionRoots.abortVictim`), for tests and the x-ray.
    */
-  @volatile var waitCyclesBackedOff: Int = 0
+  @volatile var waitCyclesAborted: Int = 0
 
   /** How many Namer completions this reader is inside now (parallel
-   *  readers): a reader inside one never backs off from a wait-for cycle
+   *  readers): a reader inside one is never aborted on a wait-for cycle
    *  (I74), since a Namer completion cannot run twice.
    */
   @volatile var namerCompletionDepth: Int = 0
@@ -291,7 +291,7 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
 
   /** Aborted as the victim of a wait-for cycle: counted, and unwound as a cancelled request, which is retried. */
   override def abort(): Nothing =
-    waitCyclesBackedOff += 1
+    waitCyclesAborted += 1
     throw CompilationUnit.CancelledCompilation()
 
   override def acquired(): Unit = util.Chaos.at("acquire", oneIn = 8)
@@ -380,7 +380,7 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
         throw CompilationUnit.CancelledCompilation()
 
   /** Did the last cancellation of this reader come from its own checker (the
-   *  client's), as opposed to the driver's sticky flag (a writer pre-empting
+   *  client's), as opposed to the driver's sticky flag (a writer cancelling
    *  the reader, which the driver retries; see `InteractiveDriver.reading`)?
    */
   var cancelledByChecker: Boolean = false

@@ -174,7 +174,7 @@ class CompletionSoakSuite extends BasePCSuite:
             if d.isClass && !d.infoOrCompleter.isInstanceOf[dotty.tools.dotc.core.SymDenotations.UnwoundCompletion]
             then d.symbol.asClass.unforcedDecls.toList else Nil
           // still completing (a leaked `Touched`), state a fresh run cannot recover from. A symbol left with the
-          // completer of a cancellation that unwound (`UnwoundCompletion`) is not dirty: it pre-empts whoever reaches
+          // completer of a cancellation that unwound (`UnwoundCompletion`) is not dirty: it cancels whoever reaches
           // it in this run, which starts a fresh one, and degrades in a later run as a stale completer does.
           (s :: nested).map(_.lastKnownDenotation).collect {
             case d if { d.awaitOtherReader(); d.isCompleting } => d.symbol.show + " (Touched)"
@@ -362,7 +362,7 @@ class CompletionSoakSuite extends BasePCSuite:
           var tries = 0
           while dirty.nonEmpty && tries < 30 do { Thread.sleep(10); dirty = touched(driver); tries += 1 }
           org.junit.Assert.assertTrue(s"[$name seed=$seed reader $thread step $step] after the fresh run ${driver.runIdOf(uri)}: ${dirty.mkString(", ")}", dirty.isEmpty)
-        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)} tainted=${driver.isTainted(uri)} backoffs=${r.waitCyclesBackedOff} cycles=${r.cyclesPrevented.size} raised=${r.cyclesRaised} unwound=${r.cancelledCompletions.size}"
+        log += s"$step $what@$offset variant=$v run=${driver.runIdOf(uri)} tainted=${driver.isTainted(uri)} cycleAborts=${r.waitCyclesAborted} cycles=${r.cyclesPrevented.size} raised=${r.cyclesRaised} unwound=${r.cancelledCompletions.size}"
         if expected != obtained then
           println(s"[soak2 $name seed=$seed reader $thread step $step] at $offset expected ${expected.take(5)} obtained ${obtained.take(5)}; tree: " +
             (try driver.compilationUnits.get(uri).map { unit =>

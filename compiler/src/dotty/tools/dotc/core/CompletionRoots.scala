@@ -26,7 +26,7 @@ import _root_.dotty.tools.sharing.{CycleHandler, PerKeyClaims}
  *  reader, as a `CyclicReference` (`SymDenotation.cyclicWait`).
  *
  *  With parallel readers, the base's `ClaimRegistry`: a `Sharing.claim` claims its key here, and a wait-for cycle
- *  that it reports aborts the reader (`CompletionRoots.BackOff`).
+ *  that it reports aborts the reader (`CompletionRoots.AbortVictim`).
  */
 object CompletionRoots:
   /** A reader's claim on a root. */
@@ -37,12 +37,12 @@ object CompletionRoots:
   val coarseCycleWaitNanos: Long = 10_000_000_000L
 
   def apply(currentReader: () => Reader): PerKeyClaims =
-    PerKeyClaims(currentReader, BackOff(currentReader), coarseCycleWaitNanos)
+    PerKeyClaims(currentReader, AbortVictim(currentReader), coarseCycleWaitNanos)
   def apply(base: Contexts.ContextState): PerKeyClaims = apply(() => base.reader)
 
   /** Abort this reader on a wait that would close a wait-for cycle: unwind as a cancelled reader does. */
-  def backOff(subject: AnyRef)(using Contexts.Context): Nothing = Contexts.ctx.reader.abort()
+  def abortVictim(subject: AnyRef)(using Contexts.Context): Nothing = Contexts.ctx.reader.abort()
 
-  /** `backOff` as the `CycleHandler` of a `Sharing.claim`. */
-  final class BackOff(currentReader: () => Reader) extends CycleHandler:
+  /** `abortVictim` as the `CycleHandler` of a `Sharing.claim`. */
+  final class AbortVictim(currentReader: () => Reader) extends CycleHandler:
     def waitCycle(subject: AnyRef): Nothing = currentReader().abort()

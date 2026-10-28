@@ -27,10 +27,10 @@ object ThroughputDemo:
    *  open (serial), typing until the first thread ran out of files, and the
    *  tail until the last one did. */
   final case class Point(n: Int, wallMs: Double, workerCpuMs: Double, rootWaits: Int, rootWaitMs: Double, differ: Int,
-      backoffs: Int, cyclesRaised: Int, filesPerThread: List[Int], failure: String,
+      cycleAborts: Int, cyclesRaised: Int, filesPerThread: List[Int], failure: String,
       openMs: Double = 0, typingMs: Double = 0, tailMs: Double = 0, lanes: List[List[(String, Double, Double)]] = Nil):
     def toMap: Map[String, Any] = Map("n" -> n, "wallMs" -> r(wallMs), "workerCpuMs" -> r(workerCpuMs), "rootWaits" -> rootWaits,
-      "rootWaitMs" -> r(rootWaitMs), "differ" -> differ, "backoffs" -> backoffs, "cyclesRaised" -> cyclesRaised,
+      "rootWaitMs" -> r(rootWaitMs), "differ" -> differ, "cycleAborts" -> cycleAborts, "cyclesRaised" -> cyclesRaised,
       "filesPerThread" -> filesPerThread, "failure" -> failure, "openMs" -> r(openMs), "typingMs" -> r(typingMs), "tailMs" -> r(tailMs),
       "lanes" -> lanes.map(_.map((f, a, b) => List(f, r(a), r(b)))))
 
@@ -90,7 +90,7 @@ object ThroughputDemo:
             val lanes = (0 until n).toList.map(t => byThread.getOrElse(t, Nil).sortBy(_._3).map((_, f, a, b) => (f, ms(a), ms(b))))
             val ends = lanes.map(l => l.lastOption.map(_._3).getOrElse(ms(timeline.opened)))
             val openMs = ms(timeline.opened)
-            Point(n, c.wallMs, c.workerCpuMs, c.rootWaits, c.rootWaitMs, c.diagnosticsDiffer, c.backoffs, c.cyclesRaised, c.filesPerThread, "",
+            Point(n, c.wallMs, c.workerCpuMs, c.rootWaits, c.rootWaitMs, c.diagnosticsDiffer, c.cycleAborts, c.cyclesRaised, c.filesPerThread, "",
               openMs, ends.min - openMs, ends.max - ends.min, lanes)
           catch case ex: RuntimeException =>
             Point(n, Double.NaN, Double.NaN, 0, 0, 0, 0, 0, Nil, if stopRequested.get then "cancelled" else String.valueOf(ex.getMessage).take(300))

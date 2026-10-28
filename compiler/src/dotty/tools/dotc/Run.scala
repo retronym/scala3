@@ -76,7 +76,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   // `files` of `myUnits`, with the units it was made from: one immutable pair in one volatile field, so that a reader
   // that finds the units it asks for finds their files with them
-  @cache @publishedBy("packed") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
+  @cache @publishedBy("holder") @volatile private var myFilesOf: (List[CompilationUnit], Set[AbstractFile]) = (Nil, Set.empty)
 
   // Readers type bodies in parallel, and each warning they issue and each `@nowarn` they meet reaches these three
   // collections, so they are reached only holding the monitor of `suppressions` (`locked`: with concurrent readers

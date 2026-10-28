@@ -56,7 +56,7 @@ def one_round(base, file, rng, viewport_lines, max_hovers):
         r = call(base, '/hover', {'code': src, 'offset': o, 'file': file})
         hovers.append({'offset': o, 'ms': r.get('ms'), 'lockWaitMs': r.get('lockWaitMs', 0.0),
                        'lockWaitCount': r.get('lockWaitCount', 0), 'error': r.get('error'),
-                       'statementWaitMs': r.get('statementWaitMs', 0.0), 'backedOff': r.get('backedOff', 0),
+                       'statementWaitMs': r.get('statementWaitMs', 0.0), 'cycleAborts': r.get('cycleAborts', 0),
                        'beside': r.get('concurrentWithBackground', False), 'lockWaits': r.get('lockWaits', [])})
         st = call(base, '/background')
     # the pass's own end, and the diagnostics check (computed after the pass)
@@ -68,7 +68,7 @@ def one_round(base, file, rng, viewport_lines, max_hovers):
             'background': {k: st.get(k) for k in ('state', 'outcome', 'ms', 'visibleFirstMs', 'statements', 'diagnosticCount',
                                                    'oracleDiagnosticCount', 'diagnosticsMatch', 'lockWaitMs', 'lockWaitCount',
                                                    'foregroundDuring', 'error', 'missingDiagnostics', 'extraDiagnostics',
-                                                   'backedOff', 'statementWaitMs', 'typedTrees')},
+                                                   'cycleAborts', 'statementWaitMs', 'typedTrees')},
             'wall': time.time() - t0}
 
 
@@ -82,13 +82,13 @@ def summarise(file, rounds):
     for w in long_waits:
         by_kind.setdefault(kind(w['root']), []).append(w['ms'])
     print(f"\n### {file}\n")
-    print("| pass | statements | visible first | whole pass | diagnostics | whole-file run | hovers beside it | pass lock wait | pass statement wait | pass backoffs | pass trees |")
+    print("| pass | statements | visible first | whole pass | diagnostics | whole-file run | hovers beside it | pass lock wait | pass statement wait | pass cycleAborts | pass trees |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
     for i, r in enumerate(rounds, 1):
         b = r['background']
         print(f"| {i} | {b.get('statements')} | {b.get('visibleFirstMs')} ms | {b.get('ms')} ms | {b.get('diagnosticCount')} | "
               f"{b.get('oracleDiagnosticCount')} {'✓' if b.get('diagnosticsMatch') else '✗'} | {sum(1 for h in r['hovers'] if h['beside'])} | "
-              f"{b.get('lockWaitMs')} ms ×{b.get('lockWaitCount')} | {b.get('statementWaitMs')} ms | {b.get('backedOff')} | {b.get('typedTrees')} |")
+              f"{b.get('lockWaitMs')} ms ×{b.get('lockWaitCount')} | {b.get('statementWaitMs')} ms | {b.get('cycleAborts')} | {b.get('typedTrees')} |")
     for i, r in enumerate(rounds, 1):
         b = r['background']
         for m in (b.get('missingDiagnostics') or [])[:3]:
@@ -101,8 +101,8 @@ def summarise(file, rounds):
     if not beside:
         print("\nno hover ran beside the pass")
         return
-    bo = [h.get('backedOff', 0) for h in beside]
-    print(f"\nHovers beside the pass: {len(beside)}; {len(waited)} waited on the lock; {sum(bo)} cycle backoffs, at most {max(bo)} in one hover.\n")
+    bo = [h.get('cycleAborts', 0) for h in beside]
+    print(f"\nHovers beside the pass: {len(beside)}; {len(waited)} waited on the lock; {sum(bo)} cycle cycleAborts, at most {max(bo)} in one hover.\n")
     print("| per hover | median | p90 | max |")
     print("|---|---|---|---|")
     print(f"| wall (ms) | {statistics.median(walls):.1f} | {pct(walls, 90):.1f} | {max(walls):.1f} |")

@@ -3,11 +3,11 @@
 # row whose fields the rules place differently, and every row that matches no field.
 core\.Types\.NamedType#(lastDenotation|lastSymbol|checkedPeriod)	C	Publish	NamedType lastDenotation/lastSymbol/checkedPeriod: a Published period and its Payloads, release/acquire (I36, I78)
 core\.Symbols\.Symbol#(lastDenot|checkedPeriod)	C	Publish	Symbol.lastDenot/checkedPeriod: a Published period and its Payload (I36)
-core\.Denotations\.PreDenotation#sharedAsSeenFrom	C	packed-volatile	PreDenotation.asSeenFrom: one immutable value in a volatile field (I78)
+core\.Denotations\.PreDenotation#sharedAsSeenFrom	C	holder-volatile	PreDenotation.asSeenFrom: one immutable value in a volatile field (I78)
 core\.Denotations\.PreDenotation#(cachedAsSeenFrom|validAsSeenFrom|cachedPrefix)	C	batch-only	PreDenotation.asSeenFrom: the plain fields are batch only (StampedCachesTest exception)
-core\.Types\.MatchType#sharedReduced	C	packed-volatile	MatchType.reduced: one immutable value in a volatile field (I79)
+core\.Types\.MatchType#sharedReduced	C	holder-volatile	MatchType.reduced: one immutable value in a volatile field (I79)
 core\.Types\.MatchType#(myReduced|reductionContext)	C	batch-only	MatchType.reduced: the plain fields are batch only
-core\.SymDenotations\.PackageClassDenotation#sharedPackageObjs	C	packed-volatile|root-claim	PackageClassDenotation.packageObjs: packed, computed under a claim (I79)
+core\.SymDenotations\.PackageClassDenotation#sharedPackageObjs	C	holder-volatile|root-claim	PackageClassDenotation.packageObjs: an immutable holder, computed under a claim (I79)
 core\.SymDenotations\.PackageClassDenotation#(packageObjsCache|packageObjsRunId)	C	batch-only	packageObjs: the plain fields are batch only
 core\.Types\.LazyRef#myRef	B	Publish	LazyRef.myRef: a `Once`, stored by its `get` under the reference's claim (I57)
 core\.Types\.LazyRef#computed	B	root-claim	LazyRef.computed: a claim per lazy reference with parallel readers (I57)

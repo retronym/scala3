@@ -54,19 +54,19 @@ class CompletionConcurrentSuite extends BasePCSuite:
   private def ask(driver: InteractiveDriver, uri: URI, source: SourceFile, offset: Int): String =
     driver.readUpTo(uri, source, Span(offset))((ctx, unit, _) => describe(ctx, unit, offset))
 
-  /** The most times a request may back off from a wait-for cycle and be
-   *  retried (§4.2's deviation): a backoff that recurs without bound is a
+  /** The most times a request may be aborted on a wait-for cycle and be
+   *  retried (§4.2's deviation): an abort that recurs without bound is a
    *  livelock, which this makes a failing number instead of a hang.
    */
-  private val maxBackoffs = 20
+  private val maxCycleAborts = 20
 
-  /** Backoffs per round, for the summary line. */
-  private val backoffs = new java.util.concurrent.ConcurrentLinkedQueue[Int]()
+  /** Cycle aborts per round, for the summary line. */
+  private val cycleAborts = new java.util.concurrent.ConcurrentLinkedQueue[Int]()
 
   /** Run `a` and `b` on two threads released together, each in a request
    *  scope of its own reader on `driver`; their results, or the first
-   *  failure. A hang fails the test with the readers' backoff counts, and so
-   *  does a request that backed off more than `maxBackoffs` times.
+   *  failure. A hang fails the test with the readers' abort counts, and so
+   *  does a request that was aborted more than `maxCycleAborts` times.
    */
   private def together[A, B](driver: InteractiveDriver)(a: => A, b: => B): (A, B) =
     val start = new CountDownLatch(1)
@@ -91,11 +91,11 @@ class CompletionConcurrentSuite extends BasePCSuite:
     val tb = thread("reader-b", b, rb)
     start.countDown()
     ta.join(TimeUnit.SECONDS.toMillis(60)); tb.join(TimeUnit.SECONDS.toMillis(60))
-    def counts = readers.asScala.map((n, r) => s"$n backed off ${r.waitCyclesBackedOff}x").mkString(", ")
+    def counts = readers.asScala.map((n, r) => s"$n aborted ${r.waitCyclesAborted}x").mkString(", ")
     assert(!ta.isAlive && !tb.isAlive, s"a reader hung: a wait-for cycle that was not broken ($counts)")
-    val most = readers.values.asScala.map(_.waitCyclesBackedOff).maxOption.getOrElse(0)
-    backoffs.add(readers.values.asScala.map(_.waitCyclesBackedOff).sum)
-    assert(most <= maxBackoffs, s"a request backed off more than $maxBackoffs times, a livelock in the making ($counts)")
+    val most = readers.values.asScala.map(_.waitCyclesAborted).maxOption.getOrElse(0)
+    cycleAborts.add(readers.values.asScala.map(_.waitCyclesAborted).sum)
+    assert(most <= maxCycleAborts, s"a request was aborted more than $maxCycleAborts times, a livelock in the making ($counts)")
     (ra.get, rb.get) match
       case (Right(x), Right(y)) => (x, y)
       case (Left(ex), _) => throw ex
@@ -140,7 +140,7 @@ class CompletionConcurrentSuite extends BasePCSuite:
       seen = seen.updated(answer, seen.getOrElse(answer, 0) + 1)
       assert(orders.contains(answer) || answer._1 == answer._2 && orders.exists(o => o._1 == answer._1 || o._2 == answer._2),
         s"round $i: two readers answered $answer, which no single-reader order gives (${orders.mkString(" | ")})")
-    println(s"[concurrent cycle] 30 rounds, answers: ${seen.map((k, v) => s"$k x$v").mkString(", ")}; ${backoffSummary()}")
+    println(s"[concurrent cycle] 30 rounds, answers: ${seen.map((k, v) => s"$k x$v").mkString(", ")}; ${cycleAbortSummary()}")
 
   // ---- I63: a self type, one reader ----
 
@@ -222,7 +222,7 @@ class CompletionConcurrentSuite extends BasePCSuite:
       assert(!diags.exists(_.msg.message.contains("cyclic")),
         s"round $i: a peek took the other reader's completion for a cycle: ${diags.map(_.msg.message).mkString("; ")}")
       assert(diags.size == wholeDiags.size, s"round $i: ${diags.size} diagnostics, the whole-file run ${wholeDiags.size}")
-    println(s"[concurrent peek import] 30 rounds, answers $expected; ${backoffSummary()}")
+    println(s"[concurrent peek import] 30 rounds, answers $expected; ${cycleAbortSummary()}")
 
   private val packageObjectCode =
     """|package p {
@@ -251,13 +251,13 @@ class CompletionConcurrentSuite extends BasePCSuite:
       d.runUpTo(uri, source, Span(code.indexOf("package p")))
       val answer = together(d)(ask(d, uri, source, atV), ask(d, uri, source, atW))
       assert(answer == expected, s"round $i: two readers answered $answer, the whole-file run $expected")
-    println(s"[concurrent peek package object] 30 rounds, answers $expected; ${backoffSummary()}")
+    println(s"[concurrent peek package object] 30 rounds, answers $expected; ${cycleAbortSummary()}")
 
-  /** The backoffs of the rounds since the last summary: total and most in a round. */
-  private def backoffSummary(): String =
-    val xs = backoffs.asScala.toList
-    backoffs.clear()
-    s"backoffs ${xs.sum} in ${xs.size} rounds, at most ${xs.maxOption.getOrElse(0)} in one (bound $maxBackoffs per request)"
+  /** The cycleAborts of the rounds since the last summary: total and most in a round. */
+  private def cycleAbortSummary(): String =
+    val xs = cycleAborts.asScala.toList
+    cycleAborts.clear()
+    s"cycleAborts ${xs.sum} in ${xs.size} rounds, at most ${xs.maxOption.getOrElse(0)} in one (bound $maxCycleAborts per request)"
 
   private def describeWhole(d: InteractiveDriver, uri: URI, offset: Int): String =
     describe(d.currentCtx, d.compilationUnits(uri), offset)

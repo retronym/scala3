@@ -148,7 +148,7 @@ object Throughput:
     val files = new java.util.concurrent.ConcurrentLinkedQueue[(Int, String, Long, Long)]()
 
   final case class Cell(what: String, k: Int, wallMs: Double, indexMs: Double, warmMs: Double, workerCpuMs: Double, processCpuMs: Double,
-      rootWaitMs: Double, rootWaits: Int, waitsByKind: Map[String, (Int, Double)], statementWaitMs: Double, backoffs: Int,
+      rootWaitMs: Double, rootWaits: Int, waitsByKind: Map[String, (Int, Double)], statementWaitMs: Double, cycleAborts: Int,
       steals: Int, diagnostics: Int, diagnosticsDiffer: Int, filesPerThread: List[Int], failure: String = "", cyclesRaised: Int = 0)
 
   private val showErrors = sys.props.getOrElse("tp.showErrors", "0").toInt
@@ -271,7 +271,7 @@ object Throughput:
     if diagnosticsOut != null then diagnosticsOut.putAll(diags)
     Cell(what1, k, (t1 - t0) / 1e6, (tIndex - t0) / 1e6, (tWarm - tIndex) / 1e6, cpu.get / 1e6, (cpu1 - cpu0) / 1e6,
       rs.map(_.lockWaitNanos).sum / 1e6, rs.map(_.lockWaitCount).sum, byKind, rs.map(_.statementWaitNanos).sum / 1e6,
-      rs.map(_.waitCyclesBackedOff).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList, cyclesRaised = rs.map(_.cyclesRaised).sum)
+      rs.map(_.waitCyclesAborted).sum, steals.get, diags.values.asScala.map(_.size).sum, differ, (0 until k).map(done.get).toList, cyclesRaised = rs.map(_.cyclesRaised).sum)
 
   /** The whole set in one run with nothing skipped, one reader: the
    *  reference diagnostics, and a baseline. */
@@ -317,7 +317,7 @@ object Throughput:
         try
           val c = measure(p, k, assign(p, k, files, graph), readers = true, warm = p == "warm", files, reference)
           divergent += c.diagnosticsDiffer
-          println(f"[tp] loop $i ${c.what} k=$k: wall ${c.wallMs}%.0f ms (open ${c.indexMs}%.0f), ${c.diagnosticsDiffer} files differ, backoffs ${c.backoffs}, cycles raised ${c.cyclesRaised}, root waits ${c.rootWaits}")
+          println(f"[tp] loop $i ${c.what} k=$k: wall ${c.wallMs}%.0f ms (open ${c.indexMs}%.0f), ${c.diagnosticsDiffer} files differ, cycleAborts ${c.cycleAborts}, cycles raised ${c.cyclesRaised}, root waits ${c.rootWaits}")
         catch case ex: RuntimeException =>
           failed += 1
           // a backed-off Namer completion left an `UnwoundCompletion`: the run is tainted (I53's rule), see §8
@@ -333,7 +333,7 @@ object Throughput:
     def report(round: Int, c: Cell): Unit =
       results += ((round, c))
       println(f"[tp] round $round ${c.what} k=${c.k}: wall ${c.wallMs}%.0f ms (index ${c.indexMs}%.0f, warm ${c.warmMs}%.0f), worker CPU ${c.workerCpuMs}%.0f ms, process CPU ${c.processCpuMs}%.0f ms, " +
-        f"root waits ${c.rootWaits} / ${c.rootWaitMs}%.0f ms ${c.waitsByKind.toList.sortBy(-_._2._2).map((k, v) => f"$k ${v._1}/${v._2}%.0f").mkString("[", ", ", "]")}, statement waits ${c.statementWaitMs}%.0f ms, backoffs ${c.backoffs}, steals ${c.steals}, " +
+        f"root waits ${c.rootWaits} / ${c.rootWaitMs}%.0f ms ${c.waitsByKind.toList.sortBy(-_._2._2).map((k, v) => f"$k ${v._1}/${v._2}%.0f").mkString("[", ", ", "]")}, statement waits ${c.statementWaitMs}%.0f ms, cycleAborts ${c.cycleAborts}, steals ${c.steals}, " +
         f"errors ${c.diagnostics} (${c.diagnosticsDiffer} files differ), files per thread ${c.filesPerThread.mkString(",")}; load ${os.getSystemLoadAverage}%.1f")
     for round <- (1 - warmup) to rounds do
       val (whole, reference) = wholeSet(files)
@@ -350,14 +350,14 @@ object Throughput:
         report(round, c)
     // medians over the measured rounds
     val measured = results.filter(_._1 >= 1).map(_._2).toList
-    println("\n| run | k | wall s | index s | worker CPU s | process CPU s | root waits (n / s) | backoffs | steals | files differ (max) | failed |")
+    println("\n| run | k | wall s | index s | worker CPU s | process CPU s | root waits (n / s) | cycle aborts | steals | files differ (max) | failed |")
     println("|---|---|---|---|---|---|---|---|---|---|---|")
     def med(xs: Seq[Double]) = if xs.isEmpty then Double.NaN else xs.sorted.apply(xs.size / 2)
     for ((what, k), all) <- measured.groupBy(c => (c.what, c.k)).toList.sortBy((wk, _) => (wk._2, wk._1)) do
       val cs = all.filter(_.failure.isEmpty)
       println(f"| $what | $k | ${med(cs.map(_.wallMs)) / 1e3}%.1f | ${med(cs.map(_.indexMs)) / 1e3}%.1f | ${med(cs.map(_.workerCpuMs)) / 1e3}%.1f | ${med(cs.map(_.processCpuMs)) / 1e3}%.1f | " +
-        f"${med(cs.map(_.rootWaits.toDouble)).toInt} / ${med(cs.map(_.rootWaitMs)) / 1e3}%.1f | ${med(cs.map(_.backoffs.toDouble)).toInt} | ${med(cs.map(_.steals.toDouble)).toInt} | ${cs.map(_.diagnosticsDiffer).maxOption.getOrElse(0)} | ${all.size - cs.size} of ${all.size} |")
+        f"${med(cs.map(_.rootWaits.toDouble)).toInt} / ${med(cs.map(_.rootWaitMs)) / 1e3}%.1f | ${med(cs.map(_.cycleAborts.toDouble)).toInt} | ${med(cs.map(_.steals.toDouble)).toInt} | ${cs.map(_.diagnosticsDiffer).maxOption.getOrElse(0)} | ${all.size - cs.size} of ${all.size} |")
     sys.props.get("tp.out").foreach { out =>
-      val json = measured.map(c => s"""{"what":"${c.what}","k":${c.k},"wallMs":${c.wallMs},"indexMs":${c.indexMs},"warmMs":${c.warmMs},"workerCpuMs":${c.workerCpuMs},"processCpuMs":${c.processCpuMs},"rootWaitMs":${c.rootWaitMs},"rootWaits":${c.rootWaits},"statementWaitMs":${c.statementWaitMs},"backoffs":${c.backoffs},"steals":${c.steals},"diagnostics":${c.diagnostics},"differ":${c.diagnosticsDiffer},"byKind":{${c.waitsByKind.map((k, v) => s""""$k":[${v._1},${v._2}]""").mkString(",")}}}""").mkString("[\n", ",\n", "\n]")
+      val json = measured.map(c => s"""{"what":"${c.what}","k":${c.k},"wallMs":${c.wallMs},"indexMs":${c.indexMs},"warmMs":${c.warmMs},"workerCpuMs":${c.workerCpuMs},"processCpuMs":${c.processCpuMs},"rootWaitMs":${c.rootWaitMs},"rootWaits":${c.rootWaits},"statementWaitMs":${c.statementWaitMs},"cycleAborts":${c.cycleAborts},"steals":${c.steals},"diagnostics":${c.diagnostics},"differ":${c.diagnosticsDiffer},"byKind":{${c.waitsByKind.map((k, v) => s""""$k":[${v._1},${v._2}]""").mkString(",")}}}""").mkString("[\n", ",\n", "\n]")
       Files.writeString(Paths.get(out), json)
     }

@@ -167,13 +167,13 @@ object Replay:
   /** What a request did. */
   final case class Row(seq: Int, mode: String, idx: Int, kind: String, file: String, offset: Int, line: Int, lane: Int,
       dueMs: Double, queuedMs: Double, ms: Double, lockMs: Double, lockCount: Int, statementMs: Double,
-      trees: Int, runs: Int, wholeFileRuns: Int, backedOff: Int, how: String, outcome: String,
+      trees: Int, runs: Int, wholeFileRuns: Int, cycleAborts: Int, how: String, outcome: String,
       answer: String, key: String, diagnostics: Int, wholeFileDiagnostics: Int,
       sinceEdit: Int = 0, editLabel: String = "", editExpect: String = "", editHow: String = "", lastEdit: String = "", label: String = ""):
     def toMap: Map[String, Any] = Map("seq" -> seq, "mode" -> mode, "idx" -> idx, "kind" -> kind, "file" -> file,
       "offset" -> offset, "line" -> line, "lane" -> lane, "dueMs" -> r1(dueMs), "queuedMs" -> r1(queuedMs), "ms" -> r1(ms),
       "lockMs" -> r1(lockMs), "lockCount" -> lockCount, "statementMs" -> r1(statementMs), "trees" -> trees, "runs" -> runs,
-      "wholeFileRuns" -> wholeFileRuns, "backedOff" -> backedOff, "how" -> how, "outcome" -> outcome, "answer" -> answer,
+      "wholeFileRuns" -> wholeFileRuns, "cycleAborts" -> cycleAborts, "how" -> how, "outcome" -> outcome, "answer" -> answer,
       "diagnostics" -> diagnostics, "wholeFileDiagnostics" -> wholeFileDiagnostics,
       "sinceEdit" -> sinceEdit, "editLabel" -> editLabel, "editExpect" -> editExpect, "editHow" -> editHow, "lastEdit" -> lastEdit, "label" -> label)
 
@@ -433,7 +433,7 @@ object Replay:
       lockMs = ((if r == null then 0L else r.lockWaitNanos) + cacheWaitNanos) / 1e6, lockCount = (if r == null then 0 else r.lockWaitCount) + cacheWaits,
       statementMs = if r == null then 0 else r.statementWaitNanos / 1e6,
       trees = trees, runs = runs, wholeFileRuns = if r == null then 0 else r.wholeFileRunsStarted,
-      backedOff = if r == null then 0 else r.waitCyclesBackedOff, how = how, outcome = outcome,
+      cycleAborts = if r == null then 0 else r.waitCyclesAborted, how = how, outcome = outcome,
       answer = shown, key = key, diagnostics = diags,
       wholeFileDiagnostics = if wholeFileKinds(e.kind) && outcome == "ok" then wholeFileCount(e.uri, s.text) else -1,
       sinceEdit = s.sinceEdit,
@@ -479,7 +479,7 @@ object Replay:
         "cancelled" -> rs.count(_.outcome.startsWith("cancelled")), "errors" -> rs.count(_.outcome == "error"),
         "latency" -> stats(_.ms), "queued" -> stats(_.queuedMs), "lock" -> stats(_.lockMs), "statement" -> stats(_.statementMs),
         "treesMedian" -> pct(ok.map(_.trees.toDouble), 50).toInt.max(0), "trees" -> ok.map(_.trees).sum,
-        "runs" -> rs.map(_.runs).sum, "wholeFileRuns" -> rs.map(_.wholeFileRuns).sum, "backedOff" -> rs.map(_.backedOff).sum,
+        "runs" -> rs.map(_.runs).sum, "wholeFileRuns" -> rs.map(_.wholeFileRuns).sum, "cycleAborts" -> rs.map(_.cycleAborts).sum,
         "diagChecked" -> checked.size, "diagMatch" -> checked.count(r => r.diagnostics == r.wholeFileDiagnostics),
         "diagFirstMismatch" -> checked.find(r => r.diagnostics != r.wholeFileDiagnostics).map(r => s"${r.file.split('/').last}:${r.line} ${r.kind}: ${r.diagnostics} vs ${r.wholeFileDiagnostics}").getOrElse(""),
         "compared" -> (if m.key == "baseline" then 0 else ok.count(r => base.contains(r.idx))),

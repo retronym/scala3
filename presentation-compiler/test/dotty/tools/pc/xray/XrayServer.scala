@@ -226,11 +226,11 @@ object XrayServer:
 
   /** The lock waits of a reader, for a result: total, count, the longest. */
   private def lockWaitsOf(r: dotty.tools.dotc.Reader | Null): Map[String, Any] =
-    if r == null then Map("lockWaitMs" -> 0.0, "lockWaitCount" -> 0, "lockWaits" -> Nil, "backedOff" -> 0)
+    if r == null then Map("lockWaitMs" -> 0.0, "lockWaitCount" -> 0, "lockWaits" -> Nil, "cycleAborts" -> 0)
     else
       val waits = r.lockWaits.iterator().asScala.toList.sortBy(-_.nanos)
-      // the times the reader backed off from a wait-for cycle and was retried (step 4): a livelock shows as a growing count
-      Map("lockWaitMs" -> math.round(r.lockWaitNanos / 1e5) / 10.0, "lockWaitCount" -> r.lockWaitCount, "backedOff" -> r.waitCyclesBackedOff,
+      // the times the reader was aborted on a wait-for cycle and was retried (step 4): a livelock shows as a growing count
+      Map("lockWaitMs" -> math.round(r.lockWaitNanos / 1e5) / 10.0, "lockWaitCount" -> r.lockWaitCount, "cycleAborts" -> r.waitCyclesAborted,
         "statementWaitMs" -> math.round(r.statementWaitNanos / 1e5) / 10.0, "typedTrees" -> r.typedTrees,
         "lockWaits" -> waits.take(5).map(w => Map("ms" -> math.round(w.nanos / 1e5) / 10.0, "root" -> w.root, "current" -> w.current, "holder" -> w.holder)))
 
@@ -565,7 +565,7 @@ object XrayServer:
       case _ => r.get("completions").collect { case l: List[?] => s"${l.size} completions, first ${l.headOption.getOrElse("-")}" }.getOrElse("")
     val line = code.substring(0, math.min(offset, code.length)).count(_ == '\n') + 1
     val snippet = code.substring(math.max(0, offset - 30), math.min(code.length, offset + 10)).replace("\n", "\\n")
-    println(s"[xray] #$seq ${if file.isEmpty then "A.scala" else file}:$line $kind@$offset${if cancel >= 0 then s" cancel=$cancel" else ""}${if latch then " latched" else ""} -> ${r.getOrElse("outcome", "?")} run=${r.getOrElse("runId", "?")} typedTop=${r.getOrElse("prefixBefore", "?")}->${r.getOrElse("prefix", "?")} skipped=${r.getOrElse("untypedSpans", "?")} trees=${r.getOrElse("typedTrees", "?")} backedOff=${r.getOrElse("backedOff", "?")} ${r.getOrElse("ms", "?")}ms touched=${r.getOrElse("touched", "?")}${if r.get("tainted").contains(true) then " TAINTED" else ""} | $tail${r.get("error").collect { case e: String => s" | ERROR $e" }.getOrElse("")}${r.get("where").collect { case w: String => s" | $w" }.getOrElse("")} | «$snippet»")
+    println(s"[xray] #$seq ${if file.isEmpty then "A.scala" else file}:$line $kind@$offset${if cancel >= 0 then s" cancel=$cancel" else ""}${if latch then " latched" else ""} -> ${r.getOrElse("outcome", "?")} run=${r.getOrElse("runId", "?")} typedTop=${r.getOrElse("prefixBefore", "?")}->${r.getOrElse("prefix", "?")} skipped=${r.getOrElse("untypedSpans", "?")} trees=${r.getOrElse("typedTrees", "?")} cycleAborts=${r.getOrElse("cycleAborts", "?")} ${r.getOrElse("ms", "?")}ms touched=${r.getOrElse("touched", "?")}${if r.get("tainted").contains(true) then " TAINTED" else ""} | $tail${r.get("error").collect { case e: String => s" | ERROR $e" }.getOrElse("")}${r.get("where").collect { case w: String => s" | $w" }.getOrElse("")} | «$snippet»")
 
   /** The latch file `xray.Latch.await` polls, armed for a latched request. */
   /** The latch file the `Latch.await` macro polls: `-Dxray.latch`, else one

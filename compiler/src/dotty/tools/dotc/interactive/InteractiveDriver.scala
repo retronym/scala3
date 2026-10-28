@@ -105,7 +105,7 @@ class InteractiveDriver(
   // raises `writerPending`, which every reader polls at its typer checkpoints
   // (`Reader.checkCancelledTyping`, through the progress callback) and unwinds
   // from with a `CancelledCompilation`, then takes the write lock and runs
-  // alone. A reader that a writer pre-empted is retried by `reading` once the
+  // alone. A reader that a writer cancelled is retried by `reading` once the
   // writer is done, so its caller never sees the writer's cancellation, only
   // its own checker's. Completions, bring-forwards and inherited caches take
   // the base's `completionLock` (one lazy fact of the symbol table computed at
@@ -116,14 +116,14 @@ class InteractiveDriver(
   @treeState private val regime = new java.util.concurrent.locks.ReentrantReadWriteLock(true)
   @treeState @publishedBy("volatile") @volatile private var writerPending = false
 
-  /** Run `body` as a reader; retried when a writer pre-empted it. A
+  /** Run `body` as a reader; retried when a writer cancelled it. A
    *  cancellation unwinding from `body` runs `afterCancel` once the read lock
    *  is released (it may write), before the retry or the rethrow.
    */
   private def reading[T](body0: => T)(afterCancel: () => Unit = () => (), serialiseWhole: Boolean = true): T =
     // Without `-Yinteractive-parallel` every read action runs under the
     // completion lock, so readers are serialised with completions and with
-    // each other (writers still pre-empt): a reader outside it would see a
+    // each other (writers still cancel them): a reader outside it would see a
     // completion's intermediate info and typer states shared with completers
     // (findings I42, I48). With it, completions hide their intermediate state
     // from other readers themselves (step 4 of the multi-reader notes).
@@ -142,7 +142,7 @@ class InteractiveDriver(
         finally lock.unlock()
       afterCancel()
       // the request's own cancellation (its checker, or a thread interrupt)
-      // unwinds to the caller; a writer's pre-emption is retried once the
+      // unwinds to the caller; a writer's cancellation is retried once the
       // writer is done (the pending flag may be down again by now: the reader
       // remembers which it was)
       if reader.cancelledByChecker || myCancelled then throw cancelled
@@ -211,7 +211,7 @@ class InteractiveDriver(
     if !parallelReaders then completionLocked(what)(op) else op
 
   /** Abandon the statements whose typing a cancellation unwound (a re-index:
-   *  a write), before a pre-empted or cancelled reader is retried or unwinds.
+   *  a write), before a cancelled reader is retried or unwinds.
    */
   private def abandonPending(s: Session): Unit =
     if s.hasPendingAbandons then

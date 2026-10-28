@@ -6,7 +6,8 @@ import java.util.concurrent.ThreadLocalRandom
  *  a random time, up to `<ms>` milliseconds, at the points where their
  *  interleaving matters (a claim taken, a statement abandoned, a completion
  *  unwound, a typing checkpoint), so that a soak on an idle machine reaches the
- *  interleavings that only a loaded one did. Off, every site is one volatile
+ *  interleavings that only a loaded one did: noise injection, or schedule
+ *  fuzzing, in the manner of IBM's ConTest. Off, every site is one volatile
  *  read.
  */
 object Chaos:

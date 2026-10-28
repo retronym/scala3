@@ -30,7 +30,7 @@ object Rules:
     Rule("C.stamped", "C", "the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object"),
     Rule("C.stamp", "C", "a stamp: declared `Period`, `RunId` or `Validity`, or, not a collection, named `…Period`, `…RunId`, `valid…`, `checked…` (`StampedCachesTest.stampFields`)"),
     Rule("C.publish", "C", "declared `Published[T]`, or read or written in a method that calls `acquire` or `release` on a `Published` field, or `sharing.Publish`, on the same object (the value the stamp publishes)"),
-    Rule("C.packed", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
+    Rule("C.holder", "C", "on a type, denotation or symbol, `@volatile` and declared a tuple or a non-value class with two or more fields, all `val`s: a multi-field cache packed into one immutable value"),
     Rule("D.designator", "D", "`myDesignator` of a `NamedType`: part of the interned key, rewritten by `setDenot` (§3 D)"),
     Rule("C.type-memo", "C", "any other field of a `Type` other than a `TypeVar`: types are hash-consed values, so a field on one memoises a function of the type"),
     Rule("C.lazy-init", "C", "a `private var myX: T | Null = null` (not a collection) read and written in one method: a lazily initialised value (the pattern §8's I91 audit enumerates)"),
@@ -44,14 +44,14 @@ object Rules:
   )
 
   val protection: List[Rule] = List(
-    Rule("@guardedBy, @frozenAfter, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, frozen-after-completion, synchronized, thread-confined, Publish, volatile, packed-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@frozenAfter(\"completion\")` (filled while hidden, frozen once its owner's completion publishes it; checked at run time by `-Ycheck-frozen-scopes`); `@confined`; `@publishedBy(\"Publish\" | \"volatile\" | \"packed\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
+    Rule("@guardedBy, @frozenAfter, @confined, @publishedBy, @benignRace", "completion-lock, root-claim, writer-action, frozen-after-completion, synchronized, thread-confined, Publish, volatile, holder-volatile, init-only, benign-race", "an annotation on the field, or else on its class: `@guardedBy(\"completionLock\")`, `(\"rootClaim\")`, `(\"writer\")` (a write action, which excludes readers) or another lock (synchronized); `@frozenAfter(\"completion\")` (filled while hidden, frozen once its owner's completion publishes it; checked at run time by `-Ycheck-frozen-scopes`); `@confined`; `@publishedBy(\"Publish\" | \"volatile\" | \"holder\" | \"init\")` (`init`: written only before the owner is shared); `@benignRace(why)`. Takes precedence over the rules below (`protectionSource: annotated`); the rules' answer is kept as `inferredProtection`, and `annotationCheck` says whether it agrees, disagrees (for `partial:P`: some accesses lack P) or is unverified (the rules find no protection)"),
     Rule("@sharable, @unshared", "static-safe (@sharable), single-threaded (@unshared)", "the markers of `-Ycheck-reentrant` on the field or its owner (reentrancy across compiler instances, not sharing within one base), when no annotation above is present"),
     Rule("P.thread-local", "thread-confined", "declared `ThreadLocal`"),
     Rule("P.confined-owner", "thread-confined", "kind A (`A.reader`, `A.traversal`): the owner is one reader's or one traversal's"),
     Rule("P.post-typer", "post-typer", "reach `post-typer` (see `reach`): written in phases after typer, which the interactive compiler does not run (§8 I91 class 3)"),
     Rule("P.publish-handle", "Publish", "declared `Published[T]` (`dotty.tools.sharing.Published`: release store, acquire load, a plain access only through `plain`/`setPlain`) or `Payload[O, F, T]` (stored only in a `publishing` block of `F`, read only `after` its acquire, or with `plain`), or `Once[K, T]` (stored only by its `get`, under the claim on its owner, with release semantics, and read with acquire semantics in a concurrent mode)"),
     Rule("P.stamped", "Stamped", "declared `Stamped[K, T]`: a stamp and a value as one immutable object, so every read and store of the field, a reset to `Stamped.Empty` included, is of a whole pair"),
-    Rule("P.packed", "packed-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
+    Rule("P.holder", "holder-volatile", "`@volatile` and declared a tuple or a class whose fields are all `val`s"),
     Rule("P.volatile", "volatile", "`@volatile`, a single value"),
     Rule("P.concurrent-type", "concurrent", "declared a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `util.ConcurrentWeakHashSet` or `util.SyncEqHashMap`"),
     Rule("P.on-base", "concurrent", "initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`: a concurrent structure when the base is concurrent"),
@@ -83,7 +83,7 @@ object Rules:
 case class FieldInfo(
     key: String, owner: String, name: String, tpe: String, file: String, line: Int, offset: Int,
     annotations: List[String], isVar: Boolean, isPrivate: Boolean, mutableCollection: Option[String],
-    typeClasses: List[String], isVolatile: Boolean, packedType: Boolean, threadLocal: Boolean,
+    typeClasses: List[String], isVolatile: Boolean, holderType: Boolean, threadLocal: Boolean,
     concurrentType: Boolean, initOnBase: Boolean, nullInit: Boolean,
     annotArgs: Map[String, String], ownerMarkers: List[String], ownerArgs: Map[String, String])
 
@@ -327,7 +327,7 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
         val ownerArgs = owner.annotations.filter(a => vocabulary(annotName(a))).map(a => annotName(a) -> annotArg(a)).toMap
         val tcs = classesOf(tpe).map(s => norm(s.fullName)).distinct
         val topCls = classesOf(tpe).filterNot(_.fullName == "scala.Null").headOption
-        val packed = topCls.exists { c =>
+        val holder = topCls.exists { c =>
           val n = c.fullName
           n.startsWith("scala.Tuple") || (c.isClassDef && !baseNames(c.typeRef).contains("scala.AnyVal") && !n.startsWith("scala.") && !n.startsWith("java.") &&
             c.fieldMembers.size >= 2 && c.fieldMembers.forall(f => !f.flags.is(Flags.Mutable)) && coll.isEmpty)
@@ -347,7 +347,7 @@ class Collector(includePkgs: List[String], repoRoot: Path) extends Inspector:
         fields(key) = FieldInfo(key, norm(owner.fullName), sym.name,
           tpe.show(using Printer.TypeReprShortCode), relPath(pos), pos.startLine + 1, pos.start,
           annots, isVar, sym.flags.is(Flags.Private) || sym.flags.is(Flags.PrivateLocal), coll, tcs,
-          annots.contains("volatile"), packed,
+          annots.contains("volatile"), holder,
           bases.exists(_.startsWith("java.lang.ThreadLocal")),
           bases.exists(b => concurrentPrefixes.exists(b.startsWith)) || bases.exists(_.startsWith("java.util.concurrent")),
           initOnBase, vd.rhs.exists { case Literal(NullConstant()) => true case _ => false }, annotArgs, ownerMarkers, ownerArgs)
@@ -606,7 +606,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     else if acc.exists(_.prot == "Stamped") then ("C", "C.stamped")
     else if isStamp(f) then ("C", "C.stamp")
     else if publishHandles((f.owner, f.name)) || acc.exists(a => c.publishingMethods(a.method) && a.prot != "batch") then ("C", "C.publish")
-    else if f.isVolatile && f.packedType && sharedOwners.exists(is) then ("C", "C.packed")
+    else if f.isVolatile && f.holderType && sharedOwners.exists(is) then ("C", "C.holder")
     else if (is("core.Types.NamedType")) && f.name == "myDesignator" then ("D", "D.designator")
     else if is("core.Types.Type") && !is("core.Types.TypeVar") then ("C", "C.type-memo")
     else if isLazyInit(f) then ("C", "C.lazy-init")
@@ -637,7 +637,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
     else if reach == "post-typer" then ("post-typer", "P.post-typer", "owner")
     else if publishHandles((f.owner, f.name)) then ("Publish", "P.publish-handle", "lexical")
     else if f.tpe.startsWith("Stamped[") || f.tpe.startsWith("dotty.tools.sharing.Stamped[") then ("Stamped", "P.stamped", "declaration")
-    else if f.isVolatile && f.packedType then ("packed-volatile", "P.packed", "annotation")
+    else if f.isVolatile && f.holderType then ("holder-volatile", "P.holder", "annotation")
     else if f.isVolatile then ("volatile", "P.volatile", "annotation")
     else if f.concurrentType then ("concurrent", "P.concurrent-type", "type")
     else if f.initOnBase then ("concurrent", "P.on-base", "lexical")
@@ -698,7 +698,7 @@ class Model(c: Collector, publishHandles: Set[(String, String)], repoRoot: Path)
      .orElse(a.get("internal.confined").map(_ => ("thread-confined", on("@confined"))))
      .orElse(a.get("internal.publishedBy").map { how =>
        val p = how match
-         case "packed" => "packed-volatile"
+         case "holder" => "holder-volatile"
          case "init" => "init-only"
          case other => other
        (p, on(s"@publishedBy(\"$how\")"))

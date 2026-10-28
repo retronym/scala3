@@ -33,7 +33,7 @@ Kind (after the annotations `@scratch`, `@lazyFact`, `@cache`, `@interned`, `@tr
 - `C.stamped`: the field a `Stamped` extension (`cached`, `cachedIf`, `peek`) is called on: a value and its stamp as one immutable object.
 - `C.stamp`: a stamp by `StampedCachesTest`'s rule (declared `Period`, `RunId`, `Validity`, or named `…Period`, `…RunId`, `valid…`, `checked…`).
 - `C.publish`: declared `Published[T]`, or accessed in a method that calls `acquire`/`release` on a `Published` field, or `sharing.Publish`.
-- `C.packed`: on a type, denotation or symbol, `@volatile` and declared a tuple or a class of two or more `val`s.
+- `C.holder`: on a type, denotation or symbol, `@volatile` and declared a tuple or a class of two or more `val`s.
 - `D.designator`: `NamedType.myDesignator`, part of the interned key.
 - `C.type-memo`: any other field of a `Type` other than a `TypeVar` (types are hash-consed values).
 - `C.lazy-init`: a `private var myX: T | Null = null` read and written in one method (the pattern of the I91 audit).
@@ -51,7 +51,7 @@ Protection (after the annotations `@guardedBy`, `@confined`, `@publishedBy`, `@b
 - `P.confined-owner` → thread-confined: kind A.
 - `P.post-typer` → post-typer: reach `post-typer`.
 - `P.publish-handle` → Publish: declared `Published[T]` (`dotty.tools.sharing.Published`), or `Payload[O, F, T]`, a field it publishes, or `Once[K, T]`, a lazy fact stored only by its `get`.
-- `P.packed` → packed-volatile, `P.volatile` → volatile: `@volatile`, packed as for `C.packed` or not.
+- `P.holder` → holder-volatile, `P.volatile` → volatile: `@volatile`, an immutable holder as for `C.holder` or not.
 - `P.concurrent-type` → concurrent: a `java.util.concurrent` or `scala.collection.concurrent` type, an atomic, `ConcurrentWeakHashSet`, `SyncEqHashMap`.
 - `P.on-base` → concurrent: initialised by `Sharing.newMap`, `newEqHashMap` or `new…Uniques`.
 - `P.asserted-completion` → completion-lock: kinds `B.denotation`, `B.completer`, `B.unpickler`, written under `lockAndComplete` or `Sharing.claim` further up the stack.
@@ -77,7 +77,7 @@ Naming conventions and types carry the rules a long way, but not all of it: a fi
 | `@treeState` | kind E: a tree's or a session's tree state |
 | `@guardedBy("completionLock" \| "rootClaim" \| "writer" \| "this" \| "<field>")` | every access holds that lock: the completion lock (`Sharing.claim` on a key whose `ClaimKind` takes it when readers are serialised), a root's claim (`Sharing.claim` on one whose kind does not), a write action of the interactive driver (which runs with no reader), or a monitor |
 | `@confined` | one thread reaches the owner |
-| `@publishedBy("Publish" \| "volatile" \| "packed" \| "init")` | writes are published by `sharing.Publish`, one volatile value, an immutable value packed into a volatile field, or are made only before the owner is shared |
+| `@publishedBy("Publish" \| "volatile" \| "holder" \| "init")` | writes are published by `sharing.Publish`, one volatile value, an immutable holder in a volatile field, or are made only before the owner is shared |
 | `@benignRace("why")` | readers may race on it: any writer stores the same or an equal value |
 | `@featureArea("cc")` | a feature area the package and class name do not show; features stay inferred otherwise |
 

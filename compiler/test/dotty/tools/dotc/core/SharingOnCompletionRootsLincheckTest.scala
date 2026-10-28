@@ -41,9 +41,9 @@ object SharingOnCompletionRootsLincheckTest:
   class RootsBlackHole extends BlackHole(using roots())
   class RootsToy extends Toy(using Mode.Concurrent, roots())
 
-  /** Two readers that claim two keys in opposite orders can close a wait-for cycle. One of them backs off (a reader
+  /** Two readers that claim two keys in opposite orders can close a wait-for cycle. One of them is aborted (a reader
    *  typing a body is cancelled) and its request restarts, rather than both waiting for ever, a hang Lincheck
-   *  reports. A call restarts until it does not back off, so what it promises is what a claim that never backs off
+   *  reports. A call restarts until it is not aborted, so what it promises is what a claim that is never aborted
    *  does: one more on the counter.
    */
   class CycleSpec extends CounterSpec:

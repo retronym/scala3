@@ -239,7 +239,7 @@ object SymDenotations {
       val key = completer.completionRoot(this)
       val roots = ctx.base.completionRoots
       roots.acquire(key, CompletionLock.What(CompletionLock.completionKind(completer), symbol), () => cyclicWait())
-      // inside a Namer completion, this reader never backs off from a cycle (I74)
+      // inside a Namer completion, this reader is never aborted on a cycle (I74)
       val namer = CompletionLock.completionKind(completer) == CompletionLock.namerKind
       val reader = ctx.reader
       if namer then reader.namerCompletionDepth += 1
@@ -267,9 +267,9 @@ object SymDenotations {
      *  (I87), and a fixed order of the threads picks this reader. It gives the single-reader
      *  answer, a `CyclicReference` (an `AssertionError` under
      *  `-Ddotc.interactive.failOnCycle`) (I74). The other cycles are `acquire`'s: a reader
-     *  typing a body backs off and its request is retried; a reader inside a Namer completion
-     *  waits for the party outside one to back off or, behind a coarse root (a TASTy file, a
-     *  bring-forward, an inherited cache), waits a bounded time and then backs off itself.
+     *  typing a body is aborted and its request retried; a reader inside a Namer completion
+     *  waits for the party outside one to be aborted or, behind a coarse root (a TASTy file, a
+     *  bring-forward, an inherited cache), waits a bounded time and then aborts itself.
      */
     private def cyclicWait()(using Context): Nothing =
       // a cycle between Namer completions on several readers: the single-reader answer (I74)
@@ -397,7 +397,7 @@ object SymDenotations {
           // with serialised readers one takes the completion lock the unwind
           // released, in the window before the statement is abandoned (the
           // soak under `-Ddotc.interactive.chaos`, `xs$1` in a completion).
-          // The symbol is left with a completer that pre-empts any reader
+          // The symbol is left with a completer that cancels any reader
           // that reaches it, which retries on a fresh run. Its info is lazy
           // again, so `Touched` comes down with it (a class completer had set
           // the temporary info and so kept the flag above), or the symbol
@@ -3038,7 +3038,7 @@ object SymDenotations {
         if c != null && c._1 == ctx.runId then c._2
         else if ctx.base.completionRoots.ownedHere(this) then Nil // break cycle in case we are looking for package object itself
         else
-          ctx.base.completionRoots.locked(this, CompletionLock.packageObjects, () => CompletionRoots.backOff(this)) {
+          ctx.base.completionRoots.locked(this, CompletionLock.packageObjects, () => CompletionRoots.abortVictim(this)) {
             val c1 = sharedPackageObjs
             if c1 != null && c1._1 == ctx.runId then c1._2
             else
@@ -3394,7 +3394,7 @@ object SymDenotations {
 
   /** The info of a symbol whose Namer completion a cancellation unwound in
    *  interactive mode (see `SymDenotation.onUnwind`): a reader that
-   *  reaches it is pre-empted, and the run is not resumed, so that the retry
+   *  reaches it is cancelled, and the run is not resumed, so that the retry
    *  is a fresh run with fresh symbols.
    */
   /** Tests: a wait-for cycle between readers fails the request with an `AssertionError` (see `cyclicWait`). */
