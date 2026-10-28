@@ -21,7 +21,7 @@ import dotty.tools.tasty.TastyFormat.ASTsSection
 import scala.util.control.NonFatal
 
 class TreePickler(pickler: TastyPickler, attributes: Attributes) {
-  val buf: TreeBuffer = new TreeBuffer
+  val buf: CompactableTastyBuffer = new CompactableTastyBuffer
   pickler.newSection(ASTsSection, buf)
   import buf.*
   import pickler.nameBuffer.nameIndex
@@ -30,6 +30,12 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private val symRefs = Symbols.MutableSymbolMap[Addr](256)
   private val forwardSymRefs = Symbols.MutableSymbolMap[List[Addr]]()
   private val pickledTypes = util.EqHashMap[Type, Addr]()
+
+  /** Shares the types that are not in `pickledTypes` but pickle the same as an earlier one, see `pickleType` */
+  private val interner = NodeInterner(buf, SHAREDtype)
+
+  /** A map from trees to the address at which a tree is pickled. */
+  private val treeAddrs = util.IntMap[untpd.Tree](initialCapacity = 8192)
 
   /** A list of annotation trees for every member definition, so that later
    *  parallel position pickling does not need to access and force symbols.
@@ -63,8 +69,9 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
 
   private inline def withLength(inline op: Unit) = {
     val lengthAddr = reserveRef(relative = true)
+    interner.lengthReserved(lengthAddr)
     op
-    fillRef(lengthAddr, currentAddr, relative = true)
+    fillRef(lengthAddr, relative = true)
   }
 
   /** There are certain expectations with code which is naturally able to reach
@@ -81,6 +88,18 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   def addrOfSym(sym: Symbol): Option[Addr] =
     symRefs.get(sym)
 
+  def addrOfTree(tree: untpd.Tree): Addr =
+    val idx = treeAddrs(tree)
+    if idx < 0 then NoAddr else Addr(idx)
+
+  private def registerTreeAddr(tree: untpd.Tree): Addr =
+    val idx = treeAddrs(tree)
+    if idx < 0 then
+      treeAddrs(tree) = currentAddr.index
+      currentAddr
+    else
+      Addr(idx)
+
   def preRegister(tree: Tree)(using Context): Unit = tree match
     case tree: MemberDef => symRefs.getOrElseUpdate(tree.symbol, NoAddr)
     case _ => ()
@@ -89,7 +108,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     symRefs(sym) = currentAddr
     val refs = forwardSymRefs.lookup(sym)
     if refs != null then
-      refs.foreach(fillRef(_, currentAddr, relative = false))
+      refs.foreach(fillRef(_, relative = false))
       forwardSymRefs -= sym
 
   def pickleName(name: Name): Unit = writeNat(nameIndex(name).index)
@@ -114,6 +133,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       writeRef(label)
 
   private def pickleForwardSymRef(sym: Symbol)(using Context) = {
+    interner.markUnshareable() // the reference is filled in later, and `forwardSymRefs` holds its address
     val ref = reserveRef(relative = false)
     assert(!sym.is(Flags.Package), sym)
     forwardSymRefs(sym) = ref :: forwardSymRefs.getOrElse(sym, Nil)
@@ -167,18 +187,37 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
           else STABLE)
     case _ =>
 
+  /** Pickles `tpe`, or a reference to an earlier type with the same pickled form.
+   *
+   *  Types are shared by pickled form, not by identity: equal types are not always the same object,
+   *  e.g. a reference to a package can be a `TermRef` or a `ThisType`, depending on whether the
+   *  type comes from source or from a classfile. Sharing them only if identical would make the
+   *  TASTy depend on that. A type's form is known once it is pickled; if an earlier type has the
+   *  same form, `interner.intern` drops the bytes and writes a reference to the earlier type instead.
+   *  By then the parts of the type have been shared, so a type that is dropped consists of
+   *  references only, and nothing but its own entry in `pickledTypes` points into the dropped
+   *  bytes. Nothing else may record an address while a type is being pickled, unless
+   *  `interner.markUnshareable` is called, see `pickleForwardSymRef` and the `AnnotatedType` case.
+   *
+   *  A `LazyRef` or a `SkolemType` is pickled as its underlying type, and shares with it. A
+   *  reference to a binder (`RECthis`, `PARAMtype`) is the binder's address, so a recursive type
+   *  or a type lambda has the same form as another only at the same address: such types are
+   *  shared by identity alone.
+   */
   def pickleType(tpe0: Type, richTypes: Boolean = false)(using Context): Unit = {
     val tpe = tpe0.stripTypeVar
     printOnAssertionError(i"error when pickling type $tpe") {
       val prev: Addr | Null = pickledTypes.lookup(tpe)
-      if (prev == null) {
-        pickledTypes(tpe) = currentAddr
-        pickleNewType(tpe, richTypes)
-      }
-      else {
-        writeByte(SHAREDtype)
-        writeRef(prev)
-      }
+      if prev != null then interner.writeReference(prev)
+      else
+        val start = currentAddr
+        interner.enter(start)
+        pickledTypes(tpe) = start // for references to `tpe` as a binder while pickling it
+        try pickleNewType(tpe, richTypes)
+        catch case NonFatal(ex) =>
+          interner.abandon() // so that the nodes are closed in pairs when `pickleTree` catches a `TypeError`
+          throw ex
+        pickledTypes(tpe) = interner.intern()
     }
   }
 
@@ -273,6 +312,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         pickleVariances(tpe.hi)
       }
     case tpe: AnnotatedType =>
+      interner.markUnshareable() // the annotation is a tree: `treeAddrs` and `annotatedTypeTrees` would hold on to dropped bytes
       writeByte(ANNOTATEDtype)
       withLength:
         pickleType(tpe.parent, richTypes)
@@ -415,6 +455,19 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     stats.foreach(preRegister)
     stats.foreach(stat => if (!stat.isEmpty) pickleTree(stat))
   }
+
+  /** Drop what was pickled from `addr` on, which an error left unfinished: the bytes, and the addresses
+   *  of the trees and types in them. A symbol defined there keeps its address and the forward references
+   *  filled with it: nothing refers to it any more, as the definition itself is gone.
+   */
+  private def dropFrom(addr: Addr): Unit =
+    truncate(addr)
+    val dropped = pickledTypes.iterator.collect { case (tpe, at) if at.index >= addr.index => tpe }.toList
+    dropped.foreach(pickledTypes.remove)
+    var i = 0
+    while i < treeAddrs.size do
+      if treeAddrs.value(i) >= addr.index then treeAddrs.setValue(i, -1) // as if never registered
+      i += 1
 
   def pickleTree(tree: Tree)(using Context): Unit = {
     val addr = registerTreeAddr(tree)
@@ -814,6 +867,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
       catch {
         case ex: TypeError =>
           report.error(ex.toMessage, tree.srcPos.focus)
+          dropFrom(addr)
           pickleErrorType()
         case NonFatal(t) =>
           println(i"error when pickling tree $tree of class ${tree.getClass}")
@@ -963,5 +1017,10 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
         i += 1
 
     updateMapWithDeltas(symRefs)
+
+    var i = 0
+    while i < treeAddrs.size do
+      if treeAddrs.value(i) >= 0 then treeAddrs.setValue(i, adjusted(Addr(treeAddrs.value(i)), scratch).index)
+      i += 1
   }
 }
