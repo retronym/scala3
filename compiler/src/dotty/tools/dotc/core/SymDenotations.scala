@@ -338,16 +338,20 @@ object SymDenotations {
       val reader: Reader | Null = if interactive then ctx.reader else null
       if myFlags.is(Touched) && !healLeakedTouched(reader) then
         if reader != null then reader.recordCyclePrevented(symbol)
+        if UnstableReads.on then UnstableReads.reentered(symbol)
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
       if reader != null then reader.completing += symbol
+      if UnstableReads.on then UnstableReads.push(symbol)
       try
         atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
         publishScope()
       catch case ex =>
         onUnwind(ex, interactive, reader, completer)
         throw ex
-      finally if reader != null then reader.completing -= symbol
+      finally
+        if reader != null then reader.completing -= symbol
+        if UnstableReads.on then UnstableReads.pop()
 
     /** The completion of a class has filled its scope: from now on readers may see it, and a change to it is a
      *  change to published state (`MutableScope.published`).
@@ -643,10 +647,12 @@ object SymDenotations {
      *  when `Touched` is set.
      */
     final def isCompleting(using Context): Boolean =
-      myFlags.is(Touched) && !isCompleted && {
+      val r = myFlags.is(Touched) && !isCompleted && {
         val base = ctx.base
         !base.concurrent || (if base.parallel then isCompletingHereFine(base) else isCompletingHereCoarse(base))
       }
+      if r && UnstableReads.on then UnstableReads.peek(symbol)
+      r
 
     private def isCompletingHereFine(base: ContextBase)(using Context): Boolean =
       myInfo match
@@ -2400,7 +2406,7 @@ object SymDenotations {
     /** The types of the parent classes. */
     def parentTypes(using Context): List[Type] = info match
       case classInfo: ClassInfo =>
-        if UnstableReads.on && classInfo.isInstanceOf[TempClassInfo] then UnstableReads.record(symbol)
+        if UnstableReads.on && classInfo.isInstanceOf[TempClassInfo] then UnstableReads.parents(symbol)
         classInfo.declaredParents
       case _ => Nil
 
@@ -2518,9 +2524,14 @@ object SymDenotations {
     }
 
     final override def derivesFrom(base: Symbol)(using Context): Boolean =
-      !isAbsent()
-      && base.isClass
-      && ((symbol eq base) || baseClassSet.contains(base))
+      val r = !isAbsent()
+        && base.isClass
+        && ((symbol eq base) || baseClassSet.contains(base))
+      if UnstableReads.on && (symbol ne base) && base.isClass then
+        // answered from a class, or a base class, whose parents are not known yet: kept, to ask again when they are
+        if UnstableReads.quietly(baseClasses.exists(_.infoOrCompleter.isInstanceOf[TempClassInfo])) then
+          UnstableReads.derivation(symbol, base, r)
+      r
 
     final override def isSubClass(base: Symbol)(using Context): Boolean =
       derivesFrom(base)
@@ -3772,19 +3783,93 @@ object SymDenotations {
   @sharable private var indent = 0 // for completions printing
 }
 
-/** Probe (`-Ddotc.unstableReads`, `=stacks` for a stack per site of a non-local class): the parents of a class read
- *  while its info is a `TempClassInfo`, whose parents are not known yet (`Nil`): a read whose answer depends on the
- *  order the completions ran in. Printed at exit. See docs/_docs/internals/parallel-signatures.md. */
+/** Probe (`-Ddotc.unstableReads`, `=stacks` for a stack per new site on a non-local symbol): reads of a
+ *  completion's intermediate state, whose answer depends on the order completions ran in. Three kinds:
+ *
+ *  - `parents`: the parents of a class read while its info is a `TempClassInfo` (not known yet, `Nil`);
+ *  - `cycle`: a `CyclicReference` made, which in a valid program is caught and handled (a check skipped, a
+ *    `LazyRef`, an implicit candidate dropped), or reported;
+ *  - `peek`: `isCompleting` answering true, to a caller that decides something from it.
+ *
+ *  Each is keyed by the symbol, whether it is local (reached only from its own unit, so the same in any parallel
+ *  schedule), whether it happened under `checkNonCyclic` (`Mode.CheckCyclic`), and the first compiler frame outside
+ *  `core` (for a peek, the caller of `isCompleting`). Printed at exit. See docs/_docs/internals/parallel-signatures.md.
+ */
 object UnstableReads:
   val on: Boolean = System.getProperty("dotc.unstableReads") != null
   private val stacks: Boolean = System.getProperty("dotc.unstableReads") == "stacks"
   private val counts = java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]()
-  def record(sym: Symbols.Symbol)(using Contexts.Context): Unit =
-    val where = s"${sym.showFullName} (${sym.source.name}) in ${ctx.phase} under ${ctx.owner.showFullName}"
-    counts.computeIfAbsent(where, _ => { if stacks && !sym.isLocal then Thread.dumpStack(); java.util.concurrent.atomic.LongAdder() }).nn.increment()
+  private val walker = StackWalker.getInstance()
+
+  // the completions in progress on this thread, innermost first
+  private val inProgress = ThreadLocal.withInitial[List[Symbols.Symbol]](() => Nil)
+  def push(sym: Symbols.Symbol): Unit = inProgress.set(sym :: inProgress.get.nn)
+  def pop(): Unit = inProgress.set(inProgress.get.nn.tail)
+
+  /** Where `sym` is among this thread's completions: the innermost (a completion looking at itself, the same in
+   *  every order), an enclosing one (a re-entry, whose answer depends on where the cycle was entered), or none. */
+  private def relation(sym: Symbols.Symbol): String = inProgress.get.nn match
+    case top :: _ if top eq sym => "self"
+    case all if all.exists(_ eq sym) => "outer"
+    case _ => "elsewhere"
+
+  private def frame(skip: String => Boolean): String =
+    walker.walk(s => s.filter(f => !f.getClassName.startsWith("dotty.tools.dotc.core.UnstableReads") && !skip(f.getClassName)).findFirst()).nn
+      .map(f => s"${f.getClassName.stripPrefix("dotty.tools.dotc.")}.${f.getMethodName}:${f.getLineNumber}").orElse("?").nn
+
+  private def record(kind: String, sym: Symbols.Symbol, at: String)(using Contexts.Context): Unit =
+    val local = if !sym.exists then "nosym" else if sym.isLocal || sym.owner.isTerm then "local" else "member"
+    val check = if ctx.mode.is(Mode.CheckCyclic) then " [checkNonCyclic]" else ""
+    val where = s"$kind $local$check ${if sym.exists then sym.showFullName else "-"} at $at"
+    counts.computeIfAbsent(where, _ => { if stacks && local == "member" then Thread.dumpStack(); java.util.concurrent.atomic.LongAdder() }).nn.increment()
+
+  private def outsideCore(cls: String) = cls.startsWith("dotty.tools.dotc.core.") || cls.startsWith("scala.")
+  private def thrower(cls: String) = cls.startsWith("dotty.tools.dotc.core.CyclicReference") || cls.startsWith("dotty.tools.dotc.core.TypeErrors")
+
+  // the probe's own reads (`derivesFrom` looking for an unknown base) are not counted
+  private val probing = ThreadLocal.withInitial[java.lang.Boolean](() => false)
+  def quietly[T](op: => T): T =
+    probing.set(true)
+    try op finally probing.set(false)
+
+  def parents(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    if !probing.get.nn.booleanValue then record(s"parents/${relation(sym)}", sym, frame(outsideCore))
+  /** A `CyclicReference` made: where it was thrown, and the first frame outside `core` above it. */
+  def cycle(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record("cycle", sym, s"${frame(thrower)} under ${frame(outsideCore)}")
+  /** A completion entered again on its own thread: the cycle `lockAndComplete0` throws for. */
+  def reentered(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record(s"reentry/${relation(sym)}", sym, frame(outsideCore))
+  // derivesFrom answered while parents were unknown: (class, base, answer, site)
+  private val derivations = java.util.concurrent.ConcurrentLinkedQueue[(Symbols.Symbol, Symbols.Symbol, Boolean, String)]()
+  def derivation(cls: Symbols.Symbol, base: Symbols.Symbol, answer: Boolean)(using Contexts.Context): Unit =
+    derivations.add((cls, base, answer, frame(outsideCore)))
+
+  /** Ask every recorded `derivesFrom` again, now that the classes are complete: did the answer given while their
+   *  parents were unknown stand? Called at the end of the typer. */
+  def validate()(using Contexts.Context): Unit =
+    import scala.jdk.CollectionConverters.*
+    val all = derivations.asScala.toList
+    val changed = all.filter((cls, base, answer, _) => cls.derivesFrom(base) != answer)
+    System.err.nn.println(s"[unstable reads] derivesFrom while parents unknown: ${all.size} answers, ${changed.size} changed once complete")
+    for (cls, base, answer, at) <- changed.distinct.take(40) do
+      System.err.nn.println(s"  changed: ${cls.showFullName} derivesFrom ${base.showFullName} was $answer at $at")
+    derivations.clear()
+
+  def peek(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record(s"peek/${relation(sym)}", sym, frame(c => c.startsWith("dotty.tools.dotc.core.SymDenotations")))
+
   if on then
     Runtime.getRuntime.addShutdownHook(Thread(() =>
       import scala.jdk.CollectionConverters.*
       val all = counts.asScala.toList.sortBy(-_._2.sum)
-      System.err.nn.println(s"[unstable reads] ${all.map(_._2.sum).sum} reads at ${all.size} sites")
-      all.take(40).foreach((k, v) => System.err.nn.println(f"  ${v.sum}%6d $k"))))
+      def total(p: String => Boolean) = all.filter((k, _) => p(k)).map(_._2.sum).sum
+      System.err.nn.println(s"[unstable reads] ${all.map(_._2.sum).sum} events at ${all.size} sites")
+      val kinds = all.map(_._1.takeWhile(_ != ' ')).distinct.sorted
+      for kind <- kinds do
+        System.err.nn.println(s"[unstable reads] $kind: member ${total(k => k.startsWith(s"$kind member"))} (under checkNonCyclic ${total(k => k.startsWith(s"$kind member [checkNonCyclic]"))}), local ${total(k => k.startsWith(s"$kind local"))}, no symbol ${total(k => k.startsWith(s"$kind nosym"))}")
+      // the self-peeks are many and the same in every order: their sites only
+      val (self, rest) = all.partition(_._1.startsWith("peek/self"))
+      rest.take(300).foreach((k, v) => System.err.nn.println(f"  ${v.sum}%6d $k"))
+      self.groupMapReduce(_._1.replaceAll(" .* at ", " at "))(_._2.sum)(_ + _).toList.sortBy(-_._2).take(20)
+        .foreach((k, v) => System.err.nn.println(f"  $v%6d $k"))))
