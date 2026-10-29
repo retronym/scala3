@@ -21,6 +21,16 @@ object CheckInlineTraits:
   val name: String = "checkInlineTraits"
   val description: String = "check if inline & specialized traits are present and are correctly used"
 
+  /** Set on a unit's context while its group (with `DesugarSpecializedTraits` and `SpecializeInlineTraits`) runs on
+   *  a worker under `-Yparallel-typer` (`MegaPhase.runOnInParallel`). A unit that would be specialized or have
+   *  inline traits inlined into it is abandoned (`NeedsSerialRun`) and run again on the main thread: those phases
+   *  share a cache of specializations across the run, enter the classes they generate into packages, emit each one
+   *  in the first unit that needs it, and read other units' inline traits.
+   */
+  val InParallel: dotty.tools.dotc.util.Property.Key[Unit] = dotty.tools.dotc.util.Property.Key()
+
+  class NeedsSerialRun extends scala.util.control.ControlThrowable
+
 class CheckInlineTraits extends MiniPhase:
     override def phaseName: String = CheckInlineTraits.name 
 
@@ -173,7 +183,8 @@ class CheckInlineTraits extends MiniPhase:
       tree
     }
 
-    private inline def registerSpecializationsInUnit(using Context): Unit = { 
+    private inline def registerSpecializationsInUnit(using Context): Unit = {
+      if ctx.property(CheckInlineTraits.InParallel).isDefined then throw CheckInlineTraits.NeedsSerialRun()
       ctx.compilationUnit.needsInlining = true
       ctx.compilationUnit.hasSpecializations = true
     }
