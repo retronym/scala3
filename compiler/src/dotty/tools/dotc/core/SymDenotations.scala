@@ -3012,16 +3012,25 @@ object SymDenotations {
      */
     def ensureFreshScopeAfter(phase: DenotTransformer)(using Context): Unit =
       if (ctx.phaseId != phase.next.id) atPhase(phase.next)(ensureFreshScopeAfter(phase))
-      else {
-        val prevClassInfo = atPhase(phase) {
-          current.asInstanceOf[ClassDenotation].classInfo
-        }
-        val ClassInfo(pre, _, ps, decls, selfInfo) = classInfo
-        if (prevClassInfo.decls eq decls)
-          copySymDenotation(info = ClassInfo(pre, classSymbol, ps, decls.cloneScope, selfInfo))
-            .copyCaches(this, phase.next)
-            .installAfter(phase)
+      else if ctx.base.concurrent then Denotations.ringClaim(this)(ensureFreshScopeAfter0(phase))
+      else ensureFreshScopeAfter0(phase)
+
+    private def ensureFreshScopeAfter0(phase: DenotTransformer)(using Context): Unit = {
+      val prevClassInfo = atPhase(phase) {
+        current.asInstanceOf[ClassDenotation].classInfo
       }
+      val ClassInfo(pre, _, ps, decls, selfInfo) = classInfo
+      if (prevClassInfo.decls eq decls)
+        val decls1 = decls.cloneScope
+        // readers on other threads find the new version as soon as it is installed: the members entered next into
+        // its scope go in as into any published scope (`MutableScope.enter`), not in place
+        if ctx.base.concurrent then (decls, decls1) match
+          case (d: MutableScope, d1: MutableScope) => d1.published = d.published
+          case _ =>
+        copySymDenotation(info = ClassInfo(pre, classSymbol, ps, decls1, selfInfo))
+          .copyCaches(this, phase.next)
+          .installAfter(phase)
+    }
 
     private var myCompanion: Symbol = NoSymbol
 

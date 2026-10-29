@@ -88,6 +88,7 @@ object Sharing:
 
   /** A TASTy file's root (`claimAt`): its address maps are filled by its completers and its lazy reads. */
   val lazyTastyRead: ClaimKind[Any] = ClaimKind(CompletionLock.lazyTastyRead, lockWhenSerialised = true)
+  val denotRing: ClaimKind[Any] = ClaimKind(CompletionLock.denotRing, lockWhenSerialised = true)
 
   /** `op` in `c0`, or, when readers are parallel, in a private child of `c0`'s typer state, settled when it ends
    *  (its type variables instantiated, its messages issued) and dropped: what readers share is never written by

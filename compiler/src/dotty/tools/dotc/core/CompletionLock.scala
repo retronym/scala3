@@ -55,6 +55,7 @@ object CompletionLock:
   val bringForward: What = What("bring forward", null)
   val inheritedCache: What = What("inherited cache", null)
   val lazyTastyRead: What = What("lazy TASTy read", null)
+  val denotRing: What = What("new version of a denotation", null)
   val commit: What = What("commit typer state", null)
   val cleanup: What = What("cleanup", null)
   val peek: What = What("wait for a completion (isCompleting)", null)

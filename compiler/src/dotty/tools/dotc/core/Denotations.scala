@@ -79,6 +79,12 @@ object Denotations {
   private[core] object BringForward:
     given Sharing.ClaimKind[BringForward.type] = Sharing.ClaimKind(CompletionLock.bringForward, lockWhenSerialised = true)
 
+  /** `op` as the one writer of the versions of `d`'s symbol in this run (its ring of denotations, linked by
+   *  `nextInRun`), on a base with several readers: a transformer's new version, an extension of a version's period,
+   *  an `installAfter`. Readers walk the ring with no claim. Keyed by the symbol, or by `d` with none. */
+  private[core] inline def ringClaim[T](d: SingleDenotation)(inline op: T)(using Context): T =
+    Sharing.claimAt(d)(if d.symbol.exists then d.symbol else d, Sharing.denotRing, d.symbol)(op)
+
   implicit def eqDenotation: CanEqual[Denotation, Denotation] = CanEqual.derived
 
   object PreDenotation:
@@ -855,7 +861,8 @@ object Denotations {
           Sharing.claim(BringForward, symbol)(initial.bringForward().current)
         else this
 
-      def goForward =
+      // `locked`: under the claim on the ring (`ringClaim`), on a base with several readers
+      def goForward(valid: Period, locked: Boolean): SingleDenotation =
         var cur = this
         // search for containing period as long as nextInRun increases.
         var next = nextInRun
@@ -866,6 +873,16 @@ object Denotations {
           // in this case, next.validFor contains currentPeriod
           cur = next
           cur
+        else if ctx.base.concurrent && !locked then
+          // the extension or the transformer's new denotation is written by one reader at a time, which searches
+          // again first: two readers that transformed the same denotation linked two versions for one period, and
+          // an extension written after a concurrent `installAfter` made the old version valid again
+          ringClaim(this) {
+            val valid1 = validFor
+            if valid1.contains(currentPeriod) then this
+            else if valid1 == Nowhere || valid1.runId != currentPeriod.runId || currentPeriod < valid1 then current
+            else goForward(valid1, locked = true)
+          }
         else
           //println(s"might need new denot for $cur, valid for ${cur.validFor} at $currentPeriod")
           // not found, cur points to highest existing variant
@@ -935,7 +952,7 @@ object Denotations {
       else if valid.runId != currentPeriod.runId then
         toNewRun
       else if currentPeriod > valid then
-        goForward
+        goForward(valid, locked = false)
       else
         goBack
     end current
@@ -950,24 +967,27 @@ object Denotations {
     protected def installAfter(phase: DenotTransformer)(using Context): Unit = {
       val targetId = phase.next.id
       if (ctx.phaseId != targetId) atPhase(phase.next)(installAfter(phase))
+      else if ctx.base.concurrent then ringClaim(this)(installAfter0(targetId))
+      else installAfter0(targetId)
+    }
+
+    private def installAfter0(targetId: PhaseId)(using Context): Unit = {
+      val current = symbol.current
+      // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
+      // println(current.definedPeriodsString)
+      this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
+      if (current.validFor.firstPhaseId >= targetId)
+        current.replaceWith(this)
+        symbol.denot
+          // Let symbol point to updated denotation
+          // Without this we can get problems when we immediately recompute the denotation
+          // at another phase since the invariant that symbol used to point to a valid
+          // denotation is lost.
       else {
-        val current = symbol.current
-        // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
-        // println(current.definedPeriodsString)
-        this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
-        if (current.validFor.firstPhaseId >= targetId)
-          current.replaceWith(this)
-          symbol.denot
-            // Let symbol point to updated denotation
-            // Without this we can get problems when we immediately recompute the denotation
-            // at another phase since the invariant that symbol used to point to a valid
-            // denotation is lost.
-        else {
-          current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
-          insertAfter(current)
-        }
-        // println(current.definedPeriodsString)
+        current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
+        insertAfter(current)
       }
+      // println(current.definedPeriodsString)
     }
 
     /** Apply a transformation `f` to all denotations in this group that start at or after
