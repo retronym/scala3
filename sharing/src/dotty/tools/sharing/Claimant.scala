@@ -27,6 +27,10 @@ class Claimant(val thread: Thread = Thread.currentThread):
   /** The claim this claimant is waiting for, or null: the edges of the wait-for graph. */
   @volatile var waitingOn: PerKeyClaims.Claim | Null = null
 
+  /** What this claimant waits for `waitingOn` to do, set with it: whether the edge is a peek (`What.isPeek`), which
+   *  yields on a wait-for cycle rather than being part of a dependency cycle. */
+  @volatile var waitingFor: What | Null = null
+
   /** How many times this claimant was aborted as the victim of a wait-for cycle. */
   @volatile var aborted: Int = 0
 

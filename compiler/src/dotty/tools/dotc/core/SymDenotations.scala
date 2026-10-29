@@ -28,7 +28,7 @@ import cc.{CapturingType, derivedCapturingType, stripCapturing}
 import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
-import _root_.dotty.tools.sharing.Stamped
+import _root_.dotty.tools.sharing.{PerKeyClaims, Stamped}
 
 object SymDenotations {
 
@@ -233,7 +233,7 @@ object SymDenotations {
     private def completeUnderRootClaim(completer0: LazyType)(using Context): Unit =
       // another reader's completion in progress (its root may not be the one
       // `completer0` names): wait for it first, then work from what is there
-      val completer = awaitOthers() match
+      val completer = awaitOthers(CompletionLock.awaitCompletion) match
         case lt: LazyType => lt
         case _ => return
       val key = completer.completionRoot(this)
@@ -312,11 +312,25 @@ object SymDenotations {
      *  reader's completion in progress is waited for first (its root), so
      *  that what is read is not that completion's intermediate state.
      */
-    private def awaitOthers()(using Context): Type = myInfo match
+    private def awaitOthers(what: CompletionLock.What = CompletionLock.peek)(using Context): Type = myInfo match
       case ip: InProgress if !ip.ownedHere =>
-        ctx.base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
-        awaitOthers()
+        try ctx.base.completionRoots.locked(ip.rootKey, what, () => cyclicWait())(())
+        catch case PerKeyClaims.Yielded =>
+          // A peek whose wait would close a wait-for cycle: the sequential
+          // answer is the path for a completion not in progress on this
+          // thread, so the symbol is seen with the completer it had before
+          // the other reader's completion began (a peek never runs it).
+          util.Chaos.note(s"peek at $symbol yields to ${ip.owner.getName}")
+          return ip.original
+        awaitOthers(what)
       case _ => ownView
+
+    /** `infoOrCompleter` for a peek with parallel readers: another reader's
+     *  completion in progress is waited for first, or, if that wait would
+     *  close a wait-for cycle, the completer as it was before it began.
+     */
+    final def awaitedInfoOrCompleter(using Context): Type =
+      if ctx.base.parallel then awaitOthers() else infoOrCompleter
 
     /** With parallel readers, wait until no other reader is completing
      *  this denotation: for a peek at its completer that decides what to do
@@ -659,9 +673,13 @@ object SymDenotations {
     private def isCompletingHereFine(base: ContextBase)(using Context): Boolean =
       myInfo match
         case ip: InProgress if !ip.ownedHere =>
-          // another reader's completion: wait for it and look again (§4.1)
-          base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
-          myFlags.is(Touched) && !isCompleted
+          // another reader's completion: wait for it and look again (§4.1);
+          // a wait that would close a wait-for cycle yields, and the answer
+          // is then the one the owner's thread would give: in progress
+          try
+            base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
+            myFlags.is(Touched) && !isCompleted
+          catch case PerKeyClaims.Yielded => true
         case _ => true // this reader's own completion, or a leaked flag as before
 
     private def isCompletingHereCoarse(base: ContextBase): Boolean =
@@ -1057,8 +1075,7 @@ object SymDenotations {
      */
     final def isSelfSym(using Context): Boolean =
       if !ctx.isBestEffort || exists then
-        owner.denot.awaitOtherReader() // I73
-        owner.infoOrCompleter match {
+        owner.denot.awaitedInfoOrCompleter match { // I73
           case ClassInfo(_, _, _, _, selfInfo) =>
             selfInfo == symbol ||
               selfInfo.isInstanceOf[Type] && name == nme.WILDCARD
@@ -2353,16 +2370,17 @@ object SymDenotations {
 
     /** The type parameters of this class */
     override final def typeParams(using Context): List[TypeSymbol] = {
-      def compute: List[TypeSymbol] =
+      def computeFrom(ioc: Type): List[TypeSymbol] =
         if (ctx.erasedTypes || is(Module)) Nil // fast return for modules to avoid scanning package decls
         else {
           val di = initial
           if (this ne di) di.typeParams
-          else infoOrCompleter match {
+          else ioc match {
             case info: TypeParamsCompleter => info.completerTypeParams(symbol)
             case _ => typeParamsFromDecls
           }
         }
+      def compute: List[TypeSymbol] = computeFrom(infoOrCompleter)
       // With parallel readers the cache is shared, and a completion in
       // progress fills it from its intermediate view (empty before the type
       // parameters are indexed), which `info_=` resets only when it ends: the
@@ -2385,7 +2403,13 @@ object SymDenotations {
         while result == null do
           myInfo match
             case ip: InProgress if ip.ownedHere => result = compute
-            case _: InProgress => awaitOtherReader()
+            case ip: InProgress =>
+              // wait for the other reader's completion and look again, or, if
+              // that wait would close a wait-for cycle, answer from the
+              // completer as it was before that completion began (not cached)
+              awaitedInfoOrCompleter match
+                case orig if orig `eq` ip.original => result = computeFrom(orig)
+                case _ =>
             case before =>
               val known = myTypeParams
               if known != null then result = known
@@ -3470,6 +3494,8 @@ object SymDenotations {
    *  waits on `rootKey` before it looks again.
    */
   final class InProgress(@volatile var current: Type, val owner: Thread, val rootKey: AnyRef) extends LazyType:
+    /** The info before the completion began: the completer a peek that yields on a wait-for cycle answers from. */
+    val original: Type = current
     def ownedHere: Boolean = owner eq Thread.currentThread
     def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
       throw AssertionError(s"$denot: an InProgress is completed through its root, not run; ${diagnose()}")

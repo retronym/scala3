@@ -64,6 +64,12 @@ class Cancelled extends scala.util.control.ControlThrowable
  *                 [[PerKeyClaims]] breaks after a bound even when no party can abort
  */
 class What(val kind: String, val subject: AnyRef | Null, val coarse: Boolean = false):
+  /** Whether a wait with this activity is a *peek*: a look at whether a computation is in progress that, on one
+   *  thread, takes another path when it is (it never forces it). A peek that waits on another claimant's computation
+   *  is a wait-for edge that is not a dependency edge, so when its wait would close a wait-for cycle it yields
+   *  instead ([[PerKeyClaims.Yielded]]): the thread takes the path it would have taken had the computation been its
+   *  own, which is the sequential answer, and the other parties' waits then succeed. */
+  def isPeek: Boolean = false
   /** The activity as text, for a report. */
   final def render: String = subject match
     case null => kind

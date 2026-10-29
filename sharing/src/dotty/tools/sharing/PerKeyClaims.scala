@@ -21,7 +21,7 @@ import scala.jdk.CollectionConverters.*
  *                              (`What.coarse`) before it aborts after all; 0 for never
  */
 final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, coarseCycleWaitNanos: Long = 0L) extends ClaimRegistry:
-  import PerKeyClaims.Claim
+  import PerKeyClaims.{Claim, Yielded}
 
   def this(currentClaimant: () => Claimant) = this(currentClaimant, AbortVictim)
 
@@ -62,7 +62,15 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
             lastChain = null
           case chain =>
             val parties = chain.map(_.owner)
-            if me.canAbort then
+            // A peek is not a dependency: on one thread it takes another path when the computation is in progress.
+            // When its wait would close a wait-for cycle the peeking party yields, which is that path (the sequential
+            // answer from the owner's side), and the other parties wait for it to; reporting the cycle instead made a
+            // cyclic reference out of a pair no sequential order has (the Setting residue of I68, as modelled), and
+            // aborting a party made the force report it when the freed peek then met its own hole.
+            if what.isPeek then throw Yielded
+            else if chain.exists(k => (k.owner ne me) && { val w = k.owner.waitingFor; w != null && w.isPeek }) then
+              () // a party at a peek yields at its next look: wait
+            else if me.canAbort then
               me.collidedWith = c
               me.abort()
             else if parties.exists(_.canAbort) then
@@ -80,9 +88,12 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
               val last = lastChain
               if last != null && last.corresponds(chain)(_ eq _) then cycle()
               else lastChain = chain
+        me.waitingFor = what
         me.waitingOn = c
         try c.done.await(5, TimeUnit.MILLISECONDS)
-        finally me.waitingOn = null
+        finally
+          me.waitingOn = null
+          me.waitingFor = null
     end while
 
   /** Release a claim made by `acquire` on this thread. */
@@ -156,6 +167,11 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
     claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
 
 object PerKeyClaims:
+  /** Thrown by `acquire` to a claimant whose wait is a peek (`What.isPeek`) when that wait would close a wait-for
+   *  cycle: the claim is not taken, and the claimant takes the path it takes when the computation is in progress on
+   *  its own thread. Caught at the peek; a stackless control exception. */
+  object Yielded extends RuntimeException("a peek yields to the completion in progress on another thread", null, false, false)
+
   /** A claimant's claim on a key, released when its holds come back to 0. */
   final class Claim(val owner: Claimant, val what: What, val ownerName: String):
     // changed only by the owner (`acquire` re-entering, `release`)
