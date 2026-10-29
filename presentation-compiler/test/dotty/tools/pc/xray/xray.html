@@ -126,7 +126,10 @@
   ul.compl { margin: 2px 0 8px; padding-left: 18px; max-height: 110px; overflow: auto; }
   pre.hljs { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); font-size: 11px; max-height: 160px; overflow: auto; }
   /* ---- bottom panel: request log and demo transcript as tabs */
-  #logsec { height: 220px; flex: none; border-top: 0; } body.scWide #logsec { height: 70vh !important; }
+  #logsec { height: 220px; flex: none; border-top: 0; }
+  /* the bottom panel as a lightbox over the page (Esc, the button or a click outside closes it) */
+  body.panelMax #logsec { position: fixed; inset: 28px; height: auto !important; z-index: 50; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.35); overflow: hidden; }
+  body.panelMax .gutter[data-i="2"] { display: none; } #panelBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 49; } #panelBackdrop[hidden] { display: none; }
   #logsec .ph { background: var(--panel); gap: 2px; padding-left: 8px; }
   #logsec .ptab { border: 0; background: transparent; color: var(--dim); padding: 4px 10px; border-radius: var(--r); font-weight: 500; }
   #logsec .ptab.on { color: var(--fg); background: var(--hover); } #logsec .ptab:disabled { opacity: .4; }
@@ -304,8 +307,9 @@
   </main>
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
+<div id="panelBackdrop" hidden></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="scaling" title="compile every file of the source set once per thread count, interactively (N readers) or in batch (-Yparallel-typer): wall time, speed-up and what each thread did">Thread scaling</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="scaling" title="compile every file of the source set once per thread count, interactively (N readers) or in batch (-Yparallel-typer): wall time, speed-up and what each thread did">Thread scaling</button><span class="sp"></span><button id="panelMax" class="icon ghost chrome" data-icon="expand" title="expand the panel over the page (Esc to restore)"></button><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
   <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th><th title="times the request was aborted on a wait-for cycle and was retried (-Yinteractive-parallel): a livelock shows here as a growing number">cycleAborts</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
   <div id="problems" hidden><div class="none dim">No diagnostics: every request and the background pass fill this list.</div></div>
@@ -373,6 +377,8 @@
     edit: svg('<path d="M11 2.5l2.5 2.5-8 8H3v-2.5z"/><path d="M9.5 4l2.5 2.5"/>'),
     trash: svg('<path d="M3 4.5h10M6.5 4.5v-2h3v2M4.5 4.5l.7 9h5.6l.7-9"/>'),
     close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    expand: svg('<path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5L9 7M2.5 13.5L7 9"/>'),
+    shrink: svg('<path d="M13 7H9V3M3 9h4v4M9 7l4.5-4.5M7 9l-4.5 4.5"/>'),
     xray: svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 5.5h6M5 8h4M5 10.5h2"/>'),
     replay: svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/><path d="M2.5 2.5v3h3"/><path d="M7 5.5v5l3.5-2.5z"/>'),
     structure: svg('<path d="M3 3h4M5 3v10M5 8h4M5 13h4"/><rect x="9" y="6.5" width="4" height="3" rx=".5"/><rect x="9" y="11.5" width="4" height="3" rx=".5"/>'),
@@ -418,15 +424,18 @@
   let cols = null; // px widths of explorer and editor; the x-ray takes the rest
   try { const c = JSON.parse(store.get('cols2') || 'null'); if (Array.isArray(c) && c.length === 2 && c.every((n) => n > 40)) cols = c; } catch (e) { /* ignore */ }
   let logh = +store.get('logh') || 220;
+  let loghWide = +store.get('loghWide') || 0; // the Thread scaling tab's own height; 0: 70% of the window
+  const wide = () => document.body.classList.contains('scWide');
+  const panelH = () => (wide() ? loghWide || Math.round(window.innerHeight * 0.7) : logh);
   function applyCols() {
     // narrower than the three columns need: the x-ray column folds away (the editor keeps the room)
     const narrow = window.innerWidth < (document.body.classList.contains('sidebarHidden') ? 700 : 940); document.body.classList.toggle('narrow', narrow);
-    if (narrow) { const sbw = cols ? Math.round(cols[0]) : 230; mainEl.style.gridTemplateColumns = document.body.classList.contains('sidebarHidden') ? 'minmax(0, 1fr)' : `${Math.min(sbw, Math.round(window.innerWidth / 3))}px ${GUT}px minmax(0, 1fr)`; $('logsec').style.height = `${Math.round(logh)}px`; cm.refresh(); return; }
+    if (narrow) { const sbw = cols ? Math.round(cols[0]) : 230; mainEl.style.gridTemplateColumns = document.body.classList.contains('sidebarHidden') ? 'minmax(0, 1fr)' : `${Math.min(sbw, Math.round(window.innerWidth / 3))}px ${GUT}px minmax(0, 1fr)`; $('logsec').style.height = `${Math.round(panelH())}px`; cm.refresh(); return; }
     const sb = !document.body.classList.contains('sidebarHidden');
     const w = cols ? cols.map((n) => `${Math.round(n)}px`) : ['230px', 'minmax(360px, 1.2fr)'];
     const rest = cols ? 'minmax(0, 1fr)' : 'minmax(320px, 1fr)';
     mainEl.style.gridTemplateColumns = sb ? `${w[0]} ${GUT}px ${w[1]} ${GUT}px ${rest}` : `${w[1]} ${GUT}px ${rest}`;
-    $('logsec').style.height = `${Math.round(logh)}px`;
+    $('logsec').style.height = `${Math.round(panelH())}px`;
     cm.refresh();
   }
   window.addEventListener('resize', () => applyCols());
@@ -435,26 +444,37 @@
       const i = +g.dataset.i, startX = ev.clientX, startY = ev.clientY;
       const px = panels.map((p) => p.getBoundingClientRect().width);
       if (!cols) cols = px.slice(0, 2);
-      const start = cols.slice(), min = [140, 300, 260], startH = logh;
+      const start = cols.slice(), min = [140, 300, 260], startH = panelH();
       try { g.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ } g.classList.add('active'); ev.preventDefault();
       const onMove = (e) => {
-        if (i === 2) { logh = Math.min(Math.max(80, startH - (e.clientY - startY)), window.innerHeight - 260); applyCols(); return; }
+        if (i === 2) { const h = Math.min(Math.max(80, startH - (e.clientY - startY)), window.innerHeight - (wide() ? 120 : 260)); if (wide()) loghWide = h; else logh = h; applyCols(); return; }
         let d = e.clientX - startX;
         d = Math.max(min[i] - start[i], d); // left panel keeps its minimum
         const right = i === 0 ? start[1] : px[2]; d = Math.min(right - min[i + 1], d); // and so does the right one
         cols[i] = start[i] + d; if (i === 0) cols[1] = start[1] - d;
         applyCols();
       };
-      const onUp = () => { g.classList.remove('active'); g.removeEventListener('pointermove', onMove); g.removeEventListener('pointerup', onUp); g.removeEventListener('pointercancel', onUp); store.set('cols2', JSON.stringify(cols)); store.set('logh', String(Math.round(logh))); cm.refresh(); };
+      const onUp = () => { g.classList.remove('active'); g.removeEventListener('pointermove', onMove); g.removeEventListener('pointerup', onUp); g.removeEventListener('pointercancel', onUp); store.set('cols2', JSON.stringify(cols)); store.set('logh', String(Math.round(logh))); if (loghWide) store.set('loghWide', String(Math.round(loghWide))); cm.refresh(); };
       g.addEventListener('pointermove', onMove); g.addEventListener('pointerup', onUp); g.addEventListener('pointercancel', onUp);
     });
   });
   function setLogCollapsed(on) { document.body.classList.toggle('logCollapsed', on); $('logShow').hidden = !on; $('actLog').classList.toggle('on', !on); store.set('logCollapsed', on ? '1' : '0'); applyCols(); }
-  $('logToggle').onclick = () => setLogCollapsed(true); $('logShow').onclick = () => setLogCollapsed(false);
+  // scRender before the scaling view is set up (sc is still in its temporal dead zone) is a no-op
+  function scRedraw() { try { scRender(); } catch (e) { if (!(e instanceof ReferenceError)) throw e; } }
+  function setPanelMax(on) {
+    document.body.classList.toggle('panelMax', on); $('panelBackdrop').hidden = !on;
+    const b = $('panelMax'); b.dataset.icon = on ? 'shrink' : 'expand'; b.innerHTML = I[b.dataset.icon]; b.title = on ? 'restore the panel (Esc)' : 'expand the panel over the page (Esc to restore)';
+    if (on) setLogCollapsed(false);
+    if (!$('scaling').hidden) scRedraw(); // the lanes are drawn to the panel's width
+  }
+  $('panelMax').onclick = () => setPanelMax(!document.body.classList.contains('panelMax'));
+  $('panelBackdrop').onclick = () => setPanelMax(false);
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && document.body.classList.contains('panelMax')) setPanelMax(false); });
+  $('logToggle').onclick = () => { setPanelMax(false); setLogCollapsed(true); }; $('logShow').onclick = () => setLogCollapsed(false);
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'scaling', 'timeline'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('scWide', name === 'scaling'); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'scaling', 'timeline'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('scWide', name === 'scaling'); applyCols(); if (name === 'scaling') scRedraw(); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
   const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
