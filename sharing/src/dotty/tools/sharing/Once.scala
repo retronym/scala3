@@ -19,9 +19,9 @@ import scala.quoted.*
  *    def info: Info = myInfo.get(computeInfo())
  *
  *  object Symbol:
- *    given Sharing.ClaimKind[Symbol] = Sharing.ClaimKind(What("computing info", null), lockWhenSerialised = true)
- *    val myInfoHandle: Published.Handle[Symbol, "myInfo"] = Published.handle
+ *    @static val myInfoHandle: Published.Handle[Symbol, "myInfo"] = Published.handle
  *    given Published.Handle[Symbol, "myInfo"] = myInfoHandle
+ *    given Sharing.ClaimKind[Symbol] = Sharing.ClaimKind(What("computing info", null), lockWhenSerialised = true)
  *  }}}
  *
  *  The key of the claim is the field's owner, the `K` of its type (`this.type` where it is declared), so that `compute`

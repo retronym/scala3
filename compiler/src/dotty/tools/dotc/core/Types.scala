@@ -32,7 +32,7 @@ import collection.mutable
 import config.Config
 import config.Feature.sourceVersion
 import config.SourceVersion
-import annotation.{tailrec, constructorOnly}
+import annotation.{tailrec, constructorOnly, static}
 import scala.util.hashing.{ MurmurHash3 => hashing }
 import config.Printers.{core, typr, matchTypes}
 import reporting.{trace, Message}
@@ -51,10 +51,6 @@ import scala.util.control.NonFatal
 import _root_.dotty.tools.sharing.{Once, Payload, Published, Stamped}
 
 object Types extends TypeUtils {
-
-  // the handle of `NamedType.checkedPeriod` (`Published`): a `val`, the given a reference to it
-  val namedTypeCheckedPeriodHandle: Published.Handle[NamedType, "checkedPeriod"] = Published.handle
-  given Published.Handle[NamedType, "checkedPeriod"] = namedTypeCheckedPeriodHandle
 
   @sharable private var nextId = 0
 
@@ -3101,6 +3097,9 @@ object Types extends TypeUtils {
   }
 
   object NamedType {
+    @static val checkedPeriodHandle: Published.Handle[NamedType, "checkedPeriod"] = Published.handle
+    given Published.Handle[NamedType, "checkedPeriod"] = checkedPeriodHandle
+
     def isType(desig: Designator)(using Context): Boolean = desig match {
       case sym: Symbol => sym.isType
       case name: Name => name.isTypeName
@@ -3291,9 +3290,9 @@ object Types extends TypeUtils {
     override def hashCode: Int = System.identityHashCode(this)
   }
   object LazyRef:
-    given Sharing.ClaimKind[LazyRef] = Sharing.ClaimKind(CompletionLock.lazyRef, lockWhenSerialised = false)
-    val myRefHandle: Published.Handle[LazyRef, "myRef"] = Published.handle
+    @static val myRefHandle: Published.Handle[LazyRef, "myRef"] = Published.handle
     given Published.Handle[LazyRef, "myRef"] = myRefHandle
+    given Sharing.ClaimKind[LazyRef] = Sharing.ClaimKind(CompletionLock.lazyRef, lockWhenSerialised = false)
     def of(refFn: Context ?=> (Type | Null)): LazyRef = LazyRef(refFn(using _))
 
   // --- Refined Type and RecType ------------------------------------------------

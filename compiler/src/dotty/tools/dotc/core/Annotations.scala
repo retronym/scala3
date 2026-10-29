@@ -13,6 +13,7 @@ import Decorators.*
 import dotty.tools.dotc.core.StdNames.nme
 
 import scala.annotation.internal.sharable
+import scala.annotation.static
 import _root_.dotty.tools.sharing.{Once, Published}
 
 object Annotations {
@@ -306,7 +307,7 @@ object Annotations {
   }
 
   object LazyAnnotation:
-    val myTreeHandle: Published.Handle[LazyAnnotation, "myTree"] = Published.handle
+    @static val myTreeHandle: Published.Handle[LazyAnnotation, "myTree"] = Published.handle
     given Published.Handle[LazyAnnotation, "myTree"] = myTreeHandle
 
   class DeferredSymAndTree(symFn: Context ?=> Symbol, treeFn: Context ?=> Tree)
@@ -369,7 +370,7 @@ object Annotations {
   }
 
   object LazyBodyAnnotation {
-    val myTreeHandle: Published.Handle[LazyBodyAnnotation, "myTree"] = Published.handle
+    @static val myTreeHandle: Published.Handle[LazyBodyAnnotation, "myTree"] = Published.handle
     given Published.Handle[LazyBodyAnnotation, "myTree"] = myTreeHandle
     def apply(bodyFn: Context ?=> Tree): LazyBodyAnnotation =
       new LazyBodyAnnotation(ctx ?=> bodyFn(using ctx)) {}
