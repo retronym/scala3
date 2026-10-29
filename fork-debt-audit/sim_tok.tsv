@@ -1,0 +1,1153 @@
+s3_file	shingles	best_s2	shared	ratio
+library/src/scala/collection/immutable/Vector.scala	5445	src/library/scala/collection/immutable/Vector.scala	5250	0.96
+library/src/scala/collection/immutable/HashMap.scala	4332	src/library/scala/collection/immutable/HashMap.scala	4159	0.96
+library/src/scala/jdk/FunctionWrappers.scala	3367	src/library/scala/jdk/FunctionWrappers.scala	3363	1.00
+library/src/scala/collection/immutable/HashSet.scala	3372	src/library/scala/collection/immutable/HashSet.scala	3251	0.96
+library/src/scala/collection/concurrent/TrieMap.scala	2365	src/library/scala/collection/concurrent/TrieMap.scala	2150	0.91
+library/src/scala/jdk/javaapi/FunctionConverters.scala	2054	src/library/scala/jdk/javaapi/FunctionConverters.scala	2049	1.00
+library/src/scala/collection/ArrayOps.scala	2083	src/library/scala/collection/ArrayOps.scala	2029	0.97
+library/src/scala/collection/immutable/RedBlackTree.scala	3111	src/library/scala/collection/immutable/RedBlackTree.scala	1919	0.62
+library/src/scala/collection/immutable/LazyList.scala	1789	src/library/scala/collection/immutable/LazyList.scala	1699	0.95
+compiler/src/dotty/tools/backend/jvm/opt/BoxUnbox.scala	1958	src/compiler/scala/tools/nsc/backend/jvm/opt/BoxUnbox.scala	1626	0.83
+library/src/scala/collection/StringOps.scala	1707	src/library/scala/collection/StringOps.scala	1548	0.91
+library/src/scala/collection/immutable/ArraySeq.scala	1527	src/library/scala/collection/immutable/ArraySeq.scala	1501	0.98
+compiler/src/dotty/tools/backend/jvm/opt/Inliner.scala	2668	src/compiler/scala/tools/nsc/backend/jvm/opt/Inliner.scala	1489	0.56
+library/src/scala/collection/mutable/CollisionProofHashMap.scala	1926	src/library/scala/collection/mutable/CollisionProofHashMap.scala	1469	0.76
+library/src/scala/collection/IterableOnce.scala	1550	src/library/scala/collection/IterableOnce.scala	1457	0.94
+library/src/scala/collection/immutable/Map.scala	1421	src/library/scala/collection/immutable/Map.scala	1342	0.94
+library/src/scala/math/Ordering.scala	1352	src/library/scala/math/Ordering.scala	1332	0.99
+library/src/scala/runtime/BoxesRunTime.java	1336	src/library/scala/runtime/BoxesRunTime.java	1314	0.98
+compiler/src/dotty/tools/backend/jvm/opt/LocalOptimizer.scala	1867	src/compiler/scala/tools/nsc/backend/jvm/opt/LocalOpt.scala	1265	0.68
+library/src/scala/collection/Iterator.scala	1575	src/library/scala/collection/Iterator.scala	1246	0.79
+library/src/scala/collection/convert/JavaCollectionWrappers.scala	1299	src/library/scala/collection/convert/JavaCollectionWrappers.scala	1216	0.94
+library/src/scala/collection/immutable/TreeSeqMap.scala	1219	src/library/scala/collection/immutable/TreeSeqMap.scala	1177	0.97
+library/src/scala/collection/Seq.scala	1247	src/library/scala/collection/Seq.scala	1130	0.91
+compiler/src/dotty/tools/backend/jvm/opt/CopyProp.scala	1571	src/compiler/scala/tools/nsc/backend/jvm/opt/CopyProp.scala	1121	0.71
+library/src/scala/reflect/Manifest.scala	1126	src/library/scala/reflect/Manifest.scala	1115	0.99
+library/src/scala/collection/immutable/IntMap.scala	1132	src/library/scala/collection/immutable/IntMap.scala	1108	0.98
+library/src/scala/collection/immutable/NumericRange.scala	1146	src/library/scala/collection/immutable/NumericRange.scala	1104	0.96
+library/src/scala/collection/immutable/LongMap.scala	1124	src/library/scala/collection/immutable/LongMap.scala	1100	0.98
+compiler/src/dotty/tools/backend/jvm/BCodeBodyBuilder.scala	4321	src/compiler/scala/tools/nsc/backend/jvm/BCodeBodyBuilder.scala	1098	0.25
+library/src/scala/collection/Iterable.scala	1217	src/library/scala/collection/Iterable.scala	1060	0.87
+library/src/scala/collection/mutable/LongMap.scala	1192	src/library/scala/collection/mutable/LongMap.scala	1052	0.88
+library/src/scala/collection/mutable/HashMap.scala	1200	src/library/scala/collection/mutable/HashMap.scala	1022	0.85
+library/src/scala/collection/immutable/Range.scala	1080	src/library/scala/collection/immutable/Range.scala	1013	0.94
+library/src/scala/concurrent/duration/Duration.scala	1005	src/library/scala/concurrent/duration/Duration.scala	996	0.99
+library-js/src/scala/collection/immutable/NumericRange.scala	1035	src/library/scala/collection/immutable/NumericRange.scala	986	0.95
+library/src/scala/concurrent/impl/Promise.scala	1125	src/library/scala/concurrent/impl/Promise.scala	979	0.87
+library/src/scala/collection/mutable/AnyRefMap.scala	1060	src/library/scala/collection/mutable/AnyRefMap.scala	970	0.92
+library/src/scala/jdk/FunctionExtensions.scala	970	src/library/scala/jdk/FunctionExtensions.scala	966	1.00
+library/src/scala/concurrent/Future.scala	970	src/library/scala/concurrent/Future.scala	966	1.00
+library/src/scala/collection/mutable/ArrayDeque.scala	1036	src/library/scala/collection/mutable/ArrayDeque.scala	957	0.92
+library/src/scala/collection/convert/StreamExtensions.scala	1037	src/library/scala/collection/convert/StreamExtensions.scala	957	0.92
+library/src/scala/collection/Factory.scala	1141	src/library/scala/collection/Factory.scala	953	0.84
+library/src/scala/collection/mutable/ArraySeq.scala	916	src/library/scala/collection/mutable/ArraySeq.scala	901	0.98
+compiler/src/dotty/tools/backend/jvm/BCodeUtils.scala	1366	src/compiler/scala/tools/nsc/backend/jvm/opt/BytecodeUtils.scala	878	0.64
+library/src/scala/math/Equiv.scala	878	src/library/scala/math/Equiv.scala	860	0.98
+library-js/src/scala/reflect/Manifest.scala	1097	src/library/scala/reflect/Manifest.scala	860	0.78
+library/src/scala/jdk/IntAccumulator.scala	866	src/library/scala/jdk/IntAccumulator.scala	845	0.98
+library/src/scala/jdk/DoubleAccumulator.scala	849	src/library/scala/jdk/DoubleAccumulator.scala	831	0.98
+library/src/scala/collection/immutable/LazyListIterable.scala	1841	src/library/scala/collection/immutable/LazyList.scala	827	0.45
+library/src/scala/jdk/LongAccumulator.scala	846	src/library/scala/jdk/LongAccumulator.scala	825	0.98
+library/src/scala/math/BigDecimal.scala	838	src/library/scala/math/BigDecimal.scala	814	0.97
+library/src/scala/collection/immutable/List.scala	890	src/library/scala/collection/immutable/List.scala	806	0.91
+library/src/scala/Array.scala	833	src/library/scala/Array.scala	805	0.97
+library/src/scala/collection/View.scala	960	src/library/scala/collection/View.scala	804	0.84
+library/src/scala/collection/immutable/Stream.scala	876	src/library/scala/collection/immutable/Stream.scala	799	0.91
+library/src/scala/collection/mutable/RedBlackTree.scala	1245	src/library/scala/collection/mutable/RedBlackTree.scala	790	0.63
+library/src/scala/collection/mutable/ArrayBuffer.scala	832	src/library/scala/collection/mutable/ArrayBuffer.scala	786	0.94
+library/src/scala/math/Numeric.scala	777	src/library/scala/math/Numeric.scala	773	0.99
+library/src/scala/math/BigInt.scala	835	src/library/scala/math/BigInt.scala	761	0.91
+compiler/src/dotty/tools/backend/jvm/opt/ClosureOptimizer.scala	1099	src/compiler/scala/tools/nsc/backend/jvm/opt/ClosureOptimizer.scala	734	0.67
+library/src/scala/collection/mutable/LinkedHashMap.scala	956	src/library/scala/collection/mutable/LinkedHashMap.scala	710	0.74
+compiler/src/dotty/tools/backend/jvm/analysis/ProdConsAnalyzer.scala	794	src/compiler/scala/tools/nsc/backend/jvm/analysis/ProdConsAnalyzer.scala	707	0.89
+library/src/scala/collection/immutable/Set.scala	729	src/library/scala/collection/immutable/Set.scala	702	0.96
+library/src/scala/collection/LazyZipOps.scala	741	src/library/scala/collection/LazyZipOps.scala	689	0.93
+library/src/scala/collection/immutable/TreeMap.scala	766	src/library/scala/collection/immutable/TreeMap.scala	689	0.90
+compiler/src/dotty/tools/backend/jvm/analysis/AliasingAnalyzer.scala	850	src/compiler/scala/tools/nsc/backend/jvm/analysis/AliasingAnalyzer.scala	686	0.81
+tasty/src/dotty/tools/tasty/TastyFormat.scala	697	src/compiler/scala/tools/tasty/TastyFormat.scala	672	0.96
+library/src/scala/jdk/AnyAccumulator.scala	692	src/library/scala/jdk/AnyAccumulator.scala	668	0.97
+library-js/src/scala/Array.scala	835	src/library/scala/Array.scala	658	0.79
+library/src/scala/collection/mutable/HashSet.scala	743	src/library/scala/collection/mutable/HashSet.scala	647	0.87
+library/src/scala/Predef.scala	1027	src/library/scala/Predef.scala	619	0.60
+library/src/scala/sys/process/ProcessBuilderImpl.scala	705	src/library/scala/sys/process/ProcessBuilderImpl.scala	619	0.88
+compiler/src/dotty/tools/backend/jvm/BCodeIdiomatic.scala	1296	src/compiler/scala/tools/nsc/backend/jvm/BCodeIdiomatic.scala	617	0.48
+library/src/scala/collection/immutable/SeqMap.scala	629	src/library/scala/collection/immutable/SeqMap.scala	608	0.97
+library/src/scala/collection/mutable/UnrolledBuffer.scala	720	src/library/scala/collection/mutable/UnrolledBuffer.scala	595	0.83
+library/src/scala/collection/mutable/ListBuffer.scala	657	src/library/scala/collection/mutable/ListBuffer.scala	588	0.89
+library/src/scala/collection/BitSet.scala	618	src/library/scala/collection/BitSet.scala	587	0.95
+library/src/scala/runtime/ScalaRunTime.scala	702	src/library/scala/runtime/ScalaRunTime.scala	582	0.83
+library/src/scala/collection/mutable/BitSet.scala	597	src/library/scala/collection/mutable/BitSet.scala	577	0.97
+library/src/scala/collection/immutable/BitSet.scala	585	src/library/scala/collection/immutable/BitSet.scala	577	0.99
+library/src/scala/math/package.scala	577	src/library/scala/math/package.scala	574	0.99
+library/src/scala/util/hashing/MurmurHash3.scala	588	src/library/scala/util/hashing/MurmurHash3.scala	571	0.97
+compiler/src/dotty/tools/backend/jvm/opt/InlinerHeuristics.scala	921	src/compiler/scala/tools/nsc/backend/jvm/opt/InlinerHeuristics.scala	569	0.62
+library/src/scala/collection/immutable/TreeSet.scala	612	src/library/scala/collection/immutable/TreeSet.scala	559	0.91
+library/src/scala/reflect/ClassManifestDeprecatedApis.scala	573	src/library/scala/reflect/ClassManifestDeprecatedApis.scala	555	0.97
+library/src/scala/collection/immutable/ListMap.scala	627	src/library/scala/collection/immutable/ListMap.scala	551	0.88
+library/src/scala/collection/StringParsers.scala	557	src/library/scala/collection/StringParsers.scala	550	0.99
+library/src/scala/Enumeration.scala	610	src/library/scala/Enumeration.scala	549	0.90
+compiler/src/dotty/tools/dotc/parsing/JavaParsers.scala	2674	src/compiler/scala/tools/nsc/javac/JavaParsers.scala	548	0.20
+library/src/scala/collection/mutable/TreeMap.scala	542	src/library/scala/collection/mutable/TreeMap.scala	526	0.97
+library/src/scala/io/Source.scala	578	src/library/scala/io/Source.scala	525	0.91
+compiler/src/dotty/tools/dotc/core/unpickleScala2/PickleFormat.scala	543	src/reflect/scala/reflect/internal/pickling/PickleFormat.scala	520	0.96
+library/src/scala/collection/mutable/StringBuilder.scala	528	src/library/scala/collection/mutable/StringBuilder.scala	520	0.98
+library/src/scala/StringContext.scala	521	src/library/scala/StringContext.scala	517	0.99
+library/src/scala/jdk/Accumulator.scala	519	src/library/scala/jdk/Accumulator.scala	512	0.99
+library/src/scala/collection/mutable/OpenHashMap.scala	530	src/library/scala/collection/mutable/OpenHashMap.scala	509	0.96
+library/src/scala/collection/Map.scala	790	src/library/scala/collection/Map.scala	505	0.64
+compiler/src/dotty/tools/dotc/profile/ExtendedThreadMxBean.java	506	src/compiler/scala/tools/nsc/profile/ExtendedThreadMxBean.java	503	0.99
+library/src/scala/collection/mutable/ArrayBuilder.scala	638	src/library/scala/collection/mutable/ArrayBuilder.scala	501	0.79
+library/src/scala/util/matching/Regex.scala	611	src/library/scala/util/matching/Regex.scala	494	0.81
+library/src/scala/util/Sorting.scala	508	src/library/scala/util/Sorting.scala	490	0.96
+compiler/src/dotty/tools/dotc/core/classfile/ClassfileConstants.scala	643	src/reflect/scala/reflect/internal/ClassfileConstants.scala	488	0.76
+compiler/src/dotty/tools/dotc/config/ScalaSettings.scala	4967	src/compiler/scala/tools/nsc/settings/ScalaSettings.scala	483	0.10
+library/src/scala/collection/mutable/TreeSet.scala	496	src/library/scala/collection/mutable/TreeSet.scala	472	0.95
+library/src/scala/collection/mutable/LinkedHashSet.scala	614	src/library/scala/collection/mutable/LinkedHashSet.scala	463	0.75
+library/src/scala/collection/mutable/HashTable.scala	557	src/library/scala/collection/mutable/HashTable.scala	463	0.83
+library/src/scala/collection/immutable/VectorMap.scala	485	src/library/scala/collection/immutable/VectorMap.scala	461	0.95
+library/src/scala/sys/process/ProcessImpl.scala	518	src/library/scala/sys/process/ProcessImpl.scala	458	0.88
+library-js/src/scala/runtime/ScalaRunTime.scala	654	src/library/scala/runtime/ScalaRunTime.scala	456	0.70
+library/src/scala/collection/SeqView.scala	516	src/library/scala/collection/SeqView.scala	448	0.87
+library/src/scala/collection/Stepper.scala	551	src/library/scala/collection/Stepper.scala	445	0.81
+compiler/src/dotty/tools/dotc/util/ShowPickled.scala	583	src/compiler/scala/tools/nsc/util/ShowPickled.scala	439	0.75
+library/src/scala/collection/mutable/PriorityQueue.scala	478	src/library/scala/collection/mutable/PriorityQueue.scala	439	0.92
+compiler/src/dotty/tools/backend/jvm/opt/OptimizerWarning.scala	694	src/compiler/scala/tools/nsc/backend/jvm/BackendReporting.scala	438	0.63
+library/src/scala/collection/LinearSeq.scala	456	src/library/scala/collection/LinearSeq.scala	424	0.93
+compiler/src/dotty/tools/backend/jvm/opt/OptimizerCallGraph.scala	1142	src/compiler/scala/tools/nsc/backend/jvm/opt/CallGraph.scala	416	0.36
+compiler/src/dotty/tools/dotc/util/CommentParsing.scala	541	src/compiler/scala/tools/nsc/util/DocStrings.scala	414	0.77
+library/src/scala/util/Properties.scala	503	src/library/scala/util/Properties.scala	409	0.81
+compiler/src/dotty/tools/dotc/core/tasty/TreeUnpickler.scala	4551	src/compiler/scala/tools/nsc/tasty/TreeUnpickler.scala	401	0.09
+compiler/src/dotty/tools/dotc/profile/Profiler.scala	1411	src/compiler/scala/tools/nsc/profile/Profiler.scala	393	0.28
+library/src/scala/collection/JavaConverters.scala	399	src/library/scala/collection/JavaConverters.scala	392	0.98
+library/src/scala/runtime/Tuple3Zipped.scala	394	src/library/scala/runtime/Tuple3Zipped.scala	390	0.99
+compiler/src/dotty/tools/dotc/transform/localopt/FormatChecker.scala	1031	src/compiler/scala/tools/reflect/FormatInterpolator.scala	387	0.38
+library/src/scala/sys/process/BasicIO.scala	396	src/library/scala/sys/process/BasicIO.scala	385	0.97
+library/src/scala/collection/StrictOptimizedIterableOps.scala	387	src/library/scala/collection/StrictOptimizedIterableOps.scala	380	0.98
+library/src/scala/collection/SortedMap.scala	457	src/library/scala/collection/SortedMap.scala	378	0.83
+library/src/scala/jdk/javaapi/StreamConverters.scala	380	src/library/scala/jdk/javaapi/StreamConverters.scala	375	0.99
+library/src/scala/package.scala	375	src/library/scala/package.scala	373	0.99
+compiler/src/dotty/tools/dotc/core/Constants.scala	818	src/reflect/scala/reflect/internal/Constants.scala	372	0.45
+library/src/scala/collection/BuildFrom.scala	458	src/library/scala/collection/BuildFrom.scala	365	0.80
+library/src/scala/util/Either.scala	372	src/library/scala/util/Either.scala	365	0.98
+compiler/src/dotty/tools/backend/jvm/analysis/NullnessAnalyzer.scala	474	src/compiler/scala/tools/nsc/backend/jvm/analysis/NullnessAnalyzer.scala	363	0.77
+library/src/scala/util/control/Exception.scala	368	src/library/scala/util/control/Exception.scala	363	0.99
+library/src/scala/collection/IndexedSeq.scala	395	src/library/scala/collection/IndexedSeq.scala	361	0.91
+library-js/src/scala/package.scala	370	src/library/scala/package.scala	360	0.97
+library/src/scala/collection/immutable/ChampCommon.scala	383	src/library/scala/collection/immutable/ChampCommon.scala	350	0.91
+compiler/src/dotty/tools/backend/jvm/analysis/InstructionStackEffect.scala	408	src/compiler/scala/tools/nsc/backend/jvm/analysis/InstructionStackEffect.scala	344	0.84
+library/src/scala/collection/IndexedSeqView.scala	382	src/library/scala/collection/IndexedSeqView.scala	344	0.90
+compiler/src/dotty/tools/dotc/profile/FileUtils.scala	398	src/reflect/scala/reflect/internal/util/FileUtils.scala	337	0.85
+library-js/src/scala/Enumeration.scala	513	src/library/scala/Enumeration.scala	337	0.66
+compiler/src/dotty/tools/dotc/core/Comments.scala	1164	src/compiler/scala/tools/nsc/ast/DocComments.scala	336	0.29
+library/src/scala/collection/Set.scala	364	src/library/scala/collection/Set.scala	332	0.91
+library/src/scala/collection/MapView.scala	370	src/library/scala/collection/MapView.scala	331	0.89
+library/src/scala/reflect/ClassTag.scala	340	src/library/scala/reflect/ClassTag.scala	320	0.94
+library/src/scala/collection/convert/impl/ChampStepper.scala	390	src/library/scala/collection/convert/impl/ChampStepper.scala	317	0.81
+compiler/src/dotty/tools/dotc/profile/ChromeTrace.scala	375	src/reflect/scala/reflect/internal/util/ChromeTrace.scala	316	0.84
+library-js/src/scala/collection/mutable/ArrayBuilder.scala	821	src/library/scala/collection/mutable/ArrayBuilder.scala	314	0.38
+library/src/scala/collection/immutable/Queue.scala	319	src/library/scala/collection/immutable/Queue.scala	310	0.97
+library/src/scala/runtime/Tuple2Zipped.scala	314	src/library/scala/runtime/Tuple2Zipped.scala	310	0.99
+library/src/scala/collection/mutable/Map.scala	324	src/library/scala/collection/mutable/Map.scala	309	0.95
+library/src/scala/util/Random.scala	319	src/library/scala/util/Random.scala	307	0.96
+library/src/scala/concurrent/impl/ExecutionContextImpl.scala	371	src/library/scala/concurrent/impl/ExecutionContextImpl.scala	301	0.81
+compiler/src/dotty/tools/dotc/typer/ConstFold.scala	710	src/compiler/scala/tools/nsc/typechecker/ConstantFolder.scala	300	0.42
+library/src/scala/collection/immutable/SortedMap.scala	350	src/library/scala/collection/immutable/SortedMap.scala	297	0.85
+compiler/src/dotty/tools/dotc/parsing/xml/MarkupParsers.scala	831	src/compiler/scala/tools/nsc/ast/parser/MarkupParsers.scala	291	0.35
+compiler/src/dotty/tools/backend/jvm/opt/BCodeRepository.scala	548	src/compiler/scala/tools/nsc/backend/jvm/opt/ByteCodeRepository.scala	289	0.53
+compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala	2182	src/compiler/scala/tools/nsc/backend/jvm/BCodeSkelBuilder.scala	286	0.13
+compiler/src/dotty/tools/backend/jvm/GenericSignatureVisitor.scala	514	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	282	0.55
+library/src/scala/io/Codec.scala	312	src/library/scala/io/Codec.scala	282	0.90
+library/src/scala/collection/SortedSet.scala	293	src/library/scala/collection/SortedSet.scala	275	0.94
+compiler/src/dotty/tools/backend/jvm/BTypes.scala	1059	src/compiler/scala/tools/nsc/backend/jvm/BTypes.scala	273	0.26
+compiler/src/dotty/tools/dotc/parsing/Scanners.scala	3193	src/compiler/scala/tools/nsc/ast/parser/Scanners.scala	272	0.09
+library/src/scala/collection/immutable/WrappedString.scala	279	src/library/scala/collection/immutable/WrappedString.scala	270	0.97
+compiler/src/dotty/tools/dotc/parsing/xml/SymbolicXMLBuilder.scala	764	src/compiler/scala/tools/nsc/ast/parser/SymbolicXMLBuilder.scala	264	0.35
+library/src/scala/collection/StepperShape.scala	381	src/library/scala/collection/StepperShape.scala	264	0.69
+library/src/scala/collection/mutable/CheckedIndexedSeqView.scala	292	src/library/scala/collection/mutable/CheckedIndexedSeqView.scala	264	0.90
+library/src/scala/Option.scala	285	src/library/scala/Option.scala	262	0.92
+library/src/scala/collection/mutable/Buffer.scala	276	src/library/scala/collection/mutable/Buffer.scala	258	0.93
+library/src/scala/collection/generic/IsSeq.scala	327	src/library/scala/collection/generic/IsSeq.scala	246	0.75
+compiler/src/dotty/tools/dotc/parsing/xml/MarkupParserCommon.scala	366	src/compiler/scala/tools/nsc/ast/parser/xml/MarkupParserCommon.scala	240	0.66
+library/src/scala/concurrent/BatchingExecutor.scala	334	src/library/scala/concurrent/BatchingExecutor.scala	240	0.72
+compiler/src/dotty/tools/backend/jvm/analysis/AnalysisUtils.scala	476	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	236	0.50
+library/src/scala/PartialFunction.scala	315	src/library/scala/PartialFunction.scala	235	0.75
+library/src/scala/collection/convert/impl/BinaryTreeStepper.scala	394	src/library/scala/collection/convert/impl/BinaryTreeStepper.scala	232	0.59
+library/src/scala/util/Using.scala	277	src/library/scala/util/Using.scala	231	0.83
+compiler/src/dotty/tools/dotc/core/unpickleScala2/Scala2Unpickler.scala	3101	src/reflect/scala/reflect/internal/pickling/UnPickler.scala	229	0.07
+compiler/src/dotty/tools/backend/jvm/BCodeSyncAndTry.scala	661	src/compiler/scala/tools/nsc/backend/jvm/BCodeSyncAndTry.scala	223	0.34
+library/src/scala/collection/convert/impl/VectorStepper.scala	243	src/library/scala/collection/convert/impl/VectorStepper.scala	218	0.90
+library/src/scala/collection/convert/impl/ArrayStepper.scala	227	src/library/scala/collection/convert/impl/ArrayStepper.scala	215	0.95
+compiler/src/dotty/tools/dotc/core/classfile/ByteCodecs.scala	229	src/reflect/scala/reflect/internal/pickling/ByteCodecs.scala	214	0.93
+library/src/scala/concurrent/impl/FutureConvertersImpl.scala	239	src/library/scala/concurrent/impl/FutureConvertersImpl.scala	209	0.87
+library/src/scala/sys/process/ProcessBuilder.scala	213	src/library/scala/sys/process/ProcessBuilder.scala	208	0.98
+library-js/src/scala/collection/mutable/Buffer.scala	281	src/library/scala/collection/mutable/Buffer.scala	207	0.74
+compiler/src/dotty/tools/io/FileWriters.scala	652	src/compiler/scala/tools/nsc/backend/jvm/ClassfileWriters.scala	206	0.32
+library/src/scala/sys/process/Process.scala	211	src/library/scala/sys/process/Process.scala	206	0.98
+compiler/src/dotty/tools/dotc/util/WeakHashSet.scala	524	src/reflect/scala/reflect/internal/util/WeakHashSet.scala	195	0.37
+library/src/scala/reflect/NameTransformer.scala	235	src/library/scala/reflect/NameTransformer.scala	194	0.83
+library/src/scala/runtime/Statics.java	206	src/library/scala/runtime/Statics.java	193	0.94
+compiler/src/dotty/tools/backend/jvm/opt/OptimizerUtils.scala	792	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	192	0.24
+library/src/scala/collection/convert/ImplicitConversions.scala	220	src/library/scala/collection/convert/ImplicitConversions.scala	192	0.87
+library/src/scala/util/Try.scala	363	src/library/scala/util/Try.scala	190	0.52
+library/src/scala/runtime/RichChar.scala	199	src/library/scala/runtime/RichChar.scala	184	0.92
+library/src/scala/collection/immutable/ListSet.scala	197	src/library/scala/collection/immutable/ListSet.scala	183	0.93
+library/src/scala/collection/immutable/Seq.scala	229	src/library/scala/collection/immutable/Seq.scala	183	0.80
+library/src/scala/io/StdIn.scala	186	src/library/scala/io/StdIn.scala	182	0.98
+library/src/scala/collection/convert/impl/BitSetStepper.scala	198	src/library/scala/collection/convert/impl/BitSetStepper.scala	181	0.91
+library/src/scala/collection/generic/IsMap.scala	186	src/library/scala/collection/generic/IsMap.scala	178	0.96
+compiler/src/dotty/tools/backend/jvm/analysis/TypeFlowAnalyzer.scala	270	src/compiler/scala/tools/nsc/backend/jvm/analysis/TypeFlowAnalyzer.scala	176	0.65
+library/src/scala/runtime/RichFloat.scala	189	src/library/scala/runtime/RichFloat.scala	174	0.92
+library/src/scala/concurrent/ExecutionContext.scala	208	src/library/scala/concurrent/ExecutionContext.scala	174	0.84
+compiler/src/dotty/tools/backend/jvm/opt/InlineInfoAttribute.scala	221	src/compiler/scala/tools/nsc/backend/jvm/opt/InlineInfoAttribute.scala	172	0.78
+library/src/scala/sys/process/Parser.scala	185	src/library/scala/sys/process/Parser.scala	172	0.93
+library/src/scala/collection/convert/impl/TableStepper.scala	256	src/library/scala/collection/convert/impl/TableStepper.scala	171	0.67
+tasty/src/dotty/tools/tasty/TastyHeaderUnpickler.scala	457	src/compiler/scala/tools/tasty/TastyHeaderUnpickler.scala	169	0.37
+library/src/scala/concurrent/duration/DurationConversions.scala	212	src/library/scala/concurrent/duration/DurationConversions.scala	168	0.79
+library/src/scala/collection/mutable/SortedMap.scala	175	src/library/scala/collection/mutable/SortedMap.scala	167	0.95
+library/src/scala/runtime/LazyRef.scala	256	src/library/scala/runtime/LazyRef.scala	164	0.64
+library/src/scala/runtime/RichDouble.scala	179	src/library/scala/runtime/RichDouble.scala	164	0.92
+library/src/scala/Int.scala	344	src/library/scala/Int.scala	163	0.47
+library/src/scala/compat/Platform.scala	167	src/library/scala/compat/Platform.scala	163	0.98
+compiler/src/dotty/tools/backend/jvm/opt/MethodMax.scala	264	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	161	0.61
+library/src/scala/runtime/LambdaDeserializer.scala	175	src/library/scala/runtime/LambdaDeserializer.scala	159	0.91
+compiler/src/dotty/tools/dotc/parsing/xml/Utility.scala	218	src/compiler/scala/tools/nsc/ast/parser/xml/Utility.scala	155	0.71
+library/src/scala/Byte.scala	267	src/library/scala/Byte.scala	155	0.58
+library/src/scala/Char.scala	443	src/library/scala/Char.scala	151	0.34
+library/src/scala/Short.scala	262	src/library/scala/Short.scala	151	0.58
+library/src/scala/Console.scala	152	src/library/scala/Console.scala	149	0.98
+library/src/scala/sys/SystemProperties.scala	200	src/library/scala/sys/SystemProperties.scala	145	0.72
+compiler/src/dotty/tools/backend/jvm/BCodeHelpers.scala	1513	src/compiler/scala/tools/nsc/backend/jvm/BCodeHelpers.scala	144	0.10
+library/src/scala/runtime/RichInt.scala	163	src/library/scala/runtime/RichInt.scala	144	0.88
+library/src/scala/Long.scala	329	src/library/scala/Long.scala	142	0.43
+library/src/scala/typeConstraints.scala	144	src/library/scala/typeConstraints.scala	141	0.98
+compiler/src/dotty/tools/backend/ScalaPrimitivesOps.scala	180	src/compiler/scala/tools/nsc/backend/ScalaPrimitives.scala	137	0.76
+library/src/scala/jdk/OptionConverters.scala	141	src/library/scala/jdk/OptionConverters.scala	137	0.97
+compiler/src/dotty/tools/dotc/classpath/DirectoryClassPath.scala	692	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	136	0.20
+library/src/scala/collection/mutable/Stack.scala	167	src/library/scala/collection/mutable/Stack.scala	136	0.81
+library/src/scala/collection/mutable/ListMap.scala	162	src/library/scala/collection/mutable/ListMap.scala	136	0.84
+library/src/scala/io/BufferedSource.scala	148	src/library/scala/io/BufferedSource.scala	134	0.91
+compiler/src/dotty/tools/dotc/profile/ProfiledThreadPool.scala	252	src/compiler/scala/tools/nsc/profile/ThreadPoolFactory.scala	132	0.52
+library-js/src/scala/concurrent/ExecutionContext.scala	162	src/library/scala/concurrent/ExecutionContext.scala	132	0.81
+compiler/src/dotty/tools/dotc/core/unpickleScala2/PickleBuffer.scala	403	src/reflect/scala/reflect/internal/pickling/PickleBuffer.scala	131	0.33
+library/src/scala/jdk/OptionShape.scala	135	src/library/scala/jdk/OptionShape.scala	129	0.96
+library/src/scala/collection/generic/DefaultSerializationProxy.scala	143	src/library/scala/collection/generic/DefaultSerializationProxy.scala	127	0.89
+tasty/src/dotty/tools/tasty/TastyReader.scala	241	src/compiler/scala/tools/tasty/TastyReader.scala	126	0.52
+library/src/scala/collection/convert/impl/IteratorStepper.scala	221	src/library/scala/collection/convert/impl/IteratorStepper.scala	125	0.57
+compiler/src/dotty/tools/dotc/core/classfile/ClassfileParser.scala	3465	src/compiler/scala/tools/nsc/symtab/classfile/ClassfileParser.scala	124	0.04
+library/src/scala/collection/convert/impl/IndexedSeqStepper.scala	130	src/library/scala/collection/convert/impl/IndexedSeqStepper.scala	124	0.95
+library/src/scala/concurrent/duration/package.scala	128	src/library/scala/concurrent/duration/package.scala	124	0.97
+library-js/src/scala/Console.scala	145	src/library/scala/Console.scala	124	0.86
+compiler/src/dotty/tools/tasty/besteffort/BestEffortTastyHeaderUnpickler.scala	343	src/compiler/scala/tools/tasty/TastyHeaderUnpickler.scala	122	0.36
+library/src/scala/runtime/RichLong.scala	137	src/library/scala/runtime/RichLong.scala	122	0.89
+library/src/scala/collection/generic/BitOperations.scala	127	src/library/scala/collection/generic/BitOperations.scala	119	0.94
+compiler/src/dotty/tools/dotc/typer/RefChecks.scala	3741	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	118	0.03
+compiler/src/dotty/tools/dotc/config/PathResolver.scala	525	src/compiler/scala/tools/util/PathResolver.scala	118	0.22
+library/src/scala/jdk/javaapi/DurationConverters.scala	122	src/library/scala/jdk/javaapi/DurationConverters.scala	117	0.96
+library/src/scala/Function.scala	129	src/library/scala/Function.scala	116	0.90
+compiler/src/dotty/tools/dotc/util/NameTransformer.scala	210	src/library/scala/reflect/NameTransformer.scala	115	0.55
+library/src/scala/Float.scala	301	src/library/scala/Float.scala	114	0.38
+library/src/scala/collection/package.scala	120	src/library/scala/collection/package.scala	114	0.95
+library/src/scala/Symbol.scala	123	src/library/scala/Symbol.scala	109	0.89
+library/src/scala/collection/mutable/Queue.scala	133	src/library/scala/collection/mutable/Queue.scala	109	0.82
+library/src/scala/collection/concurrent/Map.scala	117	src/library/scala/collection/concurrent/Map.scala	109	0.93
+library/src/scala/Double.scala	285	src/library/scala/Double.scala	108	0.38
+library/src/scala/collection/mutable/Set.scala	116	src/library/scala/collection/mutable/Set.scala	108	0.93
+library/src/scala/runtime/ScalaNumberProxy.scala	185	src/library/scala/runtime/ScalaNumberProxy.scala	106	0.57
+library/src/scala/collection/StrictOptimizedSeqOps.scala	122	src/library/scala/collection/StrictOptimizedSeqOps.scala	104	0.85
+compiler/src/dotty/tools/dotc/core/classfile/DataReader.scala	168	src/compiler/scala/tools/nsc/symtab/classfile/ReusableDataReader.scala	103	0.61
+library/src/scala/collection/immutable/StrictOptimizedSeqOps.scala	118	src/library/scala/collection/immutable/StrictOptimizedSeqOps.scala	103	0.87
+library/src/scala/sys/BooleanProp.scala	106	src/library/scala/sys/BooleanProp.scala	102	0.96
+library/src/scala/collection/convert/AsJavaConverters.scala	208	src/library/scala/collection/convert/AsJavaConverters.scala	101	0.49
+library/src/scala/concurrent/package.scala	111	src/library/scala/concurrent/package.scala	99	0.89
+library/src/scala/collection/convert/AsJavaExtensions.scala	105	src/library/scala/collection/convert/AsJavaExtensions.scala	97	0.92
+library/src/scala/collection/StrictOptimizedSortedMapOps.scala	103	src/library/scala/collection/StrictOptimizedSortedMapOps.scala	96	0.93
+library/src/scala/concurrent/Promise.scala	100	src/library/scala/concurrent/Promise.scala	96	0.96
+library/src/scala/collection/convert/impl/StringStepper.scala	108	src/library/scala/collection/convert/impl/StringStepper.scala	95	0.88
+library/src/scala/collection/mutable/package.scala	101	src/library/scala/collection/mutable/package.scala	94	0.93
+compiler/src/dotty/tools/dotc/parsing/Parsers.scala	12240	src/compiler/scala/tools/nsc/ast/parser/Parsers.scala	92	0.01
+library/src/scala/sys/process/package.scala	119	src/library/scala/sys/process/package.scala	92	0.77
+compiler/src/dotty/tools/io/ZipArchive.scala	452	src/reflect/scala/reflect/io/ZipArchive.scala	90	0.20
+library/src/scala/runtime/LambdaDeserialize.scala	108	src/library/scala/runtime/LambdaDeserialize.scala	89	0.82
+library/src/scala/collection/convert/AsScalaExtensions.scala	96	src/library/scala/collection/convert/AsScalaExtensions.scala	88	0.92
+compiler/src/dotty/tools/dotc/config/CommandLineParser.scala	233	src/library/scala/sys/process/Parser.scala	86	0.37
+library-js/src/scala/reflect/ClassTag.scala	282	src/library/scala/reflect/ClassTag.scala	86	0.30
+library/src/scala/collection/convert/impl/NumericRangeStepper.scala	91	src/library/scala/collection/convert/impl/NumericRangeStepper.scala	85	0.93
+compiler/src/dotty/tools/backend/jvm/opt/FifoCache.scala	104	src/compiler/scala/tools/nsc/backend/jvm/opt/FifoCache.scala	84	0.81
+library/src/scala/math/ScalaNumericConversions.scala	88	src/library/scala/math/ScalaNumericConversions.scala	84	0.95
+library/src/scala/concurrent/SyncVar.scala	95	src/library/scala/concurrent/SyncVar.scala	84	0.88
+library/src/scala/runtime/ArrayCharSequence.scala	87	src/library/scala/runtime/ArrayCharSequence.scala	82	0.94
+library/src/scala/languageFeature.scala	83	src/library/scala/languageFeature.scala	80	0.96
+library/src/scala/runtime/MethodCache.scala	106	src/library/scala/runtime/MethodCache.scala	79	0.75
+library/src/scala/Function22.scala	163	src/library/scala/Function22.scala	78	0.48
+library/src/scala/collection/StrictOptimizedMapOps.scala	85	src/library/scala/collection/StrictOptimizedMapOps.scala	78	0.92
+library/src/scala/collection/generic/IsIterable.scala	95	src/library/scala/collection/generic/IsIterable.scala	78	0.82
+compiler/src/dotty/tools/dotc/parsing/JavaScanners.scala	849	src/compiler/scala/tools/nsc/javac/JavaScanners.scala	77	0.09
+library/src/scala/jdk/javaapi/OptionConverters.scala	82	src/library/scala/jdk/javaapi/OptionConverters.scala	77	0.94
+tasty/src/dotty/tools/tasty/TastyVersion.scala	96	src/compiler/scala/tools/tasty/TastyVersion.scala	77	0.80
+library/src/scala/io/Position.scala	80	src/library/scala/io/Position.scala	76	0.95
+library/src/scala/collection/immutable/LazyListBase.scala	114	src/library/scala/collection/immutable/LazyListBase.scala	74	0.65
+library/src/scala/Function21.scala	157	src/library/scala/Function21.scala	72	0.46
+library/src/scala/util/control/TailCalls.scala	77	src/library/scala/util/control/TailCalls.scala	72	0.94
+library/src/scala/collection/mutable/Shrinkable.scala	84	src/library/scala/collection/mutable/Shrinkable.scala	70	0.83
+library/src/scala/concurrent/BlockContext.scala	74	src/library/scala/concurrent/BlockContext.scala	70	0.95
+library/src/scala/sys/process/ProcessLogger.scala	74	src/library/scala/sys/process/ProcessLogger.scala	69	0.93
+compiler/src/dotty/tools/dotc/config/Properties.scala	383	src/library/scala/util/Properties.scala	68	0.18
+compiler/src/dotty/tools/dotc/ast/TreeInfo.scala	2999	src/reflect/scala/reflect/internal/TreeInfo.scala	68	0.02
+library/src/scala/collection/mutable/Growable.scala	76	src/library/scala/collection/mutable/Growable.scala	68	0.89
+library/src/scala/sys/PropImpl.scala	100	src/library/scala/sys/PropImpl.scala	68	0.68
+library/src/scala/collection/mutable/Builder.scala	81	src/library/scala/collection/mutable/Builder.scala	67	0.83
+library/src/scala/sys/package.scala	70	src/library/scala/sys/package.scala	67	0.96
+library/src/scala/concurrent/SyncChannel.scala	71	src/library/scala/concurrent/SyncChannel.scala	67	0.94
+library/src/scala/Function20.scala	151	src/library/scala/Function20.scala	66	0.44
+library/src/scala/collection/SortedOps.scala	73	src/library/scala/collection/SortedOps.scala	66	0.90
+library/src/scala/runtime/RichShort.scala	81	src/library/scala/runtime/RichShort.scala	66	0.81
+compiler/src/dotty/tools/dotc/core/tasty/TastyUnpickler.scala	401	src/compiler/scala/tools/nsc/tasty/TastyUnpickler.scala	65	0.16
+compiler/src/dotty/tools/backend/jvm/BTypeLoader.scala	842	src/compiler/scala/tools/nsc/backend/jvm/BTypesFromSymbols.scala	65	0.08
+library/src/scala/runtime/ClassValueCompat.scala	69	src/library/scala/runtime/ClassValueCompat.scala	65	0.94
+compiler/src/dotty/tools/backend/jvm/opt/BTypesFromClassfile.scala	478	src/compiler/scala/tools/nsc/backend/jvm/BTypesFromClassfile.scala	63	0.13
+library/src/scala/collection/mutable/IndexedSeq.scala	78	src/library/scala/collection/mutable/IndexedSeq.scala	63	0.81
+library/src/scala/collection/concurrent/MainNode.java	63	src/library/scala/collection/concurrent/MainNode.java	63	1.00
+library/src/scala/collection/generic/package.scala	70	src/library/scala/collection/generic/package.scala	63	0.90
+compiler/src/dotty/tools/dotc/util/Chars.scala	232	src/reflect/scala/reflect/internal/Chars.scala	61	0.26
+compiler/src/dotty/tools/dotc/plugins/Plugins.scala	567	src/compiler/scala/tools/nsc/plugins/Plugins.scala	61	0.11
+library/src/scala/Function19.scala	145	src/library/scala/Function19.scala	61	0.42
+library/src/scala/collection/convert/AsScalaConverters.scala	180	src/library/scala/collection/convert/AsScalaConverters.scala	61	0.34
+library/src/scala/runtime/RichByte.scala	76	src/library/scala/runtime/RichByte.scala	61	0.80
+library/src/scala/Specializable.scala	119	src/library/scala/Specializable.scala	60	0.50
+compiler/src/dotty/tools/dotc/ast/Trees.scala	5579	src/reflect/scala/reflect/internal/Trees.scala	59	0.01
+compiler/src/dotty/tools/backend/jvm/opt/LogUtils.scala	97	src/compiler/scala/tools/nsc/backend/jvm/AsmUtils.scala	59	0.61
+library/src/scala/collection/StrictOptimizedSortedSetOps.scala	65	src/library/scala/collection/StrictOptimizedSortedSetOps.scala	58	0.89
+compiler/src/dotty/tools/backend/jvm/MethodNode1.java	76	src/compiler/scala/tools/nsc/backend/jvm/MethodNode1.java	57	0.75
+library/src/scala/runtime/ModuleSerializationProxy.scala	61	src/library/scala/runtime/ModuleSerializationProxy.scala	57	0.93
+library/src/scala/sys/process/ProcessIO.scala	62	src/library/scala/sys/process/ProcessIO.scala	57	0.92
+library/src/scala/Function18.scala	139	src/library/scala/Function18.scala	56	0.40
+library/src/scala/collection/Searching.scala	65	src/library/scala/collection/Searching.scala	55	0.85
+library/src/scala/jdk/javaapi/FutureConverters.scala	65	src/library/scala/jdk/javaapi/FutureConverters.scala	54	0.83
+library/src/scala/runtime/StructuralCallSite.scala	80	src/library/scala/runtime/StructuralCallSite.scala	54	0.68
+library/src/scala/concurrent/duration/Deadline.scala	59	src/library/scala/concurrent/duration/Deadline.scala	54	0.92
+library/src/scala/collection/mutable/MultiMap.scala	60	src/library/scala/collection/mutable/MultiMap.scala	52	0.87
+compiler/src/dotty/tools/io/File.scala	152	src/reflect/scala/reflect/io/File.scala	51	0.34
+library/src/scala/Function17.scala	133	src/library/scala/Function17.scala	51	0.38
+library/src/scala/sys/Prop.scala	61	src/library/scala/sys/Prop.scala	51	0.84
+compiler/src/dotty/tools/dotc/core/unpickleScala2/Scala2Flags.scala	78	src/reflect/scala/reflect/internal/Flags.scala	50	0.64
+library/src/scala/collection/mutable/WeakHashMap.scala	62	src/library/scala/collection/mutable/WeakHashMap.scala	50	0.81
+library/src/scala/collection/immutable/SortedSet.scala	64	src/library/scala/collection/immutable/SortedSet.scala	50	0.78
+library/src/scala/runtime/SymbolLiteral.java	56	src/library/scala/runtime/SymbolLiteral.java	50	0.89
+library/src/scala/Product.scala	57	src/library/scala/Product.scala	49	0.86
+library/src/scala/annotation/elidable.scala	62	src/library/scala/annotation/elidable.scala	49	0.79
+library-js/src/scala/Symbol.scala	78	src/library/scala/Symbol.scala	49	0.63
+compiler/src/dotty/tools/dotc/transform/SuperAccessors.scala	586	src/compiler/scala/tools/nsc/typechecker/SuperAccessors.scala	48	0.08
+library/src/scala/collection/concurrent/INodeBase.java	48	src/library/scala/collection/concurrent/INodeBase.java	48	1.00
+compiler/src/dotty/tools/dotc/plugins/Plugin.scala	415	src/compiler/scala/tools/nsc/plugins/Plugin.scala	47	0.11
+library/src/scala/collection/concurrent/CNodeBase.java	47	src/library/scala/collection/concurrent/CNodeBase.java	47	1.00
+library/src/scala/math/PartialOrdering.scala	51	src/library/scala/math/PartialOrdering.scala	47	0.92
+library/src/scala/Product22.scala	123	src/library/scala/Product22.scala	46	0.37
+library/src/scala/Function16.scala	127	src/library/scala/Function16.scala	46	0.36
+library/src/scala/collection/mutable/MutationTracker.scala	54	src/library/scala/collection/mutable/MutationTracker.scala	46	0.85
+library/src/scala/Proxy.scala	48	src/library/scala/Proxy.scala	45	0.94
+compiler/src/dotty/tools/dotc/core/StdNames.scala	1888	src/reflect/scala/reflect/internal/StdNames.scala	44	0.02
+library/src/scala/ref/ReferenceWrapper.scala	48	src/library/scala/ref/ReferenceWrapper.scala	44	0.92
+library/src/scala/App.scala	73	src/library/scala/App.scala	43	0.59
+library/src/scala/ref/ReferenceQueue.scala	53	src/library/scala/ref/ReferenceQueue.scala	43	0.81
+library/src/scala/Product21.scala	119	src/library/scala/Product21.scala	42	0.35
+library/src/scala/io/AnsiColor.scala	46	src/library/scala/io/AnsiColor.scala	42	0.91
+library/src/scala/math/Integral.scala	46	src/library/scala/math/Integral.scala	42	0.91
+compiler/src/dotty/tools/dotc/classpath/ClassPath.scala	273	src/compiler/scala/tools/nsc/util/ClassPath.scala	41	0.15
+compiler/src/dotty/tools/dotc/core/NameOps.scala	944	src/reflect/scala/reflect/internal/StdNames.scala	41	0.04
+library/src/scala/Function15.scala	121	src/library/scala/Function15.scala	41	0.34
+library/src/scala/collection/mutable/Seq.scala	63	src/library/scala/collection/mutable/Seq.scala	41	0.65
+library/src/scala/collection/convert/impl/RangeStepper.scala	53	src/library/scala/collection/convert/impl/RangeStepper.scala	41	0.77
+library/src/scala/IArray.scala	1808	src/library/scala/Array.scala	40	0.02
+library/src/scala/runtime/MethodHandleConstants.java	40	src/library/scala/runtime/MethodHandleConstants.java	40	1.00
+compiler/src/dotty/tools/io/VirtualDirectory.scala	122	src/reflect/scala/reflect/io/VirtualDirectory.scala	39	0.32
+library/src/scala/collection/Hashing.scala	46	src/library/scala/collection/Hashing.scala	39	0.85
+library/src/scala/reflect/package.scala	46	src/library/scala/reflect/package.scala	39	0.85
+library/src/scala/language.scala	440	src/library/scala/language.scala	38	0.09
+library/src/scala/Product20.scala	115	src/library/scala/Product20.scala	38	0.33
+library/src/scala/ref/SoftReference.scala	54	src/library/scala/ref/SoftReference.scala	38	0.70
+library/src/scala/ref/WeakReference.scala	54	src/library/scala/ref/WeakReference.scala	38	0.70
+library/src/scala/collection/generic/IsIterableOnce.scala	55	src/library/scala/collection/generic/IsIterableOnce.scala	38	0.69
+compiler/src/dotty/tools/io/AbstractFile.scala	310	src/reflect/scala/reflect/io/AbstractFile.scala	36	0.12
+compiler/src/dotty/tools/backend/jvm/ClassNode1.java	55	src/compiler/scala/tools/nsc/backend/jvm/ClassNode1.java	36	0.65
+library/src/scala/deprecatedName.scala	40	src/library/scala/deprecatedName.scala	36	0.90
+library/src/scala/Function14.scala	115	src/library/scala/Function14.scala	36	0.31
+library/src/scala/runtime/BoxedUnit.java	38	src/library/scala/runtime/BoxedUnit.java	36	0.95
+tasty/src/dotty/tools/tasty/TastyBuffer.scala	306	src/compiler/scala/tools/tasty/TastyRefs.scala	36	0.12
+library/src/scala/Product19.scala	111	src/library/scala/Product19.scala	35	0.32
+library/src/scala/collection/convert/impl/InOrderStepperBase.scala	52	src/library/scala/collection/convert/impl/InOrderStepperBase.scala	35	0.67
+library/src/scala/collection/convert/impl/IndexedStepperBase.scala	52	src/library/scala/collection/convert/impl/IndexedStepperBase.scala	35	0.67
+compiler/src/dotty/tools/io/Path.scala	339	src/reflect/scala/reflect/io/Path.scala	34	0.10
+library/src/scala/Tuple22.scala	95	src/library/scala/Tuple22.scala	34	0.36
+library/src/scala/collection/immutable/package.scala	41	src/library/scala/collection/immutable/package.scala	34	0.83
+library/src/scala/collection/immutable/LazyListIterableBase.scala	132	src/library/scala/collection/immutable/LazyListBase.scala	33	0.25
+compiler/src/dotty/tools/dotc/parsing/JavaTokens.scala	208	src/compiler/scala/tools/nsc/javac/JavaTokens.scala	32	0.15
+library/src/scala/Product18.scala	107	src/library/scala/Product18.scala	32	0.30
+library/src/scala/util/DynamicVariable.scala	36	src/library/scala/util/DynamicVariable.scala	32	0.89
+library/src/scala/math/Ordered.scala	36	src/library/scala/math/Ordered.scala	32	0.89
+library-js/src/scala/App.scala	55	src/library/scala/App.scala	32	0.58
+compiler/src/dotty/tools/dotc/reporting/WConf.scala	551	src/compiler/scala/tools/nsc/Reporting.scala	31	0.06
+compiler/src/dotty/tools/dotc/typer/Linter.scala	253	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	31	0.12
+compiler/src/dotty/tools/dotc/config/ScalaVersion.scala	256	src/compiler/scala/tools/nsc/settings/ScalaVersion.scala	31	0.12
+library/src/scala/Function13.scala	109	src/library/scala/Function13.scala	31	0.28
+library/src/scala/collection/generic/Subtractable.scala	39	src/library/scala/collection/generic/Subtractable.scala	31	0.79
+library/src/scala/runtime/VolatileObjectRef.java	33	src/library/scala/runtime/VolatileObjectRef.java	31	0.94
+library/src/scala/runtime/VolatileShortRef.java	36	src/library/scala/runtime/VolatileShortRef.java	31	0.86
+library/src/scala/runtime/VolatileCharRef.java	36	src/library/scala/runtime/VolatileCharRef.java	31	0.86
+library/src/scala/runtime/Static.java	31	src/library/scala/runtime/Static.java	31	1.00
+library/src/scala/runtime/VolatileByteRef.java	36	src/library/scala/runtime/VolatileByteRef.java	31	0.86
+library/src/scala/concurrent/Channel.scala	46	src/library/scala/concurrent/Channel.scala	31	0.67
+compiler/src/dotty/tools/dotc/ast/tpd.scala	5152	src/reflect/scala/reflect/internal/Trees.scala	30	0.01
+library/src/scala/Function4.scala	52	src/library/scala/Function4.scala	30	0.58
+library/src/scala/Function2.scala	41	src/library/scala/Function2.scala	30	0.73
+library/src/scala/Tuple21.scala	91	src/library/scala/Tuple21.scala	30	0.33
+library/src/scala/util/control/Breaks.scala	35	src/library/scala/util/control/Breaks.scala	30	0.86
+library/src/scala/runtime/VolatileDoubleRef.java	35	src/library/scala/runtime/VolatileDoubleRef.java	30	0.86
+library/src/scala/runtime/ShortRef.java	35	src/library/scala/runtime/ShortRef.java	30	0.86
+library/src/scala/runtime/ObjectRef.java	32	src/library/scala/runtime/ObjectRef.java	30	0.94
+library/src/scala/runtime/VolatileLongRef.java	35	src/library/scala/runtime/VolatileLongRef.java	30	0.86
+library/src/scala/runtime/VolatileBooleanRef.java	33	src/library/scala/runtime/VolatileBooleanRef.java	30	0.91
+library/src/scala/runtime/CharRef.java	35	src/library/scala/runtime/CharRef.java	30	0.86
+library/src/scala/runtime/VolatileIntRef.java	35	src/library/scala/runtime/VolatileIntRef.java	30	0.86
+library/src/scala/runtime/VolatileFloatRef.java	35	src/library/scala/runtime/VolatileFloatRef.java	30	0.86
+library/src/scala/runtime/ByteRef.java	35	src/library/scala/runtime/ByteRef.java	30	0.86
+library/src/scala/math/Fractional.scala	34	src/library/scala/math/Fractional.scala	30	0.88
+library/src/scala/Product8.scala	67	src/library/scala/Product8.scala	29	0.43
+library/src/scala/Product9.scala	71	src/library/scala/Product9.scala	29	0.41
+library/src/scala/Product7.scala	63	src/library/scala/Product7.scala	29	0.46
+library/src/scala/Product10.scala	75	src/library/scala/Product10.scala	29	0.39
+library/src/scala/Product12.scala	83	src/library/scala/Product12.scala	29	0.35
+library/src/scala/Product5.scala	55	src/library/scala/Product5.scala	29	0.53
+library/src/scala/Product16.scala	99	src/library/scala/Product16.scala	29	0.29
+library/src/scala/Product14.scala	91	src/library/scala/Product14.scala	29	0.32
+library/src/scala/Product13.scala	87	src/library/scala/Product13.scala	29	0.33
+library/src/scala/Product6.scala	59	src/library/scala/Product6.scala	29	0.49
+library/src/scala/Product11.scala	79	src/library/scala/Product11.scala	29	0.37
+library/src/scala/Product15.scala	95	src/library/scala/Product15.scala	29	0.31
+library/src/scala/Product17.scala	103	src/library/scala/Product17.scala	29	0.28
+library/src/scala/ref/PhantomReference.scala	33	src/library/scala/ref/PhantomReference.scala	29	0.88
+library/src/scala/collection/mutable/SortedSet.scala	37	src/library/scala/collection/mutable/SortedSet.scala	29	0.78
+library/src/scala/runtime/LongRef.java	34	src/library/scala/runtime/LongRef.java	29	0.85
+library/src/scala/runtime/DoubleRef.java	34	src/library/scala/runtime/DoubleRef.java	29	0.85
+library/src/scala/runtime/BooleanRef.java	32	src/library/scala/runtime/BooleanRef.java	29	0.91
+library/src/scala/runtime/FloatRef.java	34	src/library/scala/runtime/FloatRef.java	29	0.85
+library/src/scala/runtime/IntRef.java	34	src/library/scala/runtime/IntRef.java	29	0.85
+compiler/src/dotty/tools/backend/jvm/GenericSignatures.scala	1362	src/compiler/scala/tools/nsc/transform/Erasure.scala	28	0.02
+library/src/scala/Function1.scala	40	src/library/scala/Function1.scala	28	0.70
+library/src/scala/Unit.scala	42	src/library/scala/Unit.scala	28	0.67
+library/src/scala/Product4.scala	50	src/library/scala/Product4.scala	28	0.56
+library/src/scala/Product2.scala	44	src/library/scala/Product2.scala	28	0.64
+library/src/scala/collection/mutable/GrowableBuilder.scala	36	src/library/scala/collection/mutable/GrowableBuilder.scala	28	0.78
+compiler/src/dotty/tools/dotc/core/TypeErasure.scala	2284	src/reflect/scala/reflect/internal/transform/Erasure.scala	27	0.01
+library/src/scala/Tuple2.scala	30	src/library/scala/Tuple2.scala	27	0.90
+library/src/scala/runtime/java8/JFunction2$mcVJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVJI$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVIJ$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVJD$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVDJ$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVID$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVJJ$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVDD$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVDI$sp.scala	27	0.68
+library/src/scala/runtime/java8/JFunction2$mcVII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcVII$sp.scala	27	0.68
+library/src/scala/concurrent/JavaConversions.scala	42	src/library/scala/concurrent/JavaConversions.scala	27	0.64
+compiler/src/dotty/tools/dotc/core/SymbolLoaders.scala	1493	src/compiler/scala/tools/nsc/symtab/SymbolLoaders.scala	26	0.02
+compiler/src/dotty/tools/dotc/config/WrappedProperties.scala	96	src/compiler/scala/tools/reflect/WrappedProperties.scala	26	0.27
+compiler/src/dotty/tools/io/Directory.scala	98	src/reflect/scala/reflect/io/Directory.scala	26	0.27
+library/src/scala/Function6.scala	67	src/library/scala/Function6.scala	26	0.39
+library/src/scala/Function11.scala	97	src/library/scala/Function11.scala	26	0.27
+library/src/scala/Function7.scala	73	src/library/scala/Function7.scala	26	0.36
+library/src/scala/Function5.scala	61	src/library/scala/Function5.scala	26	0.43
+library/src/scala/Function10.scala	91	src/library/scala/Function10.scala	26	0.29
+library/src/scala/Function3.scala	42	src/library/scala/Function3.scala	26	0.62
+library/src/scala/Function12.scala	103	src/library/scala/Function12.scala	26	0.25
+library/src/scala/Function9.scala	85	src/library/scala/Function9.scala	26	0.31
+library/src/scala/Tuple20.scala	87	src/library/scala/Tuple20.scala	26	0.30
+library/src/scala/Function8.scala	79	src/library/scala/Function8.scala	26	0.33
+library/src/scala/sys/ShutdownHookThread.scala	30	src/library/scala/sys/ShutdownHookThread.scala	26	0.87
+compiler/src/dotty/tools/dotc/core/tasty/AttributeUnpickler.scala	90	src/compiler/scala/tools/tasty/AttributeUnpickler.scala	25	0.28
+compiler/src/dotty/tools/dotc/classpath/PackageNameUtils.scala	99	src/compiler/scala/tools/nsc/classpath/PackageNameUtils.scala	24	0.24
+library/src/scala/Product3.scala	43	src/library/scala/Product3.scala	24	0.56
+library-js/src/scala/runtime/BoxesRunTime.scala	334	src/library/scala/Predef.scala	24	0.07
+compiler/src/dotty/tools/dotc/classpath/FileUtils.scala	190	src/compiler/scala/tools/nsc/classpath/FileUtils.scala	23	0.12
+library/src/scala/Tuple19.scala	83	src/library/scala/Tuple19.scala	23	0.28
+library/src/scala/collection/SeqMap.scala	35	src/library/scala/collection/SeqMap.scala	23	0.66
+library/src/scala/collection/mutable/Iterable.scala	31	src/library/scala/collection/mutable/Iterable.scala	23	0.74
+library/src/scala/collection/immutable/Iterable.scala	38	src/library/scala/collection/immutable/Iterable.scala	23	0.61
+library/src/scala/runtime/java8/JFunction2$mcJIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJIJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFII$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJJD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJDJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFDI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIJJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZDD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDDD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIID$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDJJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZID$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDID$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIDD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZJJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZII$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIDI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDII$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZDI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIII$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDDI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFDD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFID$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJJI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFJJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDJI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZJI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIJI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJDI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJDI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFDJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJII$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJII$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFIJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFJD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJID$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJID$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJJJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJJJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcFJI$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcFJI$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcJDD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcJDD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIJD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZDJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIIJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDDJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZIJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDJD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcIDJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcIDJ$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcZJD$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcZJD$sp.scala	22	0.55
+library/src/scala/runtime/java8/JFunction2$mcDIJ$sp.scala	40	src/library/scala/runtime/java8/JFunction2$mcDIJ$sp.scala	22	0.55
+library/src/scala/collection/generic/CommonErrors.scala	30	src/library/scala/collection/generic/CommonErrors.scala	21	0.70
+library/src/scala/Product1.scala	33	src/library/scala/Product1.scala	20	0.61
+library/src/scala/Tuple18.scala	79	src/library/scala/Tuple18.scala	20	0.25
+library/src/scala/quoted/FromExpr.scala	1657	src/reflect/scala/reflect/api/StandardLiftables.scala	20	0.01
+library/src/scala/quoted/ToExpr.scala	1344	src/reflect/scala/reflect/api/StandardLiftables.scala	20	0.01
+compiler/src/dotty/tools/dotc/classpath/ZipAndJarFileLookupFactory.scala	243	src/compiler/scala/tools/nsc/classpath/ZipAndJarFileLookupFactory.scala	19	0.08
+compiler/src/dotty/tools/io/AbstractFileClassLoader.scala	108	src/reflect/scala/reflect/internal/util/AbstractFileClassLoader.scala	19	0.18
+compiler/src/dotty/tools/dotc/reporting/messages.scala	14495	src/compiler/scala/tools/nsc/typechecker/ContextErrors.scala	17	0.00
+compiler/src/dotty/tools/dotc/typer/Implicits.scala	4872	src/compiler/scala/tools/nsc/typechecker/Contexts.scala	17	0.00
+compiler/src/dotty/tools/dotc/ast/untpd.scala	3545	src/reflect/scala/reflect/internal/Trees.scala	17	0.00
+compiler/src/dotty/tools/dotc/transform/Dependencies.scala	521	src/compiler/scala/tools/nsc/transform/LambdaLift.scala	17	0.03
+compiler/src/dotty/tools/backend/jvm/opt/OptimizerKnownBTypes.scala	593	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	17	0.03
+library/src/scala/Tuple8.scala	39	src/library/scala/Tuple8.scala	17	0.44
+library/src/scala/Tuple17.scala	75	src/library/scala/Tuple17.scala	17	0.23
+library/src/scala/Tuple15.scala	67	src/library/scala/Tuple15.scala	17	0.25
+library/src/scala/Tuple11.scala	51	src/library/scala/Tuple11.scala	17	0.33
+library/src/scala/Tuple13.scala	59	src/library/scala/Tuple13.scala	17	0.29
+library/src/scala/Tuple14.scala	63	src/library/scala/Tuple14.scala	17	0.27
+library/src/scala/Tuple9.scala	43	src/library/scala/Tuple9.scala	17	0.40
+library/src/scala/Tuple16.scala	71	src/library/scala/Tuple16.scala	17	0.24
+library/src/scala/Tuple12.scala	55	src/library/scala/Tuple12.scala	17	0.31
+library/src/scala/Tuple10.scala	47	src/library/scala/Tuple10.scala	17	0.36
+library/src/scala/Tuple7.scala	35	src/library/scala/Tuple7.scala	17	0.49
+library/src/scala/Tuple6.scala	31	src/library/scala/Tuple6.scala	17	0.55
+compiler/src/dotty/tools/io/PlainFile.scala	146	src/reflect/scala/reflect/io/PlainFile.scala	16	0.11
+compiler/src/dotty/tools/backend/jvm/TraceUtils.scala	141	src/compiler/scala/tools/nsc/backend/jvm/AsmUtils.scala	16	0.11
+compiler/src/dotty/tools/dotc/classpath/AggregateClassPath.scala	150	src/compiler/scala/tools/nsc/classpath/AggregateClassPath.scala	15	0.10
+compiler/src/dotty/tools/dotc/core/tasty/AttributePickler.scala	102	src/compiler/scala/tools/tasty/AttributeUnpickler.scala	15	0.15
+compiler/src/dotty/tools/dotc/config/JavaPlatform.scala	299	src/compiler/scala/tools/nsc/backend/JavaPlatform.scala	15	0.05
+compiler/src/dotty/tools/io/VirtualFile.scala	80	src/reflect/scala/reflect/io/VirtualFile.scala	15	0.19
+library/src/scala/Boolean.scala	42	src/library/scala/Boolean.scala	15	0.36
+compiler/src/dotty/tools/dotc/classpath/ClassPathFactory.scala	369	src/compiler/scala/tools/nsc/util/ClassPath.scala	14	0.04
+compiler/src/dotty/tools/dotc/core/Types.scala	14996	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	14	0.00
+compiler/src/dotty/tools/backend/sjs/JSPrimitives.scala	312	src/compiler/scala/tools/nsc/backend/ScalaPrimitives.scala	14	0.04
+compiler/src/dotty/tools/backend/sjs/JSCodeGen.scala	10694	src/compiler/scala/tools/nsc/backend/jvm/BCodeBodyBuilder.scala	14	0.00
+compiler/src/dotty/tools/dotc/classpath/VirtualDirectoryClassPath.scala	101	src/compiler/scala/tools/nsc/classpath/VirtualDirectoryClassPath.scala	13	0.13
+compiler/src/dotty/tools/dotc/report.scala	693	src/compiler/scala/tools/nsc/Reporting.scala	12	0.02
+compiler/src/dotty/tools/dotc/core/unpickleScala2/Scala2Erasure.scala	354	src/reflect/scala/reflect/internal/transform/Erasure.scala	12	0.03
+compiler/src/dotty/tools/dotc/config/Settings.scala	1759	src/compiler/scala/tools/nsc/settings/MutableSettings.scala	12	0.01
+compiler/src/dotty/tools/dotc/printing/Formatting.scala	539	src/reflect/scala/reflect/internal/util/StripMarginInterpolator.scala	12	0.02
+compiler/src/dotty/tools/backend/jvm/analysis/AsmAnalyzer.scala	64	src/compiler/scala/tools/nsc/backend/jvm/analysis/AsmAnalyzer.scala	12	0.19
+compiler/src/dotty/tools/dotc/typer/Checking.scala	5505	src/compiler/scala/tools/nsc/typechecker/Typers.scala	11	0.00
+compiler/src/dotty/tools/dotc/typer/Applications.scala	7516	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	11	0.00
+compiler/src/dotty/tools/backend/jvm/CodeGen.scala	781	src/compiler/scala/tools/nsc/backend/jvm/PostProcessor.scala	11	0.01
+compiler/src/dotty/tools/dotc/profile/JsonNameTransformer.scala	75	src/library/scala/reflect/NameTransformer.scala	10	0.13
+library/src/scala/MatchError.scala	31	src/library/scala/MatchError.scala	10	0.32
+library/src/scala/runtime/TupledFunctions.scala	517	src/library/scala/Function22.scala	10	0.02
+library/src/scala/quoted/Expr.scala	581	src/library/scala/Function22.scala	10	0.02
+compiler/src/dotty/tools/dotc/core/tasty/TastyAnsiiPrinter.scala	45	src/compiler/scala/tools/nsc/tasty/package.scala	9	0.20
+compiler/src/dotty/tools/dotc/typer/CrossVersionChecks.scala	659	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	9	0.01
+compiler/src/dotty/tools/dotc/typer/Typer.scala	15395	src/compiler/scala/tools/nsc/typechecker/Typers.scala	9	0.00
+compiler/src/dotty/tools/dotc/transform/CheckUnused.scala	3557	src/compiler/scala/tools/nsc/typechecker/ImportTracking.scala	9	0.00
+compiler/src/dotty/tools/dotc/reporting/Reporter.scala	606	src/compiler/scala/tools/nsc/reporters/PrintReporter.scala	8	0.01
+compiler/src/dotty/tools/dotc/core/Decorators.scala	740	src/reflect/scala/reflect/internal/util/StringOps.scala	8	0.01
+compiler/src/dotty/tools/dotc/ast/Desugar.scala	6430	src/reflect/scala/reflect/internal/ReificationSupport.scala	8	0.00
+compiler/src/dotty/tools/dotc/transform/Erasure.scala	3328	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	8	0.00
+library-js/src/scala/collection/immutable/LazyListBase.scala	83	src/library/scala/collection/immutable/LazyListBase.scala	8	0.10
+compiler/src/dotty/tools/dotc/core/SymDenotations.scala	6432	src/reflect/scala/reflect/internal/AnnotationInfos.scala	7	0.00
+compiler/src/dotty/tools/dotc/typer/VarianceChecker.scala	653	src/reflect/scala/reflect/internal/Variances.scala	7	0.01
+compiler/src/dotty/tools/dotc/parsing/StringReader.scala	177	src/compiler/scala/tools/nsc/util/CharArrayReader.scala	7	0.04
+compiler/src/dotty/tools/dotc/transform/CheckNoSuperThis.scala	113	src/compiler/scala/tools/nsc/typechecker/ContextErrors.scala	7	0.06
+compiler/src/dotty/tools/dotc/Run.scala	1674	src/compiler/scala/tools/nsc/Reporting.scala	6	0.00
+compiler/src/dotty/tools/dotc/core/TypeApplications.scala	1242	src/compiler/scala/tools/nsc/tasty/bridge/TypeOps.scala	6	0.00
+compiler/src/dotty/tools/dotc/util/SourceFile.scala	562	src/reflect/scala/reflect/internal/util/SourceFile.scala	6	0.01
+compiler/src/dotty/tools/dotc/transform/MixinOps.scala	319	src/reflect/scala/reflect/internal/Definitions.scala	6	0.02
+compiler/src/dotty/tools/dotc/transform/TreeExtractors.scala	86	src/compiler/scala/tools/nsc/ast/TreeInfo.scala	6	0.07
+compiler/src/dotty/tools/dotc/transform/Bridges.scala	546	src/compiler/scala/tools/nsc/transform/Erasure.scala	6	0.01
+compiler/src/dotty/tools/dotc/staging/CrossStageSafety.scala	729	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	5	0.01
+compiler/src/dotty/tools/dotc/typer/ErrorReporting.scala	1007	src/compiler/scala/tools/nsc/typechecker/TypeDiagnostics.scala	5	0.00
+compiler/src/dotty/tools/dotc/config/CliCommand.scala	718	src/compiler/scala/tools/nsc/settings/ScalaSettings.scala	5	0.01
+compiler/src/dotty/tools/dotc/inlines/Inliner.scala	3642	src/reflect/scala/reflect/api/Trees.scala	5	0.00
+compiler/src/dotty/tools/dotc/interactive/Completion.scala	2226	src/reflect/scala/reflect/internal/Mode.scala	5	0.00
+compiler/src/dotty/tools/scripting/Util.scala	152	src/reflect/scala/reflect/internal/util/ScalaClassLoader.scala	4	0.03
+compiler/src/dotty/tools/dotc/core/Scopes.scala	715	src/reflect/scala/reflect/internal/Scopes.scala	4	0.01
+compiler/src/dotty/tools/dotc/core/SymUtils.scala	1259	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	4	0.00
+compiler/src/dotty/tools/dotc/typer/Namer.scala	5919	src/compiler/scala/tools/nsc/typechecker/Namers.scala	4	0.00
+compiler/src/dotty/tools/dotc/typer/Synthesizer.scala	2504	src/compiler/scala/tools/nsc/typechecker/Implicits.scala	4	0.00
+compiler/src/dotty/tools/dotc/config/Feature.scala	966	src/compiler/scala/tools/nsc/settings/ScalaSettings.scala	4	0.00
+compiler/src/dotty/tools/dotc/transform/OverridingPairs.scala	360	src/reflect/scala/reflect/internal/SymbolPairs.scala	4	0.01
+compiler/src/dotty/tools/dotc/transform/TryCatchPatterns.scala	322	src/reflect/scala/reflect/internal/TreeInfo.scala	4	0.01
+compiler/src/dotty/tools/dotc/transform/TailRec.scala	989	src/compiler/scala/tools/nsc/transform/TailCalls.scala	4	0.00
+library/src/scala/runtime/function/JProcedure22.java	117	src/library/scala/Function22.scala	4	0.03
+scaladoc/src/dotty/tools/scaladoc/renderers/Resources.scala	1927	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	4	0.00
+compiler/src/scala/quoted/runtime/impl/QuoteMatcher.scala	1710	src/compiler/scala/tools/nsc/transform/LambdaLift.scala	3	0.00
+compiler/src/dotty/tools/dotc/core/Names.scala	1020	src/reflect/scala/reflect/internal/Names.scala	3	0.00
+compiler/src/dotty/tools/dotc/core/Substituters.scala	723	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	3	0.00
+compiler/src/dotty/tools/dotc/typer/TypeAssigner.scala	1979	src/compiler/scala/tools/nsc/typechecker/ContextErrors.scala	3	0.00
+compiler/src/dotty/tools/dotc/typer/Nullables.scala	1258	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	3	0.00
+compiler/src/dotty/tools/dotc/interactive/InteractiveDriver.scala	372	src/compiler/scala/tools/nsc/symtab/classfile/Pickler.scala	3	0.01
+compiler/src/dotty/tools/dotc/sbt/ExtractAPI.scala	2119	src/compiler/scala/tools/nsc/symtab/classfile/Pickler.scala	3	0.00
+compiler/src/dotty/tools/dotc/ast/TreeTypeMap.scala	703	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	3	0.00
+compiler/src/dotty/tools/dotc/transform/LambdaLift.scala	941	src/compiler/scala/tools/nsc/transform/LambdaLift.scala	3	0.00
+compiler/src/dotty/tools/dotc/transform/ExtensionMethods.scala	544	src/compiler/scala/tools/nsc/transform/ExtensionMethods.scala	3	0.01
+compiler/src/dotty/tools/dotc/transform/PickleQuotes.scala	922	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	3	0.00
+compiler/src/dotty/tools/dotc/coverage/Serializer.scala	366	src/compiler/scala/tools/nsc/PipelineMain.scala	3	0.01
+compiler/src/dotty/tools/backend/jvm/TestOp.scala	96	src/compiler/scala/tools/nsc/backend/jvm/BCodeHelpers.scala	3	0.03
+library/src/scala/runtime/function/JProcedure21.java	113	src/library/scala/Function21.scala	3	0.03
+library-js/src/scala/collection/immutable/LazyListIterableBase.scala	97	src/library/scala/collection/immutable/LazyListBase.scala	3	0.03
+compiler/src/dotty/tools/scripting/Main.scala	314	src/compiler/scala/tools/nsc/MainTokenMetric.scala	2	0.01
+compiler/src/dotty/tools/dotc/classpath/ZipArchiveFileLookup.scala	102	src/compiler/scala/tools/nsc/classpath/ZipArchiveFileLookup.scala	2	0.02
+compiler/src/dotty/tools/dotc/core/Contexts.scala	2365	src/compiler/scala/tools/nsc/tasty/bridge/ContextOps.scala	2	0.00
+compiler/src/dotty/tools/dotc/core/Definitions.scala	8269	src/reflect/scala/reflect/internal/Definitions.scala	2	0.00
+compiler/src/dotty/tools/dotc/core/TypeOps.scala	2292	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	2	0.00
+compiler/src/dotty/tools/dotc/core/ContextOps.scala	320	src/compiler/scala/tools/nsc/typechecker/Contexts.scala	2	0.01
+compiler/src/dotty/tools/dotc/core/TypeComparer.scala	8565	src/reflect/scala/reflect/internal/tpe/TypeComparers.scala	2	0.00
+compiler/src/dotty/tools/dotc/core/tasty/Attributes.scala	113	src/compiler/scala/tools/nsc/backend/jvm/analysis/BackendUtils.scala	2	0.02
+compiler/src/dotty/tools/dotc/util/Util.scala	46	src/reflect/scala/reflect/internal/util/SourceFile.scala	2	0.04
+compiler/src/dotty/tools/dotc/util/GenericHashMap.scala	399	src/library/scala/collection/mutable/HashTable.scala	2	0.01
+compiler/src/dotty/tools/dotc/util/GenericHashSet.scala	309	src/library/scala/collection/mutable/HashTable.scala	2	0.01
+compiler/src/dotty/tools/dotc/config/Platform.scala	105	src/compiler/scala/tools/nsc/backend/Platform.scala	2	0.02
+compiler/src/dotty/tools/dotc/inlines/Inlines.scala	3365	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	2	0.00
+compiler/src/dotty/tools/dotc/semanticdb/ExtractSemanticDB.scala	1978	src/reflect/scala/reflect/io/RootPath.scala	2	0.00
+compiler/src/dotty/tools/dotc/quoted/PickledQuotes.scala	829	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	2	0.00
+compiler/src/dotty/tools/dotc/cc/SepCheck.scala	2765	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	2	0.00
+compiler/src/dotty/tools/dotc/transform/Splicing.scala	892	src/reflect/scala/reflect/internal/TreeInfo.scala	2	0.00
+compiler/src/dotty/tools/dotc/transform/Mixin.scala	808	src/compiler/scala/tools/nsc/transform/async/ExprBuilder.scala	2	0.00
+compiler/src/dotty/tools/dotc/transform/PatternMatcher.scala	2740	src/compiler/scala/tools/nsc/transform/patmat/MatchTranslation.scala	2	0.00
+compiler/src/dotty/tools/dotc/transform/ElimByName.scala	350	src/compiler/scala/tools/nsc/transform/UnCurry.scala	2	0.01
+compiler/src/dotty/tools/dotc/transform/init/Objects.scala	6157	src/library/scala/collection/mutable/HashSet.scala	2	0.00
+compiler/src/dotty/tools/dotc/transform/localopt/StringInterpolatorOpt.scala	659	src/library/scala/StringContext.scala	2	0.00
+compiler/src/dotty/tools/io/JarArchive.scala	114	src/compiler/scala/tools/nsc/util/ClassPath.scala	2	0.02
+compiler/src/dotty/tools/backend/jvm/CallGraph.scala	49	src/compiler/scala/tools/nsc/backend/jvm/opt/CallGraph.scala	2	0.04
+compiler/src/dotty/tools/backend/jvm/KnownBTypes.scala	249	src/compiler/scala/tools/nsc/backend/jvm/CoreBTypes.scala	2	0.01
+library/src/scala/runtime/Scala3RunTime.scala	40	src/reflect/scala/reflect/internal/SymbolTable.scala	2	0.05
+library/src/scala/runtime/stdLibPatches/Predef.scala	97	src/reflect/scala/reflect/internal/SymbolTable.scala	2	0.02
+library/src/scala/runtime/function/JProcedure8.java	61	src/library/scala/Function8.scala	2	0.03
+library/src/scala/runtime/function/JProcedure10.java	69	src/library/scala/Function10.scala	2	0.03
+library/src/scala/runtime/function/JProcedure5.java	49	src/library/scala/Function5.scala	2	0.04
+library/src/scala/runtime/function/JProcedure11.java	73	src/library/scala/Function11.scala	2	0.03
+library/src/scala/runtime/function/JProcedure9.java	65	src/library/scala/Function9.scala	2	0.03
+library/src/scala/runtime/function/JProcedure20.java	109	src/library/scala/Function20.scala	2	0.02
+library/src/scala/runtime/function/JProcedure16.java	93	src/library/scala/Function16.scala	2	0.02
+library/src/scala/runtime/function/JProcedure17.java	97	src/library/scala/Function17.scala	2	0.02
+library/src/scala/runtime/function/JProcedure18.java	101	src/library/scala/Function18.scala	2	0.02
+library/src/scala/runtime/function/JProcedure14.java	85	src/library/scala/Function14.scala	2	0.02
+library/src/scala/runtime/function/JProcedure15.java	89	src/library/scala/Function15.scala	2	0.02
+library/src/scala/runtime/function/JProcedure19.java	105	src/library/scala/Function19.scala	2	0.02
+library/src/scala/runtime/function/JProcedure12.java	77	src/library/scala/Function12.scala	2	0.03
+library/src/scala/runtime/function/JProcedure6.java	53	src/library/scala/Function6.scala	2	0.04
+library/src/scala/runtime/function/JProcedure7.java	57	src/library/scala/Function7.scala	2	0.04
+library/src/scala/runtime/function/JProcedure13.java	81	src/library/scala/Function13.scala	2	0.02
+sbt-bridge/src/xsbt/DottydocRunner.java	168	src/reflect/scala/reflect/io/RootPath.scala	2	0.01
+scaladoc/src/dotty/tools/scaladoc/SourceLinks.scala	559	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.00
+scaladoc/src/dotty/tools/scaladoc/DocContext.scala	280	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.01
+scaladoc/src/dotty/tools/scaladoc/renderers/SiteRenderer.scala	322	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.01
+scaladoc/src/dotty/tools/scaladoc/renderers/Writer.scala	98	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.02
+scaladoc/src/dotty/tools/scaladoc/renderers/Renderer.scala	495	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.00
+scaladoc/src/dotty/tools/scaladoc/util/IO.java	115	src/compiler/scala/tools/nsc/backend/jvm/ClassfileWriters.scala	2	0.02
+scaladoc/src/dotty/tools/scaladoc/site/LoadedTemplate.scala	195	src/reflect/scala/reflect/io/RootPath.scala	2	0.01
+scaladoc/src/dotty/tools/scaladoc/site/StaticSiteLoader.scala	724	src/reflect/scala/reflect/io/RootPath.scala	2	0.00
+scaladoc/src/dotty/tools/scaladoc/site/StaticSiteContext.scala	377	src/compiler/scala/tools/nsc/classpath/DirectoryClassPath.scala	2	0.01
+compiler/src/scala/quoted/runtime/impl/QuotesImpl.scala	11859	src/reflect/scala/reflect/internal/Types.scala	1	0.00
+compiler/src/scala/quoted/runtime/impl/printers/SourceCode.scala	3154	src/compiler/scala/tools/nsc/backend/jvm/analysis/ProdConsAnalyzer.scala	1	0.00
+compiler/src/dotty/tools/MainGenericCompiler.scala	415	src/compiler/scala/tools/nsc/settings/MutableSettings.scala	1	0.00
+compiler/src/dotty/tools/dotc/reporting/ConsoleReporter.scala	119	src/compiler/scala/tools/nsc/reporters/PrintReporter.scala	1	0.01
+compiler/src/dotty/tools/dotc/reporting/MessageRendering.scala	899	src/compiler/scala/tools/nsc/backend/jvm/analysis/ProdConsAnalyzer.scala	1	0.00
+compiler/src/dotty/tools/dotc/staging/HealType.scala	273	src/compiler/scala/tools/nsc/transform/LambdaLift.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/TypeUtils.scala	696	src/compiler/scala/tools/nsc/ast/DocComments.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/Annotations.scala	1031	src/reflect/scala/reflect/internal/AnnotationInfos.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/TyperState.scala	677	src/reflect/scala/reflect/runtime/SynchronizedTypes.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/NameTags.scala	70	src/compiler/scala/tools/tasty/TastyFormat.scala	1	0.01
+compiler/src/dotty/tools/dotc/core/ConstraintHandling.scala	1784	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/NamerOps.scala	947	src/compiler/scala/tools/nsc/typechecker/Namers.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/ImplicitNullInterop.scala	456	src/reflect/scala/reflect/internal/transform/Erasure.scala	1	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TastyPrinter.scala	917	src/compiler/scala/tools/nsc/tasty/TreeUnpickler.scala	1	0.00
+compiler/src/dotty/tools/dotc/util/HashMap.scala	218	src/library/scala/collection/mutable/OpenHashMap.scala	1	0.00
+compiler/src/dotty/tools/dotc/util/EqHashMap.scala	212	src/library/scala/collection/mutable/CollisionProofHashMap.scala	1	0.00
+compiler/src/dotty/tools/dotc/util/EqHashSet.scala	160	src/library/scala/collection/mutable/CollisionProofHashMap.scala	1	0.01
+compiler/src/dotty/tools/dotc/typer/Dynamic.scala	713	src/reflect/scala/reflect/internal/Printers.scala	1	0.00
+compiler/src/dotty/tools/dotc/typer/ProtoTypes.scala	2606	src/library/scala/collection/immutable/ArraySeq.scala	1	0.00
+compiler/src/dotty/tools/dotc/typer/Inferencing.scala	1776	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	1	0.00
+compiler/src/dotty/tools/dotc/typer/Deriving.scala	713	src/reflect/scala/reflect/internal/transform/Erasure.scala	1	0.00
+compiler/src/dotty/tools/dotc/config/CompilerCommand.scala	71	src/compiler/scala/tools/nsc/settings/ScalaSettings.scala	1	0.01
+compiler/src/dotty/tools/dotc/printing/RefinedPrinter.scala	3893	src/compiler/scala/tools/nsc/ast/DocComments.scala	1	0.00
+compiler/src/dotty/tools/dotc/printing/MessageLimiter.scala	82	src/reflect/scala/reflect/internal/tpe/TypeToStrings.scala	1	0.01
+compiler/src/dotty/tools/dotc/inlines/InlineReducer.scala	1128	src/reflect/scala/reflect/internal/TreeInfo.scala	1	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/SemanticdbInputStream.scala	877	src/reflect/scala/reflect/internal/Names.scala	1	0.00
+compiler/src/dotty/tools/dotc/quoted/Interpreter.scala	1264	src/compiler/scala/tools/nsc/typechecker/NamesDefaults.scala	1	0.00
+compiler/src/dotty/tools/dotc/sbt/ThunkHolder.scala	37	src/reflect/scala/reflect/internal/TreeGen.scala	1	0.03
+compiler/src/dotty/tools/dotc/sbt/ExtractDependencies.scala	1241	src/compiler/scala/tools/nsc/transform/Erasure.scala	1	0.00
+compiler/src/dotty/tools/dotc/ast/DesugarEnums.scala	973	src/reflect/scala/reflect/api/Trees.scala	1	0.00
+compiler/src/dotty/tools/dotc/cc/SafeRefs.scala	897	src/library/scala/runtime/ScalaNumberProxy.scala	1	0.00
+compiler/src/dotty/tools/dotc/cc/CheckCaptures.scala	5983	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	1	0.00
+compiler/src/dotty/tools/dotc/cc/CaptureOps.scala	2315	src/reflect/scala/reflect/internal/tpe/TypeMaps.scala	1	0.00
+compiler/src/dotty/tools/dotc/cc/CaptureAnnotation.scala	198	src/library/scala/collection/immutable/ArraySeq.scala	1	0.01
+compiler/src/dotty/tools/dotc/transform/Recheck.scala	1932	src/compiler/scala/tools/nsc/typechecker/PatternTypers.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/Splicer.scala	890	src/compiler/scala/tools/nsc/transform/async/AsyncPhase.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/ElimErasedValueType.scala	326	src/reflect/scala/reflect/internal/Symbols.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/ResolveSuper.scala	333	src/reflect/scala/reflect/internal/Symbols.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/ForwardDepChecks.scala	317	src/compiler/scala/tools/nsc/typechecker/RefChecks.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/InstrumentCoverage.scala	2129	src/reflect/scala/reflect/internal/TreeInfo.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/DesugarSpecializedTraits.scala	2432	src/compiler/scala/tools/nsc/tasty/bridge/TypeOps.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/TreeChecker.scala	3055	src/compiler/scala/tools/nsc/transform/async/AsyncPhase.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/PostTyper.scala	2242	src/reflect/scala/reflect/internal/ReificationSupport.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/init/Cache.scala	246	src/reflect/scala/reflect/internal/Constants.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/init/Semantic.scala	3762	src/library/scala/collection/mutable/RedBlackTree.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/PrepJSInterop.scala	3336	src/reflect/scala/reflect/internal/ReificationSupport.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/patmat/Space.scala	3124	src/compiler/scala/tools/nsc/transform/LambdaLift.scala	1	0.00
+compiler/src/dotty/tools/dotc/transform/localopt/DropForMap.scala	405	src/reflect/scala/reflect/internal/TreeInfo.scala	1	0.00
+library/src/scala/util/FromDigits.scala	199	src/reflect/scala/reflect/internal/Chars.scala	1	0.01
+library/src/scala/runtime/VarArgsBuilder.scala	358	src/reflect/scala/reflect/internal/util/AbstractFileClassLoader.scala	1	0.00
+library/src/scala/runtime/Arrays.scala	60	src/library/scala/runtime/ScalaRunTime.scala	1	0.02
+library/src/scala/runtime/LazyVals.scala	321	src/compiler/scala/tools/nsc/ast/TreeBrowsers.scala	1	0.00
+library/src/scala/runtime/TupleXXL.scala	135	src/library/scala/collection/immutable/ArraySeq.scala	1	0.01
+library/src/scala/runtime/function/JProcedure4.java	44	src/library/scala/Function4.scala	1	0.02
+library/src/scala/runtime/coverage/Invoker.scala	107	src/compiler/scala/tools/nsc/backend/jvm/opt/ByteCodeRepository.scala	1	0.01
+library/src/scala/quoted/Quotes.scala	6012	src/reflect/scala/reflect/internal/Types.scala	1	0.00
+scaladoc/src/dotty/tools/scaladoc/site/SidebarParser.scala	415	src/compiler/scala/tools/nsc/CompilerCommand.scala	1	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/Preparser.scala	488	src/reflect/scala/reflect/internal/util/AbstractFileClassLoader.scala	1	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/Comments.scala	1071	src/reflect/scala/reflect/internal/util/AbstractFileClassLoader.scala	1	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/wiki/Parser.scala	1216	src/library/scala/collection/mutable/RedBlackTree.scala	1	0.00
+library-js/src/scala/runtime/VarArgsBuilder.scala	505	src/reflect/scala/reflect/internal/util/AbstractFileClassLoader.scala	1	0.00
+compiler/src/scala/quoted/runtime/impl/ScopeException.scala	156		0	0.00
+compiler/src/scala/quoted/runtime/impl/ExprCastException.scala	45		0	0.00
+compiler/src/scala/quoted/runtime/impl/SpliceScope.scala	126		0	0.00
+compiler/src/scala/quoted/runtime/impl/printers/SyntaxHighlight.scala	99		0	0.00
+compiler/src/scala/quoted/runtime/impl/printers/Extractors.scala	1111		0	0.00
+compiler/src/dotty/tools/package.scala	70		0	0.00
+compiler/src/dotty/tools/scripting/ScriptingDriver.scala	153		0	0.00
+compiler/src/dotty/tools/scripting/StringDriver.scala	163		0	0.00
+compiler/src/dotty/tools/dotc/Resident.scala	80		0	0.00
+compiler/src/dotty/tools/dotc/Bench.scala	189		0	0.00
+compiler/src/dotty/tools/dotc/Compiler.scala	254		0	0.00
+compiler/src/dotty/tools/dotc/Driver.scala	528		0	0.00
+compiler/src/dotty/tools/dotc/CompilationUnit.scala	430		0	0.00
+compiler/src/dotty/tools/dotc/rewrites/Rewrites.scala	310		0	0.00
+compiler/src/dotty/tools/dotc/fromtasty/ReadTasty.scala	230		0	0.00
+compiler/src/dotty/tools/dotc/fromtasty/Debug.scala	156		0	0.00
+compiler/src/dotty/tools/dotc/fromtasty/TASTYRun.scala	101		0	0.00
+compiler/src/dotty/tools/dotc/fromtasty/TastyFileUtil.scala	87		0	0.00
+compiler/src/dotty/tools/dotc/reporting/DidYouMean.scala	454		0	0.00
+compiler/src/dotty/tools/dotc/reporting/Message.scala	1003		0	0.00
+compiler/src/dotty/tools/dotc/reporting/Profile.scala	509		0	0.00
+compiler/src/dotty/tools/dotc/reporting/Diagnostic.scala	370		0	0.00
+compiler/src/dotty/tools/dotc/reporting/MessageKind.scala	61		0	0.00
+compiler/src/dotty/tools/dotc/reporting/UniqueMessagePositions.scala	96		0	0.00
+compiler/src/dotty/tools/dotc/reporting/StoreReporter.scala	98		0	0.00
+compiler/src/dotty/tools/dotc/reporting/ErrorMessageID.scala	297		0	0.00
+compiler/src/dotty/tools/dotc/reporting/ExploringReporter.scala	42		0	0.00
+compiler/src/dotty/tools/dotc/reporting/trace.scala	291		0	0.00
+compiler/src/dotty/tools/dotc/staging/QuoteTypeTags.scala	86		0	0.00
+compiler/src/dotty/tools/dotc/staging/TreeMapWithStages.scala	132		0	0.00
+compiler/src/dotty/tools/dotc/staging/StagingLevel.scala	122		0	0.00
+compiler/src/dotty/tools/dotc/core/CheckRealizable.scala	396		0	0.00
+compiler/src/dotty/tools/dotc/core/NameKinds.scala	987		0	0.00
+compiler/src/dotty/tools/dotc/core/Hashable.scala	321		0	0.00
+compiler/src/dotty/tools/dotc/core/MatchTypeTrace.scala	377		0	0.00
+compiler/src/dotty/tools/dotc/core/TypeEval.scala	868		0	0.00
+compiler/src/dotty/tools/dotc/core/DenotTransformers.scala	114		0	0.00
+compiler/src/dotty/tools/dotc/core/OrderingConstraint.scala	2349		0	0.00
+compiler/src/dotty/tools/dotc/core/RecursiveOperation.scala	196		0	0.00
+compiler/src/dotty/tools/dotc/core/MatchTypes.scala	62		0	0.00
+compiler/src/dotty/tools/dotc/core/Mode.scala	212		0	0.00
+compiler/src/dotty/tools/dotc/core/Flags.scala	1137		0	0.00
+compiler/src/dotty/tools/dotc/core/Phases.scala	1369		0	0.00
+compiler/src/dotty/tools/dotc/core/ParamInfo.scala	42		0	0.00
+compiler/src/dotty/tools/dotc/core/ConstraintRunInfo.scala	65		0	0.00
+compiler/src/dotty/tools/dotc/core/PatternTypeConstrainer.scala	468		0	0.00
+compiler/src/dotty/tools/dotc/core/Signature.scala	254		0	0.00
+compiler/src/dotty/tools/dotc/core/Symbols.scala	2261		0	0.00
+compiler/src/dotty/tools/dotc/core/Denotations.scala	2779		0	0.00
+compiler/src/dotty/tools/dotc/core/NullOpsDecorator.scala	118		0	0.00
+compiler/src/dotty/tools/dotc/core/Variances.scala	141		0	0.00
+compiler/src/dotty/tools/dotc/core/Periods.scala	316		0	0.00
+compiler/src/dotty/tools/dotc/core/Atoms.scala	49		0	0.00
+compiler/src/dotty/tools/dotc/core/TypeErrors.scala	426		0	0.00
+compiler/src/dotty/tools/dotc/core/Constraint.scala	223		0	0.00
+compiler/src/dotty/tools/dotc/core/Uniques.scala	241		0	0.00
+compiler/src/dotty/tools/dotc/core/MacroClassLoader.scala	116		0	0.00
+compiler/src/dotty/tools/dotc/core/GadtConstraint.scala	800		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/ScratchData.scala	41		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TastyClassName.scala	130		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/DottyUnpickler.scala	228		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/PositionUnpickler.scala	153		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TastyPickler.scala	208		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TreePickler.scala	2520		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/PositionPickler.scala	262		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/NameBuffer.scala	271		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/BestEffortTastyWriter.scala	113		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/CommentPickler.scala	98		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/CommentUnpickler.scala	54		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TreeBuffer.scala	391		0	0.00
+compiler/src/dotty/tools/dotc/core/tasty/TastyHTMLPrinter.scala	32		0	0.00
+compiler/src/dotty/tools/dotc/util/Signatures.scala	1591		0	0.00
+compiler/src/dotty/tools/dotc/util/Attachment.scala	203		0	0.00
+compiler/src/dotty/tools/dotc/util/Spans.scala	317		0	0.00
+compiler/src/dotty/tools/dotc/util/FreshNameCreator.scala	51		0	0.00
+compiler/src/dotty/tools/dotc/util/SourcePosition.scala	296		0	0.00
+compiler/src/dotty/tools/dotc/util/IntMap.scala	79		0	0.00
+compiler/src/dotty/tools/dotc/util/SimpleIdentitySet.scala	325		0	0.00
+compiler/src/dotty/tools/dotc/util/MutableIdentitySet.scala	240		0	0.00
+compiler/src/dotty/tools/dotc/util/HashSet.scala	164		0	0.00
+compiler/src/dotty/tools/dotc/util/ParsedComment.scala	355		0	0.00
+compiler/src/dotty/tools/dotc/util/ReadOnlyMap.scala	75		0	0.00
+compiler/src/dotty/tools/dotc/util/SimpleIdentityMap.scala	211		0	0.00
+compiler/src/dotty/tools/dotc/util/PerfectHashing.scala	198		0	0.00
+compiler/src/dotty/tools/dotc/util/concurrent.scala	89		0	0.00
+compiler/src/dotty/tools/dotc/util/Store.scala	77		0	0.00
+compiler/src/dotty/tools/dotc/util/Stats.scala	137		0	0.00
+compiler/src/dotty/tools/dotc/util/ClasspathFromClassloader.scala	69		0	0.00
+compiler/src/dotty/tools/dotc/util/DiffUtil.scala	714		0	0.00
+compiler/src/dotty/tools/dotc/typer/Docstrings.scala	152		0	0.00
+compiler/src/dotty/tools/dotc/typer/JavaChecks.scala	41		0	0.00
+compiler/src/dotty/tools/dotc/typer/ImportSuggestions.scala	767		0	0.00
+compiler/src/dotty/tools/dotc/typer/ReTyper.scala	713		0	0.00
+compiler/src/dotty/tools/dotc/typer/EtaExpansion.scala	594		0	0.00
+compiler/src/dotty/tools/dotc/typer/ImportInfo.scala	464		0	0.00
+compiler/src/dotty/tools/dotc/typer/TyperPhase.scala	296		0	0.00
+compiler/src/dotty/tools/dotc/typer/Migrations.scala	1199		0	0.00
+compiler/src/dotty/tools/dotc/typer/SpecStrings.scala	307		0	0.00
+compiler/src/dotty/tools/dotc/typer/QuotesAndSplices.scala	1325		0	0.00
+compiler/src/dotty/tools/dotc/config/ScalaSettingsProperties.scala	96		0	0.00
+compiler/src/dotty/tools/dotc/config/Config.scala	50		0	0.00
+compiler/src/dotty/tools/dotc/config/MigrationVersion.scala	101		0	0.00
+compiler/src/dotty/tools/dotc/config/Printers.scala	117		0	0.00
+compiler/src/dotty/tools/dotc/config/SJSPlatform.scala	77		0	0.00
+compiler/src/dotty/tools/dotc/config/SourceVersion.scala	100		0	0.00
+compiler/src/dotty/tools/dotc/printing/Highlighting.scala	198		0	0.00
+compiler/src/dotty/tools/dotc/printing/PlainPrinter.scala	2450		0	0.00
+compiler/src/dotty/tools/dotc/printing/ReplPrinter.scala	363		0	0.00
+compiler/src/dotty/tools/dotc/printing/SyntaxHighlighting.scala	362		0	0.00
+compiler/src/dotty/tools/dotc/printing/OutlinePrinter.scala	129		0	0.00
+compiler/src/dotty/tools/dotc/printing/package.scala	49		0	0.00
+compiler/src/dotty/tools/dotc/printing/Texts.scala	446		0	0.00
+compiler/src/dotty/tools/dotc/printing/Printer.scala	259		0	0.00
+compiler/src/dotty/tools/dotc/printing/Showable.scala	45		0	0.00
+compiler/src/dotty/tools/dotc/inlines/PrepareInlineable.scala	777		0	0.00
+compiler/src/dotty/tools/dotc/decompiler/TASTYDecompiler.scala	35		0	0.00
+compiler/src/dotty/tools/dotc/decompiler/Main.scala	73		0	0.00
+compiler/src/dotty/tools/dotc/decompiler/DecompilationPrinter.scala	106		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/DiagnosticOps.scala	61		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/PPrint.scala	1108		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/SyntheticsExtractor.scala	372		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/ConstantOps.scala	67		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/Descriptor.scala	184		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/TypeOps.scala	1284		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/Scala3.scala	1556		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/package.scala	107		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/SemanticSymbolBuilder.scala	592		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Constant.scala	2322		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Location.scala	242		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Scope.scala	303		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Language.scala	122		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Documentation.scala	355		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/TextDocuments.scala	209		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Type.scala	4437		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/TextDocument.scala	718		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Diagnostic.scala	460		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Range.scala	245		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Signature.scala	1810		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Synthetic.scala	331		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/SymbolOccurrence.scala	423		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Tree.scala	2777		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Schema.scala	122		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Access.scala	1510		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/Annotation.scala	230		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/generated/SymbolInformation.scala	1623		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/SemanticdbOutputStream.scala	1020		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/LiteParser.scala	48		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/MD5.scala	59		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/InvalidProtocolBufferException.scala	155		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/SemanticdbTypeMapper.scala	37		0	0.00
+compiler/src/dotty/tools/dotc/semanticdb/internal/SemanticdbGeneratedMessageCompanion.scala	102		0	0.00
+compiler/src/dotty/tools/dotc/quoted/QuoteUtils.scala	67		0	0.00
+compiler/src/dotty/tools/dotc/quoted/QuotePatterns.scala	988		0	0.00
+compiler/src/dotty/tools/dotc/quoted/QuotesCache.scala	67		0	0.00
+compiler/src/dotty/tools/dotc/quoted/TastyString.scala	68		0	0.00
+compiler/src/dotty/tools/dotc/quoted/MacroExpansion.scala	51		0	0.00
+compiler/src/dotty/tools/dotc/quoted/reflect/FromSymbol.scala	230		0	0.00
+compiler/src/dotty/tools/dotc/interactive/LogicalPackage.scala	48		0	0.00
+compiler/src/dotty/tools/dotc/interactive/ParsedLogicalPackage.scala	217		0	0.00
+compiler/src/dotty/tools/dotc/interactive/Interactive.scala	675		0	0.00
+compiler/src/dotty/tools/dotc/interactive/SourceTree.scala	160		0	0.00
+compiler/src/dotty/tools/dotc/interactive/LogicalSourcePath.scala	115		0	0.00
+compiler/src/dotty/tools/dotc/interactive/LogicalPackagesProvider.scala	323		0	0.00
+compiler/src/dotty/tools/dotc/sbt/package.scala	91		0	0.00
+compiler/src/dotty/tools/dotc/sbt/ShowAPI.scala	492		0	0.00
+compiler/src/dotty/tools/dotc/sbt/APIUtils.scala	111		0	0.00
+compiler/src/dotty/tools/dotc/sbt/interfaces/ProgressCallback.java	31		0	0.00
+compiler/src/dotty/tools/dotc/sbt/interfaces/IncrementalCallback.java	99		0	0.00
+compiler/src/dotty/tools/dotc/ast/Positioned.scala	463		0	0.00
+compiler/src/dotty/tools/dotc/ast/NavigateAST.scala	337		0	0.00
+compiler/src/dotty/tools/dotc/ast/TreeMapWithTrackedStats.scala	175		0	0.00
+compiler/src/dotty/tools/dotc/ast/TreeMapWithImplicits.scala	150		0	0.00
+compiler/src/dotty/tools/dotc/ast/MainProxies.scala	323		0	0.00
+compiler/src/dotty/tools/dotc/cc/Mutability.scala	658		0	0.00
+compiler/src/dotty/tools/dotc/cc/Capability.scala	2707		0	0.00
+compiler/src/dotty/tools/dotc/cc/CapturingType.scala	142		0	0.00
+compiler/src/dotty/tools/dotc/cc/CaptureSet.scala	3646		0	0.00
+compiler/src/dotty/tools/dotc/cc/Synthetics.scala	442		0	0.00
+compiler/src/dotty/tools/dotc/cc/CCState.scala	228		0	0.00
+compiler/src/dotty/tools/dotc/cc/CaptureRunInfo.scala	55		0	0.00
+compiler/src/dotty/tools/dotc/cc/RetainingAnnotation.scala	132		0	0.00
+compiler/src/dotty/tools/dotc/cc/Setup.scala	2649		0	0.00
+compiler/src/dotty/tools/dotc/cc/ccConfig.scala	39		0	0.00
+compiler/src/dotty/tools/dotc/parsing/Tokens.scala	786		0	0.00
+compiler/src/dotty/tools/dotc/parsing/ParserPhase.scala	155		0	0.00
+compiler/src/dotty/tools/dotc/parsing/package.scala	31		0	0.00
+compiler/src/dotty/tools/dotc/transform/SpecializeInlineTraits.scala	290		0	0.00
+compiler/src/dotty/tools/dotc/transform/SyntheticMembers.scala	1755		0	0.00
+compiler/src/dotty/tools/dotc/transform/EtaReduce.scala	182		0	0.00
+compiler/src/dotty/tools/dotc/transform/CheckReentrant.scala	189		0	0.00
+compiler/src/dotty/tools/dotc/transform/Inlining.scala	415		0	0.00
+compiler/src/dotty/tools/dotc/transform/ArrayConstructors.scala	158		0	0.00
+compiler/src/dotty/tools/dotc/transform/ExplicitOuter.scala	1072		0	0.00
+compiler/src/dotty/tools/dotc/transform/CheckInlineTraits.scala	481		0	0.00
+compiler/src/dotty/tools/dotc/transform/HoistSuperArgs.scala	581		0	0.00
+compiler/src/dotty/tools/dotc/transform/InlinePatterns.scala	157		0	0.00
+compiler/src/dotty/tools/dotc/transform/TupleOptimizations.scala	510		0	0.00
+compiler/src/dotty/tools/dotc/transform/CountOuterAccesses.scala	106		0	0.00
+compiler/src/dotty/tools/dotc/transform/BetaReduce.scala	465		0	0.00
+compiler/src/dotty/tools/dotc/transform/ProtectedAccessors.scala	242		0	0.00
+compiler/src/dotty/tools/dotc/transform/BeanProperties.scala	194		0	0.00
+compiler/src/dotty/tools/dotc/transform/CapturedVars.scala	322		0	0.00
+compiler/src/dotty/tools/dotc/transform/VCElideAllocations.scala	98		0	0.00
+compiler/src/dotty/tools/dotc/transform/Staging.scala	241		0	0.00
+compiler/src/dotty/tools/dotc/transform/Memoize.scala	438		0	0.00
+compiler/src/dotty/tools/dotc/transform/FunctionXXLForwarders.scala	153		0	0.00
+compiler/src/dotty/tools/dotc/transform/SeqLiterals.scala	75		0	0.00
+compiler/src/dotty/tools/dotc/transform/PruneErasedDefs.scala	67		0	0.00
+compiler/src/dotty/tools/dotc/transform/MoveStatics.scala	298		0	0.00
+compiler/src/dotty/tools/dotc/transform/TransformWildcards.scala	57		0	0.00
+compiler/src/dotty/tools/dotc/transform/ExpandPrivate.scala	248		0	0.00
+compiler/src/dotty/tools/dotc/transform/ReifiedReflect.scala	228		0	0.00
+compiler/src/dotty/tools/dotc/transform/CompleteJavaEnums.scala	574		0	0.00
+compiler/src/dotty/tools/dotc/transform/TypeTestsCasts.scala	1002		0	0.00
+compiler/src/dotty/tools/dotc/transform/RestoreScopes.scala	94		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimOpaque.scala	167		0	0.00
+compiler/src/dotty/tools/dotc/transform/MacroAnnotations.scala	618		0	0.00
+compiler/src/dotty/tools/dotc/transform/SpecializeApplyMethods.scala	261		0	0.00
+compiler/src/dotty/tools/dotc/transform/MegaPhase.scala	3433		0	0.00
+compiler/src/dotty/tools/dotc/transform/YCheckPositions.scala	245		0	0.00
+compiler/src/dotty/tools/dotc/transform/InlineVals.scala	191		0	0.00
+compiler/src/dotty/tools/dotc/transform/Instrumentation.scala	350		0	0.00
+compiler/src/dotty/tools/dotc/transform/Constructors.scala	912		0	0.00
+compiler/src/dotty/tools/dotc/transform/ExpandSAMs.scala	517		0	0.00
+compiler/src/dotty/tools/dotc/transform/DropBreaks.scala	503		0	0.00
+compiler/src/dotty/tools/dotc/transform/PostInlining.scala	65		0	0.00
+compiler/src/dotty/tools/dotc/transform/DropOuterAccessors.scala	190		0	0.00
+compiler/src/dotty/tools/dotc/transform/SpecializeTuples.scala	155		0	0.00
+compiler/src/dotty/tools/dotc/transform/ValueClasses.scala	68		0	0.00
+compiler/src/dotty/tools/dotc/transform/Pickler.scala	1582		0	0.00
+compiler/src/dotty/tools/dotc/transform/SpecializeFunctions.scala	279		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimOuterSelect.scala	58		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimPolyFunction.scala	146		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimRepeated.scala	686		0	0.00
+compiler/src/dotty/tools/dotc/transform/RepeatableAnnotations.scala	193		0	0.00
+compiler/src/dotty/tools/dotc/transform/NonLocalReturns.scala	264		0	0.00
+compiler/src/dotty/tools/dotc/transform/LazyVals.scala	1753		0	0.00
+compiler/src/dotty/tools/dotc/transform/ParamForwarding.scala	158		0	0.00
+compiler/src/dotty/tools/dotc/transform/UnrollDefinitions.scala	758		0	0.00
+compiler/src/dotty/tools/dotc/transform/CheckShadowing.scala	760		0	0.00
+compiler/src/dotty/tools/dotc/transform/FirstTransform.scala	600		0	0.00
+compiler/src/dotty/tools/dotc/transform/LetOverApply.scala	75		0	0.00
+compiler/src/dotty/tools/dotc/transform/PureStats.scala	80		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimStaticThis.scala	112		0	0.00
+compiler/src/dotty/tools/dotc/transform/UncacheGivenAliases.scala	106		0	0.00
+compiler/src/dotty/tools/dotc/transform/SetRootTree.scala	96		0	0.00
+compiler/src/dotty/tools/dotc/transform/Flatten.scala	151		0	0.00
+compiler/src/dotty/tools/dotc/transform/ExplicitSelf.scala	160		0	0.00
+compiler/src/dotty/tools/dotc/transform/CheckLoopingImplicits.scala	213		0	0.00
+compiler/src/dotty/tools/dotc/transform/MacroTransform.scala	108		0	0.00
+compiler/src/dotty/tools/dotc/transform/SimplifySynchronized.scala	140		0	0.00
+compiler/src/dotty/tools/dotc/transform/ElimPackagePrefixes.scala	75		0	0.00
+compiler/src/dotty/tools/dotc/transform/DropParentRefinements.scala	90		0	0.00
+compiler/src/dotty/tools/dotc/transform/Getters.scala	246		0	0.00
+compiler/src/dotty/tools/dotc/transform/CookComments.scala	92		0	0.00
+compiler/src/dotty/tools/dotc/transform/ContextFunctionResults.scala	312		0	0.00
+compiler/src/dotty/tools/dotc/transform/WInferUnion.scala	111		0	0.00
+compiler/src/dotty/tools/dotc/transform/CollectNullableFields.scala	190		0	0.00
+compiler/src/dotty/tools/dotc/transform/FullParameterization.scala	463		0	0.00
+compiler/src/dotty/tools/dotc/transform/CheckStatic.scala	152		0	0.00
+compiler/src/dotty/tools/dotc/transform/InterceptedMethods.scala	242		0	0.00
+compiler/src/dotty/tools/dotc/transform/ArrayApply.scala	274		0	0.00
+compiler/src/dotty/tools/dotc/transform/VCInlineMethods.scala	181		0	0.00
+compiler/src/dotty/tools/dotc/transform/SelectStatic.scala	207		0	0.00
+compiler/src/dotty/tools/dotc/transform/UninitializedDefs.scala	90		0	0.00
+compiler/src/dotty/tools/dotc/transform/PruneInlineTraits.scala	180		0	0.00
+compiler/src/dotty/tools/dotc/transform/AccessProxies.scala	492		0	0.00
+compiler/src/dotty/tools/dotc/transform/init/Checker.scala	175		0	0.00
+compiler/src/dotty/tools/dotc/transform/init/Util.scala	347		0	0.00
+compiler/src/dotty/tools/dotc/transform/init/Trace.scala	234		0	0.00
+compiler/src/dotty/tools/dotc/transform/init/Errors.scala	264		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/JSExportUtils.scala	67		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/ExplicitJSClasses.scala	1113		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/JSSymUtils.scala	533		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/AddLocalJSFakeNews.scala	171		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/JUnitBootstrappers.scala	700		0	0.00
+compiler/src/dotty/tools/dotc/transform/sjs/PrepJSExports.scala	1238		0	0.00
+compiler/src/dotty/tools/dotc/coverage/Location.scala	83		0	0.00
+compiler/src/dotty/tools/dotc/coverage/Coverage.scala	57		0	0.00
+compiler/src/dotty/tools/io/FileExtension.scala	152		0	0.00
+compiler/src/dotty/tools/backend/ScalaPrimitives.scala	1049		0	0.00
+compiler/src/dotty/tools/backend/sjs/JSPositions.scala	223		0	0.00
+compiler/src/dotty/tools/backend/sjs/JSEncoding.scala	976		0	0.00
+compiler/src/dotty/tools/backend/sjs/JSExportsGen.scala	2432		0	0.00
+compiler/src/dotty/tools/backend/sjs/JSDefinitions.scala	1500		0	0.00
+compiler/src/dotty/tools/backend/sjs/ScopedVar.scala	88		0	0.00
+compiler/src/dotty/tools/backend/sjs/GenSJSIR.scala	44		0	0.00
+compiler/src/dotty/tools/backend/jvm/SymbolUtils.scala	164		0	0.00
+compiler/src/dotty/tools/backend/jvm/GenBCode.scala	239		0	0.00
+compiler/src/dotty/tools/backend/jvm/BCode.scala	66		0	0.00
+compiler/src/dotty/tools/backend/jvm/analysis/MethodFingerprint.scala	156		0	0.00
+compiler/src/dotty/tools/backend/jvm/analysis/AnalysisBudget.scala	131		0	0.00
+compiler/src/dotty/tools/backend/jvm/opt/Limits.scala	34		0	0.00
+compiler/src/dotty/tools/backend/jvm/opt/OptimizerSettings.scala	133		0	0.00
+compiler/src/dotty/tools/debug/JavaEncoding.scala	209		0	0.00
+compiler/src/dotty/tools/debug/ExpressionCompiler.scala	60		0	0.00
+compiler/src/dotty/tools/debug/ExpressionCompilerConfig.scala	185		0	0.00
+compiler/src/dotty/tools/debug/ExpressionReporter.scala	31		0	0.00
+compiler/src/dotty/tools/debug/ReflectEvalStrategy.scala	73		0	0.00
+compiler/src/dotty/tools/debug/ExpressionCompilerBridge.scala	62		0	0.00
+compiler/src/dotty/tools/debug/ExpressionStore.scala	83		0	0.00
+compiler/src/dotty/tools/debug/ResolveReflectEval.scala	1102		0	0.00
+compiler/src/dotty/tools/debug/InsertExpression.scala	643		0	0.00
+compiler/src/dotty/tools/debug/ExtractExpression.scala	1115		0	0.00
+library/src/scala/CanEqual.scala	109		0	0.00
+library/src/scala/CanThrow.scala	65		0	0.00
+library/src/scala/Tuple.scala	500		0	0.00
+library/src/scala/NamedTuple.scala	408		0	0.00
+library/src/scala/util/CommandLineParser.scala	124		0	0.00
+library/src/scala/util/boundary.scala	80		0	0.00
+library/src/scala/util/control/NonLocalReturns.scala	65		0	0.00
+library/src/scala/caps/package.scala	144		0	0.00
+library/src/scala/reflect/Selectable.scala	66		0	0.00
+library/src/scala/runtime/TupleMirror.scala	33		0	0.00
+library/src/scala/runtime/Tuples.scala	1785		0	0.00
+library/src/scala/runtime/stdLibPatches/language.scala	403		0	0.00
+library/src/scala/runtime/function/JProcedure2.java	33		0	0.00
+library/src/scala/runtime/function/JProcedure3.java	39		0	0.00
+library/src/scala/deriving/Mirror.scala	77		0	0.00
+library/src/scala/compiletime/package.scala	149		0	0.00
+library/src/scala/compiletime/ops/long.scala	71		0	0.00
+library/src/scala/compiletime/ops/int.scala	61		0	0.00
+library/src/scala/compiletime/ops/string.scala	37		0	0.00
+library/src/scala/compiletime/ops/double.scala	40		0	0.00
+library/src/scala/compiletime/ops/float.scala	40		0	0.00
+library/src/scala/quoted/Type.scala	150		0	0.00
+library/src/scala/quoted/Varargs.scala	59		0	0.00
+library/src/scala/quoted/ExprMap.scala	569		0	0.00
+library/src/scala/quoted/runtime/QuoteUnpickler.scala	64		0	0.00
+library/src/scala/quoted/runtime/QuoteMatching.scala	46		0	0.00
+library/src/scala/quoted/runtime/Expr.scala	43		0	0.00
+library/src/scala/quoted/runtime/Patterns.scala	67		0	0.00
+sbt-bridge/src/xsbt/CachedCompilerImpl.java	186		0	0.00
+sbt-bridge/src/xsbt/CompilerClassLoader.java	118		0	0.00
+sbt-bridge/src/xsbt/CompilerInterface.java	126		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/FallbackPathBasedFile.java	33		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/Problem.java	264		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/CompilerBridge.java	54		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/InterfaceCompileFailed.java	37		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/FallbackVirtualFile.java	49		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/ProgressCallbackImpl.java	67		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/IncrementalCallback.java	195		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/PositionBridge.java	308		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/OldIncrementalCallback.java	224		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/Action.java	41		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/DelegatingReporter.java	291		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/DiagnosticCode.java	31		0	0.00
+sbt-bridge/src/dotty/tools/xsbt/CompilerBridgeDriver.java	498		0	0.00
+scaladoc/src/scala/tasty/inspector/Inspector.scala	67		0	0.00
+scaladoc/src/scala/tasty/inspector/TastyInspector.scala	367		0	0.00
+scaladoc/src/dotty/tools/scaladoc/DRI.scala	44		0	0.00
+scaladoc/src/dotty/tools/scaladoc/compat.scala	126		0	0.00
+scaladoc/src/dotty/tools/scaladoc/Scaladoc.scala	706		0	0.00
+scaladoc/src/dotty/tools/scaladoc/QuickLink.scala	62		0	0.00
+scaladoc/src/dotty/tools/scaladoc/ScaladocSettings.scala	855		0	0.00
+scaladoc/src/dotty/tools/scaladoc/ExternalDocLink.scala	215		0	0.00
+scaladoc/src/dotty/tools/scaladoc/ScalaModuleProvider.scala	169		0	0.00
+scaladoc/src/dotty/tools/scaladoc/PathBased.scala	139		0	0.00
+scaladoc/src/dotty/tools/scaladoc/api.scala	863		0	0.00
+scaladoc/src/dotty/tools/scaladoc/ScaladocCommand.scala	58		0	0.00
+scaladoc/src/dotty/tools/scaladoc/Inkuire.scala	768		0	0.00
+scaladoc/src/dotty/tools/scaladoc/Main.scala	32		0	0.00
+scaladoc/src/dotty/tools/scaladoc/SocialLinks.scala	156		0	0.00
+scaladoc/src/dotty/tools/scaladoc/translators/ScalaSignatureProvider.scala	477		0	0.00
+scaladoc/src/dotty/tools/scaladoc/translators/ScalaSignatureUtils.scala	437		0	0.00
+scaladoc/src/dotty/tools/scaladoc/translators/FilterAttributes.scala	97		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetSource.scala	92		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/WrappedSnippet.scala	366		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/FlexmarkSnippetProcessor.scala	301		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetExpectations.scala	452		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetCompilerDataCollector.scala	169		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetCompilationResult.scala	104		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetCompilerArgs.scala	307		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetChecker.scala	159		0	0.00
+scaladoc/src/dotty/tools/scaladoc/snippets/SnippetCompiler.scala	325		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/Locations.scala	304		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/DotDiagramBuilder.scala	109		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/MemberRenderer.scala	1815		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/HtmlRenderer.scala	1196		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/MarkdownRenderer.scala	36		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/DocRenderer.scala	332		0	0.00
+scaladoc/src/dotty/tools/scaladoc/renderers/SignatureRenderer.scala	118		0	0.00
+scaladoc/src/dotty/tools/scaladoc/parsers/WikiCodeBlockParser.scala	339		0	0.00
+scaladoc/src/dotty/tools/scaladoc/util/escape.scala	52		0	0.00
+scaladoc/src/dotty/tools/scaladoc/util/JSON.scala	110		0	0.00
+scaladoc/src/dotty/tools/scaladoc/util/html.scala	315		0	0.00
+scaladoc/src/dotty/tools/scaladoc/transformers/ImplicitMembersExtensionTransformer.scala	149		0	0.00
+scaladoc/src/dotty/tools/scaladoc/transformers/InheritanceInformationTransformer.scala	119		0	0.00
+scaladoc/src/dotty/tools/scaladoc/transformers/SealedMarksGraphTransformer.scala	43		0	0.00
+scaladoc/src/dotty/tools/scaladoc/site/common.scala	469		0	0.00
+scaladoc/src/dotty/tools/scaladoc/site/templates.scala	380		0	0.00
+scaladoc/src/dotty/tools/scaladoc/site/BlogParser.scala	69		0	0.00
+scaladoc/src/dotty/tools/scaladoc/site/FlexmarkSectionWrapper.scala	109		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/ScalaDocSupport.scala	211		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/ClassLikeSupport.scala	1915		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/NameNormalizer.scala	85		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/PackageSupport.scala	40		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/InkuireSupport.scala	1182		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/JavadocAnchorCreator.scala	127		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/TypesSupport.scala	2035		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/BasicSupport.scala	225		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/SyntheticSupport.scala	206		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/TastyParser.scala	730		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/SymOps.scala	874		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/Scaladoc2AnchorCreator.scala	200		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/MarkdownParser.scala	204		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/MemberLookup.scala	808		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/CommentRegex.scala	70		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/Queries.scala	327		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/package.scala	47		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/Cleaner.scala	202		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/CommentSyntaxArgs.scala	165		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/markdown/SnippetRenderer.scala	633		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/markdown/SectionRenderingExtension.scala	229		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/markdown/DocFlexmarkExtension.scala	250		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/markdown/SnippetRenderingExtension.scala	149		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/markdown/FootnoteSeparatorExtension.scala	98		0	0.00
+scaladoc/src/dotty/tools/scaladoc/tasty/comments/wiki/Entities.scala	292		0	0.00
+scaladoc/src/dotty/tools/scaladoc/cc/CaptureOps.scala	465		0	0.00
+tasty/src/dotty/tools/tasty/util/Util.scala	43		0	0.00
+interfaces/src/dotty/tools/dotc/interfaces/Diagnostic.java	30		0	0.00
