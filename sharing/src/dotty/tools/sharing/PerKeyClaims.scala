@@ -111,13 +111,31 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
       if claim.done.getCount == 0 then return null
       chain = claim :: chain
       if claim.owner eq me then
-        // the edges were read one after another: a claim released after it was read, whose owner then waited on a
-        // claim of `me`, joins two waits that never coexisted. Claims are not reacquired, so every claim still held
-        // now was held throughout the walk, and the waits on them still stand
-        return if chain.forall(_.done.getCount != 0) then chain else null
+        // The edges were read one after another, so a chain is a cycle only if its waits still coexist now. A claim
+        // released after it was read, whose owner then waited on a claim of `me`, joined two waits that never
+        // coexisted (finding I98); claims are not reacquired, so a claim still held now was held throughout the
+        // walk. But a claim held is not a wait that stands: a claimant that threw out of `acquire` (aborted as a
+        // victim, a raised cycle, an interrupt) has cleared its `waitingOn` while its claim is still registered and
+        // its latch up, and a chain through it joins its ended wait with one that began after it. So each edge is
+        // read again: the claimant that was seen waiting on a claim must be waiting on it still.
+        return if chain.forall(_.done.getCount != 0) && edgesStand(chain) then chain else null
       claim = claim.owner.waitingOn
       steps += 1
     null
+
+  /** Does every claimant of `chain` (built last claim first) still wait on the claim it was seen waiting on: the
+   *  owner of each claim on the claim read after it, the last claim's owner being `me`, whose wait is about to start.
+   */
+  private def edgesStand(chain: List[Claim]): Boolean =
+    // `chain` is `c_n :: ... :: c_1` where `c_1` is the claim `me` waits on and the owner of `c_i` waits on `c_i+1`
+    var cs = chain
+    var ok = true
+    while ok && cs.nonEmpty && cs.tail.nonEmpty do
+      val waitedOn = cs.head        // c_i+1
+      val waiter = cs.tail.head     // c_i, whose owner was seen waiting on c_i+1
+      ok = waiter.owner.waitingOn eq waitedOn
+      cs = cs.tail
+    ok
 
   /** The wait-for graph now, for diagnostics: each claim, its owner (by thread id), and what the owner waits on. */
   def graphNow: String =
