@@ -80,6 +80,12 @@ object Denotations {
   private[core] object BringForward:
     given Sharing.ClaimKind[BringForward.type] = Sharing.ClaimKind(CompletionLock.bringForward, lockWhenSerialised = true)
 
+  /** `op` as the one writer of the versions of `d`'s symbol in this run (its ring of denotations, linked by
+   *  `nextInRun`), on a base with several readers: a transformer's new version, an extension of a version's period,
+   *  an `installAfter`. Readers walk the ring with no claim. Keyed by the symbol, or by `d` with none. */
+  private[core] inline def ringClaim[T](d: SingleDenotation)(inline op: T)(using Context): T =
+    Sharing.claimAt(d)(if d.symbol.exists then d.symbol else d, Sharing.denotRing, d.symbol)(op)
+
   implicit def eqDenotation: CanEqual[Denotation, Denotation] = CanEqual.derived
 
   object PreDenotation:
@@ -858,23 +864,36 @@ object Denotations {
 
       /** Brings this denotation forward to the current phase, in one loop over the phase plan. A run of identity
        *  transformers is skipped in one step: they return the version unchanged, so its validity just extends.
+       *
+       *  `locked`: under the claim on the ring (`ringClaim`), on a base with several readers
        */
-      def goForward: SingleDenotation =
+      def goForward(locked: Boolean): SingleDenotation =
         val targetPhase = currentPeriod.lastPhaseId
         val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
         val transformers = ctx.base.denotTransformers           // transformer id => its DenotTransformerInfo
 
         var cur = coveringOrLatest(this)
-        while cur.validFor.lastPhaseId < targetPhase do
-          val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
-          cur =
-            if targetPhase <= transformerId then extend(cur, transformerId)
-            else
-              val info = transformers(transformerId)
-              if info.isIdentity then extend(cur, math.min(info.nextNonIdentity, nextTransformerAt(targetPhase)))
-              else transformAt(info, cur)
-          cur = coveringOrLatest(cur)
-        cur
+        if cur.validFor.lastPhaseId < targetPhase && ctx.base.concurrent && !locked then
+          // the extension or the transformer's new denotation is written by one reader at a time, which searches
+          // again first: two readers that transformed the same denotation linked two versions for one period, and
+          // an extension written after a concurrent `installAfter` made the old version valid again
+          ringClaim(this) {
+            val valid1 = validFor
+            if valid1.contains(currentPeriod) then this
+            else if valid1 == Nowhere || valid1.runId != currentPeriod.runId || currentPeriod < valid1 then current
+            else goForward(locked = true)
+          }
+        else
+          while cur.validFor.lastPhaseId < targetPhase do
+            val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
+            cur =
+              if targetPhase <= transformerId then extend(cur, transformerId)
+              else
+                val info = transformers(transformerId)
+                if info.isIdentity then extend(cur, math.min(info.nextNonIdentity, nextTransformerAt(targetPhase)))
+                else transformAt(info, cur)
+            cur = coveringOrLatest(cur)
+          cur
       end goForward
 
       /** `start`, if it covers the current phase; else the later version that does, or else the latest version */
@@ -956,7 +975,7 @@ object Denotations {
       else if valid.runId != currentPeriod.runId then
         toNewRun
       else if currentPeriod > valid then
-        goForward
+        goForward(locked = false)
       else
         goBack
     end current
@@ -971,24 +990,27 @@ object Denotations {
     protected def installAfter(phase: DenotTransformer)(using Context): Unit = {
       val targetId = phase.next.id
       if (ctx.phaseId != targetId) atPhase(phase.next)(installAfter(phase))
+      else if ctx.base.concurrent then ringClaim(this)(installAfter0(targetId))
+      else installAfter0(targetId)
+    }
+
+    private def installAfter0(targetId: PhaseId)(using Context): Unit = {
+      val current = symbol.current
+      // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
+      // println(current.definedPeriodsString)
+      this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
+      if (current.validFor.firstPhaseId >= targetId)
+        current.replaceWith(this)
+        symbol.denot
+          // Let symbol point to updated denotation
+          // Without this we can get problems when we immediately recompute the denotation
+          // at another phase since the invariant that symbol used to point to a valid
+          // denotation is lost.
       else {
-        val current = symbol.current
-        // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
-        // println(current.definedPeriodsString)
-        this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
-        if (current.validFor.firstPhaseId >= targetId)
-          current.replaceWith(this)
-          symbol.denot
-            // Let symbol point to updated denotation
-            // Without this we can get problems when we immediately recompute the denotation
-            // at another phase since the invariant that symbol used to point to a valid
-            // denotation is lost.
-        else {
-          current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
-          insertAfter(current)
-        }
-        // println(current.definedPeriodsString)
+        current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
+        insertAfter(current)
       }
+      // println(current.definedPeriodsString)
     }
 
     /** Apply a transformation `f` to all denotations in this group that start at or after
