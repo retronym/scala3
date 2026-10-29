@@ -106,6 +106,13 @@ class ParallelBatchContextBase extends ContextBase(Sharing.Parallel):
   private lazy val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
   override def reader: Reader = threadReader.get.nn
 
+  // as `InteractiveContextBase.unbindThread`: each pool thread on its way out (`Phases.inParallel`)
+  override def unbindThread(): Unit =
+    threadReader.remove()
+    initialCtx.searchHistory match
+      case root: typer.SearchRoot => root.clearThread()
+      case _ =>
+
 /** The run's reporter with readers on several threads: every report is under its monitor. While `buffering`, the
  *  diagnostics are kept and then issued in a fixed order (by file, then position, then arrival), so that a
  *  parallel typecheck reports as a serial one would, but for the order between units.

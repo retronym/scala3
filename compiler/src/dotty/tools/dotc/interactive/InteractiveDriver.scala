@@ -44,7 +44,7 @@ private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharin
    *  the driver (a pool thread of the presentation compiler) would keep the
    *  whole symbol table alive.
    */
-  def unbindThread(): Unit =
+  override def unbindThread(): Unit =
     threadReader.remove()
     initialCtx.searchHistory match
       case root: typer.SearchRoot => root.clearThread()

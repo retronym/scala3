@@ -59,6 +59,10 @@ class Driver {
         case ex: Exception if !runOrNull.enrichedErrorMessage =>
           println(runOrNull.enrichErrorMessage(s"Exception while compiling ${files.map(_.path).mkString(", ")}"))
           throw ex
+      // the compiling thread forgets its state on the base (`ContextBase.unbindThread`): a `-Yparallel-typer` base
+      // keeps it in `ThreadLocal`s, and a thread that compiles again (a build server, a benchmark) kept every
+      // earlier run's base alive through them
+      finally ctx.base.unbindThread()
     ctx.reporter
 
   protected def finish(compiler: Compiler, run: Run)(using Context): Unit =

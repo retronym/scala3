@@ -1207,6 +1207,12 @@ object Contexts {
     /** The reader the current thread types under. */
     def reader: Reader = initialReader
 
+    /** Forget the current thread's state on this base, before the thread leaves it: a base read by several
+     *  threads keeps a reader and implicit search state per thread in `ThreadLocal`s, whose values reach the base.
+     *  Nothing to forget on a batch base with one reader.
+     */
+    def unbindThread(): Unit = ()
+
     /** The fuel settings of a reader (`Context.handleRecursive`), known once
      *  `ContextBase.initialize` has run.
      */
