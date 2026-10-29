@@ -8,7 +8,7 @@ import scala.language.unsafeNulls
 
 import com.sun.net.httpserver.HttpExchange
 
-/** The x-ray's throughput demo: for each N, a fresh driver over every file of
+/** The interactive mode of the x-ray's thread-scaling view: for each N (`runs` times), a fresh driver over every file of
  *  the source set (`openAll`, every statement skipped, `-Yinteractive-parallel`,
  *  the build's options), typed by N reader threads with `Throughput`'s
  *  round-robin policy, or the largest files first
@@ -26,10 +26,10 @@ object ThroughputDemo:
    *  start ms, end ms) from the start of the open; the wall split into the
    *  open (serial), typing until the first thread ran out of files, and the
    *  tail until the last one did. */
-  final case class Point(n: Int, wallMs: Double, workerCpuMs: Double, rootWaits: Int, rootWaitMs: Double, differ: Int,
+  final case class Point(n: Int, run: Int, wallMs: Double, workerCpuMs: Double, rootWaits: Int, rootWaitMs: Double, differ: Int,
       cycleAborts: Int, cyclesRaised: Int, filesPerThread: List[Int], failure: String,
       openMs: Double = 0, typingMs: Double = 0, tailMs: Double = 0, lanes: List[List[(String, Double, Double)]] = Nil):
-    def toMap: Map[String, Any] = Map("n" -> n, "wallMs" -> r(wallMs), "workerCpuMs" -> r(workerCpuMs), "rootWaits" -> rootWaits,
+    def toMap: Map[String, Any] = Map("n" -> n, "run" -> run, "wallMs" -> r(wallMs), "workerCpuMs" -> r(workerCpuMs), "rootWaits" -> rootWaits,
       "rootWaitMs" -> r(rootWaitMs), "differ" -> differ, "cycleAborts" -> cycleAborts, "cyclesRaised" -> cyclesRaised,
       "filesPerThread" -> filesPerThread, "failure" -> failure, "openMs" -> r(openMs), "typingMs" -> r(typingMs), "tailMs" -> r(tailMs),
       "lanes" -> lanes.map(_.map((f, a, b) => List(f, r(a), r(b)))))
@@ -40,7 +40,9 @@ object ThroughputDemo:
   @volatile private var points: List[Point] = Nil
   @volatile private var ns: List[Int] = List(1, 2, 4, 6, 8)
   @volatile private var policy = "big"
+  @volatile private var runs = 1
   @volatile private var currentN = 0
+  @volatile private var currentRun = 0
   @volatile private var progress: AtomicIntegerArray | Null = null
   @volatile private var files = 0
   @volatile private var batchMs: Double = Double.NaN
@@ -50,10 +52,11 @@ object ThroughputDemo:
   private val stopRequested = new AtomicBoolean(false)
   @volatile private var runner: Thread | Null = null
 
-  def start(root: Path, requested: List[Int], requestedPolicy: String): Map[String, Any] = synchronized {
-    if runner != null && runner.isAlive then status() + ("error" -> "a throughput run is in progress")
+  def start(root: Path, requested: List[Int], requestedPolicy: String, requestedRuns: Int): Map[String, Any] = synchronized {
+    if running then status() + ("error" -> "an interactive run is in progress")
+    else if BatchDemo.running then status() + ("error" -> "a batch run is in progress")
     else
-      ns = requested; policy = requestedPolicy; points = Nil; error = ""; currentN = 0; progress = null; stopRequested.set(false); startedAt = System.nanoTime()
+      ns = requested; policy = requestedPolicy; runs = requestedRuns; currentRun = 0; points = Nil; error = ""; currentN = 0; progress = null; stopRequested.set(false); startedAt = System.nanoTime()
       state = "warming" // before the reply: a page polling at once must not see the previous state
       val t = new Thread((() => run(root)): Runnable, "xray-throughput")
       t.setDaemon(true); runner = t; t.start()
@@ -61,6 +64,11 @@ object ThroughputDemo:
   }
 
   def stop(): Unit = stopRequested.set(true)
+
+  def running: Boolean = { val t = runner; t != null && t.isAlive }
+
+  /** `1,2,4,8` as thread counts, each in 1..64. */
+  def threadCounts(s: String): List[Int] = s.split(',').toList.flatMap(_.trim.toIntOption).filter(n => n >= 1 && n <= 64).distinct
 
   private def run(root: Path): Unit =
     try
@@ -75,8 +83,8 @@ object ThroughputDemo:
         state = "batch"
         batchMs = Throughput.batch(jobs, root).wallMs
       var reference = wholeSetRef
-      for n <- ns if !stopRequested.get do
-        state = "running"; currentN = n
+      for n <- ns; i <- 1 to runs if !stopRequested.get do
+        state = "running"; currentN = n; currentRun = i
         val prog = new AtomicIntegerArray(n); progress = prog
         val diags = new java.util.concurrent.ConcurrentHashMap[URI, List[String]]()
         val timeline = Throughput.Timeline()
@@ -90,13 +98,13 @@ object ThroughputDemo:
             val lanes = (0 until n).toList.map(t => byThread.getOrElse(t, Nil).sortBy(_._3).map((_, f, a, b) => (f, ms(a), ms(b))))
             val ends = lanes.map(l => l.lastOption.map(_._3).getOrElse(ms(timeline.opened)))
             val openMs = ms(timeline.opened)
-            Point(n, c.wallMs, c.workerCpuMs, c.rootWaits, c.rootWaitMs, c.diagnosticsDiffer, c.cycleAborts, c.cyclesRaised, c.filesPerThread, "",
+            Point(n, i, c.wallMs, c.workerCpuMs, c.rootWaits, c.rootWaitMs, c.diagnosticsDiffer, c.cycleAborts, c.cyclesRaised, c.filesPerThread, "",
               openMs, ends.min - openMs, ends.max - ends.min, lanes)
           catch case ex: RuntimeException =>
-            Point(n, Double.NaN, Double.NaN, 0, 0, 0, 0, 0, Nil, if stopRequested.get then "cancelled" else String.valueOf(ex.getMessage).take(300))
+            Point(n, i, Double.NaN, Double.NaN, 0, 0, 0, 0, 0, Nil, if stopRequested.get then "cancelled" else String.valueOf(ex.getMessage).take(300))
         points = points :+ point
         // the later Ns are compared with N=1's own diagnostics
-        if n == 1 && point.failure.isEmpty then
+        if n == 1 && i == 1 && point.failure.isEmpty then
           import scala.jdk.CollectionConverters.*
           reference = diags.asScala.toMap
       state = if stopRequested.get then "cancelled" else "done"
@@ -106,7 +114,7 @@ object ThroughputDemo:
 
   def status(): Map[String, Any] =
     val p = progress
-    Map("state" -> state, "ns" -> ns, "policy" -> policy, "points" -> points.map(_.toMap), "currentN" -> currentN, "files" -> files,
+    Map("state" -> state, "ns" -> ns, "policy" -> policy, "runs" -> runs, "points" -> points.map(_.toMap), "currentN" -> currentN, "currentRun" -> currentRun, "files" -> files,
       "progress" -> (if p == null then Nil else (0 until p.length).map(p.get).toList),
       "batchMs" -> (if batchMs.isNaN then -1.0 else r(batchMs)), "warmMs" -> (if warmMs.isNaN then -1.0 else r(warmMs)),
       "error" -> error, "elapsedMs" -> (if startedAt == 0L then 0L else (System.nanoTime() - startedAt) / 1000000),
@@ -124,9 +132,10 @@ object ThroughputDemo:
     val q = Option(ex.getRequestURI.getRawQuery).getOrElse("") + "&" + (if ex.getRequestMethod == "POST" then XrayServer.readBody(ex) else "")
     path match
       case "/throughput/run" =>
-        val requested = field(q, "ns").map(_.split(',').toList.flatMap(_.trim.toIntOption).filter(n => n >= 1 && n <= 64).distinct).filter(_.nonEmpty).getOrElse(List(1, 2, 4, 6, 8))
+        val requested = field(q, "ns").map(threadCounts).filter(_.nonEmpty).getOrElse(List(1, 2, 4, 6, 8))
+        val requestedRuns = field(q, "runs").flatMap(_.toIntOption).filter(n => n >= 1 && n <= 10).getOrElse(1)
         root match
-          case Some(dir) => reply(ex, 200, "application/json", json(start(dir, requested, field(q, "policy").filter(Set("big", "rr")).getOrElse("big"))))
+          case Some(dir) => reply(ex, 200, "application/json", json(start(dir, requested, field(q, "policy").filter(Set("big", "rr")).getOrElse("big"), requestedRuns)))
           case None => reply(ex, 400, "application/json", json(Map("error" -> "no source set")))
       case "/throughput/stop" => stop(); reply(ex, 200, "application/json", json(status()))
       case "/throughput/status" => reply(ex, 200, "application/json", json(status()))
