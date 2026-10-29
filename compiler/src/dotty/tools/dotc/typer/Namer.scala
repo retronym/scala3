@@ -729,7 +729,20 @@ class Namer { typer: Typer =>
         case _ =>
           Annotation.Child(child, cls.span.startPos) :: annots
       }
-    cls.annotations = insertInto(cls.annotations)
+    if ctx.base.parallel then
+      // children of one sealed parent are registered by whichever readers complete them: the new list is computed
+      // outside any lock (it may evaluate a Child annotation), and stored under the parent's monitor only if no
+      // other reader stored one meanwhile; else computed again. A plain read-modify-write lost children
+      // (`enum SourceVersion`, signatures in parallel under `-Yparallel-typer`).
+      val denot = cls.denot
+      var done = false
+      while !done do
+        val before = denot.annotations
+        val after = insertInto(before)
+        done = denot.synchronized:
+          (denot.annotationsUNSAFE eq before) && { denot.annotations = after; true }
+    else
+      cls.annotations = insertInto(cls.annotations)
   }
 
   /** Add java enum constants */
