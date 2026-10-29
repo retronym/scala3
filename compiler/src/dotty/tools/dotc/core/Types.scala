@@ -2723,7 +2723,7 @@ object Types extends TypeUtils {
         case _ =>
           false
 
-      def givenSelfTypeOrCompleter(cls: Symbol) = { cls.denot.awaitOtherReader(); cls.infoOrCompleter } match // I73
+      def givenSelfTypeOrCompleter(cls: Symbol) = cls.denot.awaitedInfoOrCompleter match // I73
         case cinfo: ClassInfo =>
           cinfo.selfInfo match
             case sym: Symbol => sym.infoOrCompleter

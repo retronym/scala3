@@ -29,6 +29,7 @@ object CompletionLock:
   // coarse: every claim but a Namer signature's guards more than one symbol (a TASTy file, a bring-forward, an
   // inherited cache), so a wait-for cycle through it is broken after a bound (I74)
   private final class SymbolWhat(kind: String, subject: AnyRef | Null) extends What(kind, subject, coarse = kind != namerKind):
+    override def isPeek: Boolean = kind == peekKind
     override protected def renderSubject(s: AnyRef): String = s match
       case sym: Symbol =>
         try
@@ -58,7 +59,13 @@ object CompletionLock:
   val denotRing: What = What("new version of a denotation", null)
   val commit: What = What("commit typer state", null)
   val cleanup: What = What("cleanup", null)
-  val peek: What = What("wait for a completion (isCompleting)", null)
+  /** The kind of a peek's wait (`SymDenotation.awaitOthers` for `isCompleting`, `typeParams`, `unforcedDecls` and
+   *  the other sites that decide from a completer without running it): a wait that yields on a wait-for cycle. */
+  val peekKind: String = "wait for a completion (isCompleting)"
+  val peek: What = What(peekKind, null)
+  /** A completion's wait for another reader's completion of the same symbol before it completes it itself
+   *  (`completeUnderRootClaim`): a force, which never yields. */
+  val awaitCompletion: What = What("wait for a completion (force)", null)
   val readAction: What = What("read action (serialised mode)", null)
   val lazyRef: What = What("lazy reference", null)
   val lazyAnnotation: What = What("lazy annotation", null)
