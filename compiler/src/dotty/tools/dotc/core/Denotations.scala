@@ -737,6 +737,13 @@ object Denotations {
      */
     def initial: SingleDenotation =
       if (validFor.firstPhaseId == FirstPhaseId) this
+      // a version replaced by `replaceWith` is no longer in the ring, and every version compares above `Nowhere`:
+      // the walk below never ended. Its `nextInRun` leads to its replacement. Serially no one asks a replaced
+      // version, but a reader on another thread can hold one (`Symbol.lastKnownDenotation` between a concurrent
+      // `installAfter`'s `replaceWith` and its `symbol.denot`)
+      else if validFor == Nowhere then
+        val next = nextDefined
+        if next.validFor == Nowhere then this else next.initial
       else {
         var current = nextInRun
         while (current.validFor > this.validFor) current = current.nextInRun
