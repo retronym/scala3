@@ -24,7 +24,7 @@ The design:
 1. **Stages.** A class's decls and type parameters are entered as a stage of their own, eagerly in the serial index, before any typing. Readers that need only decls read them without completing the header.
 2. **Signatures in parallel**, a unit per task, with the claims the spike already has.
 3. **Validate, then fall back.** At the few sites where a completion reads intermediate state, record the question and the answer (for `derivesFrom`: the class, the base, the answer). Once signatures are complete, ask each again: if every answer stands, the run was as good as a stable one. Otherwise abandon the run and compile serially. On both corpora nothing would fall back.
-4. **`checkNonCyclic` made order independent**: report illegal cycles in a pass after the signatures, on final infos, and prune the completion-time `LazyRef` insertion with facts that do not change during completion.
+4. **`checkNonCyclic`'s pruning made order independent** (done): a prefix whose class has a base in progress is taken as interesting instead of asking `derivesFrom` of it. Its two reads on the compiler are gone, and its output is unchanged.
 5. **Determinism repairs**: fresh names drawn per definition, not per unit; `Child` annotations added under the parent's claim, in position order; names hashed by content (done in the spike).
 
 No claim lending (letting a cycle's closer borrow the claim it waits for, as a serial nesting would): the toy shows it buys nothing once decls are staged.
@@ -116,7 +116,7 @@ Serially, to the end of the typer:
 
 The `parents/outer` reads:
 
-- Compiler: `object Types`, in `Checking.checkNonCyclic` for a type alias in `Types`, asked while a parent type of a class nested in `Types` is typed (`ClassCompleter.typedParentType` → `preCheckKinds` → `dealias` → the alias's completion → `CheckNonCyclicMap.isInteresting` → `derivesFrom`). The answer decides whether to explore a prefix for a cycle.
+- Compiler: `object Types`, in `Checking.checkNonCyclic` for a type alias in `Types`, asked while a parent type of a class nested in `Types` is typed (`ClassCompleter.typedParentType` → `preCheckKinds` → `dealias` → the alias's completion → `CheckNonCyclicMap.isInteresting` → `derivesFrom`). The answer decides whether to explore a prefix for a cycle. Gone after §5.6's rework.
 - Library: `Typer.typedTypeBoundsTree`, which under capture checking asks `hi.tpe.derivesFromCapSet` to choose a type parameter's default lower bound, for bounds that are collection traits in progress (`MapOps`, `SortedSetOps`, `LinearSeq`, …), reached from `TypeDefCompleter.typeSig` of their own type members (`CC`). No collection trait derives from `CapSet`, so the answer is false whether the parents are known or not.
 
 No `CyclicReference` was caught in implicit search, in either corpus.
@@ -141,7 +141,7 @@ Every site that reads intermediate state of a completion records what it asked a
 
 Once all signatures are complete, every recorded question is asked again. If every answer stands, the run computed what a run without unstable reads would have, which the toy says is unique. If one does not, the run is abandoned and the compilation redone from the start on one thread (a fresh base, the spike's code path without the flag). Nothing has been written by then: the typer runs before the pickler, the backend and sbt's callbacks. A wait-for cycle that `CompletionRoots` would abort is a fallback too.
 
-Plain detection (fall back on any unstable read) would have fallen back on both corpora: the compiler for `checkNonCyclic`'s two reads, the library for its 32. Validation keeps both in parallel.
+Plain detection (fall back on any unstable read) would have fallen back on both corpora: the compiler for `checkNonCyclic`'s two reads (gone since §5.6), the library for its 32. Validation keeps both in parallel.
 
 A recorded answer may already have been built on before it is validated (a lower bound chosen, a prefix not explored). That is fine: if it stands, what was built on it is what a stable run builds; if it does not, the whole run is thrown away.
 
@@ -159,23 +159,28 @@ The toy's lending (a waiter that closes a wait-for cycle borrows the claim it wa
 
 ### 5.6 `checkNonCyclic`
 
-`Checking.checkNonCyclic` runs inside a type member's completion (`TypeDefCompleter.typeSig`) and the unpicklers, and has two jobs. It reports illegal cycles, and it rewrites the info it is given: its result is what becomes `sym.info`, with a `LazyRef` wherever an F-bounded cycle is legal, so that the published info is safe to traverse. Both depend on order in two ways:
+`Checking.checkNonCyclic` runs inside a type member's completion (`TypeDefCompleter.typeSig`) and the unpicklers, and has two jobs. It reports illegal cycles, and it rewrites the info it is given: its result becomes `sym.info`, with a `LazyRef` wherever an F-bounded cycle is legal, and an error type where a cycle is illegal. Both are what make the published info safe to traverse, so neither can move out of the completion: an alias left cyclic until a later pass (`type A = B; type B = A`) would make every `dealias` before that pass loop. Which member of an illegal cycle gets the error depends on where the cycle was entered, but only erroneous programs have one.
 
-- `isInteresting` prunes the exploration with `prefix.derivesFrom(sym.owner)`, which can be falsely negative while the prefix's class is in progress (§4's compiler reads).
-- `checkInfo(tp.info)` forces the infos it explores. Forcing an alias whose completion encloses this one throws a `CyclicReference`, which the check turns into a `LazyRef`, an error, or keeps the type as it was, depending on where the cycle was entered. The probe found none of these on the two corpora (every re-entry under the check was the innermost completion), but nothing prevents them.
+What depended on order in valid programs was the pruning. `isInteresting` decides whether a reference's prefix might reach `sym`, and for a named prefix asks `!sym.is(Private) && prefix.derivesFrom(sym.owner)`, then a test that is fixed once symbols are entered (a static owner defined in this run, or else the prefix's own prefix). `derivesFrom` from a class whose parents are in progress answers from the ones known so far. On the compiler's sources it did so twice, for `object Types`.
 
-A rework that makes it order independent:
+The rework (`CheckNonCyclicMap.isInteresting`) changes only that answer. If the prefix's class, or a base class of it, has parents not known yet (`ClassDenotation.hasUnknownBase`: a `TempClassInfo` among the infos already there, read without completing anything), the prefix is interesting: it may derive from `sym.owner` once they are known. Otherwise `derivesFrom` is asked as before, and forces what it forced before. With parallel readers, another reader's completion in progress is not a `TempClassInfo` to this one (it reads as a lazy type), so `hasUnknownBase` answers no and `derivesFrom` waits for it.
 
-- **Report later.** Illegal cycles are reported in a pass after all signatures, when no completion is in progress, as `checkNonCyclicInherited` already is for classes (in the typer, `Typer.scala:3655`). There the exploration reads only final infos.
-- **Protect with stable facts.** At completion time the check only inserts `LazyRef`s, and prunes with what does not change while completions run: ownership and whether a class is defined in this run, both known after indexing. For a prefix whose class is in progress, it either explores (`derivesFrom(cls, defaultIfUnknown = true)`, i.e. `mayDeriveFrom`, which `provablyDisjoint` already uses for soundness) or records the `derivesFrom` answer for §5.3's validation. Exploring more forces more completions, so the first needs measuring; the second needs nothing new.
-- **Re-entry into an enclosing completion** under the check is recorded for validation like any other. It did not occur here.
+A first version also put the stable test before `derivesFrom`, which is equivalent as a boolean. It moved the error of `tests/neg/i8984.scala` (an illegal cycle between two opaque types): `derivesFrom` forces completions, and in an erroneous program what is forced first decides where a cycle is found. The version kept leaves the order of evaluation alone.
+
+Measured, serially, against the old pruning on the same sources:
+
+- the compiler's 618 sources to bytecode: byte-identical output but for `Checking.scala`'s own classes, whose source changed; the same 36 warnings. The library's 722 sources to TASTy: byte-identical;
+- the probe: the two `parents/outer` reads under `checkNonCyclic` are gone (0 `derivesFrom` answers from unknown bases in the compiler, from 2); every other count is the same (70 member and 60 local cycles over the whole compile, 7 and 8 re-entries);
+- `testCompilation` passes. `tests/neg/i8984.scala` failed before this change on this branch (4 errors where 5 were expected, also with the names-hash commit reverted), and its expectations are updated to the errors given now, on lines 4, 6, 8 and 9.
+
+What it leaves: re-entry into an enclosing completion while exploring (`checkInfo(tp.info)` forcing an alias whose completion encloses this one) still turns into a `LazyRef`, an error, or no change, by where the cycle was entered. The probe found none on either corpus; it stays a recorded event for §5.3.
 
 ## 6. Plan
 
 0. **Toy** (done): `tools/sig-toy/`, the findings of §3.
 1. **Probe, parents** (done): `-Ddotc.unstableReads`, §4.
 2. **Probe, the rest** (done for the compiler and the library): re-entries, `CyclicReference`s made and where, `isCompleting` peeks, and `derivesFrom` answers asked again at the end of the typer (§4). Left: export forwarders, `LazyRef`s in progress, and a slice of the community build.
-2a. **`checkNonCyclic`**: report in a pass after signatures; prune with stable facts (§5.6).
+2a. **`checkNonCyclic`** (done): the pruning treats a prefix with a base in progress as interesting instead of asking `derivesFrom` (§5.6). Reporting stays in the completion: the error type is what keeps an illegal cycle from looping.
 3. **Stage decls**: split `ClassCompleter`, index class bodies in the serial index step; the probe's counts before and after; `testCompilation` serially, since this changes the serial compiler.
 4. **Parallel signatures**: in `TyperPhase.typeCheckInParallel`, signatures on the pool, the detector, whole-run fallback, and `-Ddotc.parallelTyper.oneThread` as now to separate order from concurrency.
 5. **Determinism repairs**: fresh names per definition, `addChild` under the parent's claim; the spike's harness (several parallel runs, byte-for-byte) on the compiler and the library.
