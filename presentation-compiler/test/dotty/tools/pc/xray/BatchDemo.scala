@@ -51,6 +51,8 @@ object BatchDemo:
 
   def stop(): Unit = stopRequested.set(true)
 
+  private def diskIO = sys.props.contains("xray.batch.diskIO")
+
   private val switches = List("parallelSignatures", "parallelIndex", "threads")
 
   @scala.annotation.nowarn("msg=Catching Throwable") // reported as the run's failure, not rethrown
@@ -59,6 +61,8 @@ object BatchDemo:
     try
       val paths = Throughput.loadFiles(root).map(f => root.resolve(f.rel).toString)
       files = paths.size
+      // the classpath and sources in memory, read before the first run's timeline (`VirtualIO`)
+      if !diskIO then { VirtualIO.classpath; VirtualIO.sources(root, paths) }
       def set(k: String, on: Boolean, value: String = "") =
         if on then System.setProperty(s"dotc.parallelTyper.$k", value) else System.clearProperty(s"dotc.parallelTyper.$k")
       set("parallelSignatures", options.parallelSignatures)
@@ -68,7 +72,7 @@ object BatchDemo:
         current = i
         val out = Files.createTempDirectory("xray-batch")
         val stop = if options.stopAfter == "all" then Nil else List("-Ystop-after:" + options.stopAfter)
-        val args = (XrayServer.baseSettings ++ List(ParallelBatch.flag, "-d", out.toString) ++ stop ++ paths).toArray
+        val flags = XrayServer.baseSettings ++ List(ParallelBatch.flag, "-d", out.toString) ++ stop
         // a clean heap for each run, before the timeline starts: the GC is not the compiler's
         System.gc()
         val tl = ParallelBatch.Timeline()
@@ -76,7 +80,9 @@ object BatchDemo:
         val reporter = new StoreReporter(null)
         val t0 = System.nanoTime()
         val r =
-          try new Driver().process(args, reporter)
+          try
+            if diskIO then new Driver().process((flags ++ paths).toArray, reporter)
+            else VirtualIO.VirtualDriver(VirtualIO.classpath).compile(flags.toArray, VirtualIO.sources(root, paths), reporter)
           finally
             ParallelBatch.timeline = null
             tl.close()
