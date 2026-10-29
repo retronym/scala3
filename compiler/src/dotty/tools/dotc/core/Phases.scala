@@ -555,7 +555,9 @@ object Phases {
       // -Ddotc.parallelTyper.threads=<n>: the pool's size (one, to tell what a thread changes from what concurrency does)
       val wanted = sys.props.get("dotc.parallelTyper.threads").flatMap(_.toIntOption).getOrElse(Runtime.getRuntime.availableProcessors)
       val threads = math.min(wanted, unitContexts.length)
-      val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, threadName); t.setDaemon(true); t }).nn
+      // numbered, so that a timeline has a lane per worker
+      val next = java.util.concurrent.atomic.AtomicInteger()
+      val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, s"$threadName-${next.getAndIncrement()}"); t.setDaemon(true); t }).nn
       try
         val futures = unitContexts.map(c => pool.submit((() => body(using c)): Callable[Boolean]).nn)
         val done = futures.map(f =>

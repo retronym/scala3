@@ -298,6 +298,7 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
   override def acquired(): Unit = util.Chaos.at("acquire", oneIn = 8)
 
   override def recordWait(nanos: Long, holderWhat: String, holderName: String): Unit =
+    ParallelBatch.waited(nanos, holderWhat)
     util.Chaos.note(s"waited ${nanos / 1000} us on $holderName: $holderWhat")
     recordLockWait(nanos, holderWhat, "", holderName)
 

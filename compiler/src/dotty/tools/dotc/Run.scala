@@ -536,7 +536,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
           Stats.trackTime(s"phase time ms/$phase") {
             val start = System.currentTimeMillis
             profiler.onPhase(phase):
-              try units = phase.runOn(units)
+              try units = if phase.isTyper || phase.phaseName == "parser" then phase.runOn(units) else ParallelBatch.span("phase", phase.phaseName)(phase.runOn(units))
               catch case _: InterruptedException => cancelInterrupted()
             if (ctx.settings.Vprint.value.containsPhase(phase))
               for (unit <- units)

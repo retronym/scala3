@@ -38,7 +38,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
 
   def enterSyms(using Context)(using subphase: SubPhase): Boolean = monitor(subphase.name) {
     val unit = ctx.compilationUnit
-    ctx.typer.index(unit.untpdTree)
+    ParallelBatch.span("index", unit.source.name)(ctx.typer.index(unit.untpdTree))
     typr.println("entered: " + unit.source)
   }
 
@@ -46,7 +46,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     val unit = ctx.compilationUnit
     try
       if !unit.suspended then ctx.profiler.onUnit(ctx.phase, unit):
-        unit.tpdTree = ctx.typer.typedExpr(unit.untpdTree)
+        unit.tpdTree = ParallelBatch.span("bodies", unit.source.name)(ctx.typer.typedExpr(unit.untpdTree))
         typr.println("typed: " + unit.source)
         record("retained untyped trees", unit.untpdTree.treeSize)
         record("retained typed trees after typer", unit.tpdTree.treeSize)
@@ -120,7 +120,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     def eachUnit(what: String, parallel: Boolean)(op: Context ?=> Unit): Unit =
       val t = System.nanoTime()
       val body: Context => Boolean = c =>
-        try op(using c)
+        try ParallelBatch.span(what, c.compilationUnit.source.name)(op(using c))
         catch case _: CompilationUnit.SuspendException => ()
         true
       if parallel then
@@ -240,7 +240,9 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
           newCtx
 
     val unitContexts0 = interactive.OpenTiming.timed("index")(runSubPhase(Indexing) {
-      if ctx.base.parallel && ctx.run.nn.isTargeted && unitContexts.lengthCompare(1) > 0 then
+      // -Ddotc.parallelTyper.parallelIndex: the same in batch compilation (`-Yparallel-typer`)
+      val batchIndex = !ctx.mode.is(Mode.Interactive) && sys.props.contains("dotc.parallelTyper.parallelIndex")
+      if ctx.base.parallel && (ctx.run.nn.isTargeted || batchIndex) && unitContexts.lengthCompare(1) > 0 then
         indexInParallel(unitContexts)
       else
         for
