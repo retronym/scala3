@@ -959,10 +959,22 @@ class TreeUnpickler(reader: TastyReader,
         val start = currentAddr
         treeAtAddr()(start) = PoisonTree
         if poisonedBy != null then poisonedBy.put(start, Thread.currentThread.getName)
-        val tree = readNewDef()
-        treeAtAddr().remove(start)
-        if poisonedBy != null then poisonedBy.remove(start)
-        tree
+        // The sentinel is removed however the read ends. A read that unwinds (a
+        // cancellation, a reader aborted as a wait-for cycle's victim, an
+        // error) used to leave it in the file's map, which outlives the run:
+        // the next reader of this address, the one that takes the file's root
+        // over included, met it as "Cyclic reference while unpickling" (the
+        // unfound second source of finding I87). A `CyclicReference` keeps
+        // it, as the batch compiler always did: that cycle is a fact of the
+        // file, not of the reader.
+        var cyclic = false
+        try readNewDef()
+        catch
+          case ex: CyclicReference => cyclic = true; throw ex
+        finally
+          if !cyclic then
+            treeAtAddr().remove(start)
+            if poisonedBy != null then poisonedBy.remove(start)
     }
 
     private def readNewDef()(using Context): Tree = {
