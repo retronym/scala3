@@ -201,6 +201,18 @@ Measured with the timeline (`ParallelBatch.Timeline`, the x-ray's Batch tab), wh
 - **Classpath completions.** A claim per classpath file deadlocked: `collection.SortedSet` and `collection.SortedSetFactoryDefaults` refer to each other, one nests in the other on one stack, and two readers entering from either end each held one file's claim and waited for the other's, inside Namer completions where no reader aborts. Every classpath completion (loader, TASTy unpickler and its lazy reads, a classpath module's completer) now takes one reentrant claim, `SymbolLoaders.ClasspathRoot`: a classpath completion never waits for a source definition's, so it cannot close a cycle with the Namer's roots. Cost: classpath loading is serial, which matters cold (the cold run took 10.3 s, as with a claim per file). `-Ddotc.parallelTyper.classpathRoots=file` for a claim per file.
 - **Left:** parallel index's lock in `Namer.createPackageSymbol` (2.5 s blocked over three runs), and `SyncEqHashMap` (0.27 s).
 
+### 5.9 Scheduling and work units
+
+The unit of work of every parallel step is a file, submitted to a fixed pool. In source order a large file late in the list kept one worker busy after the others had run out: `Typer.scala`, 240 ms of bodies, under `typer/`, gave a tail of 127–129 ms on 920–1,136 ms of bodies at 8 threads. Units are now submitted largest first (by source length, `-Ddotc.parallelTyper.order=source` for source order); the result is in source order either way, and the output is byte-identical. At 8 threads the tail of every step is 0 ms, bodies 733–828 ms, a warm run to the typer 1.33–1.53 s (from 1.62–1.99 s).
+
+A file as the unit bounds a step from below by its largest file. At 18 threads it does not bind yet: bodies 580 ms against 561 ms of span time per thread, `Typer.scala` 317 ms. It would at about twice the threads, or in a project with few large files. Finer units, in order of what they would take:
+
+- **A statement as the unit of bodies.** #84's targeting already types a file with every member body skipped, records each skipped statement with its context (`Run.SkippedStat`), types one on demand and splices it into the unit's tree; its throughput harness and background pass schedule them across readers. Batch would type each unit's skeleton, then schedule its skipped statements, largest first. What it needs: fresh names per definition rather than per unit (§5.4), so that two readers in one unit do not share a counter; the unit's flags written by typing (`needsInlining`, `needsStaging`, macro annotations) made safe for several writers; a typer state per statement, settled when it ends; and the splice in source order, so that the tree does not depend on the schedule.
+- **Signatures and bodies of a unit in one task**, with no barrier between the two steps. Small now: largest-first leaves no idle at the barrier.
+- **A cost model** better than source length: the previous run's time per file, or the size of the untyped tree.
+
+The larger lever today is not finer units but the steps that run on one thread: in a warm run to the pickler at 18 threads, 1,651 ms of 2,487 ms are on the main thread (pickler 556, posttyper 523, class headers 265, the inline-traits megaphase 221, setup 85). The pickler reads typed trees and symbols and writes a unit's TASTy, so a unit per task is close to free; PostTyper is mostly unit-local, with known writes to other symbols (`Child` annotations, done; annotations on symbols) to make safe; class headers wait on §5.1 and §5.7.
+
 ## 6. Plan
 
 0. **Toy** (done): `tools/sig-toy/`, the findings of §3.

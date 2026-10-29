@@ -559,9 +559,16 @@ object Phases {
       val next = java.util.concurrent.atomic.AtomicInteger()
       val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, s"$threadName-${next.getAndIncrement()}"); t.setDaemon(true); t }).nn
       try
-        val futures = unitContexts.map(c => pool.submit((() => body(using c)): Callable[Boolean]).nn)
-        val done = futures.map(f =>
-          try f.get().nn.booleanValue
+        // the largest units first (longest-processing-time first, by source length), so that what is left for the
+        // end is small and the workers finish together: in source order a large file late in the list kept one
+        // worker busy after the others had run out (`Typer.scala`, 240 ms of bodies, a 13% tail on 8 threads).
+        // `-Ddotc.parallelTyper.order=source` submits in source order. The result is in source order either way.
+        val submitted =
+          if sys.props.get("dotc.parallelTyper.order").contains("source") then unitContexts
+          else unitContexts.sortBy(c => -c.compilationUnit.source.length)
+        val futures = submitted.map(c => c -> pool.submit((() => body(using c)): Callable[Boolean]).nn).toMap
+        val done = unitContexts.map(c =>
+          try futures(c).get().nn.booleanValue
           catch case ex: java.util.concurrent.ExecutionException => throw ex.getCause.nn)
         unitContexts.zip(done).collect { case (c, true) => c }
       finally pool.shutdown()
