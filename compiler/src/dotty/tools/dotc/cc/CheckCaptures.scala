@@ -753,6 +753,12 @@ class CheckCaptures extends Recheck, SymTransformer:
           case Some(idx) if idx >= 0 && idx < cls.caseAccessors.length =>
             normTree = tree.qualifier.select(cls.caseAccessors(idx)).withSpan(tree.span)
           case _ =>
+      if tree.qualifier.symbol.is(Package) && !tree.symbol.isOneOf(Package | Method) then
+        // A qualified reference `p.q.X` to a static object or value `X`. The path
+        // starts at `X`, so mark it as if `X` was referenced by a simple identifier.
+        // Only idents mark paths otherwise, and the ident at the root of a qualified
+        // reference is a package.
+        markPathFree(tree.symbol.termRef, pt, tree)
       super.recheckSelect(normTree, pt)
 
     /** A specialized implementation of the selection rule.
@@ -1619,7 +1625,35 @@ class CheckCaptures extends Recheck, SymTransformer:
 
         checkFieldCaptures(cls)
 
-        super.recheckClassDef(tree, impl, cls)
+        val result = super.recheckClassDef(tree, impl, cls)
+
+        // (7) Capture set of class includes fresh capabilities created by parent constructor arguments.
+        // Such capabilities are retained by every instance through the parent's parameter fields.
+        // Unlike for `new C(args)`, the instance type of `new cls(...)` is not refined with
+        // the parent's arguments, so the captures have to be in the use set of `cls`,
+        // which is inferred for local classes and declared with a `uses` clause otherwise.
+        // Classes extending Capability are exempt since each of their instances is a
+        // fresh capability anyway.
+        if !cls.derivesFromCapability then
+          for parent <- impl.parents if parent.isTerm do
+            val parentCls = parent.nuType.classSymbol
+            // The capability implied by the fields of the parent class is already
+            // accounted for in `cls.capturesImpliedByFields`, which includes parent fields.
+            def impliedByParentFields(c: Capability) = c.core match
+              case lc: LocalCap => lc.origin match
+                case Origin.NewInstance(core, _) => core.classSymbol == parentCls
+                case _ => false
+              case _ => false
+            val fresh = parent.nuType.captureSet.filter: c =>
+              c.isTerminalCapability && !impliedByParentFields(c)
+            if !fresh.isAlwaysEmpty then
+              withGlobalCapAsRoot: // OK? We need this here since declared uses clauses use GlobalAny instead of a LocalCap
+                checkSubset(fresh, localSet, parent.srcPos,
+                  provenance = i"""
+                    |of $cls.
+                    |The arguments of the parent constructor create a capability that is retained by every instance of $cls.
+                    |$cls needs to extend Capability, or declare the capability in a `uses` clause""")
+        result
       finally
         if cls.is(ModuleClass) then
           interpolate(cls.sourceModule.info, cls.sourceModule)
