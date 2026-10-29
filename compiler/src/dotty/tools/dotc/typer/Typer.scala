@@ -4356,7 +4356,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    */
   def tryInsertApplyOrImplicit(tree: Tree, pt: ProtoType, locked: TypeVars)(fallBack: => Tree)(using Context): Tree = {
     def isMethod(tree: Tree) = tree.tpe match {
-      case ref: TermRef => ref.denot.alternatives.forall(_.info.widen.isInstanceOf[MethodicType])
+      case ref: TermRef => !ref.denot.hasAltWith(!_.info.widen.isInstanceOf[MethodicType])
       case _ => false
     }
 
