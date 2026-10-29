@@ -12,7 +12,9 @@ import config.Printers.pickling
 import ast.untpd.Tree
 import java.util.Arrays
 
-class TreeBuffer extends TastyBuffer(50000) {
+// Initial sizes are small: one buffer is made per top-level class, most classes pickle to a few KB, and the arrays grow
+// as needed.
+class TreeBuffer extends TastyBuffer(4096) {
 
   private inline val ItemsOverOffsets = 2
   private val initialOffsetSize = bytes.length / (AddrWidth * ItemsOverOffsets)
@@ -21,7 +23,7 @@ class TreeBuffer extends TastyBuffer(50000) {
   private var numOffsets = 0
 
   /** A map from trees to the address at which a tree is pickled. */
-  private val treeAddrs = util.IntMap[Tree](initialCapacity = 8192)
+  private val treeAddrs = util.IntMap[Tree](initialCapacity = 512)
 
   def registerTreeAddr(tree: Tree): Addr =
     val idx = treeAddrs(tree)
