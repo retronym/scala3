@@ -2004,7 +2004,10 @@ class Namer { typer: Typer =>
               else
                 if (denot.is(ModuleClass) && denot.sourceModule.isOneOf(GivenOrImplicit))
                   missingType(denot.symbol, "parent ")(using creationContext)
-                fullyDefinedType(typedAheadExpr(parent).tpe, "class parent", parent.srcPos)
+                // a timeline span (`ParallelBatch`): the parents whose type arguments are inferred from the constructor's
+                // arguments, which are typed in the class's header
+                ParallelBatch.span("parent args", s"${denot.symbol.showFullName} extends ${tpt.show}"):
+                  fullyDefinedType(typedAheadExpr(parent).tpe, "class parent", parent.srcPos)
             case _ =>
               UnspecifiedErrorType.assertingErrorsReported
 

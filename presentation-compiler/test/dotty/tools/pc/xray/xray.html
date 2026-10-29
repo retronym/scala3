@@ -313,7 +313,7 @@
   <div id="scaling" hidden>
     <div class="ctl">
       <label title="what is run once per thread count">mode <select id="scMode"><option value="interactive">interactive: reader threads (-Yinteractive-parallel)</option><option value="batch">batch: typer threads (-Yparallel-typer)</option></select></label>
-      <label title="comma-separated thread counts: one row of the table each">threads <input id="scNs" type="text" value="1,2,4,8"></label>
+      <label title="comma-separated thread counts: one row of the table each">threads <input id="scNs" type="text" value="1,4,8"></label>
       <label title="timed runs per thread count, after the warm-up; the table shows the fastest">runs each <input id="scRuns" type="number" min="1" max="10" value="1"></label>
       <span class="opts" id="scOptI"><label title="largest first: the largest files first, each to the least loaded thread; round-robin: in path order. Both steal the last file of the longest list when a thread runs out">order <select id="scPolicy"><option value="big">largest first</option><option value="rr">round-robin</option></select></label></span>
       <span class="opts" id="scOptB" hidden><label title="index the files in parallel, each into a slice merged in file order"><input id="scIndex" type="checkbox" checked> parallel index</label>
