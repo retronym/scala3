@@ -30,6 +30,13 @@ class Claimant(val thread: Thread = Thread.currentThread):
   /** How many times this claimant was aborted as the victim of a wait-for cycle. */
   @volatile var aborted: Int = 0
 
+  /** The claim whose wait this claimant was aborted at, set just before `abort`, for the retry's backoff: a victim
+   *  that retries before the holder has released it meets the same cycle again and aborts again, and two victims
+   *  in opposite orders can do so for ever (the model's `livelock_forever`); a retry that first waits for this
+   *  claim's release (`PerKeyClaims.Claim.done`) does not. Cleared by whoever retries the work.
+   */
+  @volatile var collidedWith: PerKeyClaims.Claim | Null = null
+
   /** Whether this claimant can be the victim of a wait-for cycle, aborted by throwing `Cancelled`. Read at every look
    *  of a wait. */
   def canAbort: Boolean = true

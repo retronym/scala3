@@ -62,13 +62,17 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
             lastChain = null
           case chain =>
             val parties = chain.map(_.owner)
-            if me.canAbort then me.abort()
+            if me.canAbort then
+              me.collidedWith = c
+              me.abort()
             else if parties.exists(_.canAbort) then
               () // a party that can abort does so at its next look: wait
             else if coarseCycleWaitNanos > 0L && chain.exists(_.what.coarse) then
               // through a coarse claim: its owner likely finishes without what this claimant holds; wait, bounded
               if cycleSince == 0L then cycleSince = System.nanoTime()
-              else if System.nanoTime() - cycleSince > coarseCycleWaitNanos then me.abort()
+              else if System.nanoTime() - cycleSince > coarseCycleWaitNanos then
+                me.collidedWith = c
+                me.abort()
             else if parties.forall(p => System.identityHashCode(p.thread) <= System.identityHashCode(me.thread)) then
               // one party reports the cycle (a fixed order of the threads picks it). The chain is read from fields
               // the claimants change as they go: only one seen at two looks, a slice apart, with the same claims, is
