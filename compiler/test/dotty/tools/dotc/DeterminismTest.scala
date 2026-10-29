@@ -7,7 +7,7 @@ import javax.tools.{DiagnosticCollector, JavaFileObject, ToolProvider}
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
-import org.junit.{Ignore, Test}
+import org.junit.Test
 import org.junit.Assert.*
 
 import dotty.tools.deleteDirectory
@@ -290,8 +290,73 @@ class DeterminismTest {
     test(code :: Nil)
   }
 
-  // TODO: fix compiler determinism for this to pass
-  @Ignore("TASTy differs under separate compilation (TreePickler SHAREDtype addresses), see scala/scala3#26551")
+  // The following four tests are distinct types that pickle to the same bytes
+  // (e.g. `TypeRef(pre, name)` from the unpickler vs `TypeRef(pre, sym)` from
+  // typer), which must be shared regardless of whether the referenced
+  // definitions come from source or TASTy (scala/scala3#26551).
+
+  @Test def testSharedTypeOptionInt(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """object Up:
+          |  def f: Option[Int] = None
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down:
+          |  val x = Up.f
+          |  def y: Int = 0
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeMethodResult(): Unit = {
+    def code = List(
+      source("U.scala",
+        """class U:
+          |  def name: String = ""
+          |""".stripMargin),
+      source("M.scala",
+        """class M(u: U):
+          |  def f = u.name
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeFunction(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """package up
+          |object Up:
+          |  def lookup(i: Int): String => Option[Int] = _ => Some(i)
+          |""".stripMargin),
+      source("Down.scala",
+        """package down
+          |class Down:
+          |  private val entry = up.Up.lookup(1)
+          |  def get(s: String): Option[Int] = entry(s)
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  /** Reduced from zinc's `ModifiedNames` */
+  @Test def testSharedTypeCaseClass(): Unit = {
+    def code = List(
+      source("UsedName.scala",
+        """final case class UsedName(name: String, scopes: java.util.EnumSet[java.util.concurrent.TimeUnit])
+          |""".stripMargin),
+      source("Changes.scala",
+        """import scala.jdk.CollectionConverters.*
+          |final case class ModifiedNames(names: Set[UsedName]):
+          |  private lazy val lookupMap: Set[(String, java.util.concurrent.TimeUnit)] =
+          |    names.flatMap(n => n.scopes.asScala.map(n.name -> _))
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
   @Test def testAnonymousGivens(): Unit = {
     def code = List(
       source("a.scala",
@@ -314,8 +379,6 @@ class DeterminismTest {
     test(List(code))
   }
 
-  // TODO: fix compiler determinism for this to pass
-  @Ignore("TASTy of synthesized Mirror differs under separate compilation, see scala/scala3#26551")
   @Test def testMirrorSynthesis(): Unit = {
     def code = List(
       source("a.scala",

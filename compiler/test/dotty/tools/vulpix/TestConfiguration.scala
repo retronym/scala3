@@ -85,6 +85,7 @@ object TestConfiguration {
   val picklingOptions = defaultOptions `and` (
     "-Xprint-types",
     "-Ytest-pickler",
+    "-Ytest-pickler-sharing",
     "-Yprint-pos",
     "-Yprint-pos-syms"
   )
