@@ -267,7 +267,7 @@ class ExplicitJSClasses extends MiniPhase with InfoTransformer { thisPhase =>
       // we also cannot use `lastKnownDenotation` since while it would be okay to check for traits and modules,
       // `JSTypeAnnot` is synthetic and added by a previous phase.
       val denot = atPhase(picklerPhase) { sym.denot }
-      !denot.isOneOf(Trait | Module) && denot.hasAnnotation(jsdefn.JSTypeAnnot)
+      !denot.isOneOf((Trait | Module).toTypeFlags) && denot.hasAnnotation(jsdefn.JSTypeAnnot)
     }
   }
 

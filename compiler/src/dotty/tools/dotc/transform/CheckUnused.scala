@@ -662,7 +662,7 @@ object CheckUnused:
       var w: Option[UnusedSymbol] = None
       if ctx.settings.WunusedHas.privates
         && !sym.isPrimaryConstructor
-        && !sym.isOneOf(SelfName | Synthetic | CaseAccessor)
+        && !sym.isOneOf((SelfName | Synthetic | CaseAccessor).toTermFlags)
         && !sym.name.is(BodyRetainerName)
         && !sym.isSerializationSupport
         && !( sym.is(Mutable)
@@ -824,7 +824,7 @@ object CheckUnused:
     def checkLocal(sym: Symbol, pos: SrcPos) =
       var w: Option[UnusedSymbol] = None
       if ctx.settings.WunusedHas.locals
-        && !sym.isOneOf(InlineProxy | Synthetic)
+        && !sym.isOneOf((InlineProxy | Synthetic).toTermFlags)
       then
         if sym.is(Mutable) then
           if infos.asss(sym) then

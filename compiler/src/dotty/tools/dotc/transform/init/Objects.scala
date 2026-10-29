@@ -618,7 +618,7 @@ class Objects(using Context @constructorOnly):
     }
 
     def setLocalVal(x: Symbol, value: Value)(using scope: Scope, ctx: Context, heap: Heap.MutableData, envMap: EnvMap.EnvMapMutableData): Unit =
-      assert(!x.isOneOf(Flags.Param | Flags.Mutable), "Only local immutable variable allowed")
+      assert(!x.isOneOf((Flags.Param | Flags.Mutable).toTermFlags), "Only local immutable variable allowed")
       scope match
       case env: EnvRef =>
         env.initVal(x, value)
