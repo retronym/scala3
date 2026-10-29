@@ -17,6 +17,9 @@ object Config {
 
   inline val checkCacheMembersNamed = false
 
+  /** Check that `DenotUnion#toDenot`'s cached result is what `meet` computes. */
+  inline val checkMemberMergeCache = false
+
   /** When updating a constraint bound, check that the constrained parameter
    *  does not appear at the top-level of either of its bounds.
    */

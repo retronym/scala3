@@ -50,7 +50,15 @@ case class Signature(paramsSig: List[ParamSig], resSig: TypeName) {
 
   /** Two names are consistent if they are the same or one of them is tpnme.Uninstantiated */
   private def consistent(name1: ParamSig, name2: ParamSig) =
-    name1 == name2 || name1 == tpnme.Uninstantiated || name2 == tpnme.Uninstantiated
+    // Names are compared by reference (they are hash-consed) and lengths as Ints, rather than with `==` on the union,
+    // which boxes and goes through `BoxesRunTime.equals`.
+    name1 match
+      case name1: TypeName => name2 match
+        case name2: TypeName => (name1 eq name2) || (name1 eq tpnme.Uninstantiated) || (name2 eq tpnme.Uninstantiated)
+        case _ => name1 eq tpnme.Uninstantiated
+      case name1: Int => name2 match
+        case name2: Int => name1 == name2
+        case name2: TypeName => name2 eq tpnme.Uninstantiated
 
   /** Does this signature coincide with that signature on their parameter parts?
    *  This is the case if all parameter signatures are _consistent_, i.e. they are either
