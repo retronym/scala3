@@ -137,7 +137,7 @@ object Symbols extends SymUtils {
     /** The current denotation of this symbol */
     final def denot(using Context): SymDenotation = {
       util.Stats.record("Symbol.denot")
-      val checked = checkedPeriod.acquired
+      val checked = checkedPeriod.acquiredIf(ctx.base.concurrent)
       if checked.value == ctx.period then lastDenot.after(checked)
       else computeDenot(lastDenot.after(checked))
     }

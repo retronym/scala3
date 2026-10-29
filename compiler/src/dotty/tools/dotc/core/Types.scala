@@ -2426,8 +2426,8 @@ object Types extends TypeUtils {
     final def symbol(using Context): Symbol =
       // We can rely on checkedPeriod (unlike in the definition of `denot` below)
       // because SymDenotation#installAfter never changes the symbol.
-      // (An acquire read: `setDenot` stores the symbol before the period.)
-      val checked = checkedPeriod.acquired
+      // (An acquire read when readers are concurrent: `setDenot` stores the symbol before the period.)
+      val checked = checkedPeriod.acquiredIf(ctx.base.concurrent)
       if checked.value == ctx.period then lastSymbol.after(checked).asInstanceOf[Symbol]
       else computeSymbol
 
@@ -2475,7 +2475,7 @@ object Types extends TypeUtils {
      *  Used to get the class underlying a ThisType.
      */
     private[Types] def stableInRunSymbol(using Context): Symbol =
-      val checked = checkedPeriod.acquired
+      val checked = checkedPeriod.acquiredIf(ctx.base.concurrent)
       if checked.value.runId == ctx.runId then lastSymbol.after(checked).nn
       else symbol
 
@@ -2486,10 +2486,10 @@ object Types extends TypeUtils {
      */
     final def denot(using Context): Denotation =
       util.Stats.record("NamedType.denot")
-      // the period first (an acquire load), then the denotation it publishes:
+      // the period first (an acquire load if readers are concurrent), then the denotation it publishes:
       // read the other way round, another reader's `setDenot` between the two
       // reads pairs a null denotation with a current period (I78)
-      val checked = checkedPeriod.acquired
+      val checked = checkedPeriod.acquiredIf(ctx.base.concurrent)
       val lastd = lastDenotation.after(checked).asInstanceOf[Denotation]
       // Even if checkedPeriod == now we still need to recheck lastDenotation.validFor
       // as it may have been mutated by SymDenotation#installAfter
