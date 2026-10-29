@@ -145,8 +145,16 @@ class TreeUnpickler(reader: TastyReader,
   /** Enter all toplevel classes and objects into their scopes
    *  @param roots          a set of SymDenotations that should be overwritten by unpickling
    */
+  /** With `-Ddotc.sharing.check`: the file's shared state is touched under its claim (`fileKey`): the classpath's,
+   *  or this unpickler's for a file with no top-level definition. Only an unpickler of a classpath file, entered with
+   *  its roots, is shared; one of a quote or of `-Ytest-pickler` (no roots) is its caller's alone. */
+  private def assertFileClaimed(what: => String)(using Context): Unit =
+    if roots != null && roots.nonEmpty then
+      Sharing.assertClaimed(s"$what of $this", SymbolLoaders.ClasspathRoot, this)
+
   def enter(roots: Set[SymDenotation])(using Context): Unit = {
     this.roots = roots
+    assertFileClaimed("enter")
     val rdr = new TreeReader(reader).fork
     ownerTree = new OwnerTree(NoAddr, 0, rdr.fork, reader.endAddr)
     if (rdr.isTopLevel)
@@ -164,6 +172,7 @@ class TreeUnpickler(reader: TastyReader,
     if root == null then this else fileKey(root)
 
   private def unpickle0(mode: UnpickleMode)(using Context, Sharing.Holds[FileClaim]): List[Tree] = {
+    assertFileClaimed("unpickle")
     if mode != UnpickleMode.TopLevel then rootOwner = Claimed(ctx.owner)
     assert(roots != null, "unpickle without previous enterTopLevel")
     val rdr = new TreeReader(reader)
@@ -186,6 +195,7 @@ class TreeUnpickler(reader: TastyReader,
       def where =
         val f = denot.symbol.associatedFile
         if f == null then "" else s" in $f"
+      assertFileClaimed(s"complete ${denot.symbol}")
       // the completion runs under its file's claim (`completionRoot`), but its evidence names the denotation
       treeAtAddr()(using Sharing.unguarded("a completion runs under its file's claim, `completionRoot`"))(currentAddr) =
         CyclicReference.trace(i"read the definition of ${denot.symbol}$where"):
@@ -741,10 +751,16 @@ class TreeUnpickler(reader: TastyReader,
       }
       else if (sym.isInlineMethod && !sym.is(Deferred))
         sym.addAnnotation(LazyBodyAnnotation { (ctx0: Context) ?=>
-          val ctx1 = localContext(sym)(using ctx0).addMode(Mode.ReadPositions)
-          inContext(sourceChangeContext(Addr(0))(using ctx1)) {
-            // avoids space leaks by not capturing the current context
-            forkAt(rhsStart).readTree()
+          // the body is read from the file, so under the file's claim, as a lazy read is (`LazyReader`): the
+          // annotation's own claim kept two readers of one inline method apart, not readers of the same file, and two
+          // inlined bodies read at once shared the file's readers and position table ("Expected a long nat", a tree
+          // with no position; found by -Ddotc.sharing.check)
+          Sharing.claimAt(TreeUnpickler.this)(fileKey(sym), Sharing.lazyTastyRead, sym) {
+            val ctx1 = localContext(sym)(using ctx0).addMode(Mode.ReadPositions)
+            inContext(sourceChangeContext(Addr(0))(using ctx1)) {
+              // avoids space leaks by not capturing the current context
+              forkAt(rhsStart).readTree()
+            }
           }
         })
       goto(start)
@@ -1876,6 +1892,7 @@ class TreeUnpickler(reader: TastyReader,
 
     /** Pickled span for `addr`. */
     def spanAt(addr: Addr)(using Context): Span =
+      assertFileClaimed(s"position at $addr")
       if (ctx.mode.is(Mode.ReadPositions))
         posUnpicklerOpt match {
           case Some(posUnpickler) =>
@@ -1896,6 +1913,7 @@ class TreeUnpickler(reader: TastyReader,
 
     /** Pickled source path at `addr`. */
     def sourcePathAt(addr: Addr)(using Context): String =
+      assertFileClaimed(s"source path at $addr")
       if (ctx.mode.is(Mode.ReadPositions))
         posUnpicklerOpt match {
           case Some(posUnpickler) =>
@@ -1960,6 +1978,7 @@ class TreeUnpickler(reader: TastyReader,
     private var result: Claimed[FileClaim, T | Null] = Claimed.initial(null)
 
     private def complete0(using Context): T =
+      assertFileClaimed(s"lazy read for $owner")
       atPhaseBeforeTransforms {
         op(reader)(using ctx
           .withOwner(owner)
