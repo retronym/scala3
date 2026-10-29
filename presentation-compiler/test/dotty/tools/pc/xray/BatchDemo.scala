@@ -40,7 +40,7 @@ object BatchDemo:
       "spans" -> spans)
 
   @volatile private var state = "idle" // idle, warming, running, done, cancelled, failed
-  @volatile private var options = Options(List(1, 2, 4, 8), true, true, "pickler", 1)
+  @volatile private var options = Options(List(1, 4, 8), true, true, "pickler", 1)
   @volatile private var results: List[RunResult] = Nil
   @volatile private var files = 0
   @volatile private var error = ""
@@ -133,12 +133,13 @@ object BatchDemo:
     path match
       case "/batch/run" =>
         val opts = Options(
-          threads = field(q, "threads").map(ThroughputDemo.threadCounts).filter(_.nonEmpty).getOrElse(List(1, 2, 4, 8)),
+          threads = field(q, "threads").map(ThroughputDemo.threadCounts).filter(_.nonEmpty).getOrElse(List(1, 4, 8)),
           parallelIndex = flag("parallelIndex", true),
           parallelSignatures = flag("parallelSignatures", true),
           stopAfter = field(q, "stopAfter").filter(Set("typer", "pickler", "all")).getOrElse("pickler"),
           runs = field(q, "runs").flatMap(_.toIntOption).filter(n => n >= 1 && n <= 10).getOrElse(1))
-        root match
+        // `root=<dir>`: another source set than the server's, e.g. for an A/B of an edit to the sources
+        field(q, "root").map(r => Path.of(java.net.URLDecoder.decode(r, "UTF-8"))).filter(Files.isDirectory(_)).orElse(root) match
           case Some(dir) => reply(ex, 200, "application/json", json(start(dir, opts)))
           case None => reply(ex, 400, "application/json", json(Map("error" -> "no source set")))
       case "/batch/stop" => stop(); reply(ex, 200, "application/json", json(status()))
