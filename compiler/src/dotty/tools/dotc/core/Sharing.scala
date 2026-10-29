@@ -64,6 +64,18 @@ final class Sharing private (val concurrent: Boolean, val parallel: Boolean):
     if parallel then "Sharing.Parallel" else if concurrent then "Sharing.Serialised" else "Sharing.Batch"
 
 object Sharing:
+  /** Debug mode (`-Ddotc.sharing.check`): assert, where shared state is read or written, that the current reader
+   *  holds the claim that guards it, so that a reader that bypasses a claim fails where it does, with its stack,
+   *  rather than corrupting the state for whoever reads it next. Off by default: one static field test per site. */
+  val check: Boolean = System.getProperty("dotc.sharing.check") != null
+
+  /** With parallel readers and `check`: fail unless this reader holds the claim on one of `keys`. */
+  inline def assertClaimed(inline what: => String, keys: AnyRef*)(using c: Contexts.Context): Unit =
+    if check && c.base.parallel then
+      val roots = c.base.completionRoots
+      if !keys.exists(roots.ownedHere) then
+        throw AssertionError(s"[sharing.check] $what on ${Thread.currentThread.nn.getName} without the claim on any of ${keys.mkString(", ")}; claims held: ${roots.holdersNow}")
+
   export _root_.dotty.tools.sharing.Sharing.{Holds, Monitor, unguarded, unlocked, ClaimKind, claim, claimAt, once,
     BlackHole, serialised, locking, GuardedVar, Guard}
 
