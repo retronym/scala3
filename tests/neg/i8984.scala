@@ -1,12 +1,12 @@
 type |@[F[+_], G[+_]] = [a] =>> F[a] | G[a]
 
-object Fix: // error Cyclic reference involving type T
+object Fix:
   opaque type T[+F[+_]] = ApplyFix.T[F] // error
 
-  def apply[F[+_]](f: F[Fix[F]]): T[F] = ApplyFix(f) // error // error
+  def apply[F[+_]](f: F[Fix[F]]): T[F] = ApplyFix(f) // error
 
   extension [F[+_]](fix: T[F]) // error
-    def value: F[Fix[F]] = ApplyFix.unwrap(fix)
+    def value: F[Fix[F]] = ApplyFix.unwrap(fix) // error
 
   object ApplyFix:
     opaque type T[+F[+_]] = F[Fix[F]]

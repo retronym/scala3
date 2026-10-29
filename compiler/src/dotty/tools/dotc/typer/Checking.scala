@@ -343,7 +343,12 @@ object Checking {
                 || sym.owner.isContainedIn(prefix.cls) // sym reachable through member references
               )
             case prefix: NamedType =>
-              !sym.is(Private) && prefix.derivesFrom(sym.owner)
+              // A class, or a base class of it, whose completion is in progress has no parents yet, and `derivesFrom`
+              // would answer from the ones known so far, which depend on the order completions run in: such a prefix
+              // is taken as interesting, as it may derive from `sym.owner` once they are known
+              // (docs/_docs/internals/parallel-signatures.md, §5.6). Otherwise `derivesFrom` is asked as before, and
+              // what it forces is forced as before.
+              !sym.is(Private) && (prefix.classSymbols.exists(_.hasUnknownBase) || prefix.derivesFrom(sym.owner))
               || {
                 val pcls = prefix.symbol.moduleClass
                 if pcls.isStaticOwner then

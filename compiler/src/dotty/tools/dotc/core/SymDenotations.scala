@@ -2523,14 +2523,29 @@ object SymDenotations {
       (classSymbol :: builder.baseClasses, builder.baseClassSet)
     }
 
+    /** Does this class, or a base class of it, have parents that are not known yet: a `TempClassInfo`, a completion
+     *  in progress? Reads only the infos already there: completes nothing. A class whose completion has not started
+     *  answers no.
+     */
+    final def hasUnknownBase(using Context): Boolean =
+      val seen = util.HashSet[Symbol]()
+      def loop(cls: Symbol): Boolean =
+        !seen.contains(cls) && {
+          seen += cls
+          cls.denot.infoOrCompleter match
+            case _: TempClassInfo => true
+            case info: ClassInfo => info.declaredParents.exists(p => loop(p.classSymbol))
+            case _ => false
+        }
+      loop(symbol)
+
     final override def derivesFrom(base: Symbol)(using Context): Boolean =
       val r = !isAbsent()
         && base.isClass
         && ((symbol eq base) || baseClassSet.contains(base))
       if UnstableReads.on && (symbol ne base) && base.isClass then
         // answered from a class, or a base class, whose parents are not known yet: kept, to ask again when they are
-        if UnstableReads.quietly(baseClasses.exists(_.infoOrCompleter.isInstanceOf[TempClassInfo])) then
-          UnstableReads.derivation(symbol, base, r)
+        if hasUnknownBase then UnstableReads.derivation(symbol, base, r)
       r
 
     final override def isSubClass(base: Symbol)(using Context): Boolean =
