@@ -192,6 +192,15 @@ What is not: a member signature can still meet a wait-for cycle between Namer co
 
 Also: the batch reporter renders a message as it is reported (`ParallelBatchReporter.report`), so a reader holding claims runs import suggestions, which complete symbols. Rendering should not happen under a completion.
 
+### 5.8 Shared structures under parallel readers
+
+Measured with the timeline (`ParallelBatch.Timeline`, the x-ray's Batch tab), which records per span the thread's CPU time and its time blocked on monitors and parked, and with JFR's contended monitor entries.
+
+- **Names.** The name table is a `ConcurrentHashMap` (#84), and parse never blocks on a monitor: not a bottleneck.
+- **Type interners** (`Uniques`). #84's concurrent sets find a hit without a lock but take the set's monitor on a miss, which is every new type: 4.8 s blocked over three runs of the compiler's sources, most of it in bodies. They are now striped by default on a concurrent base: 64 sets, one per stripe of the hash (the high bits of a multiplicative mix, independent of the bucket index), each with its own monitor; a type is interned in exactly one, so interning stays unique. Blocked time in bodies 0.93–1.07 s to 0.32–0.38 s a run; output byte-identical. `-Ddotc.uniques.stripes=<n>`, 1 for one set.
+- **Classpath completions.** A claim per classpath file deadlocked: `collection.SortedSet` and `collection.SortedSetFactoryDefaults` refer to each other, one nests in the other on one stack, and two readers entering from either end each held one file's claim and waited for the other's, inside Namer completions where no reader aborts. Every classpath completion (loader, TASTy unpickler and its lazy reads, a classpath module's completer) now takes one reentrant claim, `SymbolLoaders.ClasspathRoot`: a classpath completion never waits for a source definition's, so it cannot close a cycle with the Namer's roots. Cost: classpath loading is serial, which matters cold (the cold run took 10.3 s, as with a claim per file). `-Ddotc.parallelTyper.classpathRoots=file` for a claim per file.
+- **Left:** parallel index's lock in `Namer.createPackageSymbol` (2.5 s blocked over three runs), and `SyncEqHashMap` (0.27 s).
+
 ## 6. Plan
 
 0. **Toy** (done): `tools/sig-toy/`, the findings of §3.

@@ -1059,12 +1059,12 @@ object Contexts {
       // In non-interactive mode, always create a fresh platform to preserve original behavior.
       if _platform == null || !ctx.mode.is(Mode.Interactive) then
         _platform = newPlatform
-      platform.init()
+      ParallelBatch.span("setup", "classpath")(platform.init())
       // See `Context.handleRecursive` for an explanation of these values
       maxFuel = ctx.settings.XmaxFuel.value
       enrichErrorMessages = !ctx.settings.XnoEnrichErrorMessages.value
       reader.initFuel(maxFuel, enrichErrorMessages) // the batch reader, or the initializing thread's
-      definitions.init()
+      ParallelBatch.span("setup", "definitions")(definitions.init())
     }
 
     def fusedContaining(p: Phase): Phase =

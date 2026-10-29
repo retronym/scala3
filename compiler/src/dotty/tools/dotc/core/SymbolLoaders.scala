@@ -25,16 +25,31 @@ import dotty.tools.tasty.besteffort.BestEffortTastyHeaderUnpickler
 
 object SymbolLoaders {
 
-  /** The key of the claims on the file a top-level class is loaded from, for the loader, the TASTy unpickler, and
-   *  a classpath module's completer (`ModuleCompleter`): its package and its name, without a module class's suffix,
-   *  so that the class, its module class, its module val and every member read from the file share it. The file
-   *  object itself was not one key: the loader's (`associatedFile` when it was made) and the unpickler's
-   *  (`associatedFile` once read) differed, and readers took the two in opposite orders (`concurrent.TNode`,
-   *  signatures in parallel under `-Yparallel-typer`). None for a symbol not under a top-level class.
+  /** The key of the claims on what is read from the classpath, for the loader, the TASTy unpickler and its lazy
+   *  reads, and a classpath module's completer (`ModuleCompleter`): one key for the whole classpath by default, so
+   *  that classpath completions run one at a time, reentrantly, on whichever reader needs them.
+   *
+   *  A key per file deadlocked: classpath classes refer to each other across files (`collection.SortedSet` and
+   *  `collection.SortedSetFactoryDefaults`), one nests in the other on one stack, and two readers entering from
+   *  either end each held one file's claim and waited for the other's, both inside Namer completions, where no
+   *  reader aborts. A classpath completion never waits for a source definition's, so one key for the classpath
+   *  cannot close a cycle with the Namer's roots. Its cost is that classpath loading is serial: most of it happens in
+   *  a cold run. `-Ddotc.parallelTyper.classpathRoots=file` gives a key per file: the top-level definition's package
+   *  and name without a module suffix, computed from owners alone, so that the class, its module class, its module val
+   *  and every member read from the file share it (the file object was not one key: the loader's and the
+   *  unpickler's `associatedFile` differed).
+   *
+   *  None for a symbol not under a top-level definition (a package).
    */
   final case class FileRoot(pkg: Symbol, name: TypeName)
 
-  def fileRoot(sym: Symbol)(using Context): Option[FileRoot] =
+  /** The key of every classpath completion, by default (see `fileRoot`). */
+  object ClasspathRoot:
+    override def toString = "the classpath"
+
+  private val rootPerFile = System.getProperty("dotc.parallelTyper.classpathRoots") == "file"
+
+  def fileRoot(sym: Symbol)(using Context): Option[AnyRef] =
     // owners and the `Package` flag only: computing a claim's key completes nothing
     def isPackage(s: Symbol) = s.denot.flagsUNSAFE.is(Package)
     def top(s: Symbol): Symbol =
@@ -42,7 +57,9 @@ object SymbolLoaders {
       else if isPackage(s.owner) then s
       else top(s.owner)
     val t = top(sym)
-    if t.exists then Some(FileRoot(t.owner, t.name.toTypeName.stripModuleClassSuffix.toTypeName)) else None
+    if !t.exists then None
+    else if rootPerFile then Some(FileRoot(t.owner, t.name.toTypeName.stripModuleClassSuffix.toTypeName))
+    else Some(ClasspathRoot)
   import ast.untpd.*
 
   /** A marker trait for a completer that replaces the original

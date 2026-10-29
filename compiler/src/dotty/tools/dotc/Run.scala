@@ -449,7 +449,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
   private var myEnrichedErrorMessage = false
 
   def compile(files: List[AbstractFile]): Unit =
-    try compileSources(files.map(runContext.getSource(_)))
+    try compileSources(ParallelBatch.span("setup", "read sources")(files.map(runContext.getSource(_))))
     catch case ex: Exception if !this.enrichedErrorMessage =>
       val files1 = if units.isEmpty then files else units.map(_.source)
       report.echo(this.enrichErrorMessage(s"exception occurred while compiling ${files1.map(_.path)}"))
@@ -463,7 +463,7 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
    */
   def compileSources(sources: List[SourceFile]): Unit =
     if (sources forall (_.exists)) {
-      units = sources.map(CompilationUnit(_))
+      units = ParallelBatch.span("setup", "units")(sources.map(CompilationUnit(_)))
       compileUnits()
     }
 
@@ -503,10 +503,12 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
     val runCtx = ctx.fresh
     runCtx.setProfiler(Profiler())
 
-    val pluginPlan = ctx.base.addPluginPhases(ctx.base.phasePlan)
-    val phases = ctx.base.fusePhases(pluginPlan,
-      ctx.settings.Yskip.value, ctx.settings.YstopBefore.value, ctx.settings.Ycheck.value)
-    ctx.base.usePhases(phases, runCtx)
+    val phases = ParallelBatch.span("setup", "phase plan"):
+      val pluginPlan = ctx.base.addPluginPhases(ctx.base.phasePlan)
+      val phases = ctx.base.fusePhases(pluginPlan,
+        ctx.settings.Yskip.value, ctx.settings.YstopBefore.value, ctx.settings.Ycheck.value)
+      ctx.base.usePhases(phases, runCtx)
+      phases
 
     if ctx.settings.YnoDoubleBindings.value then
       ctx.base.checkNoDoubleBindings = true

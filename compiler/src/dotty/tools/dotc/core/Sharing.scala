@@ -50,9 +50,15 @@ final class Sharing private (val concurrent: Boolean, val parallel: Boolean):
   def newMap[K, V](): mutable.Map[K, V] =
     if concurrent then scala.collection.concurrent.TrieMap() else mutable.HashMap()
 
-  def newUniques(): Uniques = if concurrent then ConcurrentUniques() else Uniques()
-  def newAppliedUniques(): Uniques.AppliedUniques = if concurrent then Uniques.ConcurrentAppliedUniques() else Uniques.AppliedUniques()
-  def newNamedTypeUniques(): Uniques.NamedTypeUniques = if concurrent then Uniques.ConcurrentNamedTypeUniques() else Uniques.NamedTypeUniques()
+  // concurrent: striped, a set per stripe with a monitor of its own (`Uniques.stripes`, 1 for one set)
+  def newUniques(): Uniques =
+    if !concurrent then Uniques() else if Uniques.stripes == 1 then ConcurrentUniques() else Uniques.StripedUniques()
+  def newAppliedUniques(): Uniques.AppliedUniques =
+    if !concurrent then Uniques.AppliedUniques()
+    else if Uniques.stripes == 1 then Uniques.ConcurrentAppliedUniques() else Uniques.StripedAppliedUniques()
+  def newNamedTypeUniques(): Uniques.NamedTypeUniques =
+    if !concurrent then Uniques.NamedTypeUniques()
+    else if Uniques.stripes == 1 then Uniques.ConcurrentNamedTypeUniques() else Uniques.StripedNamedTypeUniques()
 
   override def toString: String =
     if parallel then "Sharing.Parallel" else if concurrent then "Sharing.Serialised" else "Sharing.Batch"

@@ -62,8 +62,10 @@ object ParallelBatch:
     def toJson: String =
       import scala.jdk.CollectionConverters.*
       def str(s: String) = "\"" + s.flatMap { case '"' => "\\\""; case '\\' => "\\\\"; case c if c < ' ' => " "; case c => c.toString } + "\""
-      def ms(ns: Long) = if ns < 0 then "-1" else f"${ns / 1e6}%.3f"
-      spans.asScala.map(s => s"[${str(s.thread)},${str(s.step)},${str(s.label)},${ms(s.startNs)},${ms(s.endNs)},${ms(s.cpuNs)},${s.blockedMs},${s.waitedMs}]").mkString("{\"spans\":[", ",\n", "]}")
+      // times from the timeline's start (a GC pause can begin a little before it: negative); -1 for a CPU time not measured
+      def ms(ns: Long) = f"${ns / 1e6}%.3f"
+      def cpu(ns: Long) = if ns < 0 then "-1" else ms(ns)
+      spans.asScala.map(s => s"[${str(s.thread)},${str(s.step)},${str(s.label)},${ms(s.startNs)},${ms(s.endNs)},${cpu(s.cpuNs)},${s.blockedMs},${s.waitedMs}]").mkString("{\"spans\":[", ",\n", "]}")
 
   @volatile var timeline: Timeline | Null = null
 
