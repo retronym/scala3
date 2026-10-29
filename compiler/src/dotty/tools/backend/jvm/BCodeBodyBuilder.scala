@@ -213,7 +213,7 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
         stack.push(k)
         genLoad(a1, INT)
         stack.push(INT)
-        genLoad(a2)
+        genLoad(a2, elementType)
         stack.pop(2)
         generatedType = UNIT
         bc.astore(elementType)
@@ -836,7 +836,7 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
           }
 
         case Apply(fun, List(expr)) if Erasure.Boxing.isBox(fun.symbol) && fun.symbol.denot.owner != defn.UnitModuleClass =>
-          val nativeKind = tpeTK(expr)
+          val nativeKind = paramTKs(app).head
           genLoad(expr, nativeKind)
           val returnType = bTypes.boxedClassOfPrimitive(nativeKind.asPrimitiveBType)
           val methodName = "boxTo" + returnType.simpleName
