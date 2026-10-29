@@ -27,6 +27,8 @@ import dotty.tools.dotc.printing.OutlinePrinter
 import scala.annotation.constructorOnly
 import scala.concurrent.Promise
 import dotty.tools.dotc.transform.Pickler.*
+import dotty.tools.dotc.ParallelBatch
+import dotty.tools.dotc.typer.ImportInfo.withRootImports
 import dotty.tools.dotc.sbt.interfaces.IncrementalCallback
 import dotty.tools.dotc.sbt.asyncZincPhaseCompleted
 import dotty.tools.dotc.util.{NoSourcePosition, SourcePosition}
@@ -371,8 +373,14 @@ class Pickler extends Phase {
   object serialized:
     val scratch = new ScratchData
     private val buf = mutable.ListBuffer.empty[(String, Array[Byte])]
+    // units pickled a unit per task (`runOnInParallel`): a scratch block per worker, no lock
+    private val perThread = ThreadLocal.withInitial(() => new ScratchData)
     def run(body: ScratchData => Array[Byte]): Array[Byte] =
-      synchronized {
+      if pickledPerTask then
+        val s = perThread.get.nn
+        s.reset()
+        body(s)
+      else synchronized {
         scratch.reset()
         body(scratch)
       }
@@ -387,8 +395,25 @@ class Pickler extends Phase {
 
   private val executor = Executor[Array[Byte]]()
 
+  /** Units are pickled a unit per task (`runOnInParallel`): each worker compacts and assembles its own, eagerly. */
+  @volatile private var pickledPerTask = false
+
   private def useExecutor(using Context) =
-    Pickler.ParallelPickling && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
+    Pickler.ParallelPickling && !pickledPerTask && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
+
+  /** Pickle a unit per task: with parallel readers in batch compilation (`-Yparallel-typer`), several units, and
+   *  none of the modes that keep per-run maps (`-Ytest-pickler`, `-Yprint-tasty`) or read TASTy (best effort,
+   *  `-from-tasty`). A unit's pickling reads its typed trees and the symbols they refer to (completing any that are
+   *  lazy, under their claims) and writes its own `unit.pickled`; compaction, positions, comments and assembly run in
+   *  the same task, with a scratch block per worker. The main thread did all of it, the background executor the
+   *  compaction: 556 ms of a warm run of the compiler's sources at 18 threads. `-Ddotc.parallelTyper.pickler=serial`
+   *  for the main thread.
+   */
+  private def pickleInParallel(units: List[CompilationUnit])(using Context): Boolean =
+    ctx.base.parallel && !ctx.mode.is(Mode.Interactive) && units.lengthCompare(1) > 0
+      && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
+      && !ctx.settings.fromTasty.value && pickling == noPrinter
+      && !sys.props.get("dotc.parallelTyper.pickler").contains("serial") // the main thread, as before
 
   private def printerContext(isOutline: Boolean)(using Context): Context =
     if isOutline then ctx.fresh.setPrinterFn(OutlinePrinter(_))
@@ -531,8 +556,20 @@ class Pickler extends Phase {
           writeSigFilesAsync(serialized.result(), writer, async)
         }
 
+    def runUnits(): List[CompilationUnit] =
+      if pickleInParallel(units) then
+        pickledPerTask = true
+        try
+          val unitContexts = units.map(u => ctx.fresh.setPhase(this.start).setCompilationUnit(u).withRootImports)
+          inParallel("dotc-pickle", unitContexts) { c ?=>
+            ParallelBatch.span("pickle", c.compilationUnit.source.name)(run)
+            true
+          }.map(_.compilationUnit)
+        finally pickledPerTask = false
+      else super.runOn(units)
+
     def runPhase(writeCB: (doWrite: () => Unit) => Unit) =
-      super.runOn(units).tap: _ =>
+      runUnits().tap: _ =>
         for (async, doWrite) <- writeTask do
           writeCB(doWrite)
           async.signalWriteScheduled()
