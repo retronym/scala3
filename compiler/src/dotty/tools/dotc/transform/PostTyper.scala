@@ -9,6 +9,7 @@ import dotty.tools.dotc.typer.Checking
 import dotty.tools.dotc.inlines.Inlines
 import dotty.tools.dotc.typer.VarianceChecker
 import typer.ErrorReporting.errorTree
+import typer.ImportInfo.withRootImports
 import Types.*, Contexts.*, Names.*, Flags.*, DenotTransformers.*, Phases.*
 import SymDenotations.*, StdNames.*, Annotations.*, Trees.*, Scopes.*
 import Decorators.*
@@ -100,7 +101,41 @@ class PostTyper extends MacroTransform with InfoTransformer { thisPhase =>
   override def runOn(units: List[CompilationUnit])(using runCtx: Context): List[CompilationUnit] =
     if Feature.ccEnabledSomewhere then
       SafeRefs.init()(using ctx.withPhase(thisPhase))
-    super.runOn(units)
+    if runInParallel(units) then runOnInParallel(units)
+    else super.runOn(units)
+
+  /** Under `-Yparallel-typer`, a unit per task, as the typer's bodies (`TyperPhase.typeCheckInParallel`) and the
+   *  pickler (`Pickler.pickleInParallel`) are. A unit's transform writes its own trees and the denotations of the
+   *  classes it defines (super accessors, synthetic members, annotations kept for a target), each change installed
+   *  after this phase under the claim on the symbol's ring (`SymDenotation.installAfter`), a member entered into a
+   *  published scope as `MutableScope.enter` does. Its helpers are its transformer's. The main thread did all of it:
+   *  330-440 ms of a warm run of the compiler's sources. `-Ddotc.parallelTyper.posttyper=serial` for the main thread.
+   */
+  private def runInParallel(units: List[CompilationUnit])(using Context): Boolean =
+    ctx.base.parallel && !ctx.mode.is(Mode.Interactive) && units.lengthCompare(1) > 0
+      && !Feature.ccEnabledSomewhere && !Feature.safeEnabled // `SafeRefs` is one checker for the run
+      && !sys.props.get("dotc.parallelTyper.posttyper").contains("serial")
+
+  private def runOnInParallel(units: List[CompilationUnit])(using runCtx: Context): List[CompilationUnit] =
+    val reporter = ctx.reporter match
+      case r: ParallelBatchReporter => Some(r)
+      case _ => None
+    // the diagnostics in the order a serial run issues them, but for the order between units
+    reporter.foreach(_.startBuffering())
+    try
+      val unitContexts = units.map(u =>
+        runCtx.fresh.setPhase(this.start).setCompilationUnit(u).withRootImports.fresh.setNewTyperState())
+      val done = inParallel("dotc-posttyper", unitContexts) { c ?=>
+        try
+          ParallelBatch.span("posttyper", c.compilationUnit.source.name)(run)
+          true
+        catch case _: CompilationUnit.SuspendException => false
+        finally c.typerState.settle(runCtx)
+      }
+      val res = done.map(_.compilationUnit)
+      ctx.run.nn.checkSuspendedUnits(res)
+      res
+    finally reporter.foreach(_.issueBuffered())
 
   override def run(using Context): Unit =
     val unit = ctx.compilationUnit
@@ -122,17 +157,6 @@ class PostTyper extends MacroTransform with InfoTransformer { thisPhase =>
     initContextCalled = true
     compilingScala2StdLib = Feature.shouldBehaveAsScala2(using ctx)
 
-  /** The anonymous function symbols that need an explicified result type
-   *  if their right hand side is also a closure. This is the case if
-   *  the closure's type forms part of the type of a valdef or defdef
-   *  that has a polymorphic closure type.
-   */
-  private val closuresNeedingExplicify = mutable.Set[Symbol]()
-
-  val superAcc: SuperAccessors = new SuperAccessors(thisPhase)
-  val synthMbr: SyntheticMembers = new SyntheticMembers(thisPhase)
-  val beanProps: BeanProperties = new BeanProperties(thisPhase)
-
   private def newPart(tree: Tree): Option[New] = methPart(tree) match {
     case Select(nu: New, _) => Some(nu)
     case _ => None
@@ -142,7 +166,20 @@ class PostTyper extends MacroTransform with InfoTransformer { thisPhase =>
     // TODO fill in
   }
 
+  // a transformer per unit (`MacroTransform.run`), and so the state of its helpers too: under `-Yparallel-typer`
+  // the units are transformed on several threads (`runOn`)
   class PostTyperTransformer extends Transformer {
+
+    /** The anonymous function symbols that need an explicified result type
+     *  if their right hand side is also a closure. This is the case if
+     *  the closure's type forms part of the type of a valdef or defdef
+     *  that has a polymorphic closure type.
+     */
+    private val closuresNeedingExplicify = mutable.Set[Symbol]()
+
+    val superAcc: SuperAccessors = new SuperAccessors(thisPhase)
+    val synthMbr: SyntheticMembers = new SyntheticMembers(thisPhase)
+    val beanProps: BeanProperties = new BeanProperties(thisPhase)
 
     private var inJavaAnnot: Boolean = false
 
