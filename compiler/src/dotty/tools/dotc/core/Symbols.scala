@@ -29,6 +29,7 @@ import io.AbstractFile
 import util.{SourceFile, NoSource, Property, SourcePosition, SrcPos, EqHashMap, WrappedSourceFile}
 
 import scala.annotation.internal.{benignRace, cache, lazyFact, sharable, treeState}
+import scala.annotation.static
 import config.Printers.typr
 
 import scala.compiletime.uninitialized
@@ -43,10 +44,6 @@ object Symbols extends SymUtils {
 
   /** Tree attachment containing the identifiers in a tree as a sorted array */
   val Ids: Property.Key[Array[String]] = new Property.Key
-
-  // the handle of `Symbol.checkedPeriod` (`Published`): a `val`, the given a reference to it
-  val checkedPeriodHandle: Published.Handle[Symbol, "checkedPeriod"] = Published.handle
-  given Published.Handle[Symbol, "checkedPeriod"] = checkedPeriodHandle
 
   /** A Symbol represents a Scala definition/declaration or a package.
    *  @param initCoord The coordinates of the symbol (a position or an index)
@@ -483,6 +480,10 @@ object Symbols extends SymUtils {
 
     override def hashCode(): Int = id // for debugging.
   }
+
+  object Symbol:
+    @static val checkedPeriodHandle: Published.Handle[Symbol, "checkedPeriod"] = Published.handle
+    given Published.Handle[Symbol, "checkedPeriod"] = checkedPeriodHandle
 
   type TermSymbol = Symbol { type ThisName = TermName }
   type TypeSymbol = Symbol { type ThisName = TypeName }
