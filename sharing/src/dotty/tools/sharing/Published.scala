@@ -34,10 +34,12 @@ import scala.quoted.*
  *
  *  The handle is a `@static val`, the first field of the companion, and the given a reference to it: an alias given
  *  computed in place is a lazy val, whose check every access would pay. `@static` makes it a `static final` field of
- *  the class, which C2 takes as a constant, inlining `getAcquire` to the `Unsafe` intrinsic. A plain `val` of the
- *  companion is a field of the module instance, which HotSpot does not trust as final: there the access stayed an
- *  out-of-line `VarHandle` call (`VarHandleGuards.guard_L_I_`), about 1.6% of the CPU of a serial batch compilation
- *  of the compiler's sources, `NamedType.checkedPeriod` and `Symbol.checkedPeriod` above all. The operations are macros: they take the field's owner and name from the call
+ *  the class, a constant to C2 whatever it makes of the module instance. (A plain `val` of the companion was folded
+ *  too, in the profiles taken: `getAcquire` was inlined either way. What its frame costs is the acquire load itself,
+ *  an `ldar` on AArch64, about 1.5% of the CPU of a serial batch compilation of the compiler's sources, mostly
+ *  `NamedType.checkedPeriod` and `Symbol.checkedPeriod`.)
+ *
+ *  The operations are macros: they take the field's owner and name from the call
  *  (`this.version`), and the field's `VarHandle` from the given `Handle[Owner, "name"]` declared in the owner's
  *  companion, so two fields of the same type have their own handles, chosen at compile time. A value class is stored as
  *  its underlying value, the field's erased type. The field must not be `private`: the compiler drops a private field
@@ -58,9 +60,9 @@ object Published extends PublishedOps:
 
   /** The `VarHandle` of field `F` of class `O`, declared once, as a `@static val` in `O`'s companion and a given.
    *
-   *  Opaque over the handle itself, not a class holding it: C2 folds a handle in a `static final` field and inlines
-   *  `getAcquire` to the `Unsafe` intrinsic, but not one a field further away (measured: a class around the handle left
-   *  the call uninlined, 8 times slower).
+   *  Opaque over the handle itself, not a class holding it: C2 folds a handle in a `static final` field, or in a field
+   *  of a module, and inlines `getAcquire` to the `Unsafe` intrinsic, but not one a field further away (measured: a
+   *  class around the handle left the call uninlined, 8 times slower).
    *
    *  @tparam O the class that declares the field
    *  @tparam F the field's name, as a literal type
