@@ -170,10 +170,6 @@ trait PublishedOps:
      *  an `Acquired[owner.type, "field", T]`, whose `value` is the field's value. */
     transparent inline def acquired: Any = ${ PublishedMacros.acquiredImpl[T]('field) }
 
-    /** `acquired` if `concurrent`, else a plain load as the same evidence: for the hottest readers, which know whether
-     *  other threads share the object, so that one thread pays a test of a field, not an acquire load. */
-    transparent inline def acquiredIf(inline concurrent: Boolean): Any = ${ PublishedMacros.acquiredIfImpl[T]('field, 'concurrent) }
-
     /** Runs `body`, which stores this field's payloads (`p := v`), then stores `v` in this field with release
      *  semantics: the stores are ordered before the release by construction. */
     inline def publishing(inline v: T)(inline body: Published.Publishing ?=> Unit): Unit =
@@ -336,14 +332,6 @@ private[sharing] object PublishedMacros:
     val f = FieldRef[T](field)
     import f.q.reflect.*
     val loaded = acquireImpl[T](field).asTerm
-    val acq = opaqueTycon(using f.q)("dotty.tools.sharing.Published", "Acquired")
-      .appliedTo(List(f.owner.tpe, ConstantType(StringConstant(f.sym.name)), TypeRepr.of[T]))
-    Select.unique(loaded, "asInstanceOf").appliedToType(acq).asExpr
-
-  def acquiredIfImpl[T: Type](field: Expr[Published[T]], concurrent: Expr[Boolean])(using Quotes): Expr[Any] =
-    val f = FieldRef[T](field)
-    import f.q.reflect.*
-    val loaded = If(concurrent.asTerm, acquireImpl[T](field).asTerm, plainImpl[T](field).asTerm)
     val acq = opaqueTycon(using f.q)("dotty.tools.sharing.Published", "Acquired")
       .appliedTo(List(f.owner.tpe, ConstantType(StringConstant(f.sym.name)), TypeRepr.of[T]))
     Select.unique(loaded, "asInstanceOf").appliedToType(acq).asExpr
