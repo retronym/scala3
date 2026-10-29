@@ -3951,10 +3951,11 @@ class JSCodeGen()(using genCtx: Context) {
             js.JSBinaryOp.instanceof, value, genLoadJSConstructor(sym)),
             jstpe.BooleanType)
       }
+    } else if (sym == defn.NullClass || sym == defn.NothingClass) {
+      // Not written by users, but a stuck match type can erase to Nothing.
+      // No value is an instance of either, as on the JVM (`instanceof scala/runtime/Nothing$`).
+      js.Block(value, js.BooleanLiteral(false))
     } else {
-      // The Scala type system prevents x.isInstanceOf[Null] and ...[Nothing]
-      assert(sym != defn.NullClass && sym != defn.NothingClass,
-          s"Found a .isInstanceOf[$sym] at $pos")
       js.IsInstanceOf(value, toIRType(to).toNonNullable)
     }
   }
