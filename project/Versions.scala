@@ -70,6 +70,12 @@ object Versions {
   def isNightly = sys.env.get("NIGHTLYBUILD").contains("yes")
   def isBenchmark = sys.env.get("BENCHMARKBUILD").contains("yes")
 
+  /** The inliner/optimizer slows compilation of the library and compiler considerably, and
+   *  cross-file inlining (`-opt-inline`) has unspecified behaviour with Zinc's incremental
+   *  compilation. So only artifacts that are published or benchmarked are optimized; day-to-day
+   *  `compile` and `publishLocal` skip it. */
+  def optimizeArtifacts = isRelease || isNightly || isBenchmark
+
   /** Version calculated for `nonbootstrapped` projects */
   val dottyNonBootstrappedVersion = {
     // Make sure sbt always computes the scalaBinaryVersion correctly
