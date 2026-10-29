@@ -7,7 +7,8 @@ private class VirtualDirectoryClassPath(protected override val dir: AbstractFile
   type F = AbstractFile
 
   protected def getSubDir(packageDirName: String): Option[AbstractFile] =
-    dir.lookupPath(packageDirName, java.io.File.separatorChar, directory = true)
+    // `packageDirName` has a trailing separator, which `lookupPath` would treat as an empty final name
+    dir.lookupPath(packageDirName.stripSuffix(java.io.File.separator), java.io.File.separatorChar, directory = true)
 
   protected def listChildren(dir: AbstractFile, filter: Option[AbstractFile => Boolean] = None): Iterable[F] = filter match {
     case Some(f) => dir.iterator.filter(f).toSeq
