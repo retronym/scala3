@@ -23,7 +23,7 @@ object CommandLineParser:
    *
    *  The embedded quotes are stripped. Escaping backslash is not stripped.
    *
-   *  Invoke `errorFn` with a descriptive message if an end quote is missing.
+   *  Invoke `errorFn` with a descriptive message if an end quote is missing or the line ends with an escaping backslash.
    */
   def tokenize(line: String, errorFn: String => Unit): List[String] =
 
@@ -88,6 +88,7 @@ object CommandLineParser:
       res.nn
 
     inline def badquote() = errorFn(s"Unmatched quote [${qpos.last}](${line.charAt(qpos.last)})")
+    inline def badescape() = errorFn("trailing backslash")
 
     inline def skipWhitespace() = while isWhitespace(cur) do bump()
 
@@ -98,6 +99,9 @@ object CommandLineParser:
         accum.reverse
       else if !skipToDelim() then
         badquote()
+        Nil
+      else if pos > line.length then
+        badescape()
         Nil
       else
         accum ::= text()
