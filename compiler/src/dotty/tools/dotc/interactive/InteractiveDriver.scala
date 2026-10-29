@@ -147,6 +147,20 @@ class InteractiveDriver(
       // writer is done (the pending flag may be down again by now: the reader
       // remembers which it was)
       if reader.cancelledByChecker || myCancelled then throw cancelled
+      // A reader aborted as the victim of a wait-for cycle backs off before
+      // its retry: it waits (bounded) for the release of the claim it was
+      // waiting on when it was aborted. Retried at once, it takes its first
+      // root again before the other party has moved and closes the same
+      // cycle again; two victims in opposite orders can do that for ever
+      // under a scheduler that never lets one of them run ahead (the
+      // livelock the design's step 4 notes, `Reader.waitCyclesAborted` > 20
+      // in the soak under load). The wait is what a lock's queue gives for
+      // free and a retry from the driver has not.
+      val collision = reader.collidedWith
+      if collision != null then
+        reader.collidedWith = null
+        util.Chaos.note(s"backing off until ${collision.ownerName} releases ${collision.what.render}")
+        collision.done.await(1, java.util.concurrent.TimeUnit.SECONDS): Unit
     throw new IllegalStateException("unreachable")
 
   /** Run `body` as the only thread on the session. */
