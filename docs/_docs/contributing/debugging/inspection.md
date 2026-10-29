@@ -78,9 +78,9 @@ and create a file `tasty/launch.iss` with the following contents:
 ```
 $ (rm -rv out || true) && mkdir out # clean up compiler output, create `out` dir.
 
-scala3/scalac -d $here/out $here/Foo.scala
+scalac -d $here/out $here/Foo.scala
 
-scala3/scalac -print-tasty $here/out/Foo.tasty
+scalac -print-tasty $here/out/Foo.tasty
 ```
 
 With sbt command `issue tasty` you will see output such as the following:
@@ -108,7 +108,7 @@ it prints the internal representation of types, along with their class. It can b
 invoked from the sbt shell with three arguments as follows:
 
 ```bash
-sbt:scala3> scala3-compiler/Test/runMain
+sbt:scala3> scala3-compiler-nonbootstrapped/Test/runMain
   dotty.tools.printTypes
   <source>
   <kind>
@@ -135,7 +135,7 @@ Each one of `typeStrings` is then printed, displaying their internal structure, 
 
 Here, given a previously defined `class Box { type X }`, you can inspect the return type `Box#X`:
 ```bash
-sbt:scala3> scala3-compiler/Test/runMain
+sbt:scala3> scala3-compiler-nonbootstrapped/Test/runMain
 > dotty.tools.printTypes
 > "class Box { type X }"
 > "rhs"

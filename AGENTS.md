@@ -14,19 +14,29 @@ We care about maintainability. "The tests pass" is not enough to justify that a 
 
 ## Build Commands
 
-Use `sbt --client` (sbt with native thin client) to run commands. This keeps an sbt server running for faster subsequent invocations.
+Use `sbt --client` (sbt with native thin client) to run commands. This keeps an sbt server running for faster subsequent invocations. Run `sbt --client shutdown` when done, and before starting a server with different `-D` options or environment.
+
+Builds and test runs take tens of seconds to minutes; run them in the background and check the output rather than blocking. Measured timings, and the reasoning behind each recipe below, are in [Getting Started](docs/_docs/contributing/getting-started.md) and [Testing](docs/_docs/contributing/testing.md).
 
 ### Compilation
-- `sbt --client scalac <file>` - Compile a file with the current compiler changes
-- `sbt --client scala <class>` - Run a compiled class
+- `SCALA3_OPTIMIZE=false sbt --client buildQuick` - Build the nonbootstrapped compiler and REPL, skipping the optimizer (faster cold builds), and write `bin/.cp`
+- `bin/scalacQ -d local/out <file>` / `bin/scalaQ -cp local/out <main>` - Compile and run one file against that build (the `-d` directory must exist)
+- `sbt --client "scalac -d local/out <file>"` - The same through sbt (the sbt `scala` task's program output does not reach `--client`; use `bin/scalaQ`)
+- `sbt --client scala3-compiler-bootstrapped/compile` - Build the bootstrapped compiler
 
 Use the `local/` directory for temporary test files (gitignored).
 
 ### Testing
-- `sbt --client testCompilation` - Run the whole compilation test suite.
-- `sbt --client testCompilation <name>` - Run compilation tests matching `<name>` (e.g., `sbt --client testCompilation i12345`)
+- `sbt --client "testCompilation <filter>"` - Run compilation tests (`tests/pos`, `tests/neg`, `tests/run`, ...) whose path contains `<filter>`; several filters are comma-separated, not space-separated
+- `sbt --client "testCompilation --failed"` / `"testCompilation --update-checkfiles <filter>"` - Re-run the failures of the last run / overwrite `.check` files with actual output
+- `sbt --client "scala3-bootstrapped/testCompilation <filter>"` - Bootstrapped-only groups, including `tests/plugins`, `*-with-compiler`, `run-macros`
+- `sbt --client "scala3-compiler-nonbootstrapped/testOnly dotty.tools.dotc.CompilationTests -- --tests=runAll -Ddotty.tests.filter=<filter>"` - One test group plus a file filter
 - `sbt --client scala3-bootstrapped/test` - Run all tests (slow, CI-level)
-- `sbt --client "testCompilation --update-checkfiles"` - Update `.check` files with actual output
+
+A filter that matches nothing still succeeds. Check the `== Vulpix Test Report: all N suites passed (M skipped) ==` line: `N` must be non-zero.
+
+### Git
+Use a full clone, not a shallow one, for PR work: amending or rebasing in a shallow clone can create a parentless commit, and force-pushing it to a PR branch makes GitHub close the PR for good.
 
 
 ## Test Directory Structure
@@ -60,7 +70,11 @@ The compiler has two configurations:
 - **nonbootstrapped** - Built with a released Scala 3 compiler (faster iteration)
 - **bootstrapped** - Built with itself (required for some tests, final validation)
 
-Use `scala3-compiler-bootstrapped/testCompilation` for tests requiring the bootstrapped compiler.
+Use `scala3-bootstrapped/testCompilation` for tests requiring the bootstrapped compiler.
+
+## Debugging
+
+Compiler flags for inspecting a compilation (`-Vprint:<phase>`, `-Ycheck:all`, `-Ylog:<phase>`, `-Ydebug-error`), and how to try a phase as a research plugin with `-Xplugin`, are in `docs/_docs/contributing/debugging/` and `docs/_docs/contributing/issues/`.
 
 ## Documentation
 

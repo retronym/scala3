@@ -76,13 +76,13 @@ Let's use [dotty-issue-workspace] to reproduce issue [#7710]:
     ```bash
     $ (rm -rv out || true) && mkdir out # clean up compiler output, create `out` dir.
 
-    scala3/scalac -d $here/out $here/Test.scala
+    scalac -d $here/out $here/Test.scala
     ```
 
     - The first line, `$ (rm -rv out || true) && mkdir out` specifies a shell command
       (it starts with `$`), in this case to ensure that there is a fresh `out`
       directory to hold compiler output.
-    - The next line, `scala3/scalac -d $here/out $here/Test.scala` specifies an sbt
+    - The next line, `scalac -d $here/out $here/Test.scala` specifies an sbt
       command, which will compile `Test.scala` and place any output into `out`.
       `$here` is a special variable that will be replaced by the path of the parent
       directory of `launch.iss` when executing the commands.
@@ -110,7 +110,7 @@ You can achieve this via the following `launch.iss`:
 ```bash
 $ (rm -rv out || true) && mkdir out # clean up compiler output, create `out` dir.
 
-scala3/scalac -d $here/out $here/$1.scala # compile the first argument following `issue foo <arg>`
+scalac -d $here/out $here/$1.scala # compile the first argument following `issue foo <arg>`
 ```
 
 It is similar to the previous example, except now you will compile a file `$1.scala`, referring
@@ -134,7 +134,7 @@ not be passed). This saves typing the same arguments each time you want to use t
 The following `launch.iss` file is an example of how you can use multiline
 commands as a template for solving issues that [run compiled
 code](../testing.md#checking-program-output). It demonstrates configuring
-the `scala3/scalac` command using compiler flags, which are commented out. Put
+the `scalac` command using compiler flags, which are commented out. Put
 your favourite flags there for quick usage.
 
 ```bash
