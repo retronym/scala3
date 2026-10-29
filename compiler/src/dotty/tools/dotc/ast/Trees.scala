@@ -613,7 +613,7 @@ object Trees {
     def isInline = false
   }
   class InlineIf[+T <: Untyped] private[ast] (cond: Tree[T], thenp: Tree[T], elsep: Tree[T])(implicit @constructorOnly src: SourceFile)
-    extends If(cond, thenp, elsep) {
+    extends If[T](cond, thenp, elsep) {
     override def isInline = true
     override def toString = s"InlineIf($cond, $thenp, $elsep)"
   }
@@ -640,13 +640,13 @@ object Trees {
     def isSubMatch = false
   }
   class InlineMatch[+T <: Untyped] private[ast] (selector: Tree[T], cases: List[CaseDef[T]])(implicit @constructorOnly src: SourceFile)
-    extends Match(selector, cases) {
+    extends Match[T](selector, cases) {
     override def isInline = true
     override def toString = s"InlineMatch($selector, $cases)"
   }
   /** with selector match { cases } */
   final class SubMatch[+T <: Untyped] private[ast] (selector: Tree[T], cases: List[CaseDef[T]])(implicit @constructorOnly src: SourceFile)
-    extends Match(selector, cases) {
+    extends Match[T](selector, cases) {
     override def isSubMatch = true
   }
 
@@ -695,7 +695,7 @@ object Trees {
 
   /** Array(elems) */
   class JavaSeqLiteral[+T <: Untyped] private[ast] (elems: List[Tree[T]], elemtpt: Tree[T])(implicit @constructorOnly src: SourceFile)
-    extends SeqLiteral(elems, elemtpt) {
+    extends SeqLiteral[T](elems, elemtpt) {
     override def toString: String = s"JavaSeqLiteral($elems, $elemtpt)"
   }
 
@@ -1126,7 +1126,7 @@ object Trees {
       mapElems(_.withSpan(span)).asInstanceOf[this.type]
   }
 
-  class EmptyTree[T <: Untyped] extends Thicket(Nil)(using NoSource) {
+  class EmptyTree[T <: Untyped] extends Thicket[Nothing](Nil)(using NoSource) {
     // assert(uniqueId != 1492)
     override def withSpan(span: Span) = throw AssertionError("Cannot change span of EmptyTree")
   }

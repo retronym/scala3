@@ -1096,7 +1096,7 @@ trait Applications extends Compatibility {
    *  argument trees.
    */
   class ApplicableToTrees(methRef: TermRef, args: List[Tree], resultType: Type, argMatch: ArgMatch)(using Context)
-  extends TestApplication(methRef, methRef.widen, args, resultType, argMatch) {
+  extends TestApplication[Tree](methRef, methRef.widen, args, resultType, argMatch) {
     def argType(arg: Tree, formal: Type): Type =
       if untpd.isContextualClosure(arg) && defn.isContextFunctionType(formal) then arg.tpe
       else normalize(arg.tpe, formal)
@@ -1108,7 +1108,7 @@ trait Applications extends Compatibility {
 
   /** Subclass of Application for applicability tests with value argument types. */
   class ApplicableToTypes(methRef: TermRef, args: List[Type], resultType: Type, argMatch: ArgMatch)(using Context)
-  extends TestApplication(methRef, methRef, args, resultType, argMatch) {
+  extends TestApplication[Type](methRef, methRef, args, resultType, argMatch) {
     def argType(arg: Type, formal: Type): Type = arg
     def treeToArg(arg: Tree): Type = arg.tpe
     def isVarArg(arg: Type): Boolean = arg.isRepeatedParam
@@ -1122,7 +1122,7 @@ trait Applications extends Compatibility {
   @scratch @confined abstract class TypedApply[T <: Untyped](
     app: untpd.Apply, fun: Tree, methRef: TermRef, args: List[Trees.Tree[T]], resultType: Type,
     override val applyKind: ApplyKind)(using Context)
-  extends Application(methRef, fun.tpe, args, resultType) {
+  extends Application[Trees.Tree[T]](methRef, fun.tpe, args, resultType) {
     type TypedArg = Tree
     def isVarArg(arg: Trees.Tree[T]): Boolean = untpd.isWildcardStarArg(arg)
     private var typedArgBuf = new mutable.ListBuffer[Tree]
@@ -1283,7 +1283,7 @@ trait Applications extends Compatibility {
   class ApplyToUntyped(
     app: untpd.Apply, fun: Tree, methRef: TermRef, proto: FunProto,
     resultType: Type)(using Context)
-  extends TypedApply(app, fun, methRef, proto.args, resultType, proto.applyKind) {
+  extends TypedApply[Untyped](app, fun, methRef, proto.args, resultType, proto.applyKind) {
     def typedArg(arg: untpd.Tree, formal: Type): TypedArg = proto.typedArg(arg, formal)
     def treeToArg(arg: Tree): untpd.Tree = untpd.TypedSplice(arg)
   }
@@ -1292,7 +1292,7 @@ trait Applications extends Compatibility {
   class ApplyToTyped(
     app: untpd.Apply, fun: Tree, methRef: TermRef, args: List[Tree],
     resultType: Type, applyKind: ApplyKind)(using Context)
-  extends TypedApply(app, fun, methRef, args, resultType, applyKind) {
+  extends TypedApply[Type](app, fun, methRef, args, resultType, applyKind) {
     def typedArg(arg: Tree, formal: Type): TypedArg = arg
     def treeToArg(arg: Tree): Tree = arg
   }
