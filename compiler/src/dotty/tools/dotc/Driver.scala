@@ -186,6 +186,11 @@ class Driver {
       compileCtx.setReporter(reporter)
     if parallel then
       compileCtx.setReporter(ParallelBatchReporter(compileCtx.reporter))
+      // -Ddotc.parallelTyper.timeline=<file>: what each thread did when, as JSON (`ParallelBatch.Timeline`)
+      for out <- sys.props.get("dotc.parallelTyper.timeline") do
+        val tl = ParallelBatch.Timeline()
+        ParallelBatch.timeline = tl
+        Runtime.getRuntime.addShutdownHook(Thread(() => { tl.close(); java.nio.file.Files.writeString(java.nio.file.Path.of(out), tl.toJson); () }))
     if (callback != null)
       compileCtx.setCompilerCallback(callback)
     process(args, compileCtx)

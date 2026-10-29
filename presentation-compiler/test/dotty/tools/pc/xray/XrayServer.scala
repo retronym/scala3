@@ -972,6 +972,8 @@ object XrayServer:
         Replay.route(ex, p)
       case p if p.startsWith("/throughput") =>
         ThroughputDemo.route(ex, p, sourcesRoot)
+      case p if p.startsWith("/batch") =>
+        BatchDemo.route(ex, p, sourcesRoot)
       case "/background" if ex.getRequestMethod == "POST" =>
         val body = readBody(ex)
         reply(ex, 202, "application/json", json(startBackground(field(body, "code").getOrElse(""), field(body, "file").getOrElse(""),

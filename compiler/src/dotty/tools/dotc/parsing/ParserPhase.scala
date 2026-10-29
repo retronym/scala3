@@ -4,7 +4,7 @@ import dotty.tools.dotc.config.Config
 import dotty.tools.dotc.core.Contexts.{ Context, ctx }
 import dotty.tools.dotc.core.Phases.Phase
 import dotty.tools.dotc.typer.ImportInfo.withRootImports
-import dotty.tools.dotc.{ CompilationUnit, ast, report }
+import dotty.tools.dotc.{ CompilationUnit, ParallelBatch, ast, report }
 import dotty.tools.dotc.util.{ NoSourcePosition, SourcePosition }
 import dotty.tools.dotc.util.Stats.record
 import dotty.tools.unsupported
@@ -22,7 +22,7 @@ class Parser extends Phase {
    */
   private[dotc] var firstXmlPos: SourcePosition = NoSourcePosition
 
-  def parse(using Context): Boolean = monitor("parser") {
+  def parse(using Context): Boolean = monitor("parser") { ParallelBatch.span("parse", ctx.compilationUnit.source.name) {
     val unit = ctx.compilationUnit
     unit.untpdTree =
       if (unit.isJava) new JavaParsers.JavaParser(unit.source).parse()
@@ -38,7 +38,7 @@ class Parser extends Phase {
       }
     if (Config.checkPositions)
       unit.untpdTree.checkPos(nonOverlapping = !unit.isJava && !ctx.reporter.hasErrors)
-  }
+  }}
 
 
   override def runOn(units: List[CompilationUnit])(using Context): List[CompilationUnit] = {

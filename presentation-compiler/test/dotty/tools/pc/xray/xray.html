@@ -126,7 +126,7 @@
   ul.compl { margin: 2px 0 8px; padding-left: 18px; max-height: 110px; overflow: auto; }
   pre.hljs { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); font-size: 11px; max-height: 160px; overflow: auto; }
   /* ---- bottom panel: request log and demo transcript as tabs */
-  #logsec { height: 220px; flex: none; border-top: 0; } body.tpWide #logsec { height: 440px !important; }
+  #logsec { height: 220px; flex: none; border-top: 0; } body.tpWide #logsec { height: 440px !important; } body.bWide #logsec { height: 70vh !important; }
   #logsec .ph { background: var(--panel); gap: 2px; padding-left: 8px; }
   #logsec .ptab { border: 0; background: transparent; color: var(--dim); padding: 4px 10px; border-radius: var(--r); font-weight: 500; }
   #logsec .ptab.on { color: var(--fg); background: var(--hover); } #logsec .ptab:disabled { opacity: .4; }
@@ -191,6 +191,12 @@
   #tpBox input[type=text] { width: 90px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); }
   #throughput { flex: 1; overflow: auto; } #throughput[hidden] { display: none; }
   #tpPanel { display: flex; gap: 16px; padding: 8px 12px; align-items: flex-start; }
+  #batch { flex: 1; overflow: auto; padding: 6px 10px; font-size: 12px; } #batch[hidden] { display: none; }
+  #batch .ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; } #batch .ctl input[type=number] { width: 4em; }
+  #batch table { border-collapse: collapse; margin: 6px 0; } #batch td, #batch th { padding: 1px 8px; text-align: right; } #batch th { color: var(--dim); font-weight: normal; } #batch td.l, #batch th.l { text-align: left; }
+  #batch .runs button.on { outline: 1px solid #4c8bf5; } #bSvg { width: 100%; display: block; } #bSvg text { font-size: 9px; fill: var(--dim); }
+  #bSvg .lane { fill: var(--panel); } #bSvg .gc { fill: var(--dim); opacity: .18; } #bSvg .wait { fill: #e5534b; } #bSvg .tick { stroke: var(--line); }
+  #batch .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 3px; }
   #tpTimeline { margin-top: 8px; } #tpTimeline svg { width: 100%; height: auto; display: block; } #tpTimeline text { font-size: 9px; fill: var(--dim); }
   #tpTimeline .open { fill: var(--dim); opacity: .55; } #tpTimeline .f0 { fill: #4c8bf5; } #tpTimeline .f1 { fill: #2f6fd8; } #tpTimeline .idle { fill: var(--line); opacity: .6; }
   #tpTimeline .pick { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; font-size: 11.5px; } #tpTimeline .pick button.on { outline: 1px solid #4c8bf5; }
@@ -310,11 +316,23 @@
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><button class="ptab chrome" data-ptab="batch" title="the batch compiler under -Yparallel-typer over the source set: a lane per worker, what each did when">Batch</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
   <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th><th title="times the request was aborted on a wait-for cycle and was retried (-Yinteractive-parallel): a livelock shows here as a growing number">cycleAborts</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
   <div id="problems" hidden><div class="none dim">No diagnostics: every request and the background pass fill this list.</div></div>
   <div id="timeline" hidden><div class="none dim">No requests yet. Each lane is a thread: the page's requests (foreground), the background reader's passes; a bar runs from a request's start to its answer, coloured by outcome; hover for the details.</div><svg id="tlSvg"></svg></div>
+  <div id="batch" hidden>
+    <div class="ctl"><label>threads <input id="bThreads" type="number" min="1" max="64"></label>
+      <label title="index the files in parallel, each into a slice merged in file order"><input id="bIndex" type="checkbox" checked> parallel index</label>
+      <label title="member signatures a unit per task, after every class header serially"><input id="bSigs" type="checkbox" checked> parallel signatures</label>
+      <label>stop after <select id="bStop"><option>typer</option><option selected>pickler</option><option value="all">nothing (backend too)</option></select></label>
+      <label title="in this JVM: the first is cold, the later ones warm">runs <input id="bRuns" type="number" min="1" max="10" value="3"></label>
+      <button id="bRun" class="primary" data-icon="play">Run batch</button><button id="bStopBtn" class="ghost" data-icon="cancel">Stop</button>
+      <span id="bState" class="dim"></span></div>
+    <div class="runs" id="bRunsPick"></div>
+    <div id="bSummary"></div>
+    <svg id="bSvg"></svg>
+  </div>
   <div id="throughput" hidden><div id="tpPanel"><div id="tpPlot"></div><div id="tpSide"><table id="tpTable"><thead><tr><th>N</th><th>wall s</th><th>speed-up</th><th>worker CPU s</th><th>root waits</th><th title="files whose errors differ from N=1's (N=1: from the single-reader whole-set run)">files differ</th><th>cycleAborts</th><th>cycles raised</th><th title="the open: parse, index and skip every statement, serial">open s</th><th title="from the end of the open until the first thread ran out of files">typing s</th><th title="from the first thread running out of files until the last one did">tail s</th></tr></thead><tbody></tbody></table><div id="tpProg"></div><div id="tpTimeline"></div></div></div></div>
   <div id="replay" hidden><div class="none dim">Run the replay (the ▶︎ view in the activity bar): the findings per mode and request kind appear here, then the requests as they finish.</div><div id="rpFindings"></div><h4>Requests, newest first</h4><table><thead><tr><th class="l">#</th><th class="l">mode</th><th class="l">request</th><th>due ms</th><th>queued</th><th>latency</th><th>lock wait</th><th>stmt wait</th><th>trees</th><th class="l">how</th><th>diags</th><th class="l">answer</th></tr></thead><tbody id="rpRows"></tbody></table></div>
 </section>
@@ -440,7 +458,7 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput', 'timeline'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('tpWide', name === 'throughput'); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput', 'timeline', 'batch'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('tpWide', name === 'throughput'); document.body.classList.toggle('bWide', name === 'batch'); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
   const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
@@ -1470,6 +1488,91 @@
   $('tpSpeedup').onchange = () => { if (tp.last) tpPlot(tp.last); };
   // a run already going (or finished) when the page loads: the plot survives a reload
   fetch('/throughput/status').then((r) => r.json()).then((st) => { if (st.ns) $('tpNs').value = st.ns.join(','); if (st.policy) $('tpPolicy').value = st.policy; tpRender(st); if (['warming', 'batch', 'running'].includes(st.state)) tpPoll(); }).catch(() => {});
+
+  // ---- the batch view: the batch compiler under -Yparallel-typer, a lane per worker (BatchDemo)
+  const bt = { sel: 0, last: null, polling: false, spans: {} };
+  const bColors = { parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', decls: '#b8b8b8', phase: '#5aa469' };
+  const bOrder = ['parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'phase'];
+  function bLane(thread) { const m = /^dotc-[a-z-]+?-(\d+)$/.exec(thread); return m ? 'worker ' + m[1] : thread === 'gc' ? 'gc' : 'main'; }
+  function bSummary(spans, wallMs) {
+    const by = {};
+    for (const [th, step, label, a, b, cpu, bl, wt] of spans) {
+      if (step === 'wait' || step === 'gc') continue;
+      const x = by[step] || (by[step] = { from: 1e18, to: 0, span: 0, cpu: 0, bl: 0, wt: 0, n: 0, th: new Set() });
+      x.from = Math.min(x.from, a); x.to = Math.max(x.to, b); x.span += b - a; x.cpu += Math.max(cpu, 0); x.bl += Math.max(bl, 0); x.wt += Math.max(wt, 0); x.n++; x.th.add(th);
+    }
+    const gc = spans.filter((s) => s[1] === 'gc').reduce((t, s) => t + (s[4] - s[3]), 0);
+    const rows = bOrder.filter((k) => by[k]).map((k) => { const x = by[k]; const lbl = k === 'phase' ? 'later phases' : k;
+      return `<tr><td class="l"><span class="sw" style="background:${bColors[k]}"></span>${lbl}</td><td>${(x.to - x.from).toFixed(0)}</td><td>${x.th.size}</td><td>${x.n}</td><td>${x.span.toFixed(0)}</td><td>${x.cpu.toFixed(0)}</td><td>${x.bl}</td><td>${x.wt}</td><td>${(x.span - x.cpu - x.bl - x.wt).toFixed(0)}</td></tr>`; }).join('');
+    return `<table><thead><tr><th class="l">step</th><th title="first start to last end">wall ms</th><th>threads</th><th>spans</th><th title="the spans' wall time, summed over threads">in spans ms</th><th>CPU ms</th><th title="entering a monitor (synchronized)">blocked ms</th><th title="parked: claims, latches, Object.wait">parked ms</th><th title="neither: descheduled, GC, safepoints">other ms</th></tr></thead><tbody>${rows}</tbody></table><div class="dim">run ${(wallMs / 1000).toFixed(2)} s; GC pauses ${gc.toFixed(0)} ms. Colour by step; a span's opacity is its CPU over its wall time (pale: blocked or descheduled); red ticks are waits on completion roots, grey bands GC pauses.</div>`;
+  }
+  function bTimeline(spans) {
+    const svg = $('bSvg');
+    if (!spans.length) { svg.innerHTML = ''; return; }
+    const lanes = ['main', 'gc', ...[...new Set(spans.map((s) => bLane(s[0])).filter((l) => l.startsWith('worker')))].sort((p, q) => +p.split(' ')[1] - +q.split(' ')[1])];
+    const end = Math.max(...spans.map((s) => s[4]));
+    const W = Math.max(900, $('batch').clientWidth - 24), L = 64, R = 8, H = 13, gap = 2, top = 16;
+    const x = (t) => L + (W - L - R) * t / end;
+    let g = '';
+    lanes.forEach((l, i) => { const y = top + i * (H + gap); g += `<rect class="lane" x="${L}" y="${y}" width="${W - L - R}" height="${H}"/><text x="${L - 4}" y="${y + H - 3}" text-anchor="end">${esc(l)}</text>`; });
+    const step = end > 8000 ? 1000 : end > 2000 ? 500 : 100;
+    for (let t = 0; t <= end; t += step) g += `<line class="tick" x1="${x(t)}" y1="${top - 3}" x2="${x(t)}" y2="${top + lanes.length * (H + gap)}"/><text x="${x(t) + 2}" y="${top - 5}">${t >= 1000 ? (t / 1000).toFixed(step >= 1000 ? 0 : 1) + ' s' : t + ' ms'}</text>`;
+    const tip = (s) => { const [th, st, lb, a, b, cpu, bl, wt] = s; return `${st}: ${lb}\n${th}, ${(b - a).toFixed(1)} ms` + (cpu >= 0 ? `, CPU ${cpu.toFixed(1)} ms` : '') + (bl >= 0 ? `, blocked ${bl} ms, parked ${wt} ms` : ''); };
+    for (const s of spans) {
+      const [th, st, lb, a, b, cpu] = s;
+      if (st === 'gc') { g += `<rect class="gc" x="${x(a)}" y="${top}" width="${Math.max(1, x(b) - x(a))}" height="${lanes.length * (H + gap)}"><title>${esc(tip(s))}</title></rect>`; continue; }
+      const i = lanes.indexOf(bLane(th)), y = top + i * (H + gap), w = Math.max(0.6, x(b) - x(a));
+      if (st === 'wait') { g += `<rect class="wait" x="${x(a)}" y="${y + H - 3}" width="${Math.max(1, w)}" height="3"><title>${esc(tip(s))}</title></rect>`; continue; }
+      const op = cpu >= 0 && b > a ? 0.3 + 0.7 * Math.min(1, cpu / (b - a)) : 1;
+      g += `<rect x="${x(a)}" y="${y}" width="${w}" height="${H}" fill="${bColors[st] || '#999'}" fill-opacity="${op.toFixed(2)}"><title>${esc(tip(s))}</title></rect>`;
+    }
+    const Ht = top + lanes.length * (H + gap) + 4;
+    svg.setAttribute('viewBox', `0 0 ${W} ${Ht}`); svg.setAttribute('height', Ht); svg.innerHTML = g;
+  }
+  async function bShow(i) {
+    bt.sel = i;
+    let spans = bt.spans[i];
+    if (!spans) { const st = await (await fetch('/batch/status?spans=' + i)).json(); const r = st.runs.find((q) => q.index === i); spans = bt.spans[i] = (r && r.spans) || []; }
+    const r = bt.last.runs.find((q) => q.index === i);
+    $('bSummary').innerHTML = bSummary(spans, r ? r.wallMs : 0);
+    bTimeline(spans);
+    bRuns(bt.last);
+  }
+  function bRuns(st) {
+    $('bRunsPick').innerHTML = st.runs.length ? 'run: ' + st.runs.map((r) => `<button class="ghost${r.index === bt.sel ? ' on' : ''}" data-bi="${r.index}">${r.index}: ${(r.wallMs / 1000).toFixed(2)} s${r.errors ? `, <span class="bad">${r.errors} errors</span>` : ''}</button>`).join(' ') : '';
+    $('bRunsPick').querySelectorAll('button[data-bi]').forEach((b) => { b.onclick = () => bShow(+b.dataset.bi); });
+  }
+  function bRender(st) {
+    bt.last = st;
+    const o = st.options;
+    const what = { idle: 'Not run yet.', running: `Run ${st.current} of ${o.runs}…`, done: 'Done.', cancelled: 'Cancelled.', failed: 'Failed: ' + st.error }[st.state] || st.state;
+    $('bState').innerHTML = `${esc(what)} ${st.files ? st.files + ' files; ' : ''}${st.processors} processors; build <code>${esc(st.build)}</code>`;
+    if (!$('bThreads').value) $('bThreads').value = o.threads;
+    bRuns(st);
+    $('bRun').disabled = st.state === 'running';
+    const latest = st.runs.length ? st.runs[st.runs.length - 1].index : 0;
+    if (latest && (!bt.sel || st.state === 'running' || !bt.spans[bt.sel])) bShow(st.state === 'running' ? latest : (bt.sel || latest));
+  }
+  async function bPoll() {
+    if (bt.polling) return; bt.polling = true;
+    try {
+      while (true) {
+        let st; try { st = await (await fetch('/batch/status')).json(); } catch (e) { await sleep(1000); continue; }
+        bRender(st);
+        if (st.state !== 'running') break;
+        await sleep(700);
+      }
+    } finally { bt.polling = false; }
+  }
+  $('bRun').onclick = async () => {
+    bt.spans = {}; bt.sel = 0;
+    const q = new URLSearchParams({ threads: $('bThreads').value, parallelIndex: $('bIndex').checked ? 1 : 0, parallelSignatures: $('bSigs').checked ? 1 : 0, stopAfter: $('bStop').value, runs: $('bRuns').value });
+    const st = await (await fetch('/batch/run?' + q, { method: 'POST' })).json();
+    setLogCollapsed(false); panelTab('batch');
+    bRender(st); bPoll();
+  };
+  $('bStopBtn').onclick = () => fetch('/batch/stop', { method: 'POST' });
+  fetch('/batch/status').then((r) => r.json()).then((st) => { bRender(st); if (st.state === 'running') bPoll(); }).catch(() => {});
 
   gotoObject(10);
   scheduleBackground(); // the first file too
