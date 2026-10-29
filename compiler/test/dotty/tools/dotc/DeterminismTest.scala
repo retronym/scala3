@@ -7,7 +7,7 @@ import javax.tools.{DiagnosticCollector, JavaFileObject, ToolProvider}
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
-import org.junit.{Ignore, Test}
+import org.junit.Test
 import org.junit.Assert.*
 
 import dotty.tools.deleteDirectory
@@ -234,6 +234,24 @@ class DeterminismTest {
     test(List(javaAnnots) :: code :: Nil)
   }
 
+  /** Types from Java signatures refer to their package with a `TermRef` when parsed from source and with
+   *  a `ThisType` when read from a classfile, which must not affect how the TASTy shares them.
+   */
+  @Test def testJavaPackagePrefix(): Unit = {
+    def code = List(
+      source("J.java", "public class J { public static String s = \"\"; public static java.util.List<String> l = null; }"),
+      source("C.scala",
+        """class C {
+          |  def f = List(J.s, 1)
+          |  def g = List(J.l, new java.util.ArrayList[String])
+          |  def h = J.l
+          |  def i = java.util.Collections.singletonList("")
+          |}
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
   @Test def testPackedType(): Unit = {
     def code = List(
       source("a.scala",
@@ -290,8 +308,198 @@ class DeterminismTest {
     test(code :: Nil)
   }
 
-  // TODO: fix compiler determinism for this to pass
-  @Ignore("TASTy differs under separate compilation (TreePickler SHAREDtype addresses), see scala/scala3#26551")
+  // The following four tests are distinct types that pickle to the same bytes
+  // (e.g. `TypeRef(pre, name)` from the unpickler vs `TypeRef(pre, sym)` from
+  // typer), which must be shared regardless of whether the referenced
+  // definitions come from source or TASTy (scala/scala3#26551).
+
+  @Test def testSharedTypeOptionInt(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """object Up:
+          |  def f: Option[Int] = None
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down:
+          |  val x = Up.f
+          |  def y: Int = 0
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeMethodResult(): Unit = {
+    def code = List(
+      source("U.scala",
+        """class U:
+          |  def name: String = ""
+          |""".stripMargin),
+      source("M.scala",
+        """class M(u: U):
+          |  def f = u.name
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeFunction(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """package up
+          |object Up:
+          |  def lookup(i: Int): String => Option[Int] = _ => Some(i)
+          |""".stripMargin),
+      source("Down.scala",
+        """package down
+          |class Down:
+          |  private val entry = up.Up.lookup(1)
+          |  def get(s: String): Option[Int] = entry(s)
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  /** Reduced from zinc's `ModifiedNames` */
+  @Test def testSharedTypeCaseClass(): Unit = {
+    def code = List(
+      source("UsedName.scala",
+        """final case class UsedName(name: String, scopes: java.util.EnumSet[java.util.concurrent.TimeUnit])
+          |""".stripMargin),
+      source("Changes.scala",
+        """import scala.jdk.CollectionConverters.*
+          |final case class ModifiedNames(names: Set[UsedName]):
+          |  private lazy val lookupMap: Set[(String, java.util.concurrent.TimeUnit)] =
+          |    names.flatMap(n => n.scopes.asScala.map(n.name -> _))
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeRefinementAndBounds(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """trait Up:
+          |  type T <: Option[Int]
+          |  type U >: Null <: AnyRef
+          |  def r: Up { type T = Some[Int] }
+          |  def m[A <: Option[Int], B >: Some[Int]](a: A): B
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down(val u: Up):
+          |  val r = u.r
+          |  val t: u.T = ???
+          |  def f = u.m(Some(1))
+          |  def g: Up { type T = Some[Int]; type U = String } = ???
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeAndOrByName(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """object Up:
+          |  def a: String & java.io.Serializable = ""
+          |  def o: Int | String | Option[Int] = 1
+          |  def n(x: => Option[String]): Unit = ()
+          |  def t: (Int, String | Null, Option[List[Int]]) = (1, "", None)
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down:
+          |  val a = Up.a
+          |  val o = Up.o
+          |  val t = Up.t
+          |  def n = Up.n(None)
+          |  val l = List(Up.a, Up.o, Up.t)
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeConstantsAndClassOf(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """object Up:
+          |  final val i = 1
+          |  final val s = "s"
+          |  def c: Class[String] = classOf[String]
+          |  def lit: 42 = 42
+          |  def u: "a" | "b" = "a"
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down:
+          |  val a = Up.i
+          |  val b: Up.s.type = Up.s
+          |  val c = Up.c
+          |  val d = Up.lit
+          |  val e = Up.u
+          |  val f = List(classOf[Int], classOf[String], Up.c)
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  @Test def testSharedTypeMatchCasesAndFlexible(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """object Up:
+          |  def f(x: Int): x.type match { case 0 => Option[Int]; case _ => String } = ???
+          |  def g: java.util.Map[String, java.util.List[Int]] = null
+          |  def h[T](x: T): Option[T] = Some(x)
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down:
+          |  val a = Up.f(0)
+          |  val b = Up.g.get("")
+          |  val c = Up.h(Up.g)
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  /** Lambdas and match types are shared by identity only; they must not make the output depend on origin. */
+  @Test def testSharedTypeLambdasAndMatchTypes(): Unit = {
+    def code = List(
+      source("Up.scala",
+        """type Elem[X] = X match
+          |  case String => Char
+          |  case Array[t] => t
+          |trait Up[F[_]]:
+          |  def f[X](x: X): Elem[X]
+          |  def g: Up[[A] =>> Option[A]]
+          |  def h: [A] => A => Option[A]
+          |""".stripMargin),
+      source("Down.scala",
+        """class Down(u: Up[Option]):
+          |  val a = u.f("")
+          |  val b = u.g
+          |  val c = u.h
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
+  /** Types in the signatures of a class from a different package, used from several files, in either compilation order. */
+  @Test def testSharedTypeManyFiles(): Unit = {
+    def code = List(
+      source("a.scala",
+        """package a
+          |class A { def x: Option[B] = None; def y: Map[String, List[B]] = Map.empty }
+          |class B
+          |""".stripMargin),
+      source("b.scala",
+        """package b
+          |import a.*
+          |class C(a: A) { val x = a.x; val y = a.y; def z = (a.x, a.y, new B) }
+          |""".stripMargin),
+      source("c.scala",
+        """package c
+          |class D(c: b.C) { val z = c.z; val x = c.x.map(List(_)) }
+          |""".stripMargin)
+    )
+    test(List(code))
+  }
+
   @Test def testAnonymousGivens(): Unit = {
     def code = List(
       source("a.scala",
@@ -314,8 +522,6 @@ class DeterminismTest {
     test(List(code))
   }
 
-  // TODO: fix compiler determinism for this to pass
-  @Ignore("TASTy of synthesized Mirror differs under separate compilation, see scala/scala3#26551")
   @Test def testMirrorSynthesis(): Unit = {
     def code = List(
       source("a.scala",
