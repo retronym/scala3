@@ -168,8 +168,15 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     if sys.props.contains("dotc.parallelTyper.stageDecls") then
       eachUnit("decls", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(stageDecls))
 
-    // -Ddotc.parallelTyper.classesFirst: the class headers of every unit, then the members (for measurement)
-    if sys.props.contains("dotc.parallelTyper.classesFirst") then
+    // the signatures of every member of every unit, so that the readers then type bodies and meet no Namer
+    // completion of a member: serially by default; -Ddotc.parallelTyper.parallelSignatures for a unit per task,
+    // after every class header, serially. Headers on several threads meet in wait-for cycles that are not cycles
+    // serially: one thread nests `Symbols$`'s header inside `tpd$`'s and reads `tpd$`'s decls from its temporary
+    // info, while two threads wait for each other, and the cycle is answered with a `CyclicReference` that breaks
+    // `tpd`'s imports (docs/_docs/internals/parallel-signatures.md, §5.7). -Ddotc.parallelTyper.classesFirst does
+    // the same with serial signatures, to measure the split.
+    val parallelSignatures = sys.props.contains("dotc.parallelTyper.parallelSignatures")
+    if parallelSignatures || sys.props.contains("dotc.parallelTyper.classesFirst") then
       def classes(sym: Symbol)(using Context): Unit =
         if sym.exists && sym.isClass then
           sym.ensureCompleted()
@@ -177,10 +184,6 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
             if d.isClass && d.source == ctx.source then classes(d)
       eachUnit("class headers", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(classes))
 
-    // the signatures of every member of every unit, so that the readers then type bodies and meet no Namer
-    // completion of a member: serially by default, since signatures on several threads meet in wait-for cycles
-    // (I68); -Ddotc.parallelTyper.parallelSignatures to try them a unit per task
-    val parallelSignatures = sys.props.contains("dotc.parallelTyper.parallelSignatures")
     if parallelSignatures then ctx.typerState.readOnlyRoot = true
     try eachUnit("signatures", parallelSignatures)(eachTopLevel(ctx.compilationUnit.untpdTree)(completeSignatures))
     finally ctx.typerState.readOnlyRoot = false

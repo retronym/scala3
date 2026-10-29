@@ -22,10 +22,10 @@ Measured in dotc, with a probe of every read of intermediate completion state (p
 The design:
 
 1. **Stages.** A class's decls and type parameters are entered as a stage of their own, eagerly in the serial index, before any typing. Readers that need only decls read them without completing the header.
-2. **Signatures in parallel**, a unit per task, with the claims the spike already has.
+2. **Signatures in parallel**, a unit per task, with the claims the spike already has, after every class header completed serially (done, §5.7): headers on several threads meet in wait-for cycles that are not cycles serially.
 3. **Validate, then fall back.** At the few sites where a completion reads intermediate state, record the question and the answer (for `derivesFrom`: the class, the base, the answer). Once signatures are complete, ask each again: if every answer stands, the run was as good as a stable one. Otherwise abandon the run and compile serially. On both corpora nothing would fall back.
 4. **`checkNonCyclic`'s pruning made order independent** (done): a prefix whose class has a base in progress is taken as interesting instead of asking `derivesFrom` of it. Its two reads on the compiler are gone, and its output is unchanged.
-5. **Determinism repairs**: fresh names drawn per definition, not per unit; `Child` annotations added under the parent's claim, in position order; names hashed by content (done in the spike).
+5. **Determinism repairs**: fresh names drawn per definition, not per unit; `Child` annotations stored without losing a concurrent one (done, §5.4); names hashed by content (done in the spike).
 
 No claim lending (letting a cycle's closer borrow the claim it waits for, as a serial nesting would): the toy shows it buys nothing once decls are staged.
 
@@ -150,7 +150,7 @@ A recorded answer may already have been built on before it is validated (a lower
 The spike's bodies are deterministic because each unit's fresh names, symbols and `Child` annotations are made on that unit's thread. Signatures in parallel make them on whichever thread completes them:
 
 - **Fresh names.** `ctx.compilationUnit.freshNames` is a counter per unit; a completion of unit A's member on another thread draws from it in an order that depends on the schedule. Draw from a counter per definition being completed (its owner chain), so the order between definitions does not matter. This changes names in the serial compiler too, reproducibly.
-- **`Child` annotations.** `Namer.addChild` inserts a child into the parent's annotations by position (sealed children share the parent's file, so the order is total) with a read-modify-write that two threads can lose. Make it under the parent's claim.
+- **`Child` annotations** (done). `Namer.addChild` inserts a child into the parent's annotations by position (sealed children share the parent's file, so the order is total) with a read-modify-write that two threads can lose; it did, once in four runs, for `enum SourceVersion`. With parallel readers the new list is now computed outside any lock (it may evaluate a `Child` annotation, which can wait on a claim) and stored under the parent's monitor only if no other reader stored one meanwhile, else computed again. Writers of the parent's annotations other than `addChild` do not take the monitor; a child is registered after it has typed its parents, which completes the parent first, so none was seen racing with it.
 - **Hashes.** Names hash by content (done in the spike). Symbols hash by id, and ids are drawn from one counter by every thread; hashed collections of symbols iterated into output are an audit item, and the spike's byte-identical runs say none matter for bodies.
 
 ### 5.5 Not taken: lending
@@ -175,6 +175,23 @@ Measured, serially, against the old pruning on the same sources:
 
 What it leaves: re-entry into an enclosing completion while exploring (`checkInfo(tp.info)` forcing an alias whose completion encloses this one) still turns into a `LazyRef`, an error, or no change, by where the cycle was entered. The probe found none on either corpus; it stays a recorded event for §5.3.
 
+### 5.7 Class headers first
+
+Signatures a unit per task, on 4 threads and more, gave thousands of errors on the compiler's sources, the same set each run; on 1 or 2 threads, none. The cause was one wait-for cycle between two class headers that is not a cycle serially:
+
+- `#35` completes `object tpd`'s header, through `tpd.scala`'s imports (`import Symbols.*, …`), and waits for `Symbols$`.
+- `#39` completes `Symbols$`'s header, through `Symbols.scala`'s `import tpd.*`, and waits for `tpd$`.
+
+On one thread, `Symbols$`'s completion nests inside `tpd$`'s, and the wildcard import's lookup in `tpd` reads `tpd$`'s decls from its `TempClassInfo` (`ownView`): no re-entry. On two, the second reader meets an `InProgress` it must wait for. Both readers are inside Namer completions, which may not abort (I74), so `CompletionRoots.acquire` gives the single-reader answer, a `CyclicReference` (`SymDenotation.cyclicWait`). The import fails, so `tpd`'s parents (`Trees.Instance[Types.Type]`, `TypedTreeInfo`) do not resolve and `tpd` has no inherited members; the same in `Types.scala`. Everything else followed: `no pattern match extractor named closureDef / ValDefs / Template`, extension methods not found, values typed `Nothing`, and same-thread re-entries of class-level pattern temporaries (`$N$`), whose binders, with the extractor gone, resolved to the class's members `$N$._1`. Rendering those errors ran import suggestions inside the failing completion, which completed much of the package tree and multiplied the errors (9,252 at 8 threads; 1,576 with `-Ximport-suggestion-timeout 0`).
+
+This is the toy's finding in dotc (§3.1): a class's header reads other classes' decls, and a cycle through decls alone is harmless on one stack and a wait-for cycle on two. I68's assumption, that a wait-for cycle between Namer completions is a dependency cycle, does not hold for class headers, whose partial state nested work may read.
+
+What is done (`TyperPhase.typeCheckInParallel`): with `-Ddotc.parallelTyper.parallelSignatures`, every source class header is completed serially before the member signatures run a unit per task. On the compiler's 618 sources, cold single runs, to bytecode: 36 warnings, as serially; headers 1.0–1.2 s serially, member signatures 1.0–1.1 s on 18 threads (3.5 s on one), bodies 3.1–3.2 s (9.7 s on one); four runs on 18 threads byte-identical to one thread in the same order (headers, then signatures, then bodies), in TASTy and in classfiles.
+
+What is not: a member signature can still meet a wait-for cycle between Namer completions, and `cyclicWait` still answers it with a `CyclicReference` that a serial run would not give, a wrong result rather than a retry. None occurred with headers first. The fixes are §5.1's stages (a header that reads another class's decls should not wait for that class's header) or letting the waiter read the owner's decls, as a serial nesting does (§5.5's lending, restricted to decls); either is the way to take the serial header pass away.
+
+Also: the batch reporter renders a message as it is reported (`ParallelBatchReporter.report`), so a reader holding claims runs import suggestions, which complete symbols. Rendering should not happen under a completion.
+
 ## 6. Plan
 
 0. **Toy** (done): `tools/sig-toy/`, the findings of §3.
@@ -182,8 +199,8 @@ What it leaves: re-entry into an enclosing completion while exploring (`checkInf
 2. **Probe, the rest** (done for the compiler and the library): re-entries, `CyclicReference`s made and where, `isCompleting` peeks, and `derivesFrom` answers asked again at the end of the typer (§4). Left: export forwarders, `LazyRef`s in progress, and a slice of the community build.
 2a. **`checkNonCyclic`** (done): the pruning treats a prefix with a base in progress as interesting instead of asking `derivesFrom` (§5.6). Reporting stays in the completion: the error type is what keeps an illegal cycle from looping.
 3. **Stage decls**: split `ClassCompleter`, index class bodies in the serial index step; the probe's counts before and after; `testCompilation` serially, since this changes the serial compiler.
-4. **Parallel signatures**: in `TyperPhase.typeCheckInParallel`, signatures on the pool, the detector, whole-run fallback, and `-Ddotc.parallelTyper.oneThread` as now to separate order from concurrency.
-5. **Determinism repairs**: fresh names per definition, `addChild` under the parent's claim; the spike's harness (several parallel runs, byte-for-byte) on the compiler and the library.
+4. **Parallel signatures** (done, with class headers serial first, §5.7): in `TyperPhase.typeCheckInParallel`; `-Ddotc.parallelTyper.threads` for the pool's size, `-Ddotc.parallelTyper.oneThread` for the same order on one thread. Left: the detector and whole-run fallback (§5.3), and the headers in parallel (§5.1, §5.7).
+5. **Determinism repairs**: fresh names per definition; `addChild` (done, §5.4); the spike's harness (several parallel runs, byte-for-byte) on the compiler and the library.
 6. **Measure**: typer time on the compiler and the library, paired with `-Ddotc.parallelTyper.oneThread`, and the fallback rate.
 
 ## 7. Prior art
