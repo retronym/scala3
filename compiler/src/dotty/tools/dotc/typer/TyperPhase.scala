@@ -105,47 +105,86 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
       c1.typerState.settle(c0)(using c1)
       ok
     val tSig = System.nanoTime()
-    var signatures = 0
+    val signatures = java.util.concurrent.atomic.AtomicInteger()
+    val log = sys.props.contains("dotc.parallelTyper.log")
+
+    /** `op` on the symbol of each definition at the top level of the unit, a package's statements included. */
+    def eachTopLevel(tree: untpd.Tree)(op: Symbol => Unit)(using Context): Unit = tree match
+      case untpd.PackageDef(_, stats) => stats.foreach(eachTopLevel(_)(op))
+      case _: untpd.MemberDef =>
+        def one(t: untpd.Tree) = if ctx.typer.hasDefinedSymbol(t) then op(ctx.typer.symbolOfTree(t))
+        ctx.typer.expanded(tree) match
+          case untpd.Thicket(trees) => trees.foreach(one)
+          case _ => one(tree)
+      case _ =>
+    def eachUnit(what: String, parallel: Boolean)(op: Context ?=> Unit): Unit =
+      val t = System.nanoTime()
+      val body: Context => Boolean = c =>
+        try op(using c)
+        catch case _: CompilationUnit.SuspendException => ()
+        true
+      if parallel then
+        val aborted = java.util.concurrent.atomic.AtomicInteger()
+        // a watchdog: the wait-for graph of a phase that runs for longer than 15 s
+        val roots = ctx.base.completionRoots
+        val watchdog = Thread(() =>
+          try
+            Thread.sleep(15000)
+            System.err.nn.println(s"[parallel-typer] $what still running after 15 s; claims:\n${roots.graphNow}")
+          catch case _: InterruptedException => ())
+        watchdog.setDaemon(true)
+        watchdog.start()
+        try inParallel(s"dotc-$what", unitContexts) { c ?=>
+          try body(c)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            aborted.incrementAndGet()
+            report.error(s"-Yparallel-typer: $what of ${c.compilationUnit.source} aborted: ${ex.getMessage}")
+            false
+        }
+        finally watchdog.interrupt()
+        if log then System.err.nn.println(f"[parallel-typer] $what in parallel in ${(System.nanoTime() - t) / 1e6}%.1f ms, ${aborted.get} units aborted")
+      else
+        unitContexts.foreach(body)
+        if log then System.err.nn.println(f"[parallel-typer] $what serially in ${(System.nanoTime() - t) / 1e6}%.1f ms")
+
     def completeSignatures(sym: Symbol)(using Context): Unit =
       if sym.exists then
         sym.ensureCompleted()
-        signatures += 1
+        signatures.incrementAndGet()
         if sym.isClass then
           for d <- sym.info.decls.toList do
             if d.source == ctx.source then completeSignatures(d)
-    def topLevel(tree: untpd.Tree)(using Context): Unit = tree match
-      case untpd.PackageDef(_, stats) => stats.foreach(topLevel)
-      case _: untpd.MemberDef =>
-        ctx.typer.expanded(tree) match
-          case untpd.Thicket(trees) => trees.foreach(t => if ctx.typer.hasDefinedSymbol(t) then completeSignatures(ctx.typer.symbolOfTree(t)))
-          case _ => if ctx.typer.hasDefinedSymbol(tree) then completeSignatures(ctx.typer.symbolOfTree(tree))
-      case _ =>
-    // serially: the signatures of every member of every unit, so that the parallel readers type bodies and meet
-    // no Namer completion of a member, and no wait-for cycle between two of them (I68)
+
+    // -Ddotc.parallelTyper.stageDecls: before any signature, every source class's decls entered, with its type
+    // parameters and its constructor completed: `ClassCompleter.completeConstructor`, the stage that `Desugar`
+    // already asks for without completing the class (docs/_docs/internals/parallel-signatures.md, §5.1)
+    def stageDecls(sym: Symbol)(using Context): Unit =
+      if sym.exists && sym.isClass then
+        sym.infoOrCompleter match
+          case completer: Namer#ClassCompleter => completer.completeConstructor(sym)
+          case _ =>
+        for d <- sym.unforcedDecls.toList do
+          if d.isClass && d.source == ctx.source then stageDecls(d)
+    if sys.props.contains("dotc.parallelTyper.stageDecls") then
+      eachUnit("decls", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(stageDecls))
+
     // -Ddotc.parallelTyper.classesFirst: the class headers of every unit, then the members (for measurement)
-    val classesOnly = sys.props.contains("dotc.parallelTyper.classesFirst")
-    val log = sys.props.contains("dotc.parallelTyper.log")
-    if log then System.err.nn.println("[parallel-typer] signatures begin")
-    if classesOnly then
+    if sys.props.contains("dotc.parallelTyper.classesFirst") then
       def classes(sym: Symbol)(using Context): Unit =
         if sym.exists && sym.isClass then
           sym.ensureCompleted()
           for d <- sym.info.decls.toList do
             if d.isClass && d.source == ctx.source then classes(d)
-      def topClasses(tree: untpd.Tree)(using Context): Unit = tree match
-        case untpd.PackageDef(_, stats) => stats.foreach(topClasses)
-        case _: untpd.MemberDef =>
-          ctx.typer.expanded(tree) match
-            case untpd.Thicket(trees) => trees.foreach(t => if ctx.typer.hasDefinedSymbol(t) then classes(ctx.typer.symbolOfTree(t)))
-            case _ => if ctx.typer.hasDefinedSymbol(tree) then classes(ctx.typer.symbolOfTree(tree))
-        case _ =>
-      for c <- unitContexts do
-        try topClasses(c.compilationUnit.untpdTree)(using c)
-        catch case _: CompilationUnit.SuspendException => ()
-      if log then System.err.nn.println(f"[parallel-typer] class headers done in ${(System.nanoTime() - tSig) / 1e6}%.1f ms")
-    for c <- unitContexts do
-      try topLevel(c.compilationUnit.untpdTree)(using c)
-      catch case _: CompilationUnit.SuspendException => ()
+      eachUnit("class headers", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(classes))
+
+    // the signatures of every member of every unit, so that the readers then type bodies and meet no Namer
+    // completion of a member: serially by default, since signatures on several threads meet in wait-for cycles
+    // (I68); -Ddotc.parallelTyper.parallelSignatures to try them a unit per task
+    val parallelSignatures = sys.props.contains("dotc.parallelTyper.parallelSignatures")
+    if parallelSignatures then ctx.typerState.readOnlyRoot = true
+    try eachUnit("signatures", parallelSignatures)(eachTopLevel(ctx.compilationUnit.untpdTree)(completeSignatures))
+    finally ctx.typerState.readOnlyRoot = false
+
     val root = ctx.typerState
     root.readOnlyRoot = true
     val t0 = System.nanoTime()
@@ -174,7 +213,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
         root.readOnlyRoot = false
         reporter.issueBuffered()
     if ctx.settings.verbose.value || sys.props.contains("dotc.parallelTyper.log") then
-      System.err.nn.println(f"[parallel-typer] $signatures signatures completed serially in ${(t0 - tSig) / 1e6}%.1f ms")
+      System.err.nn.println(f"[parallel-typer] ${signatures.get} signatures completed in ${(t0 - tSig) / 1e6}%.1f ms")
       System.err.nn.println(f"[parallel-typer] ${unitContexts.length} units in ${(t1 - t0) / 1e6}%.1f ms on ${math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)} threads; ${again.length} retried serially in ${(System.nanoTime() - t1) / 1e6}%.1f ms")
     val ok = (done ++ doneAgain).toSet
     unitContexts.filter(ok.contains)

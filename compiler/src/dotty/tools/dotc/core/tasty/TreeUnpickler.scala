@@ -76,8 +76,7 @@ class TreeUnpickler(reader: TastyReader,
   /** The key of the claim on the file that `sym` is read from: the file, or this unpickler when it has none. The one
    *  place it is computed, for `unpickle`, the completers and the lazy reads alike. */
   def fileKey(sym: Symbol)(using Context): AnyRef =
-    val f = sym.associatedFile
-    if f == null then this else f
+    SymbolLoaders.fileRoot(sym).getOrElse(this)
 
   /** A map from addresses of definition entries to the symbols they define */
   private val symAtAddr: Claimed[FileClaim, mutable.HashMap[Addr, Symbol]] = Claimed.initial(new mutable.HashMap)
