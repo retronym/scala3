@@ -223,7 +223,7 @@ class TypeApplications(val self: Type) extends AnyVal {
         case self: TypeRef =>
           val tsym = self.symbol
           if (tsym.isClass) tsym.typeParams
-          else { tsym.denot.awaitOtherReader(); tsym.infoOrCompleter } match { // I73
+          else tsym.denot.awaitedInfoOrCompleter match { // I73
             case info: LazyType if isTrivial(self.prefix, tsym) =>
               val tparams = info.completerTypeParams(tsym)
               if tsym.isCompleted then tsym.info.typeParams

@@ -2454,7 +2454,7 @@ class Namer { typer: Typer =>
       && infoDontForceAnnots.abstractTypeMembers.nonEmpty
   end needsTracked
 
-  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = { owner.denot.awaitOtherReader(); owner.infoOrCompleter } match // I73
+  private def maybeParamAccessors(owner: Symbol, sym: Symbol)(using Context): List[Symbol] = owner.denot.awaitedInfoOrCompleter match // I73
     case info: ClassInfo =>
       info.decls.lookupAll(sym.name).filter(d => d.is(ParamAccessor)).toList
     case _ => List(sym)
@@ -2466,8 +2466,7 @@ class Namer { typer: Typer =>
    */
   def setTrackedConstrParam(param: ValDef)(using Context): Unit =
     val sym = symbolOfTree(param)
-    sym.maybeOwner.maybeOwner.denot.awaitOtherReader() // I73
-    sym.maybeOwner.maybeOwner.infoOrCompleter match
+    sym.maybeOwner.maybeOwner.denot.awaitedInfoOrCompleter match // I73
       case info: ClassInfo if needsTracked(sym, param, sym.maybeOwner.maybeOwner) =>
         typr.println(i"set tracked $param, $sym: ${sym.info} containing ${sym.info.memberNames(abstractTypeNameFilter).toList}")
         setParamTrackedWithAccessors(sym, info)
