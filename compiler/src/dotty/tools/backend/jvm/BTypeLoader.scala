@@ -14,6 +14,7 @@ import dotty.tools.dotc.core.Phases.{Phase, flattenPhase, lambdaLiftPhase, pickl
 import dotty.tools.dotc.core.StdNames.nme
 import dotty.tools.dotc.core.{StdNames, Types}
 import dotty.tools.dotc.core.Types.{JavaArrayType, Type, TypeRef, abstractTermNameFilter}
+import dotty.tools.dotc.transform.ExpandPrivate
 import dotty.tools.dotc.util.EqHashMap
 
 import scala.annotation.tailrec
@@ -87,7 +88,8 @@ final class BTypeLoader(primitives: ScalaPrimitives, val cache: ClassBType.Cache
         flags = asm.Opcodes.ACC_SUPER | asm.Opcodes.ACC_PUBLIC | asm.Opcodes.ACC_FINAL,
         nestedClasses = getMemberClasses(moduleClassSym).map(classBTypeFromSymbol),
         nestedInfo = None,
-        inlineInfo = InlineInfo.empty
+        inlineInfo = InlineInfo.empty,
+        nestHost = internalName
       )
     )
   }
@@ -206,7 +208,13 @@ final class BTypeLoader(primitives: ScalaPrimitives, val cache: ClassBType.Cache
       case None => InlineInfo.empty
     }
 
-    ClassInfo(superClass, interfaces, flags, memberClasses, nestedInfo, inlineInfo)
+    // Classes from the classpath may have been compiled without nest attributes
+    val nestHost =
+      if ExpandPrivate.useNestMates && classSym.isDefinedInCurrentRun && !classSym.is(JavaDefined)
+      then ExpandPrivate.nestHost(classSym).javaBinaryName
+      else classBType.internalName
+
+    ClassInfo(superClass, interfaces, flags, memberClasses, nestedInfo, inlineInfo, nestHost)
   }
 
   /** For currently compiled classes: All locally defined classes including local classes.

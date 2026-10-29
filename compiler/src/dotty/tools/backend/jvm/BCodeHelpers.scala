@@ -25,6 +25,7 @@ import dotty.tools.dotc.core.Types
 import dotty.tools.dotc.core.Types.*
 import dotty.tools.dotc.core.TypeErasure
 import dotty.tools.dotc.transform.ElimErasedValueType
+import dotty.tools.dotc.transform.ExpandPrivate
 import dotty.tools.dotc.transform.Mixin
 import dotty.tools.dotc.report
 import tpd.*
@@ -280,11 +281,15 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
      *
      * must-single-thread
      */
+    private def forwarderDescriptor(module: Symbol, m: Symbol)(using Context): String =
+      val methodInfo = module.thisType.memberInfo(m)
+      MethodBType(methodInfo.firstParamTypes.map(bTypeLoader.bTypeFromType), bTypeLoader.bTypeFromType(methodInfo.resultType)).descriptor
+
     private def addForwarder(jclass: asm.ClassVisitor, module: Symbol, m: Symbol, isSynthetic: Boolean)(using Context): Unit = {
       val moduleName     = bTypeLoader.classBTypeFromSymbol(module).internalName
       val methodInfo     = module.thisType.memberInfo(m)
       val paramJavaTypes: List[BType] = methodInfo.firstParamTypes.map(bTypeLoader.bTypeFromType)
-      // val paramNames     = 0 until paramJavaTypes.length.map("x_" + _)
+      val jReturnType = bTypeLoader.bTypeFromType(methodInfo.resultType)
 
       /* Forwarders must not be marked final,
        *  as the JVM will not allow redefinition of a final static method,
@@ -298,7 +303,6 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
       )
 
       // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
-      val jReturnType = bTypeLoader.bTypeFromType(methodInfo.resultType)
       val mdesc = MethodBType(paramJavaTypes, jReturnType).descriptor
       val jgensig = BCSignatureGen.getStaticForwarderGenericSignature(m, module, mdesc)
       val (throws, others) = m.annotations.partition(_.symbol eq defn.ThrowsAnnot)
@@ -357,9 +361,17 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
       report.debuglog(s"Dumping mirror class for object: $moduleClass")
 
       val linkedClass  = moduleClass.companionClass
+      // Private members are invisible to Java, so they only conflict with a forwarder of the same descriptor.
+      // Before nestmates, a private member accessed from the module class was public with an expanded name,
+      // so it did not conflict either.
       lazy val conflictingNames: Set[Name] =
-        linkedClass.info.allMembers.collect { case d if d.name.isTermName => d.name }.toSet
+        linkedClass.info.allMembers.collect {
+          case d if d.name.isTermName && !(d.symbol.is(Private) && ExpandPrivate.useNestMates) => d.name
+        }.toSet
       report.debuglog(s"Potentially conflicting names for forwarders: $conflictingNames")
+      def conflictsWithPrivate(m: Symbol) =
+        linkedClass.info.decls.lookupAll(m.name).exists(p =>
+          p.is(Private) && p.is(Method) && bTypeLoader.methodBTypeFromSymbol(p).descriptor == forwarderDescriptor(moduleClass, m))
 
       for (m0 <- sortedMembersBasedOnFlags(moduleClass.info, required = Method, excluded = ExcludedForwarder)) {
         val m = if (m0.isOneOf(Bridge | MixedIn)) m0.nextOverriddenSymbol else m0
@@ -367,7 +379,7 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader) extends BCodeIdiomatic {
           report.log(s"$m0 is a bridge method that overrides nothing, something went wrong in a previous phase.")
         else if (m.isType || m.is(Deferred) || (m.owner eq defn.ObjectClass) || m.isConstructor || m.name.is(ExpandedName))
           report.debuglog(s"No forwarder for '$m' from $jclassName to '$moduleClass'")
-        else if (conflictingNames(m.name))
+        else if (conflictingNames(m.name) || conflictsWithPrivate(m))
           report.log(s"No forwarder for $m due to conflict with ${linkedClass.info.member(m.name)}")
         else if (m.accessBoundary(defn.RootClass) ne defn.RootClass)
           report.log(s"No forwarder for non-public member $m")

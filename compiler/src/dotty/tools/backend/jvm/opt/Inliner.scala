@@ -924,7 +924,10 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
           (methodNode, methodDeclClassNode) <- byteCodeRepository.methodNode(methodRefClass.internalName, implMethod.getName, implMethod.getDesc): Either[OptimizerWarning, (MethodNode, InternalName)]
           methodDeclClass                   <- bTypesFromClassfile.classBTypeFromParsedClassfile(methodDeclClassNode)
         } yield {
-          val res = Inliner.memberIsAccessible(methodNode.access, methodDeclClass, methodRefClass, destinationClass)
+          // Like the invokespecial instruction, an invokespecial handle to a private method is only valid in its own class.
+          val res =
+            if implMethod.getTag == H_INVOKESPECIAL then destinationClass == methodDeclClass
+            else Inliner.memberIsAccessible(methodNode.access, methodDeclClass, methodRefClass, destinationClass)
           // ensure the result ClassBType is cached (for stack map frame calculation)
           if (res) bTypesFromClassfile.bTypeForDescriptorFromClassfile(Type.getReturnType(indy.desc).getDescriptor)
           res
@@ -994,7 +997,7 @@ object Inliner {
    *                        (B3) R is either protected or has default access and declared by a class in the same
    *                        run-time package as D.
    *                        If R is protected, also (P) needs to be satisfied.
-   *                        (B4) R is private and is declared in D.
+   *                        (B4) R is private and is declared in D, or in a class in the same nest as D (JVMS 5.4.4, since Java 11).
    *
    *                        (P) When accessing a protected instance member, the target object on the stack (the receiver)
    *                        has to be a subtype of D (destinationClass). This is enforced by classfile verification
@@ -1029,7 +1032,7 @@ object Inliner {
           samePackageAsDestination
 
         case ACC_PRIVATE => // B4
-          memberDeclClass == from
+          memberDeclClass == from || memberDeclClass.info.nestHost == from.info.nestHost
       }
     }
 

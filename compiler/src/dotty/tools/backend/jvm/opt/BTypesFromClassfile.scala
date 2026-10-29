@@ -148,8 +148,10 @@ class BTypesFromClassfile(byteCodeRepository: BCodeRepository, cache: ClassBType
 
     val interfaces = collect(classNode.interfaces.asScala.iterator.map(classBTypeFromParsedClassfile))
 
+    val nestHost = if classNode.nestHostClass == null then classNode.name else classNode.nestHostClass.nn
+
     (superClass, interfaces, nestedClasses, nestedInfo) match
-      case (Right(sc), Right(is), Right(ncs), Right(ni)) => Right(ClassInfo(sc, is, flags, ncs, ni, inlineInfoFromClassfile(classNode, moduleNode)))
+      case (Right(sc), Right(is), Right(ncs), Right(ni)) => Right(ClassInfo(sc, is, flags, ncs, ni, inlineInfoFromClassfile(classNode, moduleNode), nestHost))
       case (Left(l), _, _, _) => Left(l)
       case (_, Left(l), _, _) => Left(l)
       case (_, _, Left(l), _) => Left(l)

@@ -8,13 +8,14 @@ import dotty.tools.dotc.core.Contexts.{Context, atPhase}
 import dotty.tools.dotc.core.Decorators.em
 import dotty.tools.dotc.core.Phases.{Phase, sbtExtractDependenciesPhase}
 import dotty.tools.dotc.core.StdNames.nme
-import dotty.tools.dotc.core.Symbols.ClassSymbol
+import dotty.tools.dotc.core.Symbols.{ClassSymbol, Symbol}
 import dotty.tools.dotc.core.TypeError
 import dotty.tools.dotc.core.tasty.TastyUnpickler
 import dotty.tools.dotc.interfaces.CompilerCallback
 import dotty.tools.dotc.profile.ProfiledThreadPool
 import dotty.tools.dotc.{CompilationUnit, report}
 import dotty.tools.dotc.sbt.ExtractDependencies
+import dotty.tools.dotc.transform.ExpandPrivate
 import dotty.tools.dotc.sbt.interfaces.IncrementalCallback
 import dotty.tools.dotc.util.SourcePosition
 import dotty.tools.io.FileWriters
@@ -68,9 +69,13 @@ final class CodeGen(ownerPhase: Phase, gen: BCode, localOpt: Option[LocalOptimiz
     // This must be done on the main thread because it requires a Context.
     // Once we have the class node(s), we can emit any necessary error or warning related to names,
     // but order is not deterministic so we enforce lexicographic order for error-reporting
+    val classNodesBySymbol =
+      iterateTypeDefs(ctx.compilationUnit.tpdTree).map(td => (td.symbol, generateClassNodes(td)))
+    if ExpandPrivate.useNestMates then
+      addNestAttributes(classNodesBySymbol.collect { case (sym, (mainNode, _) :: _) => (sym, mainNode) })
     val generatedClassNodes =
-      iterateTypeDefs(ctx.compilationUnit.tpdTree)
-        .flatMap(generateClassNodes)
+      classNodesBySymbol
+        .flatMap(_._2)
         .sortBy((cn, _) => cn.name)
         .tapEach((cn, meta) => warnCaseInsensitiveOverwrite(cn.name, meta.position))
     // If we are doing global optimizations, we must collect class nodes and wait until we have them all,
@@ -177,6 +182,21 @@ final class CodeGen(ownerPhase: Phase, gen: BCode, localOpt: Option[LocalOptimiz
         report.error(s"Error while emitting ${ctx.compilationUnit.source}\n${ex.getMessage}", typeSym.srcPos)
         Nil
   }
+
+  /** Emits the `NestHost` and `NestMembers` attributes (JEP 181) that `ExpandPrivate` relies on
+   *  when it leaves private members accessed from nestmates private.
+   *  A nest never spans compilation units, so `classes` contains the host of each of its elements.
+   */
+  private def addNestAttributes(classes: List[(Symbol, ClassNode)])(using ctx: Context): Unit =
+    val nodeOf = classes.toMap
+    for (sym, node) <- classes do
+      val host = ExpandPrivate.nestHost(sym)
+      if host != sym then
+        val hostNode = nodeOf.getOrElse(host,
+          throw AssertionError(s"nest host $host of $sym not emitted with ${ctx.compilationUnit}"))
+        node.nestHostClass = hostNode.name
+        if hostNode.nestMembers == null then hostNode.nestMembers = java.util.ArrayList()
+        hostNode.nestMembers.nn.add(node.name)
 
   private def warnCaseInsensitiveOverwrite(name: String, pos: SourcePosition)(using Context): Unit =
     caseInsensitiveClassNames.putIfAbsent(name.toLowerCase, (name, pos)) match {
