@@ -552,7 +552,9 @@ object Phases {
      */
     protected final def inParallel(threadName: String, unitContexts: List[Context])(body: Context ?=> Boolean): List[Context] =
       import java.util.concurrent.{Callable, Executors}
-      val threads = math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)
+      // -Ddotc.parallelTyper.threads=<n>: the pool's size (one, to tell what a thread changes from what concurrency does)
+      val wanted = sys.props.get("dotc.parallelTyper.threads").flatMap(_.toIntOption).getOrElse(Runtime.getRuntime.availableProcessors)
+      val threads = math.min(wanted, unitContexts.length)
       val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, threadName); t.setDaemon(true); t }).nn
       try
         val futures = unitContexts.map(c => pool.submit((() => body(using c)): Callable[Boolean]).nn)

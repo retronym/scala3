@@ -249,8 +249,10 @@ object SymDenotations {
         ownView match
           case current: LazyType if current.needsCompletion(this) =>
             myInfo match
-              case _: InProgress =>
+              case ip: InProgress =>
                 // our own completion in progress: a re-entry, a cycle as before
+                if !ip.ownedHere && UnstableReads.on then
+                  System.err.nn.println(s"[foreign-inprogress] $symbol: in progress on ${ip.owner.getName}#${ip.owner.getId} under ${ip.rootKey}, met by ${Thread.currentThread.getName}#${Thread.currentThread.getId} holding $key")
                 lockAndComplete0(current, interactive = true)
               case _ =>
                 val ip = InProgress(current, Thread.currentThread.nn, key)
