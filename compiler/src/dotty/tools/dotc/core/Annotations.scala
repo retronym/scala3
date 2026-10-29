@@ -283,10 +283,20 @@ object Annotations {
       myTreeFn match
         case treeFn: (Context ?=> Tree) @unchecked =>
           setTreeFn(null)
-          try atPhaseBeforeTransforms(treeFn)
-          catch case ex: CompilationUnit.CancelledCompilation =>
-            setTreeFn(ctx ?=> treeFn(using ctx)) // the next run evaluates the thunk again
+          // the next evaluation runs the thunk again if this one does not complete: after a cancellation (the next
+          // run), and with parallel readers after any exception that one reader's evaluation met (a `CyclicReference`
+          // from a wait-for cycle), which otherwise left the annotation "being evaluated" for good: the next reader
+          // failed with "re-entered"
+          var completed = false
+          try
+            val t = atPhaseBeforeTransforms(treeFn)
+            completed = true
+            t
+          catch case ex: Exception =>
+            if ctx.base.parallel && System.getProperty("dotc.parallelTyper.log") != null then
+              System.err.nn.println(s"[parallel-typer] the evaluation of a lazy annotation unwound: $ex")
             throw ex
+          finally if !completed then setTreeFn(ctx ?=> treeFn(using ctx))
         case null => throw AssertionError(s"re-entered the evaluation of $this")
 
     // without a context, so read with acquire semantics whatever the mode
@@ -336,10 +346,20 @@ object Annotations {
       myTreeFn match
         case treeFn: (Context ?=> Tree) @unchecked =>
           setTreeFn(null)
-          try atPhaseBeforeTransforms(treeFn)
-          catch case ex: CompilationUnit.CancelledCompilation =>
-            setTreeFn(ctx ?=> treeFn(using ctx)) // the next run evaluates the thunk again
+          // the next evaluation runs the thunk again if this one does not complete: after a cancellation (the next
+          // run), and with parallel readers after any exception that one reader's evaluation met (a `CyclicReference`
+          // from a wait-for cycle), which otherwise left the annotation "being evaluated" for good: the next reader
+          // failed with "re-entered"
+          var completed = false
+          try
+            val t = atPhaseBeforeTransforms(treeFn)
+            completed = true
+            t
+          catch case ex: Exception =>
+            if ctx.base.parallel && System.getProperty("dotc.parallelTyper.log") != null then
+              System.err.nn.println(s"[parallel-typer] the evaluation of a lazy annotation unwound: $ex")
             throw ex
+          finally if !completed then setTreeFn(ctx ?=> treeFn(using ctx))
         case null => throw AssertionError(s"re-entered the evaluation of $this")
 
     // without a context, so read with acquire semantics whatever the mode

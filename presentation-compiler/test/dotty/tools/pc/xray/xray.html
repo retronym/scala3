@@ -1491,8 +1491,8 @@
 
   // ---- the batch view: the batch compiler under -Yparallel-typer, a lane per worker (BatchDemo)
   const bt = { sel: 0, last: null, polling: false, spans: {} };
-  const bColors = { parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', decls: '#b8b8b8', phase: '#5aa469' };
-  const bOrder = ['parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'phase'];
+  const bColors = { setup: '#9a9a9a', parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', decls: '#b8b8b8', pickle: '#2aa198', phase: '#5aa469' };
+  const bOrder = ['setup', 'parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'pickle', 'phase'];
   function bLane(thread) { const m = /^dotc-[a-z-]+?-(\d+)$/.exec(thread); return m ? 'worker ' + m[1] : thread === 'gc' ? 'gc' : 'main'; }
   function bSummary(spans, wallMs) {
     const by = {};

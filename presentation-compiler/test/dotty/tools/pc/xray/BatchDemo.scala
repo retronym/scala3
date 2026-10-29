@@ -53,6 +53,7 @@ object BatchDemo:
 
   private val switches = List("parallelSignatures", "parallelIndex", "threads")
 
+  @scala.annotation.nowarn("msg=Catching Throwable") // reported as the run's failure, not rethrown
   private def run(root: Path): Unit =
     val saved = switches.map(k => k -> sys.props.get(s"dotc.parallelTyper.$k"))
     try
@@ -85,7 +86,8 @@ object BatchDemo:
           List(s.thread, s.step, s.label, ms(s.startNs), ms(s.endNs), if s.cpuNs < 0 then -1.0 else ms(s.cpuNs), s.blockedMs, s.waitedMs))
         results = results :+ RunResult(i, math.round(wallMs * 10) / 10.0, r.errorCount, r.warningCount, spans)
       state = if stopRequested.get then "cancelled" else "done"
-    catch case ex: (Exception | StackOverflowError | AssertionError | OutOfMemoryError) =>
+    // every failure, a `LinkageError` too (the server's compiler classes rebuilt under it), so that a dead run says so
+    catch case ex: Throwable =>
       error = ex.toString; state = "failed"
     finally
       for (k, v) <- saved do v match

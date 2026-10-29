@@ -211,7 +211,7 @@ A file as the unit bounds a step from below by its largest file. At 18 threads i
 - **Signatures and bodies of a unit in one task**, with no barrier between the two steps. Small now: largest-first leaves no idle at the barrier.
 - **A cost model** better than source length: the previous run's time per file, or the size of the untyped tree.
 
-The larger lever today is not finer units but the steps that run on one thread: in a warm run to the pickler at 18 threads, 1,651 ms of 2,487 ms are on the main thread (pickler 556, posttyper 523, class headers 265, the inline-traits megaphase 221, setup 85). The pickler reads typed trees and symbols and writes a unit's TASTy, so a unit per task is close to free; PostTyper is mostly unit-local, with known writes to other symbols (`Child` annotations, done; annotations on symbols) to make safe; class headers wait on §5.1 and §5.7.
+The pickler now runs a unit per task (`Pickler.pickleInParallel`, with a scratch block per worker; `-Ddotc.parallelTyper.pickler=serial` for the main thread): 556 ms on the main thread became 83–96 ms on 18, warm runs to the pickler 1.8–2.4 s, TASTy byte-identical. Before that, the larger lever was not finer units but the steps that run on one thread: in a warm run to the pickler at 18 threads, 1,651 ms of 2,487 ms are on the main thread (pickler 556, posttyper 523, class headers 265, the inline-traits megaphase 221, setup 85). The pickler reads typed trees and symbols and writes a unit's TASTy, so a unit per task is close to free; PostTyper is mostly unit-local, with known writes to other symbols (`Child` annotations, done; annotations on symbols) to make safe; class headers wait on §5.1 and §5.7.
 
 ## 6. Plan
 
