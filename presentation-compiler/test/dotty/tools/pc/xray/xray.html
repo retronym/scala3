@@ -126,7 +126,7 @@
   ul.compl { margin: 2px 0 8px; padding-left: 18px; max-height: 110px; overflow: auto; }
   pre.hljs { margin: 4px 0 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); font-size: 11px; max-height: 160px; overflow: auto; }
   /* ---- bottom panel: request log and demo transcript as tabs */
-  #logsec { height: 220px; flex: none; border-top: 0; } body.tpWide #logsec { height: 440px !important; } body.bWide #logsec { height: 70vh !important; }
+  #logsec { height: 220px; flex: none; border-top: 0; } body.scWide #logsec { height: 70vh !important; }
   #logsec .ph { background: var(--panel); gap: 2px; padding-left: 8px; }
   #logsec .ptab { border: 0; background: transparent; color: var(--dim); padding: 4px 10px; border-radius: var(--r); font-weight: 500; }
   #logsec .ptab.on { color: var(--fg); background: var(--hover); } #logsec .ptab:disabled { opacity: .4; }
@@ -186,27 +186,24 @@
   #replay tr.all td { font-weight: 600; border-top: 2px solid var(--line); } #replay .bad { color: var(--cancelu); font-weight: 600; } #replay .good { color: var(--newu); }
   #replay h4 { margin: 10px 10px 4px; font-size: 12px; } #replay .none { padding: 16px; } #replay .ex { padding: 0 10px; font-size: 11.5px; } #replay .ex div { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
   #rpRows td { text-align: left; } .m-baseline { color: #e8a317; } .m-default { color: #4a90e2; } .m-readers { color: #2f9e44; }
-  /* ---- the throughput demo: N readers over every file of the source set */
-  #tpBox { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-  #tpBox input[type=text] { width: 90px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); }
-  #throughput { flex: 1; overflow: auto; } #throughput[hidden] { display: none; }
-  #tpPanel { display: flex; gap: 16px; padding: 8px 12px; align-items: flex-start; }
-  #batch { flex: 1; overflow: auto; padding: 6px 10px; font-size: 12px; } #batch[hidden] { display: none; }
-  #batch .ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; } #batch .ctl input[type=number] { width: 4em; }
-  #batch table { border-collapse: collapse; margin: 6px 0; } #batch td, #batch th { padding: 1px 8px; text-align: right; } #batch th { color: var(--dim); font-weight: normal; } #batch td.l, #batch th.l { text-align: left; }
-  #batch .runs button.on { outline: 1px solid #4c8bf5; } #bSvg { width: 100%; display: block; } #bSvg text { font-size: 9px; fill: var(--dim); }
-  #bSvg .lane { fill: var(--panel); } #bSvg .gc { fill: var(--dim); opacity: .18; } #bSvg .wait { fill: #e5534b; } #bSvg .tick { stroke: var(--line); }
-  #batch .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 3px; }
-  #tpTimeline { margin-top: 8px; } #tpTimeline svg { width: 100%; height: auto; display: block; } #tpTimeline text { font-size: 9px; fill: var(--dim); }
-  #tpTimeline .open { fill: var(--dim); opacity: .55; } #tpTimeline .f0 { fill: #4c8bf5; } #tpTimeline .f1 { fill: #2f6fd8; } #tpTimeline .idle { fill: var(--line); opacity: .6; }
-  #tpTimeline .pick { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; font-size: 11.5px; } #tpTimeline .pick button.on { outline: 1px solid #4c8bf5; }
-  #tpTable tr.sel td { background: rgba(76,139,245,.12); } #tpTable tbody tr { cursor: pointer; } #tpPlot { flex: 0 0 440px; } #tpSide { flex: 1; min-width: 0; }
-  #tpPlot svg { width: 100%; height: auto; display: block; } #tpPlot text { font-size: 10px; fill: var(--dim); }
-  #tpPlot .axis { stroke: var(--dim); } #tpPlot .grid { stroke: var(--line); stroke-width: .5; } #tpPlot .series { fill: none; stroke: #4c8bf5; stroke-width: 2; } #tpPlot .dot { fill: #4c8bf5; }
-  #tpPlot .ref { stroke: #f08c00; stroke-dasharray: 4 3; } #tpPlot .ideal { stroke: var(--dim); stroke-dasharray: 2 3; } #tpPlot .lab { fill: var(--fg); font-weight: 600; }
-  #tpTable { border-collapse: collapse; width: 100%; font-size: 11.5px; } #tpTable td, #tpTable th { padding: 2px 5px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
-  #tpTable th { color: var(--dim); font-weight: 500; } #tpTable .bad { color: var(--cancelu); font-weight: 600; } #tpTable .good { color: var(--newu); }
-  #tpProg .bar { height: 4px; background: var(--line); border-radius: 2px; margin: 2px 0; } #tpProg .bar i { display: block; height: 100%; background: #4c8bf5; border-radius: 2px; }
+  /* ---- thread scaling: one sweep over thread counts, interactive readers or the batch compiler */
+  #scaling { flex: 1; overflow: auto; padding: 6px 10px; font-size: 12px; } #scaling[hidden] { display: none; }
+  #scaling .ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; } #scaling .ctl input[type=number] { width: 4em; }
+  #scaling .ctl input[type=text] { width: 90px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); }
+  #scaling .opts { display: contents; } #scaling .opts[hidden] { display: none; }
+  #scWhat { margin: 2px 0 6px; max-width: 110ch; } #scState { margin-bottom: 6px; }
+  #scPanel { display: flex; gap: 16px; align-items: flex-start; } #scPlot { flex: 0 0 400px; } #scSide { flex: 1; min-width: 0; }
+  #scPlot svg { width: 100%; height: auto; display: block; } #scPlot text { font-size: 10px; fill: var(--dim); }
+  #scPlot .axis { stroke: var(--dim); } #scPlot .grid { stroke: var(--line); stroke-width: .5; } #scPlot .series { fill: none; stroke: #4c8bf5; stroke-width: 2; } #scPlot .dot { fill: #4c8bf5; }
+  #scPlot .ref { stroke: #f08c00; stroke-dasharray: 4 3; } #scPlot .ideal { stroke: var(--dim); stroke-dasharray: 2 3; } #scPlot .lab { fill: var(--fg); font-weight: 600; }
+  #scaling table { border-collapse: collapse; font-size: 11.5px; } #scaling td, #scaling th { padding: 2px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  #scaling th { color: var(--dim); font-weight: 500; } #scaling td.l, #scaling th.l { text-align: left; } #scaling .bad { color: var(--cancelu); font-weight: 600; } #scaling .good { color: var(--newu); }
+  #scTable tbody tr { cursor: pointer; } #scTable tr.sel td { background: rgba(76,139,245,.12); }
+  #scProg .bar { height: 4px; background: var(--line); border-radius: 2px; margin: 2px 0; } #scProg .bar i { display: block; height: 100%; background: #4c8bf5; border-radius: 2px; }
+  #scPick { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; } #scPick button.on { outline: 1px solid #4c8bf5; }
+  #scSvg { width: 100%; display: block; } #scSvg text { font-size: 9px; fill: var(--dim); } #scSvg rect.s { stroke: var(--panel); stroke-width: .4; }
+  #scSvg .lane { fill: var(--panel); } #scSvg .gc { fill: var(--dim); opacity: .18; } #scSvg .wait { fill: #e5534b; } #scSvg .tick { stroke: var(--line); }
+  #scaling .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 3px; }
   .replayHit { background: rgba(240,140,0,.45); outline: 1px solid #f08c00; } .line-replay { background: rgba(240,140,0,.12); }
   #strip { display: inline-flex; align-items: flex-end; gap: 1px; height: 18px; width: 180px; flex: none; cursor: default; } #strip i { display: block; width: 2px; background: var(--acc); border-radius: 1px 1px 0 0; min-height: 1px; }
   #strip i.cancelled { background: var(--cancelu); } #strip i.baseline { background: #e8a317; } #strip i.default { background: #4a90e2; } #strip i.readers { background: #2f9e44; }
@@ -224,6 +221,7 @@
     <button class="chrome" data-view="structure" data-icon="structure" title="Structure: the definitions of the open file"></button>
     <button class="chrome" data-view="demos" data-icon="play" title="Demos"></button>
     <button class="chrome" data-view="replay" data-icon="replay" title="Replay: a recorded Metals editing session, once per mode, and the findings"></button>
+    <button class="chrome" id="actScale" data-icon="threads" title="Thread scaling: the source set compiled once per thread count, interactive readers or the batch compiler"></button>
     <span class="sp"></span>
     <button class="chrome" id="actLog" data-icon="panel" title="Request log and demo transcript"></button>
   </nav>
@@ -252,15 +250,6 @@
           <div class="row2"><button id="rpAll" class="primary" data-icon="play" title="baseline, default and -Yinteractive-parallel in turn, each on a fresh driver">Run all modes</button><button id="rpStop" class="ghost" data-icon="cancel">Stop</button></div>
           <div id="rpModes"></div>
           <div class="row2"><a id="rpExport" href="/replay/report.md" download="replay-findings.md"><button class="ghost" data-icon="doc" tabindex="-1">Export markdown</button></a><button id="rpCopy" class="ghost" data-icon="doc">Copy markdown</button></div>
-          <div id="tpBox">
-            <p><b>Throughput</b> <span class="dim">— every file of the source set in one fresh run (<code>openAll</code>, every statement skipped, <code>-Yinteractive-parallel</code>, the build's options), typed by N reader threads (the largest files first, or round-robin; with work stealing), a fresh driver per N after one single-reader warm-up.</span></p>
-            <div class="row2"><label title="comma-separated thread counts">N <input id="tpNs" type="text" value="1,2,4,6,8"></label>
-              <label title="big: the largest files first, each to the least loaded thread; rr: round-robin in path order. Both steal the last file of the longest list when a thread runs out">order <select id="tpPolicy"><option value="big">largest first</option><option value="rr">round-robin</option></select></label>
-              <label><input id="tpSpeedup" type="checkbox" checked> speed-up against N=1</label></div>
-            <div class="row2"><button id="tpRun" class="primary" data-icon="play">Run throughput</button><button id="tpStop" class="ghost" data-icon="cancel">Stop</button></div>
-            <div id="tpState" class="dim"></div>
-            <p class="dim">The plot, the points and each thread's progress are in the panel below (<b>Throughput</b>).</p>
-          </div>
           <p class="dim">Freeform: pick a mode next to the reset button above the editor, reset, and drive by hand; the strip in the status bar shows the latency of each request.</p>
         </div>
       </div>
@@ -316,24 +305,30 @@
 </div>
 <div class="gutter h" data-i="2" title="drag to resize"></div>
 <section id="logsec">
-  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="throughput" title="N readers over every file of the source set">Throughput</button><button class="ptab chrome" data-ptab="batch" title="the batch compiler under -Yparallel-typer over the source set: a lane per worker, what each did when">Batch</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
+  <div class="ph"><button class="ptab chrome on" data-ptab="log">Request log</button><button class="ptab chrome" data-ptab="timeline" title="who did what when: a lane per thread (the page's requests, the background reader), a bar per request from its start to its answer">Timeline</button><button class="ptab chrome" data-ptab="story" disabled>Demo transcript</button><button class="ptab chrome" data-ptab="problems" title="the session's diagnostic set: the union of its stores, from every request and the background pass">Problems <span id="probCount" class="dim"></span></button><button class="ptab chrome" data-ptab="replay" title="per mode and request kind, from the replay">Replay findings</button><button class="ptab chrome" data-ptab="scaling" title="compile every file of the source set once per thread count, interactively (N readers) or in batch (-Yparallel-typer): wall time, speed-up and what each thread did">Thread scaling</button><span class="sp"></span><button id="logToggle" class="icon ghost chrome" data-icon="close" title="hide the panel; the status bar keeps the latest entry"></button></div>
   <div id="log"><table><thead><tr><th>#</th><th>request</th><th>outcome</th><th>run</th><th>prefix</th><th>trees</th><th>touched</th><th>ms</th><th title="time blocked on the completion lock (another reader completing), and the longest wait's holder">lock wait</th><th title="times the request was aborted on a wait-for cycle and was retried (-Yinteractive-parallel): a livelock shows here as a growing number">cycleAborts</th></tr></thead><tbody id="logbody"></tbody></table><div class="none dim">Requests appear here, newest first.</div></div>
   <div id="story" hidden></div>
   <div id="problems" hidden><div class="none dim">No diagnostics: every request and the background pass fill this list.</div></div>
   <div id="timeline" hidden><div class="none dim">No requests yet. Each lane is a thread: the page's requests (foreground), the background reader's passes; a bar runs from a request's start to its answer, coloured by outcome; hover for the details.</div><svg id="tlSvg"></svg></div>
-  <div id="batch" hidden>
-    <div class="ctl"><label>threads <input id="bThreads" type="number" min="1" max="64"></label>
-      <label title="index the files in parallel, each into a slice merged in file order"><input id="bIndex" type="checkbox" checked> parallel index</label>
-      <label title="member signatures a unit per task, after every class header serially"><input id="bSigs" type="checkbox" checked> parallel signatures</label>
-      <label>stop after <select id="bStop"><option>typer</option><option selected>pickler</option><option value="all">nothing (backend too)</option></select></label>
-      <label title="in this JVM: the first is cold, the later ones warm">runs <input id="bRuns" type="number" min="1" max="10" value="3"></label>
-      <button id="bRun" class="primary" data-icon="play">Run batch</button><button id="bStopBtn" class="ghost" data-icon="cancel">Stop</button>
-      <span id="bState" class="dim"></span></div>
-    <div class="runs" id="bRunsPick"></div>
-    <div id="bSummary"></div>
-    <svg id="bSvg"></svg>
+  <div id="scaling" hidden>
+    <div class="ctl">
+      <label title="what is run once per thread count">mode <select id="scMode"><option value="interactive">interactive: reader threads (-Yinteractive-parallel)</option><option value="batch">batch: typer threads (-Yparallel-typer)</option></select></label>
+      <label title="comma-separated thread counts: one row of the table each">threads <input id="scNs" type="text" value="1,2,4,8"></label>
+      <label title="timed runs per thread count, after the warm-up; the table shows the fastest">runs each <input id="scRuns" type="number" min="1" max="10" value="1"></label>
+      <span class="opts" id="scOptI"><label title="largest first: the largest files first, each to the least loaded thread; round-robin: in path order. Both steal the last file of the longest list when a thread runs out">order <select id="scPolicy"><option value="big">largest first</option><option value="rr">round-robin</option></select></label></span>
+      <span class="opts" id="scOptB" hidden><label title="index the files in parallel, each into a slice merged in file order"><input id="scIndex" type="checkbox" checked> parallel index</label>
+        <label title="member signatures a unit per task, after every class header serially"><input id="scSigs" type="checkbox" checked> parallel signatures</label>
+        <label>stop after <select id="scStopAfter"><option>typer</option><option selected>pickler</option><option value="all">nothing (backend too)</option></select></label></span>
+      <label><input id="scSpeedup" type="checkbox" checked> plot speed-up</label>
+      <button id="scRun" class="primary" data-icon="play">Run sweep</button><button id="scStop" class="ghost" data-icon="cancel">Stop</button>
+    </div>
+    <div id="scWhat" class="dim"></div>
+    <div id="scState" class="dim"></div>
+    <div id="scPanel"><div id="scPlot"></div><div id="scSide"><table id="scTable"></table><div id="scProg"></div></div></div>
+    <div id="scPick"></div>
+    <div id="scSteps"></div>
+    <svg id="scSvg"></svg>
   </div>
-  <div id="throughput" hidden><div id="tpPanel"><div id="tpPlot"></div><div id="tpSide"><table id="tpTable"><thead><tr><th>N</th><th>wall s</th><th>speed-up</th><th>worker CPU s</th><th>root waits</th><th title="files whose errors differ from N=1's (N=1: from the single-reader whole-set run)">files differ</th><th>cycleAborts</th><th>cycles raised</th><th title="the open: parse, index and skip every statement, serial">open s</th><th title="from the end of the open until the first thread ran out of files">typing s</th><th title="from the first thread running out of files until the last one did">tail s</th></tr></thead><tbody></tbody></table><div id="tpProg"></div><div id="tpTimeline"></div></div></div></div>
   <div id="replay" hidden><div class="none dim">Run the replay (the ▶︎ view in the activity bar): the findings per mode and request kind appear here, then the requests as they finish.</div><div id="rpFindings"></div><h4>Requests, newest first</h4><table><thead><tr><th class="l">#</th><th class="l">mode</th><th class="l">request</th><th>due ms</th><th>queued</th><th>latency</th><th>lock wait</th><th>stmt wait</th><th>trees</th><th class="l">how</th><th>diags</th><th class="l">answer</th></tr></thead><tbody id="rpRows"></tbody></table></div>
 </section>
 <div id="quick" hidden><input id="quickIn" placeholder="Go to file… (type to filter; Enter opens, Esc closes)" autocomplete="off"><div class="items" id="quickItems"></div><div class="hint" id="quickHint">Ctrl/Cmd-K · the snapshot's compiler sources and the generated A.scala</div></div>
@@ -370,6 +365,7 @@
     right: svg('<path d="M6 3l5 5-5 5"/>'),
     complete: svg('<path d="M3 3.5l9.5 4.5L3 12.5l1.8-4.5z"/>'),
     doc: svg('<path d="M4 1.75h5l3 3v9.5H4z"/><path d="M9 1.75v3h3"/><path d="M6 8h4M6 10.5h4"/>'),
+    threads: svg('<path d="M2 4h7M5 8h9M3 12h6"/>'),
     sliders: svg('<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.4" fill="var(--panel)"/><circle cx="10.5" cy="8" r="1.4" fill="var(--panel)"/><circle cx="5" cy="11.5" r="1.4" fill="var(--panel)"/>'),
     latch: svg('<path d="M4 2.5h8M4 13.5h8"/><path d="M5 2.5c0 4 6 4 6 8v3M11 2.5c0 4-6 4-6 8v3"/>'),
     session: svg('<path d="M9 1.5 3.5 9h4L7 14.5 12.5 7h-4z"/>'),
@@ -458,7 +454,7 @@
   $('actLog').onclick = () => setLogCollapsed(!document.body.classList.contains('logCollapsed'));
   setLogCollapsed(store.get('logCollapsed') === '1');
   // the bottom panel's tabs: the request log, and the demo transcript once a demo has run
-  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'throughput', 'timeline', 'batch'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('tpWide', name === 'throughput'); document.body.classList.toggle('bWide', name === 'batch'); }
+  function panelTab(name) { document.querySelectorAll('#logsec .ptab').forEach((b) => b.classList.toggle('on', b.dataset.ptab === name)); ['log', 'story', 'problems', 'replay', 'scaling', 'timeline'].forEach((n) => { $(n).hidden = name !== n; }); if (name === 'timeline') tlRender(); document.body.classList.toggle('scWide', name === 'scaling'); }
   document.querySelectorAll('#logsec .ptab').forEach((b) => b.onclick = () => panelTab(b.dataset.ptab));
   // the activity bar: a view in the sidebar (clicking the current one hides the sidebar), and the bottom panel
   const views = { explorer: 'Explorer', structure: 'Structure', demos: 'Demos', replay: 'Replay' };
@@ -1400,118 +1396,100 @@
   // a replay already running (or finished) when the page loads
   fetch('/replay/status?since=0').then((r) => r.json()).then((st) => { if (st.rows.length || st.running) { rpRenderModes(st); st.rows.forEach((r) => { rpRow(r); rp.since = Math.max(rp.since, r.seq); }); rpRenderFindings(st.findings); if (st.running) rpPoll(); } }).catch(() => {});
 
-  // ---- the throughput demo
-  const tp = { polling: false, last: null, sel: null };
-  function tpPlot(st) {
-    const pts = st.points.filter((p) => p.failure === '' && p.wallMs > 0);
-    const speed = $('tpSpeedup').checked;
-    const base = (st.points.find((p) => p.n === 1 && p.failure === '') || {}).wallMs;
-    const W = 440, H = 180, L = 40, R = 10, T = 14, B = 28;
-    const maxN = Math.max(...st.ns, 1);
-    const ys = pts.map((p) => speed ? (base ? base / p.wallMs : 0) : p.wallMs / 1000);
-    const batchS = st.batchMs > 0 ? st.batchMs / 1000 : null;
-    let maxY = Math.max(...ys, speed ? maxN : (batchS || 0), speed ? 1 : 0.1);
-    // true x/y: both axes linear from 0, round-number ticks on y
+  // ---- thread scaling: a sweep over thread counts in one of two modes (ThroughputDemo, BatchDemo). Each mode's
+  // status is normalised to rows {n, run, wallMs, failure, cells, spans | index}; the table, the plot and the lanes
+  // are drawn from the rows alone.
+  const SC = {
+    interactive: {
+      url: '/throughput', busy: ['warming', 'batch', 'running'],
+      what: '<b>One run</b>: a fresh run of an <code>InteractiveDriver</code> (<code>-Yinteractive-parallel</code>, the build\'s options; one driver for the whole sweep, <code>-Dtp.fresh</code> for one per run) opens every file of the source set (<code>openAll</code>: parse, index, every statement skipped; serial), then N reader threads type every file, largest first or round-robin, stealing work when they run out. <b>Timed</b>: from the open to the last file typed. <b>Before the sweep</b>: one single-reader run as the warm-up, and the batch typer once, for the reference line of the wall-time plot. <b>Checked</b>: each file\'s errors against N=1\'s.',
+      cols: [['worker CPU s', 'CPU time of the reader threads'], ['root waits', 'waits on a completion root another reader holds: count / total'], ['files differ', 'files whose errors differ from N=1\'s (N=1: from the single-reader warm-up)'], ['cycleAborts', 'requests aborted on a wait-for cycle and retried'], ['cycles raised', 'CyclicReference errors raised'], ['open s', 'the open: parse, index and skip every statement, serial'], ['typing s', 'from the end of the open until the first thread ran out of files'], ['tail s', 'from the first thread running out of files until the last one did']],
+      rows: (st) => st.points.map((p) => ({ n: p.n, run: p.run || 1, wallMs: p.wallMs, failure: p.failure,
+        cells: p.failure ? [] : [(p.workerCpuMs / 1000).toFixed(1), `${p.rootWaits} / ${p.rootWaitMs.toFixed(0)} ms`, [p.differ, p.differ ? 'bad' : 'good'], p.cycleAborts, p.cyclesRaised, (p.openMs / 1000).toFixed(2), (p.typingMs / 1000).toFixed(2), (p.tailMs / 1000).toFixed(2)],
+        spans: [['main', 'open', 'open: parse, index, skip every statement (serial)', 0, p.openMs, -1, -1, -1], ...(p.lanes || []).flatMap((fs, t) => fs.map(([f, a, b]) => [`dotc-reader-${t}`, 'file', f, a, b, -1, -1, -1]))] })),
+      state: (st) => ({ idle: 'Not run yet.', warming: 'Warm-up: the whole set, one reader, nothing skipped…', batch: 'The batch typer on the same files, for the reference line…', running: `N=${st.currentN}, run ${st.currentRun || 1} of ${st.runs || 1}…` }[st.state]),
+      params: () => ({ ns: $('scNs').value, runs: $('scRuns').value, policy: $('scPolicy').value }),
+      load: (st) => { if (st.ns) $('scNs').value = st.ns.join(','); if (st.runs) $('scRuns').value = st.runs; if (st.policy) $('scPolicy').value = st.policy; },
+      legend: () => 'Lanes: the open on <i>main</i>, then each file a reader typed (hover for its name and time); an empty stretch is a reader out of files.',
+    },
+    batch: {
+      url: '/batch', busy: ['warming', 'running'],
+      what: '<b>One run</b>: the batch compiler (<code>Driver.process</code>, <code>-Yparallel-typer</code>, the build\'s options) over every file of the source set with N worker threads, up to the phase chosen, in the server\'s JVM. <b>Timed</b>: the whole <code>Driver.process</code> call, recorded by <code>ParallelBatch.Timeline</code>: a span per unit of each step on the thread that did it. <b>Before the sweep</b>: one untimed run at the first thread count, as the warm-up.',
+      cols: [['CPU s', 'CPU time inside the recorded spans, summed over threads'], ['root waits', 'waits on a completion root another thread holds'], ['GC ms', 'stop-the-world GC pauses during the run'], ['errors', 'errors reported by the run']],
+      rows: (st) => st.runs.map((r) => ({ n: r.n, run: r.run, index: r.index, wallMs: r.wallMs, failure: '',
+        cells: [(r.cpuMs / 1000).toFixed(1), r.waits, r.gcMs, [r.errors, r.errors ? 'bad' : '']] })),
+      state: (st) => ({ idle: 'Not run yet.', warming: 'Warm-up: one untimed run…', running: `N=${st.currentN}, run ${st.currentRun} of ${st.options.runs}…` }[st.state]),
+      params: () => ({ threads: $('scNs').value, runs: $('scRuns').value, parallelIndex: $('scIndex').checked ? 1 : 0, parallelSignatures: $('scSigs').checked ? 1 : 0, stopAfter: $('scStopAfter').value }),
+      load: (st) => { const o = st.options; $('scNs').value = o.threads.join(','); $('scRuns').value = o.runs; $('scIndex').checked = o.parallelIndex; $('scSigs').checked = o.parallelSignatures; $('scStopAfter').value = o.stopAfter; },
+      legend: () => 'Lanes: colour by step; a span\'s opacity is its CPU over its wall time (pale: blocked or descheduled); red ticks are waits on completion roots, grey bands GC pauses.',
+    },
+  };
+  const sc = { mode: store.get('scMode') === 'batch' ? 'batch' : 'interactive', st: {}, sel: null, spans: {}, polling: false, follow: false };
+  const scColors = { setup: '#9a9a9a', open: '#9a9a9a', parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', file: '#4c8bf5', decls: '#b8b8b8', pickle: '#2aa198', phase: '#5aa469' };
+  const scOrder = ['setup', 'parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'pickle', 'phase'];
+  const scBusy = (mode) => { const st = sc.st[mode]; return !!st && SC[mode].busy.includes(st.state); };
+  // per thread count: its runs, and the fastest of them, which the table and the plot show
+  function scGroups(rows) {
+    const by = new Map();
+    for (const r of rows) { if (!by.has(r.n)) by.set(r.n, []); by.get(r.n).push(r); }
+    return [...by.entries()].map(([n, rs]) => { const ok = rs.filter((r) => !r.failure && r.wallMs > 0); return { n, rs, best: ok.length ? ok.reduce((p, q) => (q.wallMs < p.wallMs ? q : p)) : null }; });
+  }
+  function scPlot(groups, st) {
+    const pts = groups.filter((g) => g.best), speed = $('scSpeedup').checked;
+    const base = pts.length ? pts[0] : null;
+    const W = 400, H = 180, L = 40, R = 10, T = 14, B = 28;
+    const maxN = Math.max(...groups.map((g) => g.n), 1);
+    const ys = pts.map((g) => speed ? base.best.wallMs / g.best.wallMs : g.best.wallMs / 1000);
+    const refS = sc.mode === 'interactive' && st.batchMs > 0 ? st.batchMs / 1000 : null;
+    let maxY = Math.max(...ys, speed ? maxN / (base ? base.n : 1) : (refS || 0), speed ? 1 : 0.1);
     const span = maxY * 1.05, raw = span / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
     const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
     maxY = Math.ceil(span / step) * step;
-    const x = (n) => L + (n / maxN) * (W - L - R);
-    const y = (v) => H - B - (v / maxY) * (H - T - B);
+    const x = (n) => L + (n / maxN) * (W - L - R), y = (v) => H - B - (v / maxY) * (H - T - B);
     let g = '';
     for (let v = 0; v <= maxY + step / 2; v += step) g += `<line class="grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/><text x="${L - 4}" y="${y(v) + 3}" text-anchor="end">${+v.toFixed(2)}</text>`;
     g += `<line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/><line class="axis" x1="${L}" y1="${T}" x2="${L}" y2="${H - B}"/>`;
-    for (let n = 0; n <= maxN; n += maxN > 16 ? Math.ceil(maxN / 16) : 1) g += `<line class="axis" x1="${x(n)}" y1="${H - B}" x2="${x(n)}" y2="${H - B + 3}"/><text x="${x(n)}" y="${H - B + 13}" text-anchor="middle"${st.ns.includes(n) ? ' class="lab"' : ''}>${n}</text>`;
-    g += `<text x="${(L + W - R) / 2}" y="${H - 3}" text-anchor="middle">reader threads</text>`;
-    g += `<text x="4" y="${T - 4}">${speed ? 'speed-up ×' : 'wall s'}</text>`;
-    if (speed) g += `<line class="ideal" x1="${x(0)}" y1="${y(0)}" x2="${x(Math.min(maxN, maxY))}" y2="${y(Math.min(maxN, maxY))}"><title>linear speed-up</title></line>`;
-    else if (batchS) g += `<line class="ref" x1="${L}" y1="${y(batchS)}" x2="${W - R}" y2="${y(batchS)}"/><text x="${W - R}" y="${y(batchS) - 3}" text-anchor="end" style="fill:#f08c00">batch typer ${batchS.toFixed(1)} s</text>`;
+    for (let n = 0; n <= maxN; n += maxN > 16 ? Math.ceil(maxN / 16) : 1) g += `<line class="axis" x1="${x(n)}" y1="${H - B}" x2="${x(n)}" y2="${H - B + 3}"/><text x="${x(n)}" y="${H - B + 13}" text-anchor="middle"${groups.some((q) => q.n === n) ? ' class="lab"' : ''}>${n}</text>`;
+    g += `<text x="${(L + W - R) / 2}" y="${H - 3}" text-anchor="middle">${sc.mode === 'batch' ? 'typer threads' : 'reader threads'}</text>`;
+    g += `<text x="4" y="${T - 4}">${speed ? `speed-up × against N=${base ? base.n : 1}` : 'wall s (fastest run)'}</text>`;
+    if (speed && base) { const e = Math.min(maxN, maxY * base.n); g += `<line class="ideal" x1="${x(0)}" y1="${y(0)}" x2="${x(e)}" y2="${y(e / base.n)}"><title>linear speed-up</title></line>`; }
+    else if (!speed && refS) g += `<line class="ref" x1="${L}" y1="${y(refS)}" x2="${W - R}" y2="${y(refS)}"/><text x="${W - R}" y="${y(refS) - 3}" text-anchor="end" style="fill:#f08c00">batch typer ${refS.toFixed(1)} s</text>`;
     if (pts.length) g += `<polyline class="series" points="${pts.map((p, i) => `${x(p.n)},${y(ys[i])}`).join(' ')}"/>`;
-    pts.forEach((p, i) => { g += `<circle class="dot" cx="${x(p.n)}" cy="${y(ys[i])}" r="3.5"><title>N=${p.n}: wall ${(p.wallMs / 1000).toFixed(2)} s, worker CPU ${(p.workerCpuMs / 1000).toFixed(1)} s, root waits ${p.rootWaits}, ${p.differ} files differ</title></circle><text class="lab" x="${x(p.n)}" y="${y(ys[i]) - 7}" text-anchor="middle">${speed ? ys[i].toFixed(1) + '×' : ys[i].toFixed(2)}</text>`; });
-    $('tpPlot').innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+    pts.forEach((p, i) => { g += `<circle class="dot" cx="${x(p.n)}" cy="${y(ys[i])}" r="3.5"><title>N=${p.n}: wall ${(p.best.wallMs / 1000).toFixed(2)} s</title></circle><text class="lab" x="${x(p.n)}" y="${y(ys[i]) - 7}" text-anchor="middle">${speed ? ys[i].toFixed(1) + '×' : ys[i].toFixed(2)}</text>`; });
+    $('scPlot').innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
   }
-  // one lane per reader thread for the selected N: the open (serial), each file
-  // typed (sized by its time; hover for its name), idle until the wall ends
-  function tpTimeline(st) {
-    const done = st.points.filter((p) => p.failure === '' && p.lanes && p.lanes.length);
-    if (!done.length) { $('tpTimeline').innerHTML = ''; return; }
-    if (!done.some((p) => p.n === tp.sel)) tp.sel = done[done.length - 1].n;
-    const p = done.find((q) => q.n === tp.sel);
-    const W = 900, L = 26, R = 6, lane = 10, gap = 3, T = 4;
-    const H = T + p.lanes.length * (lane + gap) + 14;
-    const x = (ms) => L + (ms / p.wallMs) * (W - L - R);
-    let g = '';
-    p.lanes.forEach((files, t) => {
-      const y = T + t * (lane + gap);
-      g += `<text x="${L - 4}" y="${y + lane - 2}" text-anchor="end">${t}</text>`;
-      g += `<rect class="open" x="${x(0)}" y="${y}" width="${x(p.openMs) - x(0)}" height="${lane}"><title>open (serial): ${(p.openMs / 1000).toFixed(2)} s</title></rect>`;
-      files.forEach(([f, a, b], i) => { g += `<rect class="f${i % 2}" x="${x(a)}" y="${y}" width="${Math.max(0.5, x(b) - x(a))}" height="${lane}"><title>${esc(f)}: ${(b - a).toFixed(0)} ms</title></rect>`; });
-      const end = files.length ? files[files.length - 1][2] : p.openMs;
-      if (end < p.wallMs) g += `<rect class="idle" x="${x(end)}" y="${y}" width="${x(p.wallMs) - x(end)}" height="${lane}"><title>idle: ${((p.wallMs - end) / 1000).toFixed(2)} s</title></rect>`;
-    });
-    const yAxis = T + p.lanes.length * (lane + gap) + 10;
-    for (let s = 0; s <= p.wallMs / 1000 + 1e-9; s += p.wallMs > 4000 ? 1 : 0.5) g += `<text x="${x(s * 1000)}" y="${yAxis}" text-anchor="middle">${s}s</text>`;
-    $('tpTimeline').innerHTML = `<div class="pick">timeline: ${done.map((q) => `<button class="ghost${q.n === p.n ? ' on' : ''}" data-tn="${q.n}">N=${q.n}</button>`).join('')} <span class="dim">open ${(p.openMs / 1000).toFixed(2)} s · typing ${(p.typingMs / 1000).toFixed(2)} s · tail ${(p.tailMs / 1000).toFixed(2)} s of ${(p.wallMs / 1000).toFixed(2)} s</span></div><svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
-    $('tpTimeline').querySelectorAll('button[data-tn]').forEach((b) => { b.onclick = () => { tp.sel = +b.dataset.tn; tpRender(tp.last); }; });
+  function scTable(groups) {
+    const m = SC[sc.mode], base = groups.find((g) => g.best);
+    const head = `<tr><th>threads</th><th title="the fastest of the runs at this thread count">wall s</th><th title="against the fastest run at the first thread count">speed-up</th><th class="l" title="every run's wall time, in order">runs s</th>${m.cols.map(([c, t]) => `<th title="${esc(t)}">${esc(c)}</th>`).join('')}</tr>`;
+    const body = groups.map((g) => {
+      const runs = g.rs.map((r) => r.failure ? '✗' : (r.wallMs / 1000).toFixed(2)).join(' ');
+      if (!g.best) return `<tr><td>${g.n}</td><td colspan="${3 + m.cols.length}" class="bad l">${esc(g.rs[g.rs.length - 1].failure)}</td></tr>`;
+      const cells = g.best.cells.map((c) => Array.isArray(c) ? `<td class="${c[1]}">${c[0]}</td>` : `<td>${c}</td>`).join('');
+      return `<tr data-n="${g.n}"${sc.sel && sc.sel.n === g.n ? ' class="sel"' : ''}><td>${g.n}</td><td>${(g.best.wallMs / 1000).toFixed(2)}</td><td>${base ? (base.best.wallMs / g.best.wallMs).toFixed(2) + '×' : ''}</td><td class="l dim">${runs}</td>${cells}</tr>`;
+    }).join('');
+    $('scTable').innerHTML = `<thead>${head}</thead><tbody>${body || `<tr><td colspan="${4 + m.cols.length}" class="l dim">No runs yet.</td></tr>`}</tbody>`;
+    $('scTable').querySelectorAll('tbody tr[data-n]').forEach((tr) => { tr.onclick = () => { const g = groups.find((q) => q.n === +tr.dataset.n); sc.sel = { n: g.n, run: g.best.run }; scRender(); }; });
   }
-  function tpRender(st) {
-    tp.last = st;
-    const run = st.state === 'warming' || st.state === 'batch' || st.state === 'running';
-    const what = { idle: 'Not run yet.', warming: 'Warm-up: the whole set, one reader, nothing skipped…', batch: 'The batch typer on the same files, for the reference line…', running: `N=${st.currentN}…`, done: 'Done.', cancelled: 'Cancelled.', failed: 'Failed: ' + st.error }[st.state] || st.state;
-    $('tpState').innerHTML = `${esc(what)} ${st.files ? `${st.files} files; ` : ''}${st.processors} processors; build <code>${esc(st.build)}</code>${st.warmMs > 0 ? `; warm-up ${(st.warmMs / 1000).toFixed(1)} s` : ''}${st.batchMs > 0 ? `; batch typer ${(st.batchMs / 1000).toFixed(1)} s` : ''}${run ? ` (${(st.elapsedMs / 1000).toFixed(0)} s)` : ''}${st.jvm ? `<br>JVM ${esc(st.jvm.version)}, ${esc(st.jvm.gc)}, max heap ${st.jvm.maxHeapGb} GB: <code>${esc(st.jvm.flags)}</code>` : ''}`;
-    $('tpProg').innerHTML = st.state === 'running' && st.progress.length ? st.progress.map((n, t) => `<div class="dim">thread ${t}: ${n} files<div class="bar"><i style="width:${Math.min(100, 100 * n * st.progress.length / Math.max(st.files, 1))}%"></i></div></div>`).join('') : '';
-    const base = (st.points.find((p) => p.n === 1 && p.failure === '') || {}).wallMs;
-    $('tpTable').querySelector('tbody').innerHTML = st.points.map((p) => p.failure
-      ? `<tr><td>${p.n}</td><td colspan="7" class="bad" style="text-align:left">${esc(p.failure)}</td></tr>`
-      : `<tr data-n="${p.n}"${p.n === tp.sel ? ' class="sel"' : ''}><td>${p.n}</td><td>${(p.wallMs / 1000).toFixed(2)}</td><td>${base ? (base / p.wallMs).toFixed(2) + '×' : ''}</td><td>${(p.workerCpuMs / 1000).toFixed(1)}</td><td>${p.rootWaits} / ${p.rootWaitMs.toFixed(0)} ms</td><td class="${p.differ ? 'bad' : 'good'}">${p.differ}</td><td>${p.cycleAborts}</td><td>${p.cyclesRaised}</td><td>${(p.openMs / 1000).toFixed(2)}</td><td>${(p.typingMs / 1000).toFixed(2)}</td><td>${(p.tailMs / 1000).toFixed(2)}</td></tr>`).join('');
-    $('tpTable').querySelectorAll('tbody tr[data-n]').forEach((tr) => { tr.onclick = () => { tp.sel = +tr.dataset.n; tpRender(tp.last); }; });
-    tpTimeline(st);
-    tpPlot(st);
-    $('tpRun').disabled = run;
-  }
-  async function tpPoll() {
-    if (tp.polling) return; tp.polling = true;
-    try {
-      while (true) {
-        let st; try { st = await (await fetch('/throughput/status')).json(); } catch (e) { await sleep(1000); continue; }
-        tpRender(st);
-        if (!['warming', 'batch', 'running'].includes(st.state)) break;
-        await sleep(400);
-      }
-    } finally { tp.polling = false; }
-  }
-  $('tpRun').onclick = async () => {
-    const st = await (await fetch('/throughput/run?ns=' + encodeURIComponent($('tpNs').value) + '&policy=' + $('tpPolicy').value, { method: 'POST' })).json();
-    setLogCollapsed(false); panelTab('throughput');
-    tpRender(st); tpPoll();
-  };
-  $('tpStop').onclick = () => fetch('/throughput/stop', { method: 'POST' });
-  $('tpSpeedup').onchange = () => { if (tp.last) tpPlot(tp.last); };
-  // a run already going (or finished) when the page loads: the plot survives a reload
-  fetch('/throughput/status').then((r) => r.json()).then((st) => { if (st.ns) $('tpNs').value = st.ns.join(','); if (st.policy) $('tpPolicy').value = st.policy; tpRender(st); if (['warming', 'batch', 'running'].includes(st.state)) tpPoll(); }).catch(() => {});
-
-  // ---- the batch view: the batch compiler under -Yparallel-typer, a lane per worker (BatchDemo)
-  const bt = { sel: 0, last: null, polling: false, spans: {} };
-  const bColors = { setup: '#9a9a9a', parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', decls: '#b8b8b8', pickle: '#2aa198', phase: '#5aa469' };
-  const bOrder = ['setup', 'parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'pickle', 'phase'];
-  function bLane(thread) { const m = /^dotc-[a-z-]+?-(\d+)$/.exec(thread); return m ? 'worker ' + m[1] : thread === 'gc' ? 'gc' : 'main'; }
-  function bSummary(spans, wallMs) {
+  function scLane(thread) { const m = /^dotc-[a-z-]+?-(\d+)$/.exec(thread); return m ? 'thread ' + m[1] : thread === 'gc' ? 'gc' : 'main'; }
+  function scSteps(spans, wallMs) {
     const by = {};
-    for (const [th, step, label, a, b, cpu, bl, wt] of spans) {
+    for (const [th, step, , a, b, cpu, bl, wt] of spans) {
       if (step === 'wait' || step === 'gc') continue;
       const x = by[step] || (by[step] = { from: 1e18, to: 0, span: 0, cpu: 0, bl: 0, wt: 0, n: 0, th: new Set() });
       x.from = Math.min(x.from, a); x.to = Math.max(x.to, b); x.span += b - a; x.cpu += Math.max(cpu, 0); x.bl += Math.max(bl, 0); x.wt += Math.max(wt, 0); x.n++; x.th.add(th);
     }
     const gc = spans.filter((s) => s[1] === 'gc').reduce((t, s) => t + (s[4] - s[3]), 0);
-    const rows = bOrder.filter((k) => by[k]).map((k) => { const x = by[k]; const lbl = k === 'phase' ? 'later phases' : k;
-      return `<tr><td class="l"><span class="sw" style="background:${bColors[k]}"></span>${lbl}</td><td>${(x.to - x.from).toFixed(0)}</td><td>${x.th.size}</td><td>${x.n}</td><td>${x.span.toFixed(0)}</td><td>${x.cpu.toFixed(0)}</td><td>${x.bl}</td><td>${x.wt}</td><td>${(x.span - x.cpu - x.bl - x.wt).toFixed(0)}</td></tr>`; }).join('');
-    return `<table><thead><tr><th class="l">step</th><th title="first start to last end">wall ms</th><th>threads</th><th>spans</th><th title="the spans' wall time, summed over threads">in spans ms</th><th>CPU ms</th><th title="entering a monitor (synchronized)">blocked ms</th><th title="parked: claims, latches, Object.wait">parked ms</th><th title="neither: descheduled, GC, safepoints">other ms</th></tr></thead><tbody>${rows}</tbody></table><div class="dim">run ${(wallMs / 1000).toFixed(2)} s; GC pauses ${gc.toFixed(0)} ms. Colour by step; a span's opacity is its CPU over its wall time (pale: blocked or descheduled); red ticks are waits on completion roots, grey bands GC pauses.</div>`;
+    const rows = scOrder.filter((k) => by[k]).map((k) => { const x = by[k];
+      return `<tr><td class="l"><span class="sw" style="background:${scColors[k]}"></span>${k === 'phase' ? 'later phases' : k}</td><td>${(x.to - x.from).toFixed(0)}</td><td>${x.th.size}</td><td>${x.n}</td><td>${x.span.toFixed(0)}</td><td>${x.cpu.toFixed(0)}</td><td>${x.bl}</td><td>${x.wt}</td><td>${(x.span - x.cpu - x.bl - x.wt).toFixed(0)}</td></tr>`; }).join('');
+    return `<table><thead><tr><th class="l">step</th><th title="first start to last end">wall ms</th><th>threads</th><th>spans</th><th title="the spans' wall time, summed over threads">in spans ms</th><th>CPU ms</th><th title="entering a monitor (synchronized)">blocked ms</th><th title="parked: claims, latches, Object.wait">parked ms</th><th title="neither: descheduled, GC, safepoints">other ms</th></tr></thead><tbody>${rows}</tbody></table><div class="dim">run ${(wallMs / 1000).toFixed(2)} s; GC pauses ${gc.toFixed(0)} ms.</div>`;
   }
-  function bTimeline(spans) {
-    const svg = $('bSvg');
-    if (!spans.length) { svg.innerHTML = ''; return; }
-    const lanes = ['main', 'gc', ...[...new Set(spans.map((s) => bLane(s[0])).filter((l) => l.startsWith('worker')))].sort((p, q) => +p.split(' ')[1] - +q.split(' ')[1])];
+  function scLanes(spans) {
+    const svg = $('scSvg');
+    if (!spans.length) { svg.innerHTML = ''; svg.removeAttribute('height'); return; }
+    const workers = [...new Set(spans.map((s) => scLane(s[0])).filter((l) => l.startsWith('thread')))].sort((p, q) => +p.split(' ')[1] - +q.split(' ')[1]);
+    const lanes = [...['main', 'gc'].filter((l) => spans.some((s) => scLane(s[0]) === l)), ...workers];
     const end = Math.max(...spans.map((s) => s[4]));
-    const W = Math.max(900, $('batch').clientWidth - 24), L = 64, R = 8, H = 13, gap = 2, top = 16;
+    const W = Math.max(900, $('scaling').clientWidth - 24), L = 64, R = 8, H = 13, gap = 2, top = 16;
     const x = (t) => L + (W - L - R) * t / end;
     let g = '';
     lanes.forEach((l, i) => { const y = top + i * (H + gap); g += `<rect class="lane" x="${L}" y="${y}" width="${W - L - R}" height="${H}"/><text x="${L - 4}" y="${y + H - 3}" text-anchor="end">${esc(l)}</text>`; });
@@ -1519,60 +1497,80 @@
     for (let t = 0; t <= end; t += step) g += `<line class="tick" x1="${x(t)}" y1="${top - 3}" x2="${x(t)}" y2="${top + lanes.length * (H + gap)}"/><text x="${x(t) + 2}" y="${top - 5}">${t >= 1000 ? (t / 1000).toFixed(step >= 1000 ? 0 : 1) + ' s' : t + ' ms'}</text>`;
     const tip = (s) => { const [th, st, lb, a, b, cpu, bl, wt] = s; return `${st}: ${lb}\n${th}, ${(b - a).toFixed(1)} ms` + (cpu >= 0 ? `, CPU ${cpu.toFixed(1)} ms` : '') + (bl >= 0 ? `, blocked ${bl} ms, parked ${wt} ms` : ''); };
     for (const s of spans) {
-      const [th, st, lb, a, b, cpu] = s;
+      const [th, st, , a, b, cpu] = s;
       if (st === 'gc') { g += `<rect class="gc" x="${x(a)}" y="${top}" width="${Math.max(1, x(b) - x(a))}" height="${lanes.length * (H + gap)}"><title>${esc(tip(s))}</title></rect>`; continue; }
-      const i = lanes.indexOf(bLane(th)), y = top + i * (H + gap), w = Math.max(0.6, x(b) - x(a));
+      const i = lanes.indexOf(scLane(th)), y = top + i * (H + gap), w = Math.max(0.6, x(b) - x(a));
       if (st === 'wait') { g += `<rect class="wait" x="${x(a)}" y="${y + H - 3}" width="${Math.max(1, w)}" height="3"><title>${esc(tip(s))}</title></rect>`; continue; }
       const op = cpu >= 0 && b > a ? 0.3 + 0.7 * Math.min(1, cpu / (b - a)) : 1;
-      g += `<rect x="${x(a)}" y="${y}" width="${w}" height="${H}" fill="${bColors[st] || '#999'}" fill-opacity="${op.toFixed(2)}"><title>${esc(tip(s))}</title></rect>`;
+      g += `<rect class="s" x="${x(a)}" y="${y}" width="${w}" height="${H}" fill="${scColors[st] || '#999'}" fill-opacity="${op.toFixed(2)}"><title>${esc(tip(s))}</title></rect>`;
     }
     const Ht = top + lanes.length * (H + gap) + 4;
     svg.setAttribute('viewBox', `0 0 ${W} ${Ht}`); svg.setAttribute('height', Ht); svg.innerHTML = g;
   }
-  async function bShow(i) {
-    bt.sel = i;
-    let spans = bt.spans[i];
-    if (!spans) { const st = await (await fetch('/batch/status?spans=' + i)).json(); const r = st.runs.find((q) => q.index === i); spans = bt.spans[i] = (r && r.spans) || []; }
-    const r = bt.last.runs.find((q) => q.index === i);
-    $('bSummary').innerHTML = bSummary(spans, r ? r.wallMs : 0);
-    bTimeline(spans);
-    bRuns(bt.last);
+  // the lanes of the selected run; a batch run's spans are fetched once, on demand
+  async function scShow(rows) {
+    const r = sc.sel && rows.find((q) => q.n === sc.sel.n && q.run === sc.sel.run && !q.failure);
+    $('scPick').innerHTML = rows.some((q) => !q.failure) ? '<span class="dim">lanes of:</span> ' + rows.filter((q) => !q.failure).map((q) => `<button class="ghost${q === r ? ' on' : ''}" data-n="${q.n}" data-r="${q.run}">N=${q.n}${rows.some((o) => o.n === q.n && o.run > 1) ? ` #${q.run}` : ''} · ${(q.wallMs / 1000).toFixed(2)} s</button>`).join('') + ` <span class="dim">${SC[sc.mode].legend()}</span>` : '';
+    $('scPick').querySelectorAll('button[data-n]').forEach((b) => { b.onclick = () => { sc.sel = { n: +b.dataset.n, run: +b.dataset.r }; scRender(); }; });
+    if (!r) { $('scSteps').innerHTML = ''; scLanes([]); return; }
+    let spans = r.spans;
+    if (!spans) {
+      const key = sc.mode + r.index;
+      if (!sc.spans[key]) { const st = await (await fetch('/batch/status?spans=' + r.index)).json(); const q = st.runs.find((x) => x.index === r.index); sc.spans[key] = (q && q.spans) || []; }
+      spans = sc.spans[key];
+    }
+    $('scSteps').innerHTML = sc.mode === 'batch' ? scSteps(spans, r.wallMs) : '';
+    scLanes(spans);
   }
-  function bRuns(st) {
-    $('bRunsPick').innerHTML = st.runs.length ? 'run: ' + st.runs.map((r) => `<button class="ghost${r.index === bt.sel ? ' on' : ''}" data-bi="${r.index}">${r.index}: ${(r.wallMs / 1000).toFixed(2)} s${r.errors ? `, <span class="bad">${r.errors} errors</span>` : ''}</button>`).join(' ') : '';
-    $('bRunsPick').querySelectorAll('button[data-bi]').forEach((b) => { b.onclick = () => bShow(+b.dataset.bi); });
+  function scRender() {
+    const m = SC[sc.mode], st = sc.st[sc.mode];
+    $('scMode').value = sc.mode; $('scOptI').hidden = sc.mode !== 'interactive'; $('scOptB').hidden = sc.mode !== 'batch';
+    $('scWhat').innerHTML = m.what;
+    const other = sc.mode === 'batch' ? 'interactive' : 'batch';
+    $('scRun').disabled = scBusy('interactive') || scBusy('batch');
+    if (!st) { $('scState').textContent = 'Loading…'; return; }
+    const what = m.state(st) || { done: 'Done.', cancelled: 'Cancelled.', failed: 'Failed: ' + st.error }[st.state] || st.state;
+    const tip = sc.st.interactive || {};
+    $('scState').innerHTML = `${esc(what)}${scBusy(other) ? ` <b>The ${other} sweep is running.</b>` : ''} ${st.files ? `${st.files} files; ` : ''}${st.processors} processors; build <code>${esc(st.build)}</code>${sc.mode === 'interactive' && st.warmMs > 0 ? `; warm-up ${(st.warmMs / 1000).toFixed(1)} s` : ''}${sc.mode === 'interactive' && st.batchMs > 0 ? `; batch typer ${(st.batchMs / 1000).toFixed(1)} s` : ''}${tip.jvm ? `<br>JVM ${esc(tip.jvm.version)}, ${esc(tip.jvm.gc)}, max heap ${tip.jvm.maxHeapGb} GB: <code>${esc(tip.jvm.flags)}</code>` : ''}`;
+    $('scProg').innerHTML = sc.mode === 'interactive' && st.state === 'running' && st.progress.length ? st.progress.map((n, t) => `<div class="dim">thread ${t}: ${n} files<div class="bar"><i style="width:${Math.min(100, 100 * n * st.progress.length / Math.max(st.files, 1))}%"></i></div></div>`).join('') : '';
+    const rows = m.rows(st), groups = scGroups(rows);
+    // follow the newest run while the sweep runs, and once more when it ends; otherwise keep the pick if it still exists
+    const ok = rows.filter((r) => !r.failure);
+    if (ok.length && (sc.follow || !sc.sel || !ok.some((r) => r.n === sc.sel.n && r.run === sc.sel.run))) { const r = ok[ok.length - 1]; sc.sel = { n: r.n, run: r.run }; }
+    sc.follow = scBusy(sc.mode);
+    scTable(groups); scPlot(groups, st); scShow(rows);
   }
-  function bRender(st) {
-    bt.last = st;
-    const o = st.options;
-    const what = { idle: 'Not run yet.', running: `Run ${st.current} of ${o.runs}…`, done: 'Done.', cancelled: 'Cancelled.', failed: 'Failed: ' + st.error }[st.state] || st.state;
-    $('bState').innerHTML = `${esc(what)} ${st.files ? st.files + ' files; ' : ''}${st.processors} processors; build <code>${esc(st.build)}</code>`;
-    if (!$('bThreads').value) $('bThreads').value = o.threads;
-    bRuns(st);
-    $('bRun').disabled = st.state === 'running';
-    const latest = st.runs.length ? st.runs[st.runs.length - 1].index : 0;
-    if (latest && (!bt.sel || st.state === 'running' || !bt.spans[bt.sel])) bShow(st.state === 'running' ? latest : (bt.sel || latest));
-  }
-  async function bPoll() {
-    if (bt.polling) return; bt.polling = true;
+  async function scPoll() {
+    if (sc.polling) return; sc.polling = true;
     try {
       while (true) {
-        let st; try { st = await (await fetch('/batch/status')).json(); } catch (e) { await sleep(1000); continue; }
-        bRender(st);
-        if (st.state !== 'running') break;
-        await sleep(700);
+        const mode = sc.mode;
+        let st; try { st = await (await fetch(SC[mode].url + '/status')).json(); } catch (e) { await sleep(1000); continue; }
+        sc.st[mode] = st; if (mode === sc.mode) scRender();
+        if (!scBusy(mode)) break;
+        await sleep(500);
       }
-    } finally { bt.polling = false; }
+    } finally { sc.polling = false; }
   }
-  $('bRun').onclick = async () => {
-    bt.spans = {}; bt.sel = 0;
-    const q = new URLSearchParams({ threads: $('bThreads').value, parallelIndex: $('bIndex').checked ? 1 : 0, parallelSignatures: $('bSigs').checked ? 1 : 0, stopAfter: $('bStop').value, runs: $('bRuns').value });
-    const st = await (await fetch('/batch/run?' + q, { method: 'POST' })).json();
-    setLogCollapsed(false); panelTab('batch');
-    bRender(st); bPoll();
+  function scOpen() { setLogCollapsed(false); panelTab('scaling'); }
+  $('actScale').onclick = scOpen;
+  $('scMode').onchange = () => { sc.mode = $('scMode').value; store.set('scMode', sc.mode); sc.sel = null; if (sc.st[sc.mode]) SC[sc.mode].load(sc.st[sc.mode]); scRender(); };
+  $('scRun').onclick = async () => {
+    const m = SC[sc.mode];
+    Object.keys(sc.spans).filter((k) => k.startsWith(sc.mode)).forEach((k) => delete sc.spans[k]); sc.sel = null;
+    const st = await (await fetch(m.url + '/run?' + new URLSearchParams(m.params()), { method: 'POST' })).json();
+    if (st.error && st.state !== 'warming') alert(st.error);
+    sc.st[sc.mode] = st; scOpen(); scRender(); scPoll();
   };
-  $('bStopBtn').onclick = () => fetch('/batch/stop', { method: 'POST' });
-  fetch('/batch/status').then((r) => r.json()).then((st) => { bRender(st); if (st.state === 'running') bPoll(); }).catch(() => {});
+  $('scStop').onclick = () => fetch(SC[sc.mode].url + '/stop', { method: 'POST' });
+  $('scSpeedup').onchange = () => scRender();
+  // a sweep already running (or finished) when the page loads: the results survive a reload
+  Promise.all(['interactive', 'batch'].map((mode) => fetch(SC[mode].url + '/status').then((r) => r.json()).then((st) => { sc.st[mode] = st; }).catch(() => {}))).then(() => {
+    const running = ['interactive', 'batch'].find(scBusy);
+    if (running) sc.mode = running;
+    if (sc.st[sc.mode]) SC[sc.mode].load(sc.st[sc.mode]);
+    scRender(); if (running) scPoll();
+  });
 
   gotoObject(10);
   scheduleBackground(); // the first file too
