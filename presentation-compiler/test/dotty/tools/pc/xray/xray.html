@@ -1425,8 +1425,7 @@
     },
   };
   const sc = { mode: store.get('scMode') === 'batch' ? 'batch' : 'interactive', st: {}, sel: null, spans: {}, polling: false, follow: false };
-  const scColors = { setup: '#9a9a9a', open: '#9a9a9a', parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', file: '#4c8bf5', decls: '#b8b8b8', pickle: '#2aa198', phase: '#5aa469' };
-  const scOrder = ['setup', 'parse', 'index', 'decls', 'class headers', 'signatures', 'bodies', 'pickle', 'phase'];
+  const scColors = { setup: '#9a9a9a', open: '#9a9a9a', parse: '#8e6bd8', index: '#c47ad8', 'class headers': '#e0a030', signatures: '#f08b3a', bodies: '#4c8bf5', file: '#4c8bf5', decls: '#b8b8b8', posttyper: '#d4559a', pickle: '#2aa198', phase: '#5aa469' };
   const scBusy = (mode) => { const st = sc.st[mode]; return !!st && SC[mode].busy.includes(st.state); };
   // per thread count: its runs, and the fastest of them, which the table and the plot show
   function scGroups(rows) {
@@ -1471,16 +1470,23 @@
     $('scTable').querySelectorAll('tbody tr[data-n]').forEach((tr) => { tr.onclick = () => { const g = groups.find((q) => q.n === +tr.dataset.n); sc.sel = { n: g.n, run: g.best.run }; scRender(); }; });
   }
   function scLane(thread) { const m = /^dotc-[a-z-]+?-(\d+)$/.exec(thread); return m ? 'thread ' + m[1] : thread === 'gc' ? 'gc' : 'main'; }
+  // a row per step, in the order the steps began: a phase on the run's thread gets a row of its own (`phase` spans,
+  // by phase name, if it took a millisecond or more), but not one whose units ran on the workers (posttyper, pickle):
+  // there the run's thread only waits
   function scSteps(spans, wallMs) {
     const by = {};
-    for (const [th, step, , a, b, cpu, bl, wt] of spans) {
+    for (const [th, step, label, a, b, cpu, bl, wt] of spans) {
       if (step === 'wait' || step === 'gc') continue;
-      const x = by[step] || (by[step] = { from: 1e18, to: 0, span: 0, cpu: 0, bl: 0, wt: 0, n: 0, th: new Set() });
+      const k = step === 'phase' ? 'phase:' + label : step;
+      const x = by[k] || (by[k] = { step, label: step === 'phase' ? label : step, from: 1e18, to: 0, span: 0, cpu: 0, bl: 0, wt: 0, n: 0, th: new Set() });
       x.from = Math.min(x.from, a); x.to = Math.max(x.to, b); x.span += b - a; x.cpu += Math.max(cpu, 0); x.bl += Math.max(bl, 0); x.wt += Math.max(wt, 0); x.n++; x.th.add(th);
     }
+    const all = Object.values(by);
+    const covers = (p) => all.some((u) => u.step !== 'phase' && u.step !== 'setup' && u.from >= p.from && u.to <= p.to + 0.5);
     const gc = spans.filter((s) => s[1] === 'gc').reduce((t, s) => t + (s[4] - s[3]), 0);
-    const rows = scOrder.filter((k) => by[k]).map((k) => { const x = by[k];
-      return `<tr><td class="l"><span class="sw" style="background:${scColors[k]}"></span>${k === 'phase' ? 'later phases' : k}</td><td>${(x.to - x.from).toFixed(0)}</td><td>${x.th.size}</td><td>${x.n}</td><td>${x.span.toFixed(0)}</td><td>${x.cpu.toFixed(0)}</td><td>${x.bl}</td><td>${x.wt}</td><td>${(x.span - x.cpu - x.bl - x.wt).toFixed(0)}</td></tr>`; }).join('');
+    const short = (l) => { const m = /^MegaPhase\{(.*)\}$/.exec(l); return m ? m[1].split(', ').join(' + ') : l; };
+    const rows = all.filter((x) => x.step !== 'phase' || (!covers(x) && x.span >= 1)).sort((p, q) => p.from - q.from).map((x) => {
+      return `<tr><td class="l" title="${esc(x.label)}"><span class="sw" style="background:${scColors[x.step] || '#999'}"></span>${esc(short(x.label))}</td><td>${(x.to - x.from).toFixed(0)}</td><td>${x.th.size}</td><td>${x.n}</td><td>${x.span.toFixed(0)}</td><td>${x.cpu.toFixed(0)}</td><td>${x.bl}</td><td>${x.wt}</td><td>${(x.span - x.cpu - x.bl - x.wt).toFixed(0)}</td></tr>`; }).join('');
     return `<table><thead><tr><th class="l">step</th><th title="first start to last end">wall ms</th><th>threads</th><th>spans</th><th title="the spans' wall time, summed over threads">in spans ms</th><th>CPU ms</th><th title="entering a monitor (synchronized)">blocked ms</th><th title="parked: claims, latches, Object.wait">parked ms</th><th title="neither: descheduled, GC, safepoints">other ms</th></tr></thead><tbody>${rows}</tbody></table><div class="dim">run ${(wallMs / 1000).toFixed(2)} s; GC pauses ${gc.toFixed(0)} ms.</div>`;
   }
   function scLanes(spans) {
