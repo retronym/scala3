@@ -492,6 +492,52 @@ class MegaPhase(val miniPhases: Array[MiniPhase]) extends Phase {
     ctx.compilationUnit.tpdTree =
       atPhase(miniPhases.last.next)(transformUnit(ctx.compilationUnit.tpdTree))
 
+  override def runOn(units: List[CompilationUnit])(using runCtx: Context): List[CompilationUnit] =
+    if runInParallel(units) then runOnInParallel(units) else super.runOn(units)
+
+  /** Under `-Yparallel-typer`, the group of `CheckInlineTraits` a unit per task, as `PostTyper` is. In a unit with
+   *  no inline or specialized traits the group only checks, the main thread's 175-240 ms of a warm run of the
+   *  compiler's sources. A unit with them (`CheckInlineTraits.InParallel`) is run again afterwards on the main
+   *  thread, in order. `-Ddotc.parallelTyper.inlineTraits=serial` for the main thread.
+   */
+  private def runInParallel(units: List[CompilationUnit])(using Context): Boolean =
+    ctx.base.parallel && !ctx.mode.is(Mode.Interactive) && units.lengthCompare(1) > 0
+      && miniPhases.exists(_.isInstanceOf[CheckInlineTraits])
+      && !sys.props.get("dotc.parallelTyper.inlineTraits").contains("serial")
+
+  private def runOnInParallel(units: List[CompilationUnit])(using runCtx: Context): List[CompilationUnit] =
+    import typer.ImportInfo.withRootImports
+    val reporter = ctx.reporter match
+      case r: ParallelBatchReporter => Some(r)
+      case _ => None
+    reporter.foreach(_.startBuffering())
+    try
+      val doCheckJava = skipIfJava && !isAfterLastJavaPhase
+      val (candidates, special) = units.partition(!_.hasSpecializations)
+      val unitContexts = candidates.map(u =>
+        runCtx.fresh.setPhase(this.start).setCompilationUnit(u).withRootImports
+          .fresh.setNewTyperState().setProperty(CheckInlineTraits.InParallel, ()))
+      val deferred = java.util.concurrent.ConcurrentHashMap.newKeySet[CompilationUnit]().nn
+      val done = inParallel("dotc-inlinetraits", unitContexts) { c ?=>
+        try
+          if !(doCheckJava && c.compilationUnit.typedAsJava) then
+            ParallelBatch.span("inlineTraits", c.compilationUnit.source.name)(run)
+          true
+        catch
+          case _: CheckInlineTraits.NeedsSerialRun =>
+            c.reporter.removeBufferedMessages // reported again by the serial run
+            deferred.add(c.compilationUnit)
+            false
+          case _: CompilationUnit.SuspendException => false
+        finally c.typerState.settle(runCtx)
+      }.map(_.compilationUnit).toSet
+      val serial = units.filter(u => special.contains(u) || deferred.contains(u))
+      val doneSerially = if serial.isEmpty then Set.empty else super.runOn(serial).toSet
+      val res = units.filter(u => done.contains(u) || doneSerially.contains(u))
+      ctx.run.nn.checkSuspendedUnits(res)
+      res
+    finally reporter.foreach(_.issueBuffered())
+
   // Initialization code
 
   /** Class#getDeclaredMethods is slow, and we want to search by name, so we cache its output */
