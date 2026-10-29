@@ -33,7 +33,7 @@ class Driver {
     if files.nonEmpty then
       var runOrNull = ctx.run
       try
-        val run = compiler.newRun
+        val run = ParallelBatch.span("setup", "new run")(compiler.newRun)
         runOrNull = run
         run.compile(files)
         finish(compiler, run)
@@ -223,7 +223,7 @@ class Driver {
    *                    if compilation succeeded.
    */
   def process(args: Array[String], rootCtx: Context): Reporter = {
-    setup(args, rootCtx) match
+    ParallelBatch.span("setup", "settings")(setup(args, rootCtx)) match
       case Some((files, compileCtx)) =>
         doCompile(newCompiler(using compileCtx), files)(using compileCtx)
       case None =>

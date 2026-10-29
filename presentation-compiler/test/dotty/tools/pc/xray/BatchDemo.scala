@@ -68,8 +68,9 @@ object BatchDemo:
         val out = Files.createTempDirectory("xray-batch")
         val stop = if options.stopAfter == "all" then Nil else List("-Ystop-after:" + options.stopAfter)
         val args = (XrayServer.baseSettings ++ List(ParallelBatch.flag, "-d", out.toString) ++ stop ++ paths).toArray
-        val tl = ParallelBatch.Timeline()
+        // a clean heap for each run, before the timeline starts: the GC is not the compiler's
         System.gc()
+        val tl = ParallelBatch.Timeline()
         ParallelBatch.timeline = tl
         val reporter = new StoreReporter(null)
         val t0 = System.nanoTime()
@@ -79,9 +80,9 @@ object BatchDemo:
             ParallelBatch.timeline = null
             tl.close()
         val wallMs = (System.nanoTime() - t0) / 1e6
-        def ms(ns: Long) = if ns < 0 then -1.0 else math.round(ns / 1e3) / 1e3
+        def ms(ns: Long) = math.round(ns / 1e3) / 1e3
         val spans = tl.spans.asScala.toList.sortBy(_.startNs).map(s =>
-          List(s.thread, s.step, s.label, ms(s.startNs), ms(s.endNs), ms(s.cpuNs), s.blockedMs, s.waitedMs))
+          List(s.thread, s.step, s.label, ms(s.startNs), ms(s.endNs), if s.cpuNs < 0 then -1.0 else ms(s.cpuNs), s.blockedMs, s.waitedMs))
         results = results :+ RunResult(i, math.round(wallMs * 10) / 10.0, r.errorCount, r.warningCount, spans)
       state = if stopRequested.get then "cancelled" else "done"
     catch case ex: (Exception | StackOverflowError | AssertionError | OutOfMemoryError) =>

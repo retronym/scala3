@@ -9,7 +9,7 @@ import util.{ConcurrentWeakHashSet, WeakHashSet, Stats}
 import WeakHashSet.Entry
 import scala.annotation.tailrec
 
-class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
+class Uniques(initialCapacity: Int = Config.initialUniquesCapacity) extends WeakHashSet[Type](initialCapacity):
   override def hash(x: Type): Int = x.hash
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
@@ -21,7 +21,7 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
  *  unsynchronised set; this class is loaded only when an interactive base
  *  chooses it.
  */
-class ConcurrentUniques extends Uniques, ConcurrentWeakHashSet[Type]:
+class ConcurrentUniques(initialCapacity: Int = Config.initialUniquesCapacity) extends Uniques(initialCapacity), ConcurrentWeakHashSet[Type]:
   override def put(elem: Type): Type =
     val found = findPublished(elem.hash)(elem.equals(_))
     if found != null then found else synchronized(super.put(elem))
@@ -54,7 +54,7 @@ object Uniques:
     if tp.hash == NotCached then tp
     else ctx.uniques.put(tp).asInstanceOf[T]
 
-  class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
+  class NamedTypeUniques(initialCapacity: Int = Config.initialUniquesCapacity * 4) extends WeakHashSet[NamedType](initialCapacity) with Hashable:
     override def hash(x: NamedType): Int = x.hash
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
@@ -96,7 +96,7 @@ object Uniques:
   end NamedTypeUniques
 
   /** `NamedTypeUniques` read without a lock (see `ConcurrentUniques`). */
-  final class ConcurrentNamedTypeUniques extends NamedTypeUniques, ConcurrentWeakHashSet[NamedType]:
+  final class ConcurrentNamedTypeUniques(initialCapacity: Int = Config.initialUniquesCapacity * 4) extends NamedTypeUniques(initialCapacity), ConcurrentWeakHashSet[NamedType]:
     override def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
       val h = doHash(null, designator, prefix)
       val found =
@@ -115,7 +115,7 @@ object Uniques:
     override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
     override def size: Int = synchronized(super.size)
 
-  class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
+  class AppliedUniques(initialCapacity: Int = Config.initialUniquesCapacity * 2) extends WeakHashSet[AppliedType](initialCapacity) with Hashable:
     override def hash(x: AppliedType): Int = x.hash
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
@@ -145,7 +145,7 @@ object Uniques:
   end AppliedUniques
 
   /** `AppliedUniques` read without a lock (see `ConcurrentUniques`). */
-  final class ConcurrentAppliedUniques extends AppliedUniques, ConcurrentWeakHashSet[AppliedType]:
+  final class ConcurrentAppliedUniques(initialCapacity: Int = Config.initialUniquesCapacity * 2) extends AppliedUniques(initialCapacity), ConcurrentWeakHashSet[AppliedType]:
     override def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
       val h = doHash(null, tycon, args)
       val found =
@@ -163,4 +163,55 @@ object Uniques:
     override def -=(elem: AppliedType): Unit = synchronized(super.-=(elem))
     override def clear(resetToInitial: Boolean): Unit = synchronized(super.clear(resetToInitial))
     override def size: Int = synchronized(super.size)
+
+  // ---- striped: several concurrent sets, one chosen by hash, each with its own monitor
+  //
+  // A miss in a concurrent set (every new type) takes the set's monitor, and with parallel readers that monitor was
+  // the most contended in the compiler (`-Yparallel-typer`: 2.0 s blocked on each of the named and applied sets, over
+  // three runs of the compiler's sources). A type is interned in exactly one stripe, fixed by its hash, so equal
+  // types meet in the same one and interning stays unique.
+
+  /** The number of stripes of a striped set: a power of two, `-Ddotc.uniques.stripes=<n>` (1 for one set). */
+  val stripes: Int =
+    val n = sys.props.get("dotc.uniques.stripes").flatMap(_.toIntOption).getOrElse(64).max(1)
+    Integer.highestOneBit(n)
+  private val stripeShift = 32 - Integer.numberOfTrailingZeros(stripes)
+
+  /** The stripe of a hash: the high bits of a multiplicative mix, so that it does not follow the low bits that
+   *  choose a bucket within the stripe. */
+  inline def stripeOf(h: Int): Int = if stripes == 1 then 0 else (h * 0x9E3779B9) >>> stripeShift
+
+  final class StripedUniques extends Uniques(8):
+    private val sets = Array.fill(stripes)(ConcurrentUniques(Config.initialUniquesCapacity / stripes max 8))
+    private def of(h: Int) = sets(stripeOf(h))
+    override def put(elem: Type): Type = of(elem.hash).put(elem)
+    override def lookup(elem: Type): Type | Null = of(elem.hash).lookup(elem)
+    override def -=(elem: Type): Unit = of(elem.hash) -= elem
+    override def clear(resetToInitial: Boolean): Unit = sets.foreach(_.clear(resetToInitial))
+    override def size: Int = sets.iterator.map(_.size).sum
+    override def iterator: Iterator[Type] = sets.iterator.flatMap(_.iterator)
+
+  final class StripedNamedTypeUniques extends NamedTypeUniques(8):
+    private val sets = Array.fill(stripes)(ConcurrentNamedTypeUniques(Config.initialUniquesCapacity * 4 / stripes max 8))
+    private def of(h: Int) = sets(stripeOf(h))
+    override def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
+      of(doHash(null, designator, prefix)).enterIfNew(prefix, designator, isTerm)
+    override def put(elem: NamedType): NamedType = of(elem.hash).put(elem)
+    override def lookup(elem: NamedType): NamedType | Null = of(elem.hash).lookup(elem)
+    override def -=(elem: NamedType): Unit = of(elem.hash) -= elem
+    override def clear(resetToInitial: Boolean): Unit = sets.foreach(_.clear(resetToInitial))
+    override def size: Int = sets.iterator.map(_.size).sum
+    override def iterator: Iterator[NamedType] = sets.iterator.flatMap(_.iterator)
+
+  final class StripedAppliedUniques extends AppliedUniques(8):
+    private val sets = Array.fill(stripes)(ConcurrentAppliedUniques(Config.initialUniquesCapacity * 2 / stripes max 8))
+    private def of(h: Int) = sets(stripeOf(h))
+    override def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
+      of(doHash(null, tycon, args)).enterIfNew(tycon, args)
+    override def put(elem: AppliedType): AppliedType = of(elem.hash).put(elem)
+    override def lookup(elem: AppliedType): AppliedType | Null = of(elem.hash).lookup(elem)
+    override def -=(elem: AppliedType): Unit = of(elem.hash) -= elem
+    override def clear(resetToInitial: Boolean): Unit = sets.foreach(_.clear(resetToInitial))
+    override def size: Int = sets.iterator.map(_.size).sum
+    override def iterator: Iterator[AppliedType] = sets.iterator.flatMap(_.iterator)
 end Uniques
