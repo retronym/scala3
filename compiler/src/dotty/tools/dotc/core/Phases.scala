@@ -557,7 +557,11 @@ object Phases {
       val threads = math.min(wanted, unitContexts.length)
       // numbered, so that a timeline has a lane per worker
       val next = java.util.concurrent.atomic.AtomicInteger()
-      val pool = Executors.newFixedThreadPool(threads, r => { val t = new Thread(r, s"$threadName-${next.getAndIncrement()}"); t.setDaemon(true); t }).nn
+      // each thread forgets its state on the base as it ends (`ContextBase.unbindThread`), whoever holds the thread
+      val base = unitContexts.headOption.map(_.base)
+      val pool = Executors.newFixedThreadPool(threads, r => {
+        val t = new Thread(() => try r.run() finally base.foreach(_.unbindThread()), s"$threadName-${next.getAndIncrement()}")
+        t.setDaemon(true); t }).nn
       try
         // the largest units first (longest-processing-time first, by source length), so that what is left for the
         // end is small and the workers finish together: in source order a large file late in the list kept one
