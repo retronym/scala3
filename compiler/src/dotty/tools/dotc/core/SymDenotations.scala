@@ -3499,6 +3499,18 @@ object SymDenotations {
    */
   class ModuleCompleter(_moduleClass: ClassSymbol) extends LazyType {
     override def moduleClass(using Context): ClassSymbol = _moduleClass
+
+    /** The module class's root: completing the module val reads the module class (its completion, its flags and
+     *  annotations), and a loader or unpickler of the class's file completes the module val. Under keys of their
+     *  own, two readers took them in opposite orders and waited for each other (`scala.transient`,
+     *  `scala.UninitializedError`, signatures in parallel under `-Yparallel-typer`). The key depends only on where
+     *  the module is defined, never on how far its class is completed (a key read from the class's completer changed
+     *  under a reader that had computed it): a source module's class is the Namer's root, its own symbol; a
+     *  module from the classpath has its file's root (`SymbolLoaders.fileRoot`), as its loader and unpickler do.
+     */
+    override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
+      if _moduleClass.isDefinedInCurrentRun then _moduleClass
+      else SymbolLoaders.fileRoot(_moduleClass).getOrElse(symd.symbol)
     def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val from = moduleClass.denot.asClass
       denot.setFlag(from.flags.toTermFlags & RetainedModuleValFlags)
@@ -3579,6 +3591,20 @@ object SymDenotations {
     def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base)
   }
 
+  /** Complete `clsd`'s ancestors, each before its parents are read: completions only, no inherited cache. */
+  private def completeAncestors(clsd: ClassDenotation)(using Context): Unit =
+    val seen = util.HashSet[Symbol]()
+    def loop(cls: Symbol): Unit =
+      if !seen.contains(cls) then
+        seen += cls
+        cls.denot.infoOrCompleter match
+          case _: TempClassInfo => // in progress on this reader: its parents are not known yet
+          case _ =>
+            cls.denot.info match
+              case info: ClassInfo => info.declaredParents.foreach(p => loop(p.classSymbol))
+              case _ =>
+    loop(clsd.symbol)
+
   private abstract class InheritedCacheImpl(val createdAt: Period, base: ContextBase) extends InheritedCache, Sharing.BlackHole { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
@@ -3623,6 +3649,11 @@ object SymDenotations {
      *  has one owner, like a completion's `Touched`.
      */
     protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
+      // with parallel readers, the class and its ancestors are completed before the cache is claimed: completing
+      // one claims its root (a TASTy file's), and a reader holding that root may be computing this cache, so a
+      // completion under a cache's claim took the two in the other order (`collection.Iterator`, signatures in
+      // parallel under `-Yparallel-typer`). What the computation completes then is complete already.
+      if ctx.base.parallel then completeAncestors(clsd)
       // the cache is its own root: its black hole `locked` has one owner
       Sharing.claim(this, clsd)(op)
 

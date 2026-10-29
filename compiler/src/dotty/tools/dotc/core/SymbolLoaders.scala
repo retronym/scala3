@@ -24,6 +24,25 @@ import dotty.tools.tasty.UnpickleException
 import dotty.tools.tasty.besteffort.BestEffortTastyHeaderUnpickler
 
 object SymbolLoaders {
+
+  /** The key of the claims on the file a top-level class is loaded from, for the loader, the TASTy unpickler, and
+   *  a classpath module's completer (`ModuleCompleter`): its package and its name, without a module class's suffix,
+   *  so that the class, its module class, its module val and every member read from the file share it. The file
+   *  object itself was not one key: the loader's (`associatedFile` when it was made) and the unpickler's
+   *  (`associatedFile` once read) differed, and readers took the two in opposite orders (`concurrent.TNode`,
+   *  signatures in parallel under `-Yparallel-typer`). None for a symbol not under a top-level class.
+   */
+  final case class FileRoot(pkg: Symbol, name: TypeName)
+
+  def fileRoot(sym: Symbol)(using Context): Option[FileRoot] =
+    // owners and the `Package` flag only: computing a claim's key completes nothing
+    def isPackage(s: Symbol) = s.denot.flagsUNSAFE.is(Package)
+    def top(s: Symbol): Symbol =
+      if !s.exists || isPackage(s) then NoSymbol
+      else if isPackage(s.owner) then s
+      else top(s.owner)
+    val t = top(sym)
+    if t.exists then Some(FileRoot(t.owner, t.name.toTypeName.stripModuleClassSuffix.toTypeName)) else None
   import ast.untpd.*
 
   /** A marker trait for a completer that replaces the original
@@ -448,8 +467,7 @@ abstract class SymbolLoader extends LazyType { self =>
    *  TASTy members unpickled from it, `TreeUnpickler`), or the loader.
    */
   override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
-    val f = symd.symbol.associatedFile
-    if f == null then this else f
+    SymbolLoaders.fileRoot(symd.symbol).getOrElse(this)
 
   /** Parallel readers: the other root of this load (the linked class or
    *  module class, and the module val) is hidden from other readers while

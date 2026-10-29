@@ -119,6 +119,16 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
       steps += 1
     null
 
+  /** The wait-for graph now, for diagnostics: each claim, its owner (by thread id), and what the owner waits on. */
+  def graphNow: String =
+    def who(c: Claim) = s"${c.ownerName}#${c.owner.thread.getId}"
+    claims.values.asScala.toList.map: c =>
+      val waits = c.owner.waitingOn match
+        case null => "waits on nothing"
+        case w: Claim => s"waits on [${w.what.render}] held by ${who(w)}"
+      s"${who(c)} holds [${c.what.render}] (x${c.holds}), $waits"
+    .sorted.mkString("\n")
+
   /** The claims held now, for diagnostics. */
   def holdersNow: String =
     claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
