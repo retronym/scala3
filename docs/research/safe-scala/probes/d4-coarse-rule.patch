@@ -1,0 +1,120 @@
+diff --git a/compiler/src/dotty/tools/dotc/cc/CaptureOps.scala b/compiler/src/dotty/tools/dotc/cc/CaptureOps.scala
+index a5e91ec216..0e440cde7a 100644
+--- a/compiler/src/dotty/tools/dotc/cc/CaptureOps.scala
++++ b/compiler/src/dotty/tools/dotc/cc/CaptureOps.scala
+@@ -593,7 +593,9 @@ extension (cls: ClassSymbol) {
+   /** The additional capture set implied by the capture sets of its fields. This
+    *  is either empty or, if some fields have a terminal capability in their span
+    *  capture sets, it consists of a single LocalCap that subsumes all these terminal
+-   *  capabilities. Class parameters are not counted. If the type extends Separate,
++   *  capabilities. Class parameters of `cls` itself are not counted, since the
++   *  arguments at a `new` site account for them. Class parameters of proper base
++   *  classes are counted (see `contributesLocalCapsToSubclass`). If the type extends Separate,
+    *  we add a LocalCap in any case -- this is because we can currently hide
+    *  mutability in array vals if separation checking is off, an example is
+    *  neg-customargs/captures/matrix.scala.
+@@ -611,12 +613,12 @@ extension (cls: ClassSymbol) {
+      *  @return The implied classidier, or NoSymbol is there is no LocalCap
+      *          to be generated for the instance.
+      */
+-    def impliedClassifier(cls: Symbol): Symbol = cls match
++    def impliedClassifier(cls: Symbol, inherited: Boolean): Symbol = cls match
+       case cls: ClassSymbol =>
+         val fieldClassifiers =
+-          knownFields(cls).flatMap(classifiersOfLocalCapsInInfo)
++          knownFields(cls).flatMap(_.classifiersOfLocalCapsInInfo(inherited))
+         val parentClassifiers =
+-          cls.parentSyms.map(impliedClassifier).collect:
++          cls.parentSyms.map(impliedClassifier(_, inherited = true)).collect:
+             case cl: ClassSymbol => cl
+         val stateClassifiers =
+           if cls.typeRef.isStatefulType(varsOnly = true)
+@@ -625,17 +627,18 @@ extension (cls: ClassSymbol) {
+         (fieldClassifiers ++ parentClassifiers ++ stateClassifiers).commonAncestor
+       case _ => NoSymbol
+ 
+-    def contributingFields(cls: Symbol): List[Symbol] = cls match
++    def contributingFields(cls: Symbol, inherited: Boolean): List[Symbol] = cls match
+       case cls: ClassSymbol =>
+-        var ownFields = knownFields(cls).filter(memberCaps(_).nonEmpty)
+-        val parentFields = cls.parentSyms.flatMap(contributingFields)
++        var ownFields = knownFields(cls).filter(_.memberCaps(inherited).nonEmpty)
++        val parentFields = cls.parentSyms.flatMap(contributingFields(_, inherited = true))
+         ownFields ++ parentFields
+       case _ => Nil
+ 
+-    val impliedClr = impliedClassifier(cls)
+-    val contributing = contributingFields(cls)
++    val impliedClr = impliedClassifier(cls, inherited = false)
++    val contributing = contributingFields(cls, inherited = false)
+     def readOnly =
+-      !cls.typeRef.isStatefulType() && contributing.forall(allLocalCapsInTypeAreRO)
++      !cls.typeRef.isStatefulType()
++      && contributing.forall(f => f.allLocalCapsInTypeAreRO(inherited = f.owner != cls))
+     val impliedSet = core.impliedCaptures(impliedClr, contributing, readOnly)
+     (impliedSet, contributing)
+   }
+@@ -855,24 +858,43 @@ extension (sym: Symbol) {
+       else sym.isOneOf(DeferredOrTermParamOrAccessor)
+     sym.isField && !isExempt && !sym.hasAnnotation(defn.UntrackedCapturesAnnot)
+ 
++  /** Do terminal capabilities in the type of this symbol contribute to the capture set
++   *  of an instance of a proper subclass of the enclosing class? In addition to the
++   *  fields covered by `contributesLocalCapsToClass`, this includes refining parameter
++   *  accessors. Those are exempt from `contributesLocalCapsToClass` since the arguments
++   *  at a `new C(args)` site account for their captures, via refinement of the instance
++   *  type. For an instance of a proper subclass `D` of `C`, the arguments are passed in
++   *  the parent call of `D`'s template, no `new D` site accounts for them, and the
++   *  instance type of `D` does not refine them. So the accessor's declared capture
++   *  set has to be assumed, otherwise instances of `D` are pure while `d.r` for an
++   *  instance `d` is a capability that is never charged, as paths are only charged
++   *  if their root is tracked.
++   */
++  def contributesLocalCapsToSubclass(using Context): Boolean =
++    sym.contributesLocalCapsToClass || sym.isRefiningParamAccessor
++
+   /** The terminal capabilities that this symbol contributes to the capture set of the
+-   *  enclosing class.
++   *  enclosing class, or, if `inherited` is true, to the capture set of an instance of
++   *  a proper subclass of the enclosing class.
+    */
+-  def memberCaps(using Context): List[Capability] =
+-    if sym.contributesLocalCapsToClass then sym.info.embeddedLocalCaps else Nil
++  def memberCaps(inherited: Boolean = false)(using Context): List[Capability] =
++    val contributes =
++      if inherited then sym.contributesLocalCapsToSubclass
++      else sym.contributesLocalCapsToClass
++    if contributes then sym.info.embeddedLocalCaps else Nil
+ 
+   /** The classifiers of all terminal capabilities comntributed by this symbol
+    *  to the capture set of the enclosing class.
+    */
+-  def classifiersOfLocalCapsInInfo(using Context): List[ClassSymbol] =
+-    memberCaps.map(_.classifier).collect:
++  def classifiersOfLocalCapsInInfo(inherited: Boolean = false)(using Context): List[ClassSymbol] =
++    memberCaps(inherited).map(_.classifier).collect:
+       case cl: ClassSymbol => cl
+ 
+   /** Are all terminal capabilities comntributed by this symbol to the capture set
+    *  of the enclosing class read only?
+    */
+-  def allLocalCapsInTypeAreRO(using Context): Boolean =
+-    memberCaps.forall(_.isReadOnly)
++  def allLocalCapsInTypeAreRO(inherited: Boolean = false)(using Context): Boolean =
++    memberCaps(inherited).forall(_.isReadOnly)
+ 
+   /** Does the result type of this method need to be treated with refineConstructorInstance? */
+   def needsResultRefinement(using Context): Boolean =
+diff --git a/compiler/src/dotty/tools/dotc/cc/CheckCaptures.scala b/compiler/src/dotty/tools/dotc/cc/CheckCaptures.scala
+index 0cfeb6d348..de1ea5d24c 100644
+--- a/compiler/src/dotty/tools/dotc/cc/CheckCaptures.scala
++++ b/compiler/src/dotty/tools/dotc/cc/CheckCaptures.scala
+@@ -1469,7 +1469,7 @@ class CheckCaptures extends Recheck, SymTransformer:
+           then
+             todoAtPostCheck += { () =>
+               val cls = sym.owner.asClass
+-              val fieldClassifiers = sym.classifiersOfLocalCapsInInfo
++              val fieldClassifiers = sym.classifiersOfLocalCapsInInfo()
+               val classCapset = cls.creationCapset()
+               if !covers(classCapset, fieldClassifiers) then
+                 report.error(
