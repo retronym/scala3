@@ -536,7 +536,7 @@ class TastyLoader(tastyFile: AbstractFile) extends SymbolLoader {
 
   private def handleUnpicklingExceptions[T](thunk: =>T): T =
     try thunk
-    catch case e: RuntimeException if false =>
+    catch case e: RuntimeException =>
       val tastyType = if (isBestEffortTasty) "Best Effort TASTy" else "TASTy"
       val message = e match
         case e: UnpickleException =>
