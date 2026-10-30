@@ -50,6 +50,8 @@ val `dist-linux-aarch64` = Build.`dist-linux-aarch64`
 val `community-build` = Build.`community-build`
 val `scala3-presentation-compiler` = Build.`scala3-presentation-compiler`
 val `scala3-presentation-compiler-testcases` = Build.`scala3-presentation-compiler-testcases`
+val `scala3-presentation-compiler-nonbootstrapped` = Build.`scala3-presentation-compiler-nonbootstrapped`
+val `scala3-presentation-compiler-testcases-nonbootstrapped` = Build.`scala3-presentation-compiler-testcases-nonbootstrapped`
 
 val sjsSandbox = Build.sjsSandbox
 val sjsJUnitTests = Build.sjsJUnitTests

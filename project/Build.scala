@@ -622,7 +622,9 @@ object Build {
     `scaladoc-js-main`,
     `scaladoc-js-contributors`,
     `scala3-presentation-compiler`,
+    `scala3-presentation-compiler-nonbootstrapped`,
     `scala3-presentation-compiler-testcases`,
+    `scala3-presentation-compiler-testcases-nonbootstrapped`,
     sjsSandbox,
     sjsJUnitTests,
     sjsCompilerTests,
@@ -2043,23 +2045,42 @@ object Build {
     .settings(commonBootstrappedSettings)
     .dependsOn(`scala3-compiler-bootstrapped` % "compile->compile;test->test", `scala3-library-bootstrapped`, `scala3-presentation-compiler-testcases` % "test->test")
     .settings(presentationCompilerSettings)
-    .settings(scala3PresentationCompilerBuildInfo)
+    .settings(scala3PresentationCompilerBuildInfo(`scala3-presentation-compiler-testcases`, `scala-library-bootstrapped`))
+    .settings(
+      ideTestsScalaJSClasspath := scalaJSCompletionsClasspath.value,
+      publishLocal := publishLocal.dependsOn( // It is best to publish all together. It is not rare to make changes in both compiler / presentation compiler and it can get misaligned
+        `scala3-compiler-bootstrapped` / publishLocal,
+        `scala3-library-bootstrapped` / publishLocal,
+        `scala-library-bootstrapped` / publishLocal,
+      ).value,
+    )
 
-  def scala3PresentationCompilerBuildInfo =
+  // The presentation compiler and its tests on the non-bootstrapped compiler, compiled with the reference compiler, as
+  // `scala3-repl-nonbootstrapped` is: a change to the compiler is tested here without first building the compiler
+  // with itself. Not published. Its test cases are compiled the same way; Scala.js's library is built only by the
+  // bootstrapped toolchain, so the suite that needs it runs only in `scala3-presentation-compiler`.
+  lazy val `scala3-presentation-compiler-nonbootstrapped` = project.in(file("presentation-compiler"))
+    .dependsOn(`scala3-compiler-nonbootstrapped` % "compile->compile;test->test", `scala3-library-nonbootstrapped`, `scala3-presentation-compiler-testcases-nonbootstrapped` % "test->test")
+    .settings(commonDottySettings)
+    .settings(presentationCompilerSettings)
+    .settings(scala3PresentationCompilerBuildInfo(`scala3-presentation-compiler-testcases-nonbootstrapped`, `scala-library-nonbootstrapped`))
+    .settings(
+      name          := "scala3-presentation-compiler-nonbootstrapped",
+      version       := dottyNonBootstrappedVersion,
+      scalaVersion  := referenceVersion,
+      publish / skip := true,
+      target := target.value / "scala3-presentation-compiler-nonbootstrapped",
+      fetchedScalaInstanceSettings,
+      ideTestsScalaJSClasspath := Nil,
+      Test / testOptions += Tests.Filter(!_.endsWith(".ScalaJSCompletionsSuite")),
+    )
+
+  def scala3PresentationCompilerBuildInfo(testcases: Project, scalaLibrary: Project) =
     Seq(
       ideTestsDependencyClasspath := {
-        val testCasesLib = (`scala3-presentation-compiler-testcases` / Compile / classDirectory).value
-        val dottyLib = (`scala-library-bootstrapped` / Compile / classDirectory).value
+        val testCasesLib = (testcases / Compile / classDirectory).value
+        val dottyLib = (scalaLibrary / Compile / classDirectory).value
         testCasesLib :: dottyLib :: Nil
-      },
-      ideTestsScalaJSClasspath := {
-        val externalJSCommonDeps = (`scaladoc-js-common`  / Compile / externalDependencyClasspath).value
-        val scalaJSCommonDom = findArtifact(externalJSCommonDeps, "scalajs-dom_sjs1_3")
-        val externalJSDeps = (`scala-library-sjs` / Compile / externalDependencyClasspath).value
-        val scalaJSLibrary = findArtifact(externalJSDeps, "scalajs-library_2.13")
-        val scalaJSJavalib = findArtifact(externalJSDeps, "scalajs-javalib")
-        val scalaJSScalalib = (`scala-library-sjs` / Compile / packageBin).value
-        scalaJSLibrary :: scalaJSJavalib :: scalaJSScalalib :: scalaJSCommonDom :: Nil
       },
       Compile / buildInfoPackage := "dotty.tools.pc.buildinfo",
       Compile / buildInfoKeys := Seq(scalaVersion),
@@ -2068,6 +2089,17 @@ object Build {
     ) ++ BuildInfoPlugin.buildInfoScopedSettings(Compile) ++
       BuildInfoPlugin.buildInfoScopedSettings(Test) ++
       BuildInfoPlugin.buildInfoDefaultSettings
+
+  // the classpath of `ScalaJSCompletionsSuite`: Scala.js's library and DOM facade, and our library for Scala.js
+  def scalaJSCompletionsClasspath = Def.task {
+    val externalJSCommonDeps = (`scaladoc-js-common`  / Compile / externalDependencyClasspath).value
+    val scalaJSCommonDom = findArtifact(externalJSCommonDeps, "scalajs-dom_sjs1_3")
+    val externalJSDeps = (`scala-library-sjs` / Compile / externalDependencyClasspath).value
+    val scalaJSLibrary = findArtifact(externalJSDeps, "scalajs-library_2.13")
+    val scalaJSJavalib = findArtifact(externalJSDeps, "scalajs-javalib")
+    val scalaJSScalalib = (`scala-library-sjs` / Compile / packageBin).value
+    scalaJSLibrary :: scalaJSJavalib :: scalaJSScalalib :: scalaJSCommonDom :: Nil
+  }
 
   lazy val presentationCompilerSettings = {
     Seq(
@@ -2080,11 +2112,6 @@ object Build {
       libraryDependencies += (Dependencies.mtagsShared % SourceDeps),
       ivyConfigurations += SourceDeps.hide,
       transitiveClassifiers := Seq("sources"),
-      publishLocal := publishLocal.dependsOn( // It is best to publish all together. It is not rare to make changes in both compiler / presentation compiler and it can get misaligned
-        `scala3-compiler-bootstrapped` / publishLocal,
-        `scala3-library-bootstrapped` / publishLocal,
-        `scala-library-bootstrapped` / publishLocal,
-      ).value,
       // Silence warnings in metals shared code, which must be compatible with Scala 2
       Compile / compile / scalacOptions += "-Wconf:src=.*/scala/meta/internal/.*:s",
       Compile / compile / scalacOptions += "-Wunused:all",
@@ -2127,17 +2154,34 @@ object Build {
     .settings(
       commonBootstrappedSettings,
       bspEnabled := enableBspAllProjects,
-      // Compile these fixtures with a sourceroot pointing at their own `src`
-      // dir, so the source path baked into TASTy (SOURCEFILEattr) is relative
-      // to `src` (e.g. `tests/macros/Foo.scala`) and does NOT resolve from the
-      // test working directory (the repo root). This makes the module behave
-      // like a real distributed dependency: available as TASTy only, with no
-      // source on disk. `SourceFile.content()` is then empty for these symbols,
-      // matching what the presentation compiler sees for classpath deps.
-      Compile / scalacOptions ++= Seq(
-        "-sourceroot", ((Compile / scalaSource).value).getAbsolutePath
-      ),
+      presentationCompilerTestcasesSettings,
     )
+
+  lazy val `scala3-presentation-compiler-testcases-nonbootstrapped` = project.in(file("presentation-compiler-testcases"))
+    .dependsOn(`scala3-compiler-nonbootstrapped`)
+    .settings(
+      commonDottySettings,
+      name          := "scala3-presentation-compiler-testcases-nonbootstrapped",
+      version       := dottyNonBootstrappedVersion,
+      scalaVersion  := referenceVersion,
+      publish / skip := true,
+      target := target.value / "scala3-presentation-compiler-testcases-nonbootstrapped",
+      fetchedScalaInstanceSettings,
+      presentationCompilerTestcasesSettings,
+    )
+
+  lazy val presentationCompilerTestcasesSettings = Def.settings(
+    // Compile these fixtures with a sourceroot pointing at their own `src`
+    // dir, so the source path baked into TASTy (SOURCEFILEattr) is relative
+    // to `src` (e.g. `tests/macros/Foo.scala`) and does NOT resolve from the
+    // test working directory (the repo root). This makes the module behave
+    // like a real distributed dependency: available as TASTy only, with no
+    // source on disk. `SourceFile.content()` is then empty for these symbols,
+    // matching what the presentation compiler sees for classpath deps.
+    Compile / scalacOptions ++= Seq(
+      "-sourceroot", ((Compile / scalaSource).value).getAbsolutePath
+    ),
+  )
 
   /** Common settings for sjsSandbox and sjsJUnitTests */
   lazy val regularScalaJSProjectSettings: Seq[Setting[?]] = Def.settings(
