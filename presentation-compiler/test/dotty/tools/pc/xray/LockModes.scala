@@ -82,7 +82,7 @@ object LockModes:
     val driver = new InteractiveDriver(settings ++ List("-Yinteractive-parallel", s"-Yinteractive-completion-lock:$mode"), CachedLogicalPackage.none)
     driver.run(XrayServer.generatedUri, SourceFile.virtual(XrayServer.generatedUri, XrayServer.generatedSource("warmup", 5)))
     // new content per round, so that the open is a fresh run of the files
-    val sources = files.map(f => f.uri -> SourceFile.virtual(f.uri, f.source.content().mkString + s"\n// round $round\n"))
+    val sources = files.map(f => f.uri -> SourceFile.virtual(f.uri, f.source.textContent() + s"\n// round $round\n"))
     val t0 = System.nanoTime()
     driver.openAll(sources)
     val tOpen = System.nanoTime()
@@ -137,7 +137,7 @@ object LockModes:
     val wholeFileEvery = sys.props.getOrElse("lm.wholeFileEvery", "10").toInt
     val files0 = Throughput.loadFiles(root)
     val files = sys.props.get("lm.limit").map(n => files0.take(n.toInt)).getOrElse(files0)
-    val idents = files.map(f => identifierEnds(f.source.content().mkString)).toArray
+    val idents = files.map(f => identifierEnds(f.source.textContent())).toArray
     println(f"[lm] ${files.size} files, ${idents.map(_.length.toLong).sum} identifiers; ${Runtime.getRuntime.availableProcessors} processors; load ${os.getSystemLoadAverage}%.1f; lockStats ${LockStats.on}")
     val results = mutable.ListBuffer.empty[Cell]
     for round <- (1 - warmup) to rounds; k <- ks do
