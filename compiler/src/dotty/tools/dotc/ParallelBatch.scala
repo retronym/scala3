@@ -101,8 +101,14 @@ object ParallelBatch:
   def requested(args: Array[String]): Boolean =
     args.exists(a => a == flag || a == s"$flag:true")
 
-/** A batch base with a reader per thread, as `InteractiveContextBase` has. */
-class ParallelBatchContextBase extends ContextBase(Sharing.Parallel):
+  /** The sharing of a parallel batch base, from the raw arguments: one completion at a time with
+   *  `-Yinteractive-completion-lock:global`. */
+  def sharingOf(args: Array[String]): Sharing =
+    if args.contains("-Yinteractive-completion-lock:global") then Sharing.ParallelGlobalLock else Sharing.Parallel
+
+/** A batch base with a reader per thread, as `InteractiveContextBase` has; `Sharing.ParallelGlobalLock` with
+ *  `-Yinteractive-completion-lock:global` (one completion at a time, for measurement). */
+class ParallelBatchContextBase(sharing: Sharing = Sharing.Parallel) extends ContextBase(sharing):
   private lazy val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
   override def reader: Reader = threadReader.get.nn
 

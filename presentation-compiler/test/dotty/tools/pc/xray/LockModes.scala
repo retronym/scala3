@@ -32,6 +32,7 @@ import dotty.tools.dotc.util.Spans.Span
  *
  *    -Dlm.modes=roots,global -Dlm.ks=2,4 -Dlm.requests=300 (per reader) -Dlm.rounds=2 -Dlm.warmup=1 -Dlm.seed=1
  *    -Dlm.limit=<files> -Dlm.root=<source tree> -Dlm.out=<results.json> -Dlm.wholeFileEvery=10 (0 for hovers only)
+ *    -Dlm.timeoutSec=300 (a cell whose readers run longer is reported as hung, with their stacks)
  *
  *  Run from the worktree root with the presentation compiler's test classpath (README of the x-ray).
  */
@@ -39,6 +40,7 @@ object LockModes:
   private val os = ManagementFactory.getOperatingSystemMXBean.asInstanceOf[com.sun.management.OperatingSystemMXBean]
   private val settings = XrayServer.baseSettings
   private val root = Paths.get(sys.props.getOrElse("lm.root", "compiler/src/dotty/tools/dotc"))
+  private val timeoutSec = sys.props.getOrElse("lm.timeoutSec", "300").toLong
 
   final case class Cell(mode: String, k: Int, round: Int, requests: Int, wholeFile: Int, wallMs: Double, openMs: Double,
       hoverMs: List[Double], wholeFileMs: List[Double], waitMs: Double, waits: Long, longestWaitMs: Double,
@@ -118,7 +120,14 @@ object LockModes:
       th.setDaemon(true); th.start(); th
     }
     start.countDown()
-    ts.foreach(_.join())
+    // a watchdog: a cell whose readers have not finished in `lm.timeoutSec` is a hang (a deadlock the registry does
+    // not see, say between a claim and a JVM lazy val): the readers' stacks are printed and the cell fails
+    val deadline = System.nanoTime() + timeoutSec * 1_000_000_000L
+    ts.foreach(t => t.join(math.max(1L, (deadline - System.nanoTime()) / 1_000_000L)))
+    if ts.exists(_.isAlive) then
+      val stacks = ts.filter(_.isAlive).map(t => s"  ${t.getName} (${t.getState}):\n" + t.getStackTrace.iterator.filter(f => f.getClassName.startsWith("dotty") || f.getClassName.contains("concurrent")).take(40).map(f => s"      at $f").mkString("\n")).mkString("\n")
+      println(s"[lm] HUNG $mode k=$k round $round after $timeoutSec s; claims: ${driver.completionOwnerNow}\n$stacks")
+      throw new RuntimeException(s"$mode k=$k: the readers hung for $timeoutSec s")
     val t1 = System.nanoTime()
     if failure.get != null then throw failure.get
     val rs = readers.asScala.toSet.toList

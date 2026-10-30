@@ -28,6 +28,8 @@ import BindingPrec.*
 import Hashable.*
 import util.{EqHashMap, Stats}
 import config.{Config, Feature, SourceVersion}
+import scala.annotation.internal.lazyFact
+import _root_.dotty.tools.sharing.{Once, Published}
 import Feature.{migrateTo3, sourceVersion}
 import config.Printers.{implicits, implicitsDetailed}
 import collection.mutable
@@ -272,20 +274,29 @@ object Implicits:
    *  @param tp              the type determining the implicit scope
    *  @param companionRefs   the companion objects in the implicit scope.
    */
+  /** The claim of an `OfTypeImplicits`' lazy facts (`refs`, `eligible`). Serialised readers compute them under the
+   *  read action's lock already. */
+  private given Sharing.ClaimKind[OfTypeImplicits] = Sharing.ClaimKind(CompletionLock.implicitScope, lockWhenSerialised = false)
+
   class OfTypeImplicits(tp: Type, override val companionRefs: TermRefSet)(initctx: Context) extends ImplicitRefs(initctx) {
     implicits.println(i"implicit scope of type $tp = ${companionRefs.showAsList}%, %")
-    // Not `@threadUnsafe`: an implicit scope is cached for the run
-    // (`implicitScopeCache`) and read by every reader in interactive mode; an
-    // unsafely published list (its cells' `next` is a var) could be seen cut
-    // short by another thread.
-    lazy val refs: List[ImplicitRef] = {
+    // An implicit scope is cached for the run (`implicitScopeCache`) and read by every reader in interactive mode.
+    // `refs` and `eligible` are lazy facts computed under this scope's claim (`Once`), not JVM lazy vals: a lazy
+    // val's initialisation is a wait outside the claim registry, and computing `eligible` forces completions (the
+    // candidates' infos). A reader initialising it waited on a completion root held by a reader that, inside its
+    // completion, waited on the lazy val: a deadlock the registry could not see (I105, found with one key for every
+    // root, where every completion is behind the same key; possible with a key per root too). Under the claim, the
+    // wait is an edge of the wait-for graph, and the holder of the key re-enters.
+    @lazyFact private[typer] var myRefs: Once[this.type, List[ImplicitRef]] = Once.empty
+    @lazyFact private[typer] var myEligible: Once[this.type, List[Candidate]] = Once.empty
+
+    def refs: List[ImplicitRef] = myRefs.get:
       val buf = new mutable.ListBuffer[TermRef]
       for (companion <- companionRefs) buf ++= companion.implicitMembers
       buf.toList
-    }
 
     /** The candidates that are eligible for expected type `tp` */
-    lazy val eligible: List[Candidate] =
+    def eligible: List[Candidate] = myEligible.get:
       trace(i"eligible($tp), companions = ${companionRefs.showAsList}%, %", implicitsDetailed, show = true) {
         if (refs.nonEmpty && monitored) record(s"check eligible refs in tpe", refs.length)
         filterMatching(tp)
@@ -297,6 +308,10 @@ object Implicits:
     override def toString: String =
       i"OfTypeImplicits($tp), companions = ${companionRefs.showAsList}%, %; refs = $refs%, %."
   }
+
+  object OfTypeImplicits:
+    given refsHandle: Published.Handle[OfTypeImplicits, "myRefs"] = Published.handle
+    given eligibleHandle: Published.Handle[OfTypeImplicits, "myEligible"] = Published.handle
 
   /** The implicit references coming from the context.
    *  @param refs      the implicit references made visible by the current context.

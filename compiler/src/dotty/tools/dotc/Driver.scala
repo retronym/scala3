@@ -185,7 +185,7 @@ class Driver {
   final def process(args: Array[String], reporter: Reporter | Null = null,
     callback: interfaces.CompilerCallback | Null = null): Reporter = {
     val parallel = ParallelBatch.requested(args)
-    val compileCtx = (if parallel then new ParallelBatchContextBase().initialCtx else initCtx).fresh
+    val compileCtx = (if parallel then new ParallelBatchContextBase(ParallelBatch.sharingOf(args)).initialCtx else initCtx).fresh
     if (reporter != null)
       compileCtx.setReporter(reporter)
     if parallel then

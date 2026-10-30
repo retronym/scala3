@@ -101,7 +101,8 @@ object VirtualIO:
     override protected def sourcesRequired: Boolean = false
 
     def compile(args: Array[String], files: List[AbstractFile], reporter: Reporter): Reporter =
-      val base = new ParallelBatchContextBase:
+      // the completion lock's granularity from the arguments, as `Driver.process` reads it
+      val base = new ParallelBatchContextBase(ParallelBatch.sharingOf(args)):
         override protected def newPlatform(using Context): Platform = new JavaPlatform:
           private val cp = snapshot.classPath
           override def classPath(using Context): ClassPath = cp

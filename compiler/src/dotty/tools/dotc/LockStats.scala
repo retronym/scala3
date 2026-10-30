@@ -34,7 +34,7 @@ object LockStats:
   private val kinds = List("Namer signature", "load source", "load classpath", "unpickle TASTy", "complete (", "bring forward",
     "inherited cache", "lazy TASTy read", "new version of a denotation", "commit typer state", "cleanup",
     "wait for a completion (isCompleting)", "wait for a completion (force)", "read action", "lazy reference", "lazy annotation",
-    "package objects", "change to a published scope", "pass types the statement")
+    "package objects", "change to a published scope", "pass types the statement", "implicit scope")
   private def holderKind(root: String): String =
     kinds.find(root.startsWith).getOrElse(root.takeWhile(_ != ' '))
 
