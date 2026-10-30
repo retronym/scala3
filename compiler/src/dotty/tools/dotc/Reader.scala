@@ -128,19 +128,6 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
   def pendingBaseTypesOf(cls: AnyRef): util.EqHashSet[Type] =
     pendingBaseTypes.getOrElseUpdate(cls, util.EqHashSet[Type]())
 
-  // ---- The typer's name-resolution scratch (`Typer.findRef`) ----
-
-  /** The set of all root import symbols that have been encountered as a
-   *  qualifier of an import so far, during one lookup (saved and restored
-   *  around `Typer.findRef`).
-   */
-  var unimported: Set[Symbol] = Set()
-
-  /** Temporary data item for a single call to `typedIdent`: the symbol that
-   *  would be found under Scala2 mode but is not in dotty.
-   */
-  var foundUnderScala2: Type = Types.NoType
-
   // ---- Targeted typing (interactive mode, see `InteractiveDriver.runUpTo`) ----
   //
   // When `typingTarget` exists, `Typer.typedStats` types, of the statements of
