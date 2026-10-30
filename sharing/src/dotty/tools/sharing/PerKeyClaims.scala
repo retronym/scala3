@@ -19,9 +19,14 @@ import scala.jdk.CollectionConverters.*
  *  @param cycles               what a claim does with a wait-for cycle it reports
  *  @param coarseCycleWaitNanos how long a claimant that cannot abort waits on a cycle through a coarse claim
  *                              (`What.coarse`) before it aborts after all; 0 for never
+ *  @param singleKey            every key is the one key (`PerKeyClaims.TheKey`): one claimant computes at a time,
+ *                              as under a coarse lock, and no wait-for cycle between claimants can form (a holder of
+ *                              the one key never waits), so the cycle check is not run. For measuring what the key
+ *                              per root buys over one lock, with the rest of the registry (what a holder is doing,
+ *                              the waits recorded) the same.
  */
-final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, coarseCycleWaitNanos: Long = 0L) extends ClaimRegistry:
-  import PerKeyClaims.{Claim, Yielded}
+final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, coarseCycleWaitNanos: Long = 0L, val singleKey: Boolean = false) extends ClaimRegistry:
+  import PerKeyClaims.{Claim, TheKey, Yielded}
 
   def this(currentClaimant: () => Claimant) = this(currentClaimant, AbortVictim)
 
@@ -33,7 +38,8 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
   /** Claim `key` for this thread's claimant, to do `what`; wait while another claimant holds it. `cycle` reports a
    *  wait-for cycle (it throws).
    */
-  def acquire(key: AnyRef, what: What, cycle: () => Nothing): Unit =
+  def acquire(key0: AnyRef, what: What, cycle: () => Nothing): Unit =
+    val key = if singleKey then TheKey else key0
     val me = currentClaimant()
     var waitedSince = 0L
     var seen: Claim | Null = null
@@ -47,7 +53,7 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
           me.acquired()
           if waitedSince != 0L then
             val s = seen.nn
-            me.recordWait(System.nanoTime() - waitedSince, s.what.render, s.ownerName)
+            me.recordWait(System.nanoTime() - waitedSince, what, s.what.render, s.ownerName)
           return
       else if c.owner eq me then
         c.holds += 1
@@ -56,7 +62,7 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
         if waitedSince == 0L then
           waitedSince = System.nanoTime()
           seen = c
-        cycleChain(me, c) match
+        (if singleKey then null else cycleChain(me, c)) match
           case null =>
             cycleSince = 0L
             lastChain = null
@@ -97,7 +103,8 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
     end while
 
   /** Release a claim made by `acquire` on this thread. */
-  def release(key: AnyRef): Unit =
+  def release(key0: AnyRef): Unit =
+    val key = if singleKey then TheKey else key0
     val c = claims.get(key).nn
     c.holds -= 1
     if c.holds == 0 then
@@ -111,7 +118,7 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
 
   /** Does this thread's claimant hold the claim on `key`? */
   def ownedHere(key: AnyRef): Boolean =
-    val c = claims.get(key)
+    val c = claims.get(if singleKey then TheKey else key)
     c != null && (c.owner eq currentClaimant())
 
   /** The claims of a wait-for cycle that waiting on `c` would close: `c`, then what its owner waits on, and so on,
@@ -167,6 +174,10 @@ final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, 
     claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
 
 object PerKeyClaims:
+  /** The one key of a registry with `singleKey`. */
+  object TheKey:
+    override def toString: String = "the global completion lock"
+
   /** Thrown by `acquire` to a claimant whose wait is a peek (`What.isPeek`) when that wait would close a wait-for
    *  cycle: the claim is not taken, and the claimant takes the path it takes when the computation is in progress on
    *  its own thread. Caught at the peek; a stackless control exception. */

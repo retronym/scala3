@@ -28,6 +28,39 @@ class CompletionRootsLincheckTest:
   @Test def stress(): Unit =
     LinChecker.check(classOf[Roots], StressOptions().iterations(50).invocationsPerIteration(500).threads(3).actorsPerThread(4))
 
+  /** With the one key (`-Yinteractive-completion-lock:global`) the same operations never report a cycle. */
+  @Test def stressGlobal(): Unit =
+    LinChecker.check(classOf[GlobalRoots], StressOptions().iterations(50).invocationsPerIteration(500).threads(3).actorsPerThread(4))
+
+  @Test def oppositeOrdersNeverCycleGlobal(): Unit =
+    val readers = new ConcurrentHashMap[Thread, Reader]()
+    val roots = CompletionRoots(() => readers.computeIfAbsent(Thread.currentThread, _ => Reader.initial()).nn, global = true)
+    val k1, k2 = new Object
+    val what = CompletionLock.What(CompletionLock.namerKind, null)
+    val raised = new AtomicInteger
+    val done = new CountDownLatch(2)
+    class Cycle extends RuntimeException
+    def party(first: Object, second: Object): Thread =
+      val t = new Thread((() =>
+        try
+          val me = readers.computeIfAbsent(Thread.currentThread, _ => Reader.initial()).nn
+          me.namerCompletionDepth = 1
+          for _ <- 1 to 200 do
+            roots.acquire(first, what, () => throw new Cycle)
+            try
+              try
+                roots.acquire(second, what, () => throw new Cycle)
+                roots.release(second)
+              catch case _: Cycle => raised.incrementAndGet()
+            finally roots.release(first)
+        finally done.countDown()): Runnable)
+      t.setDaemon(true)
+      t.start()
+      t
+    party(k1, k2); party(k2, k1)
+    assertTrue("both readers should finish", done.await(30, TimeUnit.SECONDS))
+    assertEquals("no cycle under the one key", 0, raised.get)
+
   @Test def realCycleIsRaisedByExactlyOne(): Unit =
     val readers = new ConcurrentHashMap[Thread, Reader]()
     val roots = CompletionRoots(() => readers.computeIfAbsent(Thread.currentThread, _ => Reader.initial()).nn)
@@ -59,9 +92,13 @@ class CompletionRootsLincheckTest:
     assertEquals("one reader of the cycle raises it", 1, raised.get)
 
 object CompletionRootsLincheckTest:
-  class Roots:
+  // Lincheck makes the class under test with its no-argument constructor
+  class Roots extends RootsWith(global = false)
+  class GlobalRoots extends RootsWith(global = true)
+
+  class RootsWith(global: Boolean):
     private val readers = new ConcurrentHashMap[Thread, Reader]()
-    private val roots = CompletionRoots(() => reader())
+    private val roots = CompletionRoots(() => reader(), global)
     private val k1, k2 = new Object
     private val what = CompletionLock.What(CompletionLock.namerKind, null)
 

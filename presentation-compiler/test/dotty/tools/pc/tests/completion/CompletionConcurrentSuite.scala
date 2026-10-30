@@ -36,9 +36,11 @@ import org.junit.Test
  */
 class CompletionConcurrentSuite extends BasePCSuite:
 
+  // `-Ddotc.test.completionLock=global`: the suite under `-Yinteractive-completion-lock:global` (one completion at a time)
   private val settings =
     List("-color:never", "-Ximport-suggestion-timeout", "0", "-Yinteractive-parallel",
-      "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator))
+      "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator)) ++
+      sys.props.get("dotc.test.completionLock").map("-Yinteractive-completion-lock:" + _)
 
   private def newDriver(extra: String*) = new InteractiveDriver(settings ++ extra, CachedLogicalPackage.none)
 

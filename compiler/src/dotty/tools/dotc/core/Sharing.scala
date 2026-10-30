@@ -15,6 +15,8 @@ import Contexts.*
  *  - `Sharing.Parallel`: fine-grained. A claim per completion root (`completionRoots`) and read actions in
  *    parallel: a completion's intermediate state is seen only by its reader, and others wait for it (IntelliJ's
  *    parallel read actions, K2's per-declaration locks; `-Yinteractive-parallel`, step 4).
+ *  - `Sharing.ParallelGlobalLock`: `Parallel` with one key for every root (`-Yinteractive-completion-lock:global`):
+ *    one completion at a time, bodies typed in parallel, no wait-for cycles between readers. A measurement mode.
  *
  *  A concurrent sharing is only ever made by the interactive driver's base.
  *
@@ -34,8 +36,9 @@ import Contexts.*
  *  - a value paired with the period or run it was computed in: `Stamped`, one field holding both.
  *  - typing that must not write what readers share: `privately`.
  */
-final class Sharing private (val concurrent: Boolean, val parallel: Boolean):
+final class Sharing private (val concurrent: Boolean, val parallel: Boolean, val globalCompletionLock: Boolean = false):
   assert(concurrent || !parallel)
+  assert(parallel || !globalCompletionLock)
 
   /** The library's mode, held by the base (`ContextState.mode`) for the operations' given. */
   val mode: _root_.dotty.tools.sharing.Mode = _root_.dotty.tools.sharing.Mode(concurrent)
@@ -61,7 +64,8 @@ final class Sharing private (val concurrent: Boolean, val parallel: Boolean):
     else if Uniques.stripes == 1 then Uniques.ConcurrentNamedTypeUniques() else Uniques.StripedNamedTypeUniques()
 
   override def toString: String =
-    if parallel then "Sharing.Parallel" else if concurrent then "Sharing.Serialised" else "Sharing.Batch"
+    if globalCompletionLock then "Sharing.ParallelGlobalLock"
+    else if parallel then "Sharing.Parallel" else if concurrent then "Sharing.Serialised" else "Sharing.Batch"
 
 object Sharing:
   /** Debug mode (`-Ddotc.sharing.check`): assert, where shared state is read or written, that the current reader
@@ -109,3 +113,8 @@ object Sharing:
   val Batch: Sharing = new Sharing(concurrent = false, parallel = false)
   val Serialised: Sharing = new Sharing(concurrent = true, parallel = false)
   val Parallel: Sharing = new Sharing(concurrent = true, parallel = true)
+
+  /** `Parallel` with every completion root the same one key (`-Yinteractive-completion-lock:global`): read actions
+   *  in parallel and a completion's intermediate state hidden from other readers as with `Parallel`, but one
+   *  completion at a time, so no wait-for cycle between readers can form. For measuring what the key per root buys. */
+  val ParallelGlobalLock: Sharing = new Sharing(concurrent = true, parallel = true, globalCompletionLock = true)

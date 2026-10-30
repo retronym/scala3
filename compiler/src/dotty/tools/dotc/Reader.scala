@@ -297,10 +297,10 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
 
   override def acquired(): Unit = util.Chaos.at("acquire", oneIn = 8)
 
-  override def recordWait(nanos: Long, holderWhat: String, holderName: String): Unit =
+  override def recordWait(nanos: Long, waiterWhat: dotty.tools.sharing.What, holderWhat: String, holderName: String): Unit =
     ParallelBatch.waited(nanos, holderWhat)
     util.Chaos.note(s"waited ${nanos / 1000} us on $holderName: $holderWhat")
-    recordLockWait(nanos, holderWhat, "", holderName)
+    recordLockWait(nanos, holderWhat, "", holderName, waiterWhat.kind)
 
   /** The wait-for cycles between Namer completions this reader reported as a
    *  `CyclicReference` (the single-reader answer, I74). */
@@ -317,9 +317,11 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
   @volatile var runsStarted: Int = 0
   @volatile var wholeFileRunsStarted: Int = 0
 
-  /** Time this reader spent blocked on the completion lock, in nanoseconds. */
+  /** Time this reader spent blocked on the completion lock or a root's claim (`acquire`, and the waits for another
+   *  reader's completion in `awaitOthers`), in nanoseconds; how many waits; the longest one. */
   @volatile var lockWaitNanos: Long = 0L
   @volatile var lockWaitCount: Int = 0
+  @volatile var lockWaitMaxNanos: Long = 0L
 
   /** The waits of at least `Reader.recordedWaitNanos`, with what the lock
    *  holder was doing when the wait began: its root (the outermost
@@ -327,9 +329,11 @@ extends _root_.dotty.tools.sharing.Claimant(Thread.currentThread()):
    */
   val lockWaits: java.util.concurrent.ConcurrentLinkedQueue[Reader.LockWait] = new java.util.concurrent.ConcurrentLinkedQueue()
 
-  def recordLockWait(nanos: Long, root: AnyRef | Null, current: AnyRef | Null, holder: String): Unit =
+  def recordLockWait(nanos: Long, root: AnyRef | Null, current: AnyRef | Null, holder: String, waiterKind: String = "completion lock"): Unit =
     lockWaitNanos += nanos
     lockWaitCount += 1
+    if nanos > lockWaitMaxNanos then lockWaitMaxNanos = nanos
+    if LockStats.on then LockStats.waited(nanos, waiterKind, String.valueOf(root))
     if nanos >= Reader.recordedWaitNanos then
       lockWaits.add(Reader.LockWait(nanos, String.valueOf(root), String.valueOf(current), holder))
 

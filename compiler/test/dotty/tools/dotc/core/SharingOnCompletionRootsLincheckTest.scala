@@ -27,6 +27,14 @@ class SharingOnCompletionRootsLincheckTest:
   @Test def claimBacksOffAWaitForCycle(): Unit = stress(classOf[CycleSpec], classOf[RootsCycle], scenarios = 5, runs = 50)
   @Test def toyCompiler(): Unit = stress(classOf[BatchToy], classOf[RootsToy])
 
+  // the same sections on the registry with one key for every root (`-Yinteractive-completion-lock:global`): the
+  // contract holds, and two keys claimed in opposite orders never close a cycle, so no reader is aborted
+  @Test def claimGlobal(): Unit = stress(classOf[ClaimSpec], classOf[GlobalClaim])
+  @Test def onceGlobal(): Unit = stress(classOf[OnceSpec], classOf[GlobalOnce])
+  @Test def blackHoleGlobal(): Unit = stress(classOf[BlackHoleSpec], classOf[GlobalBlackHole])
+  @Test def oppositeOrdersNeverCycleGlobal(): Unit = stress(classOf[CycleSpec], classOf[GlobalNoCycle], scenarios = 5, runs = 50)
+  @Test def toyCompilerGlobal(): Unit = stress(classOf[BatchToy], classOf[GlobalToy])
+
 object SharingOnCompletionRootsLincheckTest:
 
   given Mode = Mode.Concurrent
@@ -35,6 +43,26 @@ object SharingOnCompletionRootsLincheckTest:
   def roots(): ClaimRegistry =
     val readers = ConcurrentHashMap[Thread, Reader]()
     CompletionRoots(() => readers.computeIfAbsent(Thread.currentThread, _ => Reader.initial()).nn)
+
+  /** Completion roots with the one key (`CompletionRoots(_, global = true)`). */
+  def globalRoots(): ClaimRegistry =
+    val readers = ConcurrentHashMap[Thread, Reader]()
+    CompletionRoots(() => readers.computeIfAbsent(Thread.currentThread, _ => Reader.initial()).nn, global = true)
+
+  class GlobalClaim extends Claim(using globalRoots())
+  class GlobalOnce extends BlackHoleOnce(using globalRoots())
+  class GlobalBlackHole extends BlackHole(using globalRoots())
+  class GlobalToy extends Toy(using Mode.Concurrent, globalRoots())
+
+  /** `RootsCycle`'s claims in opposite orders under the one key: never a cycle, so never an abort (a `Cancelled`
+   *  would escape as a result Lincheck does not expect from the spec). */
+  class GlobalNoCycle:
+    private given ClaimRegistry = globalRoots()
+    private val a, b = Key()
+    private val counter = Counter()
+
+    @Operation def ab(): Int = Sharing.claim(a)(Sharing.claim(b)(counter.count()))
+    @Operation def ba(): Int = Sharing.claim(b)(Sharing.claim(a)(counter.count()))
 
   class RootsClaim extends Claim(using roots())
   class RootsOnce extends BlackHoleOnce(using roots())

@@ -161,9 +161,12 @@ object Throughput:
       "lazy reference" -> "lazy ref", "wait for a completion" -> "peek")
       .collectFirst { case (p, k) if root.startsWith(p) => k }.getOrElse(root.takeWhile(_ != ' '))
 
+  // `-Dtp.lock=global`: the readers' cells under `-Yinteractive-completion-lock:global` (one completion at a time)
+  private val lockFlags = sys.props.get("tp.lock").map("-Yinteractive-completion-lock:" + _).toList
+
   private def freshDriver(readers: Boolean): InteractiveDriver =
     System.gc()
-    val d = new InteractiveDriver(settings ++ (if readers then List("-Yinteractive-parallel") else Nil), CachedLogicalPackage.none)
+    val d = new InteractiveDriver(settings ++ (if readers then "-Yinteractive-parallel" :: lockFlags else Nil), CachedLogicalPackage.none)
     d.run(XrayServer.generatedUri, SourceFile.virtual(XrayServer.generatedUri, XrayServer.generatedSource("warmup", 5)))
     d
 

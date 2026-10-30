@@ -75,7 +75,8 @@ class InteractiveDriver(
     // readers parallel with `-Yinteractive-parallel`; chosen here, before
     // the settings are parsed, since the base's interners depend on it
     val parallel = settings.exists(s => s == "-Yinteractive-parallel" || s == "-Yinteractive-parallel:true")
-    val sharing = if parallel then Sharing.Parallel else Sharing.Serialised
+    val globalLock = settings.contains("-Yinteractive-completion-lock:global")
+    val sharing = if parallel && globalLock then Sharing.ParallelGlobalLock else if parallel then Sharing.Parallel else Sharing.Serialised
     new InteractiveContextBase(logicalRootPackage, sharing).initialCtx
 
   override def sourcesRequired: Boolean = false
@@ -268,6 +269,8 @@ class InteractiveDriver(
   val parallelReaders: Boolean = myInitCtx.base.parallel
   assert(parallelReaders == myInitCtx.settings.YinteractiveParallel.value(using myInitCtx),
     s"-Yinteractive-parallel read from the arguments (${myInitCtx.base.sharing}) differs from the parsed setting")
+  assert(!parallelReaders || myInitCtx.base.sharing.globalCompletionLock == (myInitCtx.settings.YinteractiveCompletionLock.value(using myInitCtx) == "global"),
+    s"-Yinteractive-completion-lock read from the arguments (${myInitCtx.base.sharing}) differs from the parsed setting")
 
   /** Does the session survive an edit inside the body of a definition with a
    *  declared type (`-Yinteractive-body-edits`, docs §12)? Then a whole-file
@@ -1469,7 +1472,10 @@ class InteractiveDriver(
         // the editor's report keeps the message only: the stack goes to the log
         System.err.println(s"[dotc-session] $what failed$by: $ex\n" + ex.getStackTrace.nn.take(24).map("    at " + _).mkString("\n"))
         throw ex
-      finally System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms")
+      finally
+        val r = base.reader
+        val waits = if r.lockWaitCount == 0 then "" else f" waits=${r.lockWaitCount} waited=${r.lockWaitNanos / 1e6}%.1fms maxWait=${r.lockWaitMaxNanos / 1e6}%.1fms"
+        System.err.println(f"[dotc-session] $what ${outcome}$by ${(System.nanoTime() - t0) / 1e6}%.1f ms$waits")
 
   /** Under `-Yinteractive-log`, the time a whole request took in the caller
    *  (a presentation-compiler provider), the driver's own work included: what

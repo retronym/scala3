@@ -59,6 +59,11 @@ class Claimant(val thread: Thread = Thread.currentThread):
    *  and who it was. For lock-wait statistics; does nothing by default. */
   def recordWait(nanos: Long, holderWhat: String, holderName: String): Unit = ()
 
+  /** As `recordWait` above, with what this claimant waited to do (`waiterWhat`): the registry calls this one, and by
+   *  default it forwards to the other. Override it to tell a wait before a computation from a peek at one. */
+  def recordWait(nanos: Long, waiterWhat: What, holderWhat: String, holderName: String): Unit =
+    recordWait(nanos, holderWhat, holderName)
+
 /** A `CycleHandler` that aborts the thread that reports the cycle, as the victim: throws `Cancelled`, as a claimant
  *  that can abort does. */
 object AbortVictim extends CycleHandler:
