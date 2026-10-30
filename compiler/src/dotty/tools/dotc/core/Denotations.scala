@@ -75,6 +75,12 @@ import scala.compiletime.uninitialized
  */
 object Denotations {
 
+  object Denotation:
+    /** `Denotation.denotBits`: a type denotation. */
+    inline val TypeBit = 1
+    /** `Denotation.denotBits`: a `SymDenotation` on a concurrent base (`SymDenotations.SymDenotation`'s factory sets it). */
+    inline val ConcurrentBit = 2
+
   /** The key of every bring-forward's claim: one, so that its cycles with completions are detected. */
   private[core] object BringForward:
     given Sharing.ClaimKind[BringForward.type] = Sharing.ClaimKind(CompletionLock.bringForward, lockWhenSerialised = true)
@@ -206,8 +212,14 @@ object Denotations {
    *
    *  @param symbol  The referencing symbol, or NoSymbol is none exists
    */
-  abstract class Denotation(val symbol: Symbol, initInfo: Type, val isType: Boolean) extends PreDenotation with printing.Showable {
+  abstract class Denotation(val symbol: Symbol, initInfo: Type, initIsType: Boolean) extends PreDenotation with printing.Showable {
     type AsSeenFromResult <: Denotation
+
+    // facts about this denotation, one bit each (`Denotation.TypeBit`, `Denotation.ConcurrentBit`)
+    protected var denotBits: Byte = if initIsType then Denotation.TypeBit else 0
+
+    /** Is this a reference to a type symbol? */
+    final def isType: Boolean = (denotBits & Denotation.TypeBit) != 0
 
     // as `SymDenotation`'s other lazy facts: set by a completion under its claim (`InProgress` while it runs),
     // and by the setters of a symbol that no other reader has yet
@@ -1341,7 +1353,7 @@ object Denotations {
 
   /** An overloaded denotation consisting of the alternatives of both given denotations.
    */
-  case class MultiDenotation(denot1: Denotation, denot2: Denotation) extends Denotation(NoSymbol, NoType, isType = false) with MultiPreDenotation {
+  case class MultiDenotation(denot1: Denotation, denot2: Denotation) extends Denotation(NoSymbol, NoType, initIsType = false) with MultiPreDenotation {
     validFor = denot1.validFor & denot2.validFor
 
     final def infoOrCompleter: Type = multiHasNot("info")

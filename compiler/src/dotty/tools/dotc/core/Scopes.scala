@@ -306,7 +306,8 @@ object Scopes {
     // the scope whose entries this one makes, when it is built aside to extend that scope (`extendAside`)
     @confined private var extending: MutableScope | Null = null
 
-    /** Set when the owner's completion publishes this scope (`SymDenotation.lockAndComplete0`). A change after
+    /** Set when the owner's completion publishes this scope (`SymDenotation.runCompleter`; on a batch base, which
+     *  reads no structure epoch, only under `-Ddotc.scopeWrites`). A change after
      *  that bumps the base's `structureEpoch`, and on a concurrent base must be made by a write action: a scope is
      *  filled while it is hidden and then frozen (`changed`).
      */
