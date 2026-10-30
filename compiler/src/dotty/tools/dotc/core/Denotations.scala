@@ -632,7 +632,7 @@ object Denotations {
   end infoMeet
 
   /** A non-overloaded denotation */
-  abstract class SingleDenotation(symbol: Symbol, initInfo: Type, isType: Boolean) extends Denotation(symbol, initInfo, isType) {
+  abstract class SingleDenotation(symbol: Symbol, initInfo: Type, initIsType: Boolean) extends Denotation(symbol, initInfo, initIsType) {
     protected def newLikeThis(symbol: Symbol, info: Type, pre: Type, isRefinedMethod: Boolean)(using Context): SingleDenotation
 
     final def name(using Context): Name = symbol.name
