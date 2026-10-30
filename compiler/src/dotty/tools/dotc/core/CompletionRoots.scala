@@ -36,9 +36,11 @@ object CompletionRoots:
    *  through a coarse root before it aborts after all (I74). */
   val coarseCycleWaitNanos: Long = 10_000_000_000L
 
-  def apply(currentReader: () => Reader): PerKeyClaims =
-    PerKeyClaims(currentReader, AbortVictim(currentReader), coarseCycleWaitNanos)
-  def apply(base: Contexts.ContextState): PerKeyClaims = apply(() => base.reader)
+  /** `global`: every root is the one key (`Sharing.ParallelGlobalLock`, `-Yinteractive-completion-lock:global`): one
+   *  completion at a time, and no wait-for cycle between readers, so neither the victim rule nor `cycleChain` runs. */
+  def apply(currentReader: () => Reader, global: Boolean = false): PerKeyClaims =
+    PerKeyClaims(currentReader, AbortVictim(currentReader), coarseCycleWaitNanos, singleKey = global)
+  def apply(base: Contexts.ContextState): PerKeyClaims = apply(() => base.reader, base.sharing.globalCompletionLock)
 
   /** Abort this reader on a wait that would close a wait-for cycle: unwind as a cancelled reader does. */
   def abortVictim(subject: AnyRef)(using Contexts.Context): Nothing = Contexts.ctx.reader.abort()

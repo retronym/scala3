@@ -823,3 +823,61 @@ The boundary:
 The package is a module of its own, `sharing/` (`scala3-sharing-nonbootstrapped` and `-bootstrapped`), depending on the Scala library alone, so the build keeps it from naming the compiler. Each compiler variant depends on the variant built by the same compiler, and packages its classes, TASTy and sources into the compiler's jars; it is not published, and the compiler's POM does not name it, so the compiler is still one artifact. Being built before the compiler is what lets `Stamped`'s macros expand in the compiler's run: a macro defined in the same run would suspend `Types.scala` to a second run, where the bootstrapped build's `-opt` meets the phantom constructor proxies of a suspended unit (scala/scala3#27422). The sources are vendored from [scala-sharing](https://github.com/retronym/scala-sharing), its production code only, with the package renamed (`sharing/VENDORED.md` records the commit; `project/scripts/vendorSharing.sh` repeats it).
 
 The library's tests are upstream's. The module keeps two of them, the claim/once/`BlackHole`/`Guard` suite and the toy compiler's, because `SharingOnCompletionRootsLincheckTest` runs their sections on dotc's registry. dotc's registries are the library's: `CompletionLock` is a `CoarseLock`, and `CompletionRoots` is a `PerKeyClaims` with the readers as its claimants. The reader-specific policy stays in dotc on `Reader`: who can abort (not inside a Namer completion), an abort being a `CancelledCompilation`, which claims are coarse (all but a Namer signature's, I74's bounded wait), and the chaos point. Left to do: capture checking, so that a `Holds` or `Monitor` cannot escape the operation that made it (today the evidence is a shared object any closure can keep).
+
+## 12. One global completion lock, measured (30 October 2026)
+
+The per-root claims of step 4 were chosen over one completion lock because a Scala member with an inferred result type is completed by typing its body: under one lock, completion would serialise a large share of the typing. The Lean models of the design (Track I, `retronym/jvm-lang-models`) found that every hard problem of step 4 (false `CyclicReference`s from lock-order cycles, the livelock that needs a backoff, poisoned Namer completions, scratch sentinels leaked on unwind) comes from hold-and-wait on non-rerunnable completions, and that linearizability holds at any root granularity, one global lock included. So the question is only cost. This section measures it.
+
+**The mode.** `-Yinteractive-completion-lock:roots|global` (default `roots`), read by the interactive driver and by the parallel batch typer (`-Yparallel-typer`). With `global`, `CompletionRoots` is a `PerKeyClaims` with `singleKey`: every root, and every `Sharing.claim` key, is the one key. One completion runs at a time; bodies still type in parallel; a completion's intermediate state is hidden from other readers as before (`InProgress`); peeks wait on the one key as they waited on the root. A holder of the one key never waits, so no wait-for cycle between readers can form, and the cycle check and the victim rule are not run (`Sharing.ParallelGlobalLock`). Waits are instrumented in both granularities and in the serialised mode: per reader the total, the count and the longest (`Reader.lockWaitMaxNanos`, on the `-Yinteractive-log` line), and under `-Ddotc.interactive.lockStats` a JVM-wide summary by what the waiter wanted and what the holder was doing (`LockStats`).
+
+**Two bugs the one key found.** Both are in the per-root code and were latent there.
+
+- `PackageClassDenotation.packageObjs` used the registry's `ownedHere(this)` as its cycle breaker ("we are looking for the package object itself"). Under one key a reader inside any completion owns every key, so every package answered no package objects (`scala.runtime.$throws` not found, empty completions). The breaker is now the package's own field, the thread computing it. Per root it happened to be right; it was still an abstraction leak.
+- `OfTypeImplicits.refs` and `eligible` were JVM lazy vals on an object cached for the run and read by every reader. A lazy val's initialisation is a wait outside the claim registry, and computing `eligible` forces completions. At four readers under one key: reader A, inside a completion (holding the key), reads the lazy val that reader B is initialising; B, inside the initialiser, waits for the key. A deadlock the registry cannot see (I105). Per root the same shape needs B to force the very root A holds, which is rarer, not impossible. Both are now `Once` facts under the scope's claim: the wait is an edge of the wait-for graph, and the holder of the one key re-enters. The one key is a useful oracle for this class of bug: it puts every completion behind the same key, so any hold-and-wait outside the registry collides with it.
+
+**Setup.** `BatchLockModes`, `LockModes` and `Throughput` (`-Dtp.lock`) in `presentation-compiler/test/dotty/tools/pc/xray`, on the presentation compiler's test classpath, over `compiler/src/dotty/tools/dotc` (493 files), JDK 17.0.17, `-Xms12g -Xmx12g -XX:+UseParallelGC -Xmn6g -XX:+AlwaysPreTouch`, a 10-core Apple silicon laptop with a load average of 5 to 7 from other work during the runs (so the 8-thread cells are saturated; compare 2 and 4). Medians of 3 timed runs after a warm-up, same JVM, classpath and sources in memory. Every run had 0 errors; every hover answered the same in both modes.
+
+### The parallel typer
+
+`-Yparallel-typer` with parallel index and parallel signatures, to the pickler. Signatures and bodies are the two steps whose units run one per task; "wall / CPU" is the step's span over the summed CPU of its spans.
+
+| mode | threads | wall ms | CPU ms | signatures wall / CPU ms | bodies wall / CPU ms | waits | waited ms | longest wait ms |
+|---|---|---|---|---|---|---|---|---|
+| roots | 1 | 5638 | 6544 | 590 / 589 | 3282 / 3274 | 0 | 0 | 0.0 |
+| global | 1 | 5962 | 6637 | 579 / 577 | 3527 / 3481 | 0 | 0 | 0.0 |
+| roots | 2 | 2949 | 6103 | 313 / 618 | 1663 / 3312 | 370 | 7 | 0.9 |
+| global | 2 | 4034 | 6603 | 664 / 736 | 2171 / 3422 | 58700 | 1852 | 16.4 |
+| roots | 4 | 1824 | 7517 | 171 / 665 | 1018 / 4043 | 1424 | 31 | 0.9 |
+| global | 4 | 3685 | 9443 | 702 / 898 | 1884 / 4026 | 152447 | 6697 | 16.9 |
+| roots | 8 | 2028 | 15030 | 197 / 1377 | 1093 / 8423 | 4802 | 228 | 3.6 |
+| global | 8 | 4007 | 12503 | 838 / 1353 | 2016 / 4897 | 208899 | 21386 | 22.4 |
+
+Per root the typer is 3.1× faster at 4 threads; under one key 1.5×, and no better at 8. The signatures step is the plain reading: 590 ms serially, 171 ms per root at 4 threads, 700 ms under one key, which is serial time plus the hand-offs (its CPU is 900 ms for 700 ms of wall: the threads are waiting, not working). The bodies step is 1.0 s against 1.9 s: typing a body forces the signatures of the members it uses, and with inferred result types those completions type bodies in turn, each one alone behind the key. Where the waiting is, at 4 threads: by what the holder was doing, Namer signatures hold the key for 5.3 s of the 6.7 s waited; by what the waiter wanted, Namer signatures 3.9 s, inherited caches (base classes, member names) 1.2 s, the denotation ring 0.9 s in 117,000 short waits, implicit scopes 0.4 s. Per root the whole run waits 31 ms, mostly on TASTy files and inherited caches.
+
+### An editor's requests over a session
+
+`LockModes`: the 493 files opened in one run with every statement skipped, then k readers issuing 400 requests each at random identifiers of random files, nine hovers (`readUpTo`, the type at the identifier) to one whole-file read (`readAll`, as inlay hints cost), the same sequence in both modes.
+
+| mode | k | requests | hover median / p90 / max ms | whole-file median / max ms | waits / request | waited s | longest wait ms |
+|---|---|---|---|---|---|---|---|
+| roots | 2 | 800 | 0.7 / 6.2 / 62 | 4 / 408 | 0.20 | 0.0 | 2 |
+| global | 2 | 800 | 0.5 / 6.1 / 115 | 4 / 408 | 8.14 | 0.8 | 23 |
+| roots | 4 | 1600 | 0.3 / 5.3 / 108 | 4 / 492 | 0.28 | 0.1 | 4 |
+| global | 4 | 1600 | 0.3 / 6.1 / 128 | 6 / 545 | 13.50 | 3.7 | 17 |
+
+No difference an editor would see: medians and p90s are within noise, the worst hover is 20 to 50 ms worse. The readers do wait forty times as often and up to forty times as long in total (3.7 s summed over 1,600 requests at k=4, 2.3 ms a request), but a hover's work is small and a reader waiting a few milliseconds behind another's signature completion is the price of one key, not a stall. By waiter: Namer signatures 2.0 s, inherited caches 1.4 s, implicit scopes 0.2 s.
+
+`Throughput` (k readers typing every file of the set, round-robin with stealing, the background pass of the x-ray), 2 rounds:
+
+| mode | k | wall s | worker CPU s | waits (n / s) |
+|---|---|---|---|---|
+| roots | 2 | 5.4 | 10.0 | 60 / 0.0 |
+| global | 2 | 5.7 | 9.3 | 13,678 / 1.7 |
+| roots | 4 | 4.4 | 16.4 | 246 / 0.0 |
+| global | 4 | 4.8 | 11.2 | 37,924 / 7.1 |
+
+The whole-set typing is 6 to 9 percent slower under one key: the files' top-level members are completed by whichever reader reaches them, and that is where the readers queue.
+
+### Verdict
+
+The one global lock is a viable simplification for the interactive session as the editor uses it: at two to four readers serving hovers and whole-file reads over an open session, the extra waiting is a few milliseconds a request and shows in no percentile that matters, and it removes the wait-for cycle machinery, the victim rule and the backoff from the interactive path. It is not viable for the parallel typer: on the compiler's own sources, where most members have inferred result types, it caps the typer's speed-up at about 1.5× against 3× per root at 4 threads, because signature completion, body typing included, runs alone behind the key, and the waiting concentrates there (Namer signatures hold the key for 80 percent of the time waited). The per-root design earns its complexity in batch, not in the editor. One open option is both: one key for the interactive session, roots for `-Yparallel-typer`, with the one-key mode kept in any case as the oracle for hold-and-wait outside the registry.

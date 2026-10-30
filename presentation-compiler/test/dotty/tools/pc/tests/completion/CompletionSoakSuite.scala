@@ -33,9 +33,12 @@ class CompletionSoakSuite extends BasePCSuite:
 
   private val uri = URI.create("file:///Soak.scala")
 
+  // `-Ddotc.test.completionLock=global`: the parallel soaks under `-Yinteractive-completion-lock:global` (one
+  // completion at a time); the setting is read only with `-Yinteractive-parallel`
   private val settings =
     List("-color:never", "-Ximport-suggestion-timeout", "0",
-      "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator))
+      "-classpath", TestResources.classpath.map(_.toString).mkString(File.pathSeparator)) ++
+      sys.props.get("dotc.test.completionLock").map("-Yinteractive-completion-lock:" + _)
 
   private def newDriver(bodyEdits: Boolean = false) =
     new InteractiveDriver(if bodyEdits then settings :+ "-Yinteractive-body-edits" else settings, CachedLogicalPackage.none)

@@ -3097,20 +3097,28 @@ object SymDenotations {
     // breaker `Nil` saw no package objects ("Not found: type List", I79)
     @volatile private var sharedPackageObjs: (RunId, List[ClassDenotation]) | Null = null
 
+    /** The thread computing `sharedPackageObjs` now, under this package's claim: the cycle breaker's re-entry test.
+     *  Its own field, not the registry's `ownedHere(this)`: under one key for every root (`-Yinteractive-completion-lock:global`)
+     *  a reader inside any completion owns every key, and answered `Nil` for every package. */
+    @volatile private var packageObjsComputer: Thread | Null = null
+
     /** The package objects in this class */
     def packageObjs(using Context): List[ClassDenotation] =
       if ctx.base.parallel then
         val c = sharedPackageObjs
         if c != null && c._1 == ctx.runId then c._2
-        else if ctx.base.completionRoots.ownedHere(this) then Nil // break cycle in case we are looking for package object itself
+        else if packageObjsComputer eq Thread.currentThread then Nil // break cycle in case we are looking for package object itself
         else
           ctx.base.completionRoots.locked(this, CompletionLock.packageObjects, () => CompletionRoots.abortVictim(this)) {
             val c1 = sharedPackageObjs
             if c1 != null && c1._1 == ctx.runId then c1._2
             else
-              val objs = computePackageObjs
-              sharedPackageObjs = (ctx.runId, objs)
-              objs
+              packageObjsComputer = Thread.currentThread
+              try
+                val objs = computePackageObjs
+                sharedPackageObjs = (ctx.runId, objs)
+                objs
+              finally packageObjsComputer = null
           }
       else
         if (packageObjsRunId != ctx.runId) {

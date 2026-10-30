@@ -69,5 +69,6 @@ object CompletionLock:
   val readAction: What = What("read action (serialised mode)", null)
   val lazyRef: What = What("lazy reference", null)
   val lazyAnnotation: What = What("lazy annotation", null)
+  val implicitScope: What = What("implicit scope", null)
   val packageObjects: What = What("package objects", null)
   val scopeWrite: What = What("change to a published scope", null)
