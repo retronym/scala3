@@ -148,7 +148,7 @@ object LockModes:
           try measure(mode, k, round, files, plans, answers)
           catch case ex: RuntimeException =>
             println(s"[lm] round $round $mode k=$k FAILED: ${ex.getMessage}")
-            ex.getCause.getStackTrace.iterator.filter(_.getClassName.startsWith("dotty")).take(30).foreach(f => println(s"[lm]     at $f"))
+            ex.getCause.getStackTrace.iterator.filter(f => f.getClassName.startsWith("dotty") && !f.getClassName.contains("Trees$Instance") && !f.getMethodName.contains("sliceTopLevel") && !f.getClassName.contains("SetRootTree")).take(60).foreach(f => println(s"[lm]     at $f"))
             Cell(mode, k, round, 0, 0, Double.NaN, Double.NaN, Nil, Nil, Double.NaN, 0, Double.NaN, 0, 0, 0, "")
         if round >= 1 then results += c
         println(f"[lm] round $round $mode k=$k: ${c.requests} requests in ${c.wallMs}%.0f ms (open ${c.openMs}%.0f ms); hover ${c.med(c.hoverMs)}%.1f / ${c.p90(c.hoverMs)}%.1f / ${c.max(c.hoverMs)}%.0f ms (median / p90 / max), " +
