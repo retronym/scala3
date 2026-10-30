@@ -75,6 +75,16 @@ object SymDenotations {
      */
     private[dotc] final def flagsUNSAFE: FlagSet = myFlags
 
+    /** This denotation's base is concurrent (`Denotation.ConcurrentBit`, set by the factory): the hot methods below run their
+     *  concurrent-capable bodies, out of line, only then, and otherwise the batch compiler's, without a load of the
+     *  base. Every concurrent sharing (serialised or parallel readers) sets it; a body that is for parallel readers
+     *  only tests `ctx.base.parallel` as well.
+     */
+    private inline def concurrentDenot: Boolean = (denotBits & Denotation.ConcurrentBit) != 0
+
+    /** Set `Denotation.ConcurrentBit`: by the factory, on a concurrent base. */
+    private[SymDenotations] final def markConcurrent(): Unit = denotBits = (denotBits | Denotation.ConcurrentBit).toByte
+
     final def flagsString(using Context): String = flags.flagsString
 
     /** Adapt flag set to this denotation's term or type nature */
@@ -105,16 +115,17 @@ object SymDenotations {
 
     def isCurrent(fs: FlagSet)(using Context): Boolean =
       // A completed denotation, the common case, is decided on `myInfo`
-      // alone, as in batch compilation; only a lazy info is looked at
-      // through `ownView`.
+      // alone; on a concurrent base a lazy info is looked at through
+      // `ownView` (`isCurrentLazy`).
       val i = myInfo
-      !i.isInstanceOf[LazyType] || isCurrentLazy(fs)
+      !i.isInstanceOf[LazyType] || (if concurrentDenot then isCurrentLazy(fs) else fs <= knownFlags(i))
+
+    private def knownFlags(info: Type): FlagSet = info match
+      case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
+      case _ => AfterLoadFlags
 
     private def isCurrentLazy(fs: FlagSet): Boolean =
-      def knownFlags(info: Type): FlagSet = info match
-        case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
-        case _ => AfterLoadFlags
-      val i = ownView
+      val i = ownViewConcurrent
       !i.isInstanceOf[LazyType] || fs <= knownFlags(i)
 
     final def relevantFlagsFor(fs: FlagSet)(using Context) =
@@ -183,25 +194,29 @@ object SymDenotations {
 
     /** Set `Touched`, run the completer, and clear the lock on the way out,
      *  in the discipline of the base's `Sharing`:
-     *  - batch: as is, on one thread (`lockAndComplete0`);
+     *  - batch: as is, on one thread, inline (`runCompleter`);
      *  - serialised readers (step 3 of the multi-reader notes): one
      *    completion at a time under the base's completion lock
      *    (`completeUnderGlobalLock`);
      *  - parallel readers (`-Yinteractive-parallel`, step 4): a claim on the
      *    completion's root, other readers waiting for it
      *    (`completeUnderRootClaim`).
-     *  Each discipline is a method; the dispatch is two field tests and a
-     *  mode test.
+     *  The batch discipline is inline, the others are methods
+     *  (`lockAndCompleteConcurrent`); the dispatch is a test of
+     *  `Denotation.ConcurrentBit`.
      *  Interactive mode also keeps the set of symbols whose completion is in
      *  progress on the reader (`Reader.completing`), so that a `Touched` flag
      *  can be told from a cycle (see `healLeakedTouched`), and records an
      *  exception that unwinds through the completion (see `onUnwind`).
      */
-    private def lockAndComplete(completer: LazyType)(using Context): Unit =
-      val base = ctx.base
-      if base.parallel then completeUnderRootClaim(completer)
-      else if base.concurrent then completeUnderGlobalLock(completer)
-      else lockAndComplete0(completer, ctx.mode.is(Mode.Interactive))
+    private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
+      if concurrentDenot then lockAndCompleteConcurrent(completer)
+      // a batch base reads no structure epoch: its scopes are published only for `-Ddotc.scopeWrites`
+      else runCompleter(completer, ctx.mode.is(Mode.Interactive), publish = ScopeWrites.tracing)
+
+    private def lockAndCompleteConcurrent(completer: LazyType)(using Context): Unit =
+      if ctx.base.parallel then completeUnderRootClaim(completer)
+      else completeUnderGlobalLock(completer)
 
     /** Serialised readers: hold the completion lock, then complete the
      *  symbol as it is now.
@@ -233,7 +248,7 @@ object SymDenotations {
     private def completeUnderRootClaim(completer0: LazyType)(using Context): Unit =
       // another reader's completion in progress (its root may not be the one
       // `completer0` names): wait for it first, then work from what is there
-      val completer = awaitOthers(CompletionLock.awaitCompletion) match
+      val completer = awaitOthersConcurrent(CompletionLock.awaitCompletion) match
         case lt: LazyType => lt
         case _ => return
       val key = completer.completionRoot(this)
@@ -246,7 +261,7 @@ object SymDenotations {
       if namer then reader.namerCompletionDepth += 1
       try
         // as it is now: completed meanwhile, or another info (I44)
-        ownView match
+        ownViewConcurrent match
           case current: LazyType if current.needsCompletion(this) =>
             myInfo match
               case ip: InProgress =>
@@ -302,17 +317,23 @@ object SymDenotations {
 
     /** The info as this thread sees it: the owner of a completion in
      *  progress (parallel readers) sees its intermediate info, every other
-     *  thread the `InProgress`, a lazy type.
+     *  thread the `InProgress`, a lazy type. On a batch base, `myInfo`.
      */
-    private def ownView: Type = myInfo match
+    private inline def ownView: Type = if concurrentDenot then ownViewConcurrent else myInfo
+
+    private def ownViewConcurrent: Type = myInfo match
       case ip: InProgress if ip.ownedHere => ip.current
       case i => i
 
     /** The info as this thread may use it without completing: another
      *  reader's completion in progress is waited for first (its root), so
-     *  that what is read is not that completion's intermediate state.
+     *  that what is read is not that completion's intermediate state. On a
+     *  batch base, `myInfo`.
      */
-    private def awaitOthers(what: CompletionLock.What = CompletionLock.peek)(using Context): Type = myInfo match
+    private inline def awaitOthers()(using Context): Type =
+      if concurrentDenot then awaitOthersConcurrent(CompletionLock.peek) else myInfo
+
+    private def awaitOthersConcurrent(what: CompletionLock.What)(using Context): Type = myInfo match
       case ip: InProgress if !ip.ownedHere =>
         try ctx.base.completionRoots.locked(ip.rootKey, what, () => cyclicWait())(())
         catch case PerKeyClaims.Yielded =>
@@ -322,35 +343,47 @@ object SymDenotations {
           // the other reader's completion began (a peek never runs it).
           util.Chaos.note(s"peek at $symbol yields to ${ip.owner.getName}")
           return ip.original
-        awaitOthers(what)
-      case _ => ownView
+        awaitOthersConcurrent(what)
+      case _ => ownViewConcurrent
 
     /** `infoOrCompleter` for a peek with parallel readers: another reader's
      *  completion in progress is waited for first, or, if that wait would
      *  close a wait-for cycle, the completer as it was before it began.
      */
-    final def awaitedInfoOrCompleter(using Context): Type =
-      if ctx.base.parallel then awaitOthers() else infoOrCompleter
+    final def awaitedInfoOrCompleter(using Context): Type = awaitOthers()
 
     /** With parallel readers, wait until no other reader is completing
      *  this denotation: for a peek at its completer that decides what to do
      *  from it (§4.1). A no-op otherwise.
      */
     final def awaitOtherReader()(using Context): Unit =
-      if ctx.base.parallel then awaitOthers()
+      if concurrentDenot then awaitOtherReaderConcurrent()
+
+    private def awaitOtherReaderConcurrent()(using Context): Unit =
+      if ctx.base.parallel then awaitOthersConcurrent(CompletionLock.peek)
 
     /** The slow path of `Denotation.info`: the info is a lazy type. Complete
      *  it; the owner of a completion in progress sees its intermediate info,
      *  any other reader waits for it (`completeUnderRootClaim`).
      */
     private[core] final def infoAfterCompletion(using Context): Type =
-      ownView match
+      if concurrentDenot then infoAfterCompletionConcurrent
+      else
+        completeFrom(myInfo.asInstanceOf[LazyType])
+        info
+
+    private def infoAfterCompletionConcurrent(using Context): Type =
+      ownViewConcurrent match
         case lt: LazyType =>
           completeFrom(lt)
           info
         case i => i
 
+    /** Run the completer on a concurrent base, where a completion publishes its class's scope. */
     private def lockAndComplete0(completer: LazyType, interactive: Boolean)(using Context): Unit =
+      runCompleter(completer, interactive, publish = true)
+
+    private inline def runCompleter(completer: LazyType, interactive: Boolean, inline publish: Boolean)(using Context): Unit =
       val reader: Reader | Null = if interactive then ctx.reader else null
       if myFlags.is(Touched) && !healLeakedTouched(reader) then
         if reader != null then reader.recordCyclePrevented(symbol)
@@ -361,7 +394,7 @@ object SymDenotations {
       if UnstableReads.on then UnstableReads.push(symbol)
       try
         atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
-        publishScope()
+        if publish then publishScope()
       catch case ex =>
         onUnwind(ex, interactive, reader, completer)
         throw ex
@@ -453,10 +486,12 @@ object SymDenotations {
         }
         */
       if (Config.checkNoSkolemsInInfo) assertNoSkolems(tp)
-      myInfo match
-        case ip: InProgress if ip.ownedHere => ip.current = tp // hidden until the completion ends
-        case _ => myInfo = tp
+      if concurrentDenot then setInfoConcurrent(tp) else myInfo = tp
     }
+
+    private def setInfoConcurrent(tp: Type): Unit = myInfo match
+      case ip: InProgress if ip.ownedHere => ip.current = tp // hidden until the completion ends
+      case _ => myInfo = tp
 
     /** The name, except
      *   - if this is a module class, strip the module class suffix
@@ -648,10 +683,12 @@ object SymDenotations {
     /** The denotation is completed: info is not a lazy type and attributes have defined values */
     final def isCompleted: Boolean =
       val i = myInfo
-      !i.isInstanceOf[LazyType] || (i.isInstanceOf[InProgress] && {
-        val ip = i.asInstanceOf[InProgress]
-        ip.ownedHere && !ip.current.isInstanceOf[LazyType]
-      })
+      !i.isInstanceOf[LazyType] || concurrentDenot && isCompletedHere(i)
+
+    // this reader's own completion in progress (parallel readers) has left a completed info
+    private def isCompletedHere(i: Type): Boolean = i match
+      case ip: InProgress => ip.ownedHere && !ip.current.isInstanceOf[LazyType]
+      case _ => false
 
     /** The denotation is in train of being completed, by this reader. With
      *  several readers (interactive mode) a completion in progress on
@@ -663,12 +700,13 @@ object SymDenotations {
      *  when `Touched` is set.
      */
     final def isCompleting(using Context): Boolean =
-      val r = myFlags.is(Touched) && !isCompleted && {
-        val base = ctx.base
-        !base.concurrent || (if base.parallel then isCompletingHereFine(base) else isCompletingHereCoarse(base))
-      }
+      val r = myFlags.is(Touched) && !isCompleted && (!concurrentDenot || isCompletingHere)
       if r && UnstableReads.on then UnstableReads.peek(symbol)
       r
+
+    private def isCompletingHere(using Context): Boolean =
+      val base = ctx.base
+      if base.parallel then isCompletingHereFine(base) else isCompletingHereCoarse(base)
 
     private def isCompletingHereFine(base: ContextBase)(using Context): Boolean =
       myInfo match
@@ -3321,6 +3359,7 @@ object SymDenotations {
         else new ClassDenotation(symbol, owner, name, initFlags, initInfo, initPrivateWithin)
       else new SymDenotation(symbol, owner, name, initFlags, initInfo, initPrivateWithin)
     result.validFor = currentStablePeriod
+    if ctx.base.concurrent then result.markConcurrent()
     result
   }
 
