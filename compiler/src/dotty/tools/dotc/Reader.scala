@@ -403,3 +403,11 @@ object Reader:
   private[dotc] def initial(): Reader = new Reader(initialFuel, enrichErrorMessages = true, neverCancelled)
 
   private[dotc] val initialFuel = 10
+
+/** A worker of `Phases.inParallel`'s pool, which keeps its reader of the base it works for in a field, so that
+ *  `ParallelBatchContextBase.reader` reads it there rather than through a `ThreadLocal`. Set by the base on the
+ *  thread's first `reader` and cleared by `unbindThread`; read and written by the thread itself only.
+ */
+final class ReaderThread(task: Runnable, name: String) extends Thread(task, name):
+  private[dotc] var readerBase: AnyRef | Null = null
+  private[dotc] var reader: Reader | Null = null
