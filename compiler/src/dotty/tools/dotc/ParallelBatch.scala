@@ -103,12 +103,32 @@ object ParallelBatch:
 
 /** A batch base with a reader per thread, as `InteractiveContextBase` has. */
 class ParallelBatchContextBase extends ContextBase(Sharing.Parallel):
-  private lazy val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
-  override def reader: Reader = threadReader.get.nn
+  // the reader of a thread this base did not start (the driver's): `Phases.inParallel`'s workers keep theirs in a
+  // field (`ReaderThread`)
+  private val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
+
+  // a worker's reader is a field of its thread: a class test and two loads, where `ThreadLocal.get` hashes into the
+  // thread's map and checks the entry's weak key on every call (`handleRecursive`, `comparer`, the context pools)
+  override def reader: Reader = Thread.currentThread() match
+    case t: ReaderThread =>
+      val r = t.reader
+      if r != null && (t.readerBase eq this) then r else bindReader(t)
+    case _ => threadReader.get.nn
+
+  private def bindReader(t: ReaderThread): Reader =
+    val r = newReader(Reader.neverCancelled)
+    t.readerBase = this
+    t.reader = r
+    r
 
   // as `InteractiveContextBase.unbindThread`: each pool thread on its way out (`Phases.inParallel`)
   override def unbindThread(): Unit =
     threadReader.remove()
+    Thread.currentThread() match
+      case t: ReaderThread if t.readerBase eq this =>
+        t.reader = null
+        t.readerBase = null
+      case _ =>
     initialCtx.searchHistory match
       case root: typer.SearchRoot => root.clearThread()
       case _ =>

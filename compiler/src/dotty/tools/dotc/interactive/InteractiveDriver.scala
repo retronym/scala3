@@ -32,7 +32,7 @@ private class InteractiveContextBase(sourcePackage: CachedLogicalPackage, sharin
    *  of its own. Batch compilation keeps the base's single reader, a field
    *  read; here it is a `ThreadLocal` read, in interactive mode only.
    */
-  private lazy val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
+  private val threadReader: ThreadLocal[Reader] = ThreadLocal.withInitial(() => newReader(Reader.neverCancelled))
 
   override def reader: Reader = threadReader.get.nn
 
