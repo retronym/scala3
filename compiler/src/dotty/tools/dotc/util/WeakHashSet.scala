@@ -4,7 +4,7 @@ package dotty.tools.dotc.util
 
 import java.lang.ref.{ReferenceQueue, WeakReference}
 
-import scala.annotation.{ constructorOnly, tailrec }
+import scala.annotation.{ constructorOnly, static, tailrec }
 import scala.annotation.internal.{interned, publishedBy}
 
 import dotty.tools.*
@@ -145,7 +145,7 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
       case null                    => null
       case _                       =>
         if entry.hash == h then
-          val entryElem = entry.get
+          val entryElem = entry.value
           if entryElem != null && isEqual(elem, entryElem) then entryElem
           else linkedListLoop(entry.tail)
         else linkedListLoop(entry.tail)
@@ -173,7 +173,7 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
       case null                    => addEntryAt(bucket, elem, h, oldHead)
       case _                       =>
         if entry.hash == h then
-          val entryElem = entry.get
+          val entryElem = entry.value
           if entryElem != null && isEqual(elem, entryElem) then entryElem
           else linkedListLoop(entry.tail)
         else linkedListLoop(entry.tail)
@@ -193,7 +193,7 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
     def linkedListLoop(prevEntry: Entry[A] | Null, entry: Entry[A] | Null): Unit =
       if entry != null then
         if entry.hash == h then
-          val entryElem = entry.get
+          val entryElem = entry.value
           if entryElem != null && isEqual(elem, entryElem) then remove(bucket, prevEntry, entry)
           else linkedListLoop(entry, entry.tail)
         else linkedListLoop(entry, entry.tail)
@@ -246,7 +246,7 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
         val e = entry
         if (e == null) false
         else {
-          lookaheadelement = e.get
+          lookaheadelement = e.value
           if lookaheadelement == null then
             // element null means the weakref has been cleared since we last did a removeStaleEntries(), move to the next entry
             entry = e.tail
@@ -289,10 +289,10 @@ abstract class WeakHashSet[A <: AnyRef](initialCapacity: Int = 8, loadFactor: Do
       while (bucket < table.size) {
         var entry = table(bucket)
         while (entry != null) {
-          assert(entry.get != null, s"$entry had a null value indicated that gc activity was happening during diagnostic validation or that a null value was inserted")
+          assert(entry.value != null, s"$entry had a null value indicated that gc activity was happening during diagnostic validation or that a null value was inserted")
           computedCount += 1
           val cachedHash = entry.hash
-          val realHash = hash(entry.get)
+          val realHash = hash(entry.value.nn)
           assert(cachedHash == realHash, s"for $entry cached hash was $cachedHash but should have been $realHash")
           val computedBucket = index(realHash)
           assert(computedBucket == bucket, s"for $entry the computed bucket was $computedBucket but should have been $bucket")
@@ -343,6 +343,19 @@ object WeakHashSet {
   // `tail` is set as the entry is made, and changed in place only under the set's monitor (`remove`, the batch `resize`):
   // to an entry further down, or, in a concurrent set, in copies that are published whole (see `ConcurrentWeakHashSet`).
   @interned @publishedBy("Publish")
-  class Entry[A](@constructorOnly element: A, val hash:Int, var tail: Entry[A] | Null, @constructorOnly queue: ReferenceQueue[A]) extends WeakReference[A](element, queue)
+  class Entry[A](element: A, val hash:Int, var tail: Entry[A] | Null, @constructorOnly queue: ReferenceQueue[A])
+  extends WeakReference[A](if strong then null.asInstanceOf[A] else element, if strong then null else queue):
+    // with `strong`, the element, held strongly; the weak referent is then null, so a collection has nothing to
+    // discover, clear or enqueue
+    private val strongElement: A | Null = if strong then element else null
+
+    /** The element, or null if it was collected (never, with `strong`). */
+    inline def value: A | Null = if strong then strongElement else get()
+
+  /** `-Ddotty.uniques.strong=true`: every set's entries hold their elements strongly, so a set keeps what was put in
+   *  it until it is cleared (the interners at a run's `reset`), and its contents depend only on the program, not on
+   *  when collections ran. A fixture for benchmarking for now: the interners without weak references.
+   */
+  @static final val strong: Boolean = java.lang.Boolean.getBoolean("dotty.uniques.strong")
 
 }
