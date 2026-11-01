@@ -40,7 +40,7 @@ trait ConcurrentWeakHashSet[A <: AnyRef] extends WeakHashSet[A]:
     var result: A | Null = null
     while entry != null do
       if entry.hash == h then
-        val e = entry.get
+        val e = entry.value
         if e != null && matches(e) then
           result = e
           entry = null
@@ -65,7 +65,7 @@ trait ConcurrentWeakHashSet[A <: AnyRef] extends WeakHashSet[A]:
       var entry = old(bucket)
       var last: Entry[A] | Null = null
       while entry != null do
-        val e = entry.get
+        val e = entry.value
         if e == null then count -= 1 // its stale entry, once polled, is not found
         else
           val fresh = new Entry(e, entry.hash, null, queue)

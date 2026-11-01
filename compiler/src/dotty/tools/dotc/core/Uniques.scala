@@ -39,6 +39,9 @@ class ConcurrentUniques(initialCapacity: Int = Config.initialUniquesCapacity) ex
  */
 object Uniques:
 
+  /** `-Ddotty.uniques.uncacheMethodParams=true`: see `ParamRef.computeHash`. */
+  @scala.annotation.static final val uncacheMethodParams: Boolean = java.lang.Boolean.getBoolean("dotty.uniques.uncacheMethodParams")
+
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
   private inline def recordCaching(h: Int, clazz: Class[?]): Unit =
     if monitored then
@@ -78,7 +81,7 @@ object Uniques:
           case null                    => addEntryAt(bucket, newType, h, oldHead)
           case _                       =>
             if entry.hash == h then
-              val e = entry.get
+              val e = entry.value
               if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
@@ -135,7 +138,7 @@ object Uniques:
           case null                    => addEntryAt(bucket, newType, h, oldHead)
           case _                       =>
             if entry.hash == h then
-              val e = entry.get
+              val e = entry.value
               if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
