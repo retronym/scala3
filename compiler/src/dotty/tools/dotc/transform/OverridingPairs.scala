@@ -8,7 +8,7 @@ import NameKinds.DefaultGetterName
 import NullOpsDecorator.*
 import collection.immutable.BitSet
 import scala.annotation.tailrec
-import cc.{isCaptureChecking, CCState}
+import cc.{isCaptureChecking, isCaptureCheckingOrSetup, CCState}
 
 import scala.compiletime.uninitialized
 import scala.collection.mutable
@@ -22,6 +22,31 @@ import scala.collection.mutable
  *  way too unwieldy to be maintained.
  */
 object OverridingPairs:
+
+  // Spike switch: `-Ddotty.overridingPairs.seenFromCache=on` keeps, for the run, the info of each member of an
+  // overriding pair as seen from the class, and reuses it in a later phase while the member's info is the same object.
+  // RefChecks' cursors fill it and Bridges' cursors (a phase group later) read it; RefChecks' `canBeHandledByParent`
+  // also finds pairs as seen from a parent that was checked earlier. `=verify` also recomputes every reused info and
+  // reports one that differs (frozen =:=). Not under capture checking, whose seen-from infos carry fresh capture sets.
+  private val seenFromCacheMode: String = System.getProperty("dotty.overridingPairs.seenFromCache", "off").nn
+
+  private def seenFrom(sym: Symbol, pre: Type)(using Context): Denotations.SingleDenotation =
+    if (seenFromCacheMode == "off") || sym.isType || (ctx.run == null) || isCaptureCheckingOrSetup then sym.asSeenFrom(pre)
+    else
+      val cache = ctx.run.nn.pairsSeenFrom
+      val key = (sym, pre)
+      val raw = sym.info
+      cache.get(key) match
+        case (raw0, info0) if raw0 eq raw =>
+          if seenFromCacheMode == "verify" then
+            val fresh = sym.asSeenFrom(pre)
+            if !(fresh.info frozen_=:= info0) then
+              report.error(em"seen-from cache: ${sym.showLocated} as seen from $pre was ${info0}, now ${fresh.info}")
+          sym.denot.derivedSingleDenotation(sym, info0, pre)
+        case _ =>
+          val fresh = sym.asSeenFrom(pre)
+          cache.put(key, (raw, fresh.info))
+          fresh
 
   /** The cursor class
    *  @param base   the base class that contains the overriding pairs
@@ -50,7 +75,7 @@ object OverridingPairs:
      *  relative to `self` do.
      */
     protected def matches(sym1: Symbol, sym2: Symbol): Boolean =
-      sym1.isType || sym1.asSeenFrom(self).matches(sym2.asSeenFrom(self))
+      sym1.isType || seenFrom(sym1, self).matches(seenFrom(sym2, self))
 
     /** The symbols that can take part in an overriding pair */
     private val decls = {
@@ -202,8 +227,8 @@ object OverridingPairs:
     then false // javac already handles these checks and inserts bridges
     else if sym1.isType then true
     else
-      val sd1 = sym1.asSeenFrom(self)
-      val sd2 = sym2.asSeenFrom(self)
+      val sd1 = seenFrom(sym1, self)
+      val sd2 = seenFrom(sym2, self)
       sd1.matchesLoosely(sd2)
         && (sym1.hasTargetName(sym2.targetName)
             || isOverridingPair(sym1, sd1.info, sym2, sd2.info))
