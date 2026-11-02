@@ -21,6 +21,11 @@ import util.Stats
 import dotty.tools.dotc.transform.sjs.JSSymUtils.isJSType
 
 object Mixin {
+
+  // Spike switch: `-Ddotty.mixin.predictDiscard=on` skips computing a mixin forwarder's generic info when
+  // `genericInfoErasesDifferently` shows it would be discarded; `=verify` computes it anyway and reports an error if a
+  // predicted discard would have been kept.
+  val predictDiscardMode: String = System.getProperty("dotty.mixin.predictDiscard", "off").nn
   val name: String = "mixin"
   val description: String = "expand trait fields and trait initializers"
 
@@ -366,8 +371,46 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
         util.Stats.record("mixin forwarders")
         transformFollowing(DefDef(mkMixinForwarderSym(meth.asTerm), forwarderRhsFn(meth)))
 
+    /** Is it certain that the info of `target` as seen from `cls` erases differently from the forwarder's info, so
+     *  that it would not be kept as the forwarder's generic info? That is the case when a parameter or the result of
+     *  `target` is a type parameter of its owner (possibly applied), and `cls` instantiates that parameter with a type
+     *  whose erasure differs from the erasure of the parameter's upper bound. Only looks at the raw info and the base
+     *  type, so it does not build the seen-from info.
+     */
+    def genericInfoErasesDifferently(target: TermSymbol): Boolean = atPhase(erasurePhase) {
+      val owner = target.owner
+      val tparams = owner.typeParams
+      tparams.nonEmpty && (cls.thisType.baseType(owner) match
+        case AppliedType(_, args) if args.hasSameLengthAs(tparams) =>
+          def changes(tp: Type): Boolean = tp match
+            case tp: TypeRef =>
+              val i = tparams.indexOf(tp.symbol)
+              i >= 0 && (tp.prefix match
+                case pre: ThisType => pre.cls == owner
+                case _ => false)
+              && (args(i) match
+                case _: TypeBounds => false
+                case arg => !(TypeErasure.erasure(arg) =:= TypeErasure.erasure(tp.symbol.info.hiBound)))
+            case tp: AppliedType => changes(tp.tycon)
+            case _ => false
+          def loop(info: Type): Boolean = info match
+            case mt: MethodType => mt.paramInfos.exists(changes) || loop(mt.resType)
+            case pt: PolyType => loop(pt.resType)
+            case ExprType(res) => changes(res)
+            case res => changes(res)
+          loop(target.info)
+        case _ => false)
+    }
+
     def mkMixinForwarderSym(target: TermSymbol): TermSymbol =
       val sym = mkForwarderSym(target, extraFlags = MixedIn)
+      if Mixin.predictDiscardMode == "on" && genericInfoErasesDifferently(target) then
+        Stats.doRecord("mixin forwarder discard predicted", 1)
+      else
+        mkMixinGenericInfo(target, sym)
+      sym
+
+    def mkMixinGenericInfo(target: TermSymbol, sym: TermSymbol): Unit =
       val (infoBeforeErasure, isDifferentThanInfoNow) = atPhase(erasurePhase) {
         val beforeErasure = cls.thisType.memberInfo(target)
         (beforeErasure, !(beforeErasure =:= sym.info))
@@ -384,7 +427,8 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
         if ElimErasedValueType.elimEVT(TypeErasure.transformInfo(target, infoBeforeErasure)) =:= sym.info then
           Stats.doRecord("mixin forwarder generic info stored", 1)
           mixinGenericInfos(sym) = infoBeforeErasure
-      sym
+          if Mixin.predictDiscardMode == "verify" && genericInfoErasesDifferently(target) then
+            report.error(em"mixin forwarder: discard predicted wrongly for ${target.showLocated} in $cls: $infoBeforeErasure")
 
     cpy.Template(impl)(
       constr =
