@@ -12,6 +12,7 @@ import dotty.tools.io.Path
 import dotty.tools.dotc.classpath.ClassPath
 
 import scala.io.Codec
+import scala.annotation.internal.{confined, scratch}
 
 /**
  * A compiler component that adds support for parsing Scala and Java source files and finding out
@@ -69,6 +70,7 @@ class LogicalPackagesProvider(sourcePath: String) {
   /**
    * Traverse an untyped AST to extract package and class definitions.
    */
+  @scratch @confined
   private class SourceFileTraverser(
       sourceFile: SourceFile,
       rootPackage: ParsedLogicalPackage

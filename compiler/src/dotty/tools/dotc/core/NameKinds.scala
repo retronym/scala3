@@ -9,7 +9,7 @@ import NameTags.*
 import Contexts.*
 import Decorators.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{interned, publishedBy, sharable}
 
 /** Defines possible kinds of NameInfo of a derived name */
 object NameKinds {
@@ -17,10 +17,11 @@ object NameKinds {
   // These are sharable since all NameKinds are created eagerly at the start of the program
   // before any concurrent threads are forked. for this to work, NameKinds should never
   // be created lazily or in modules that start running after compilers are forked.
-  @sharable private val simpleNameKinds = new Array[ClassifiedNameKind](64)
-  @sharable private val qualifiedNameKinds = new Array[QualifiedNameKind](64)
-  @sharable private val numberedNameKinds = new Array[NumberedNameKind](64)
-  @sharable private val uniqueNameKinds = util.EqHashMap[TermName, UniqueNameKind]()
+  // the name kinds register themselves by tag as this object is initialised
+  @interned @publishedBy("init") @sharable private val simpleNameKinds = new Array[ClassifiedNameKind](64)
+  @interned @publishedBy("init") @sharable private val qualifiedNameKinds = new Array[QualifiedNameKind](64)
+  @interned @publishedBy("init") @sharable private val numberedNameKinds = new Array[NumberedNameKind](64)
+  @interned @sharable private val uniqueNameKinds = util.EqHashMap[TermName, UniqueNameKind]()
 
   /** A class for the info stored in a derived name */
   abstract class NameInfo {
@@ -32,12 +33,16 @@ object NameKinds {
   /** An abstract base class of classes that define the kind of a derived name info */
   abstract class NameKind(val tag: Int) { self =>
 
+    // not the identity hash: see `SimpleName.hashCode`
+    override def hashCode: Int = tag
+
     /** The info class defined by this kind */
     type ThisInfo <: Info
 
     /** A simple info type; some subclasses of Kind define more refined versions */
     class Info extends NameInfo { this: ThisInfo =>
       def kind: NameKind = self
+      override def hashCode: Int = self.hashCode
       def mkString(underlying: TermName): String = self.mkString(underlying, this)
       override def toString: String = infoString
     }

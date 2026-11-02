@@ -5,14 +5,14 @@ import core.Contexts.*
 import reporting.Reporter
 import io.AbstractFile
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, scratch}
 import scala.compiletime.uninitialized
 
 /** A main class for running compiler benchmarks. Can instantiate a given
  *  number of compilers and run each (sequentially) a given number of times
  *  on the same sources.
  */
-object Bench extends Driver:
+@scratch object Bench extends Driver:
 
   @sharable private var numRuns = 1
   @sharable private var numCompilers = 1

@@ -601,6 +601,8 @@ object Build {
     `scala3-bootstrapped`,
     `scala3-compiler-nonbootstrapped`,
     `scala3-compiler-bootstrapped`,
+    `scala3-sharing-nonbootstrapped`,
+    `scala3-sharing-bootstrapped`,
     `scala3-sbt-bridge-nonbootstrapped`,
     `scala3-sbt-bridge-bootstrapped`,
     `scala-library-nonbootstrapped`,
@@ -624,7 +626,9 @@ object Build {
     `scaladoc-js-main`,
     `scaladoc-js-contributors`,
     `scala3-presentation-compiler`,
+    `scala3-presentation-compiler-nonbootstrapped`,
     `scala3-presentation-compiler-testcases`,
+    `scala3-presentation-compiler-testcases-nonbootstrapped`,
     sjsSandbox,
     sjsJUnitTests,
     sjsCompilerTests,
@@ -645,7 +649,7 @@ object Build {
 
   lazy val `scala3-nonbootstrapped` = project.in(file("."))
     .aggregate(`scala3-interfaces`, `scala3-library-nonbootstrapped` , `scala-library-nonbootstrapped`,
-      `tasty-core-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped`, `scala3-compiler-nonbootstrapped`,
+      `tasty-core-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped`, `scala3-sharing-nonbootstrapped`, `scala3-compiler-nonbootstrapped`,
       `scala3-sbt-bridge-nonbootstrapped`, `scala3-repl-nonbootstrapped`)
     .settings(
       name          := "scala3-nonbootstrapped",
@@ -734,7 +738,7 @@ object Build {
   lazy val `scala3-bootstrapped` = project
     .enablePlugins(ScriptedPlugin)
     .aggregate(`scala3-interfaces`, `scala3-library-bootstrapped` , `scala-library-bootstrapped`,
-      `tasty-core-bootstrapped`, `scala3-directives-parser-bootstrapped`, `scala3-compiler-bootstrapped`, `scala3-sbt-bridge-bootstrapped`,
+      `tasty-core-bootstrapped`, `scala3-directives-parser-bootstrapped`, `scala3-sharing-bootstrapped`, `scala3-compiler-bootstrapped`, `scala3-sbt-bridge-bootstrapped`,
       `scala3-staging`, `scala3-tasty-inspector`, `scala-library-sjs`, `scala3-library-sjs`,
       scaladoc, `scala3-repl`, `scala3-presentation-compiler`)
     .settings(
@@ -1442,12 +1446,63 @@ object Build {
     )
 
   // ==============================================================================================
+  // ======================================= SHARING LIBRARY ======================================
+  // ==============================================================================================
+
+  // `dotty.tools.sharing`, the concurrency primitives of the compiler's shared state
+  // (docs/_docs/internals/interactive-multi-reader.md §11). A module of its own, compiled before the compiler so that
+  // its macros expand in the compiler's run, and depending on the library alone, which keeps it from naming the
+  // compiler. Not published: its classes, TASTy and sources are packaged into the compiler's jars
+  // (`sharingPackagedInCompiler`). The sources are vendored from scala-sharing (sharing/VENDORED.md).
+  def sharingSettings(nonBootstrapped: Boolean) = Def.settings(
+    name          := (if (nonBootstrapped) "scala3-sharing-nonbootstrapped" else "scala3-sharing-bootstrapped"),
+    moduleName    := "scala3-sharing",
+    version       := (if (nonBootstrapped) dottyNonBootstrappedVersion else dottyVersion),
+    crossPaths    := true,
+    autoScalaLibrary := false,
+    Compile / unmanagedSourceDirectories := Seq(baseDirectory.value / "src"),
+    Test    / unmanagedSourceDirectories := Seq(baseDirectory.value / "test"),
+    libraryDependencies ++= Seq(
+      Dependencies.sbtJunitInterface % Test,
+      Dependencies.lincheck % Test,
+    ),
+    publish / skip := true,
+    Test / publishArtifact := false,
+    target := target.value / (if (nonBootstrapped) "scala3-sharing-nonbootstrapped" else "scala3-sharing-bootstrapped"),
+  )
+
+  lazy val `scala3-sharing-nonbootstrapped` = project.in(file("sharing"))
+    .dependsOn(`scala3-library-nonbootstrapped`)
+    .settings(sharingSettings(nonBootstrapped = true))
+    .settings(
+      scalaVersion := referenceVersion,
+      fetchedScalaInstanceSettings,
+    )
+
+  lazy val `scala3-sharing-bootstrapped` = project.in(file("sharing"))
+    .dependsOn(`scala3-library-bootstrapped`)
+    .settings(sharingSettings(nonBootstrapped = false))
+    .settings(
+      scalaVersion := dottyNonBootstrappedVersion,
+      bootstrappedScalaInstanceSettings,
+      bspEnabled := false,
+    )
+
+  // The sharing module inside the compiler's jars, and out of its POM: the compiler is published as one artifact.
+  def sharingPackagedInCompiler(sharing: Project) = Def.settings(
+    Compile / packageBin / mappings ++= (sharing / Compile / packageBin / mappings).value,
+    Compile / packageSrc / mappings ++= (sharing / Compile / packageSrc / mappings).value,
+    projectDependencies := projectDependencies.value.filterNot(_.name == "scala3-sharing"),
+  )
+
+  // ==============================================================================================
   // ======================================= SCALA COMPILER =======================================
   // ==============================================================================================
 
   /* Configuration of the org.scala-lang:scala3-compiler_3:*.**.**-nonbootstrapped project */
   lazy val `scala3-compiler-nonbootstrapped` = project.in(file("compiler"))
-    .dependsOn(`scala3-interfaces`, `tasty-core-nonbootstrapped`, `scala3-library-nonbootstrapped`, `scala3-directives-parser-nonbootstrapped` % Test)
+    .dependsOn(`scala3-interfaces`, `tasty-core-nonbootstrapped`, `scala3-library-nonbootstrapped`, `scala3-sharing-nonbootstrapped` % "compile->compile;test->test", `scala3-directives-parser-nonbootstrapped` % Test)
+    .settings(sharingPackagedInCompiler(`scala3-sharing-nonbootstrapped`))
     .settings(
       name          := "scala3-compiler-nonbootstrapped",
       moduleName    := "scala3-compiler",
@@ -1472,6 +1527,7 @@ object Build {
         Dependencies.sbtCompilerInterface,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),
@@ -1582,8 +1638,9 @@ object Build {
 
   /* Configuration of the org.scala-lang:scala3-compiler_3:*.**.**-bootstrapped project */
   lazy val `scala3-compiler-bootstrapped` = project.in(file("compiler"))
-    .dependsOn(`scala3-interfaces`, `tasty-core-bootstrapped`, `scala3-library-bootstrapped`, `scala3-directives-parser-bootstrapped` % Test)
+    .dependsOn(`scala3-interfaces`, `tasty-core-bootstrapped`, `scala3-library-bootstrapped`, `scala3-sharing-bootstrapped` % "compile->compile;test->test", `scala3-directives-parser-bootstrapped` % Test)
     .settings(publishSettings)
+    .settings(sharingPackagedInCompiler(`scala3-sharing-bootstrapped`))
     .settings(
       name          := "scala3-compiler-bootstrapped",
       moduleName    := "scala3-compiler",
@@ -1608,6 +1665,7 @@ object Build {
         Dependencies.sbtJunitInterface % Test,
         (Dependencies.coursier % Test).cross(CrossVersion.for3Use2_13),
         Dependencies.scalaReflect % Test,
+        Dependencies.lincheck % Test,
       ),
       // Specify the default entry point of the compiler
       Compile / mainClass := Some("dotty.tools.dotc.Main"),
@@ -1949,23 +2007,42 @@ object Build {
     .settings(commonBootstrappedSettings)
     .dependsOn(`scala3-compiler-bootstrapped` % "compile->compile;test->test", `scala3-library-bootstrapped`, `scala3-presentation-compiler-testcases` % "test->test")
     .settings(presentationCompilerSettings)
-    .settings(scala3PresentationCompilerBuildInfo)
+    .settings(scala3PresentationCompilerBuildInfo(`scala3-presentation-compiler-testcases`, `scala-library-bootstrapped`))
+    .settings(
+      ideTestsScalaJSClasspath := scalaJSCompletionsClasspath.value,
+      publishLocal := publishLocal.dependsOn( // It is best to publish all together. It is not rare to make changes in both compiler / presentation compiler and it can get misaligned
+        `scala3-compiler-bootstrapped` / publishLocal,
+        `scala3-library-bootstrapped` / publishLocal,
+        `scala-library-bootstrapped` / publishLocal,
+      ).value,
+    )
 
-  def scala3PresentationCompilerBuildInfo =
+  // The presentation compiler and its tests on the non-bootstrapped compiler, compiled with the reference compiler, as
+  // `scala3-repl-nonbootstrapped` is: a change to the compiler is tested here without first building the compiler
+  // with itself. Not published. Its test cases are compiled the same way; Scala.js's library is built only by the
+  // bootstrapped toolchain, so the suite that needs it runs only in `scala3-presentation-compiler`.
+  lazy val `scala3-presentation-compiler-nonbootstrapped` = project.in(file("presentation-compiler"))
+    .dependsOn(`scala3-compiler-nonbootstrapped` % "compile->compile;test->test", `scala3-library-nonbootstrapped`, `scala3-presentation-compiler-testcases-nonbootstrapped` % "test->test")
+    .settings(commonDottySettings)
+    .settings(presentationCompilerSettings)
+    .settings(scala3PresentationCompilerBuildInfo(`scala3-presentation-compiler-testcases-nonbootstrapped`, `scala-library-nonbootstrapped`))
+    .settings(
+      name          := "scala3-presentation-compiler-nonbootstrapped",
+      version       := dottyNonBootstrappedVersion,
+      scalaVersion  := referenceVersion,
+      publish / skip := true,
+      target := target.value / "scala3-presentation-compiler-nonbootstrapped",
+      fetchedScalaInstanceSettings,
+      ideTestsScalaJSClasspath := Nil,
+      Test / testOptions += Tests.Filter(!_.endsWith(".ScalaJSCompletionsSuite")),
+    )
+
+  def scala3PresentationCompilerBuildInfo(testcases: Project, scalaLibrary: Project) =
     Seq(
       ideTestsDependencyClasspath := {
-        val testCasesLib = (`scala3-presentation-compiler-testcases` / Compile / classDirectory).value
-        val dottyLib = (`scala-library-bootstrapped` / Compile / classDirectory).value
+        val testCasesLib = (testcases / Compile / classDirectory).value
+        val dottyLib = (scalaLibrary / Compile / classDirectory).value
         testCasesLib :: dottyLib :: Nil
-      },
-      ideTestsScalaJSClasspath := {
-        val externalJSCommonDeps = (`scaladoc-js-common`  / Compile / externalDependencyClasspath).value
-        val scalaJSCommonDom = findArtifact(externalJSCommonDeps, "scalajs-dom_sjs1_3")
-        val externalJSDeps = (`scala-library-sjs` / Compile / externalDependencyClasspath).value
-        val scalaJSLibrary = findArtifact(externalJSDeps, "scalajs-library_2.13")
-        val scalaJSJavalib = findArtifact(externalJSDeps, "scalajs-javalib")
-        val scalaJSScalalib = (`scala-library-sjs` / Compile / packageBin).value
-        scalaJSLibrary :: scalaJSJavalib :: scalaJSScalalib :: scalaJSCommonDom :: Nil
       },
       Compile / buildInfoPackage := "dotty.tools.pc.buildinfo",
       Compile / buildInfoKeys := Seq(scalaVersion),
@@ -1974,6 +2051,17 @@ object Build {
     ) ++ BuildInfoPlugin.buildInfoScopedSettings(Compile) ++
       BuildInfoPlugin.buildInfoScopedSettings(Test) ++
       BuildInfoPlugin.buildInfoDefaultSettings
+
+  // the classpath of `ScalaJSCompletionsSuite`: Scala.js's library and DOM facade, and our library for Scala.js
+  def scalaJSCompletionsClasspath = Def.task {
+    val externalJSCommonDeps = (`scaladoc-js-common`  / Compile / externalDependencyClasspath).value
+    val scalaJSCommonDom = findArtifact(externalJSCommonDeps, "scalajs-dom_sjs1_3")
+    val externalJSDeps = (`scala-library-sjs` / Compile / externalDependencyClasspath).value
+    val scalaJSLibrary = findArtifact(externalJSDeps, "scalajs-library_2.13")
+    val scalaJSJavalib = findArtifact(externalJSDeps, "scalajs-javalib")
+    val scalaJSScalalib = (`scala-library-sjs` / Compile / packageBin).value
+    scalaJSLibrary :: scalaJSJavalib :: scalaJSScalalib :: scalaJSCommonDom :: Nil
+  }
 
   lazy val presentationCompilerSettings = {
     Seq(
@@ -1986,11 +2074,6 @@ object Build {
       libraryDependencies += (Dependencies.mtagsShared % SourceDeps),
       ivyConfigurations += SourceDeps.hide,
       transitiveClassifiers := Seq("sources"),
-      publishLocal := publishLocal.dependsOn( // It is best to publish all together. It is not rare to make changes in both compiler / presentation compiler and it can get misaligned
-        `scala3-compiler-bootstrapped` / publishLocal,
-        `scala3-library-bootstrapped` / publishLocal,
-        `scala-library-bootstrapped` / publishLocal,
-      ).value,
       // Silence warnings in metals shared code, which must be compatible with Scala 2
       Compile / compile / scalacOptions += "-Wconf:src=.*/scala/meta/internal/.*:s",
       Compile / compile / scalacOptions += "-Wunused:all",
@@ -2033,17 +2116,34 @@ object Build {
     .settings(
       commonBootstrappedSettings,
       bspEnabled := enableBspAllProjects,
-      // Compile these fixtures with a sourceroot pointing at their own `src`
-      // dir, so the source path baked into TASTy (SOURCEFILEattr) is relative
-      // to `src` (e.g. `tests/macros/Foo.scala`) and does NOT resolve from the
-      // test working directory (the repo root). This makes the module behave
-      // like a real distributed dependency: available as TASTy only, with no
-      // source on disk. `SourceFile.content()` is then empty for these symbols,
-      // matching what the presentation compiler sees for classpath deps.
-      Compile / scalacOptions ++= Seq(
-        "-sourceroot", ((Compile / scalaSource).value).getAbsolutePath
-      ),
+      presentationCompilerTestcasesSettings,
     )
+
+  lazy val `scala3-presentation-compiler-testcases-nonbootstrapped` = project.in(file("presentation-compiler-testcases"))
+    .dependsOn(`scala3-compiler-nonbootstrapped`)
+    .settings(
+      commonDottySettings,
+      name          := "scala3-presentation-compiler-testcases-nonbootstrapped",
+      version       := dottyNonBootstrappedVersion,
+      scalaVersion  := referenceVersion,
+      publish / skip := true,
+      target := target.value / "scala3-presentation-compiler-testcases-nonbootstrapped",
+      fetchedScalaInstanceSettings,
+      presentationCompilerTestcasesSettings,
+    )
+
+  lazy val presentationCompilerTestcasesSettings = Def.settings(
+    // Compile these fixtures with a sourceroot pointing at their own `src`
+    // dir, so the source path baked into TASTy (SOURCEFILEattr) is relative
+    // to `src` (e.g. `tests/macros/Foo.scala`) and does NOT resolve from the
+    // test working directory (the repo root). This makes the module behave
+    // like a real distributed dependency: available as TASTy only, with no
+    // source on disk. `SourceFile.content()` is then empty for these symbols,
+    // matching what the presentation compiler sees for classpath deps.
+    Compile / scalacOptions ++= Seq(
+      "-sourceroot", ((Compile / scalaSource).value).getAbsolutePath
+    ),
+  )
 
   /** Common settings for sjsSandbox and sjsJUnitTests */
   lazy val regularScalaJSProjectSettings: Seq[Setting[?]] = Def.settings(

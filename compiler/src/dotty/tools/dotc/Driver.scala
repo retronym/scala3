@@ -33,7 +33,7 @@ class Driver {
     if files.nonEmpty then
       var runOrNull = ctx.run
       try
-        val run = compiler.newRun
+        val run = ParallelBatch.span("setup", "new run")(compiler.newRun)
         runOrNull = run
         run.compile(files)
         finish(compiler, run)
@@ -59,6 +59,10 @@ class Driver {
         case ex: Exception if !runOrNull.enrichedErrorMessage =>
           println(runOrNull.enrichErrorMessage(s"Exception while compiling ${files.map(_.path).mkString(", ")}"))
           throw ex
+      // the compiling thread forgets its state on the base (`ContextBase.unbindThread`): a `-Yparallel-typer` base
+      // keeps it in `ThreadLocal`s, and a thread that compiles again (a build server, a benchmark) kept every
+      // earlier run's base alive through them
+      finally ctx.base.unbindThread()
     ctx.reporter
 
   protected def finish(compiler: Compiler, run: Run)(using Context): Unit =
@@ -180,9 +184,17 @@ class Driver {
    */
   final def process(args: Array[String], reporter: Reporter | Null = null,
     callback: interfaces.CompilerCallback | Null = null): Reporter = {
-    val compileCtx = initCtx.fresh
+    val parallel = ParallelBatch.requested(args)
+    val compileCtx = (if parallel then new ParallelBatchContextBase().initialCtx else initCtx).fresh
     if (reporter != null)
       compileCtx.setReporter(reporter)
+    if parallel then
+      compileCtx.setReporter(ParallelBatchReporter(compileCtx.reporter))
+      // -Ddotc.parallelTyper.timeline=<file>: what each thread did when, as JSON (`ParallelBatch.Timeline`)
+      for out <- sys.props.get("dotc.parallelTyper.timeline") do
+        val tl = ParallelBatch.Timeline()
+        ParallelBatch.timeline = tl
+        Runtime.getRuntime.addShutdownHook(Thread(() => { tl.close(); java.nio.file.Files.writeString(java.nio.file.Path.of(out), tl.toJson); () }))
     if (callback != null)
       compileCtx.setCompilerCallback(callback)
     process(args, compileCtx)
@@ -215,7 +227,7 @@ class Driver {
    *                    if compilation succeeded.
    */
   def process(args: Array[String], rootCtx: Context): Reporter = {
-    setup(args, rootCtx) match
+    ParallelBatch.span("setup", "settings")(setup(args, rootCtx)) match
       case Some((files, compileCtx)) =>
         doCompile(newCompiler(using compileCtx), files)(using compileCtx)
       case None =>

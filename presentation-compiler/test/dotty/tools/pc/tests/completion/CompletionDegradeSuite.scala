@@ -64,7 +64,7 @@ class CompletionDegradeSuite extends BaseCompletionSuite:
     println(s"[degrade] true cycle: $items")
     val labels = items.map(_.takeWhile(c => c.isLetter))
     assert(labels.contains("pAlpha") && labels.contains("pDelta"), s"the other members must be listed: $items")
-    val (runId, tainted, cycles) = withDriver(d => (d.runIdOf(uri), d.isTainted(uri), d.currentCtx.run.nn.cyclesPrevented.size))
+    val (runId, tainted, cycles) = withDriver(d => (d.runIdOf(uri), d.isTainted(uri), d.readerOfLastRequest.cyclesPrevented.size))
     println(s"[degrade] after the cycle: runId=$runId tainted=$tainted cyclesPrevented=$cycles")
     assert(cycles > 0, "the cycle is recorded on the run")
     assert(!tainted, "a prevented cyclic reference does not taint the run: its symbols are left recomputable")
@@ -108,7 +108,7 @@ class CompletionDegradeSuite extends BaseCompletionSuite:
     // No completion of pBeta was in progress: the flag was a leak, healed on the spot, and pBeta
     // completed through the planted completer (which gives it `Int`) instead of being dropped
     assert(degraded.exists(_.startsWith("pBeta: Int")), s"the leaked flag is healed, not reported as a cycle: $degraded")
-    val (tainted, healed) = withDriver(d => (d.isTainted(uri), d.currentCtx.run.nn.leaksHealed.size))
+    val (tainted, healed) = withDriver(d => (d.isTainted(uri), d.readerOfLastRequest.leaksHealed.size))
     println(s"[degrade] tainted=$tainted leaksHealed=$healed")
     assert(healed > 0, "the healing is recorded on the run")
     assert(!tainted, "a healed leak does not taint the run")

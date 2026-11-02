@@ -259,6 +259,11 @@ object Names {
   /** A simple name is essentially an interned string */
   final class SimpleName private[Names](private val value: String) extends TermName {
 
+    // names are interned, so equality is identity; the hash is the content's, not the identity hash, so that the
+    // iteration order of a hashed collection of names does not depend on which thread hashed a name first
+    // (-Yparallel-typer: HotSpot's identity hash comes from a per-thread generator)
+    override def hashCode: Int = value.hashCode
+
     override def length: Int = value.length
 
     /** The n-th character */
@@ -337,6 +342,8 @@ object Names {
 
   final class TypeName private[Names](val toTermName: TermName) extends Name {
 
+    override val hashCode: Int = toTermName.hashCode * 31 + 1
+
     type ThisName = TypeName
 
     override def isTypeName: Boolean = true
@@ -378,6 +385,8 @@ object Names {
    */
   final class DerivedName private[Names](override val underlying: TermName, override val info: NameInfo)
   extends TermName {
+
+    override val hashCode: Int = underlying.hashCode * 41 + info.hashCode
 
     override def asSimpleName: Nothing = throw new UnsupportedOperationException(s"$debugString is not a simple name")
 
@@ -445,21 +454,24 @@ object Names {
   /** The term name represented by the empty string */
   val EmptyTermName: SimpleName = new SimpleName("")
 
-  /** Hashtable for finding term names quickly. */
-  @sharable // because it's only mutated in enterIfNew which is synchronized
-  private val nameTable: mutable.Map[String, SimpleName] = new mutable.HashMap[String, SimpleName](initialCapacity = 0x10000, loadFactor = 2.0)
-  nameTable("") = EmptyTermName
+  /** Hashtable for finding term names quickly. A concurrent map, so that a
+   *  hit takes no lock: one lock around every lookup serialised the scanners
+   *  of files parsed in parallel (`ParserPhase.parseInParallel`, several
+   *  readers over one run).
+   */
+  @sharable // a concurrent map
+  private val nameTable = new java.util.concurrent.ConcurrentHashMap[String, SimpleName](0x10000)
+  nameTable.put("", EmptyTermName)
 
-  private def enterIfNew(str: String): SimpleName = synchronized {
+  private def enterIfNew(str: String): SimpleName =
     Stats.record("NameTable.get")
-    nameTable.get(str) match
-      case Some(n) => n
-      case None =>
-        Stats.record("NameTable.add")
-        val res = SimpleName(str)
-        nameTable(str) = res
-        res
-  }
+    val n = nameTable.get(str)
+    if n != null then n
+    else
+      Stats.record("NameTable.add")
+      val res = SimpleName(str)
+      val prev = nameTable.putIfAbsent(str, res)
+      if prev != null then prev else res
 
   /** Create a term name from the UTF8 encoded bytes in bs[offset..offset+len-1].
    */
@@ -485,6 +497,8 @@ object Names {
   /** The type name represented by the empty string */
   val EmptyTypeName: TypeName = EmptyTermName.toTypeName
 
+  // stateless
+  @scala.annotation.internal.publishedBy("init")
   implicit val NameOrdering: Ordering[Name] = new Ordering[Name] {
     private def compareInfos(x: NameInfo, y: NameInfo): Int =
       if (x.kind.tag != y.kind.tag) x.kind.tag - y.kind.tag

@@ -25,11 +25,15 @@ import reporting.Diagnostic.LoadingFailure
 import collection.mutable
 import cc.{CapturingType, derivedCapturingType, stripCapturing}
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, guardedBy, interned, lazyFact, publishedBy, scratch, sharable}
 import scala.compiletime.uninitialized
 import dotty.tools.dotc.transform.Specialization
+import _root_.dotty.tools.sharing.{PerKeyClaims, Stamped}
 
 object SymDenotations {
+
+  private given Sharing.ClaimKind[InheritedCacheImpl] =
+    Sharing.ClaimKind(CompletionLock.inheritedCache, lockWhenSerialised = true)
 
   /** A sym-denotation represents the contents of a definition
    *  during a period.
@@ -71,6 +75,21 @@ object SymDenotations {
      */
     private[dotc] final def flagsUNSAFE: FlagSet = myFlags
 
+    /** This denotation's base is concurrent (`Denotation.ConcurrentBit`, set by the factory): the hot methods below run their
+     *  concurrent-capable bodies, out of line, only then, and otherwise the batch compiler's, without a load of the
+     *  base. Every concurrent sharing (serialised or parallel readers) sets it; a body that is for parallel readers
+     *  only tests `ctx.base.parallel` as well.
+     */
+    // the almost-final test first, so that until a concurrent base exists in the JVM the whole test folds to false,
+    // and with it the concurrent arm (whose possible calls, inlined into the callers, cost the batch path spills)
+    private inline def concurrentDenot: Boolean =
+      _root_.dotty.tools.sharing.AnyConcurrent.get() && (denotBits & Denotation.ConcurrentBit) != 0
+
+    /** Set `Denotation.ConcurrentBit`: by the factory, on a concurrent base. */
+    private[SymDenotations] final def markConcurrent(): Unit =
+      if !_root_.dotty.tools.sharing.AnyConcurrent.get() then _root_.dotty.tools.sharing.AnyConcurrent.seen()
+      denotBits = (denotBits | Denotation.ConcurrentBit).toByte
+
     final def flagsString(using Context): String = flags.flagsString
 
     /** Adapt flag set to this denotation's term or type nature */
@@ -100,10 +119,19 @@ object SymDenotations {
       if ctorStable then primaryConstructor.setFlag(StableRealizable)
 
     def isCurrent(fs: FlagSet)(using Context): Boolean =
-      def knownFlags(info: Type): FlagSet = info match
-        case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
-        case _ => AfterLoadFlags
-      !myInfo.isInstanceOf[LazyType] || fs <= knownFlags(myInfo)
+      // A completed denotation, the common case, is decided on `myInfo`
+      // alone; on a concurrent base a lazy info is looked at through
+      // `ownView` (`isCurrentLazy`).
+      val i = myInfo
+      !i.isInstanceOf[LazyType] || (if concurrentDenot then isCurrentLazy(fs) else fs <= knownFlags(i))
+
+    private def knownFlags(info: Type): FlagSet = info match
+      case _: SymbolLoader | _: ModuleCompleter => FromStartFlags
+      case _ => AfterLoadFlags
+
+    private def isCurrentLazy(fs: FlagSet): Boolean =
+      val i = ownViewConcurrent
+      !i.isInstanceOf[LazyType] || fs <= knownFlags(i)
 
     final def relevantFlagsFor(fs: FlagSet)(using Context) =
       if (isCurrent(fs)) myFlags else flags
@@ -139,10 +167,10 @@ object SymDenotations {
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isAllOf(fs, butNot)
 
     /** The type info, or, if symbol is not yet completed, the completer */
-    final def infoOrCompleter: Type = myInfo
+    final def infoOrCompleter: Type = ownView
 
     /** Optionally, the info if it is completed */
-    final def unforcedInfo: Option[Type] = myInfo match {
+    final def unforcedInfo: Option[Type] = ownView match {
       case myInfo: LazyType => None
       case _ => Some(myInfo)
     }
@@ -169,37 +197,235 @@ object SymDenotations {
           CyclicReference.trace("compute the signature of ", symbol):
             lockAndComplete(completer)
 
-    /** Set `Touched`, run the completer, and clear the lock on the way out.
+    /** Set `Touched`, run the completer, and clear the lock on the way out,
+     *  in the discipline of the base's `Sharing`:
+     *  - batch: as is, on one thread, inline (`runCompleter`);
+     *  - serialised readers (step 3 of the multi-reader notes): one
+     *    completion at a time under the base's completion lock
+     *    (`completeUnderGlobalLock`);
+     *  - parallel readers (`-Yinteractive-parallel`, step 4): a claim on the
+     *    completion's root, other readers waiting for it
+     *    (`completeUnderRootClaim`).
+     *  The batch discipline is inline, the others are methods
+     *  (`lockAndCompleteConcurrent`); the dispatch is a test of
+     *  `Denotation.ConcurrentBit`.
      *  Interactive mode also keeps the set of symbols whose completion is in
-     *  progress on the run (`Run.completing`), so that a `Touched` flag can
-     *  be told from a cycle (see `healLeakedTouched`), and records an
-     *  exception that unwinds through the completion (see `onUnwind`). Batch
-     *  compilation pays one mode test.
+     *  progress on the reader (`Reader.completing`), so that a `Touched` flag
+     *  can be told from a cycle (see `healLeakedTouched`), and records an
+     *  exception that unwinds through the completion (see `onUnwind`).
      */
     private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
-      val interactive = ctx.mode.is(Mode.Interactive)
-      val run: Run | Null = if interactive then ctx.run else null
-      if myFlags.is(Touched) && !healLeakedTouched(run) then
-        if run != null then run.recordCyclePrevented(symbol)
+      if concurrentDenot then lockAndCompleteConcurrent(completer)
+      // a batch base reads no structure epoch: its scopes are published only for `-Ddotc.scopeWrites`
+      else runCompleter(completer, ctx.mode.is(Mode.Interactive), publish = ScopeWrites.tracing)
+
+    private def lockAndCompleteConcurrent(completer: LazyType)(using Context): Unit =
+      if ctx.base.parallel then completeUnderRootClaim(completer)
+      else completeUnderGlobalLock(completer)
+
+    /** Serialised readers: hold the completion lock, then complete the
+     *  symbol as it is now.
+     */
+    private def completeUnderGlobalLock(completer: LazyType)(using Context): Unit =
+      val lock = ctx.base.completionLock
+      lock.lockFor(CompletionLock.What(CompletionLock.completionKind(completer), symbol))
+      try
+        // `completer` was read before the wait: the owner may have finished
+        // meanwhile, or left a different info (the unpickler's placeholder
+        // `NoCompleter` while it reads a type's right-hand side; running that
+        // one throws, finding I44). Look at the symbol as it is now.
+        myInfo match
+          case current: LazyType if current.needsCompletion(this) =>
+            lockAndComplete0(current, ctx.mode.is(Mode.Interactive))
+          case _ =>
+      finally lock.unlockFor()
+
+    /** Parallel readers (`-Yinteractive-parallel`, step 4): claim the
+     *  completion's root (`CompletionRoots`), waiting while another reader
+     *  owns it, then complete the symbol as it is now. While the completion
+     *  runs, the symbol's info is an `InProgress` that only this reader sees
+     *  through (`ownView`): the intermediate infos a completer sets (a class's
+     *  `TempClassInfo`, an unpickled type's placeholder bounds) are its own,
+     *  and another reader that asks for the info meets a lazy type and waits
+     *  on the root (I48). Whatever the completer leaves is published when it
+     *  returns or unwinds.
+     */
+    private def completeUnderRootClaim(completer0: LazyType)(using Context): Unit =
+      // another reader's completion in progress (its root may not be the one
+      // `completer0` names): wait for it first, then work from what is there
+      val completer = awaitOthersConcurrent(CompletionLock.awaitCompletion) match
+        case lt: LazyType => lt
+        case _ => return
+      val key = completer.completionRoot(this)
+      val roots = ctx.base.completionRoots
+      roots.acquire(key, CompletionLock.What(CompletionLock.completionKind(completer), symbol), () => cyclicWait())
+      util.Chaos.note(s"root acquired for $symbol: $key")
+      // inside a Namer completion, this reader is never aborted on a cycle (I74)
+      val namer = CompletionLock.completionKind(completer) == CompletionLock.namerKind
+      val reader = ctx.reader
+      if namer then reader.namerCompletionDepth += 1
+      try
+        // as it is now: completed meanwhile, or another info (I44)
+        ownViewConcurrent match
+          case current: LazyType if current.needsCompletion(this) =>
+            myInfo match
+              case ip: InProgress =>
+                // our own completion in progress: a re-entry, a cycle as before
+                if !ip.ownedHere && UnstableReads.on then
+                  System.err.nn.println(s"[foreign-inprogress] $symbol: in progress on ${ip.owner.getName}#${ip.owner.getId} under ${ip.rootKey}, met by ${Thread.currentThread.getName}#${Thread.currentThread.getId} holding $key")
+                lockAndComplete0(current, interactive = true)
+              case _ =>
+                val ip = InProgress(current, Thread.currentThread.nn, key)
+                myInfo = ip
+                try lockAndComplete0(current, interactive = true)
+                finally if myInfo eq ip then myInfo = ip.current
+          case _ =>
+      finally
+        if namer then reader.namerCompletionDepth -= 1
+        util.Chaos.note(s"root released for $symbol: $key")
+        roots.release(key)
+
+    /** A wait for a root would close a wait-for cycle that `CompletionRoots.acquire` has
+     *  found to be between signatures: every reader in it is inside a Namer completion, every
+     *  root it waits on is a symbol, the same chain was seen at two looks a slice apart
+     *  (I87), and a fixed order of the threads picks this reader. It gives the single-reader
+     *  answer, a `CyclicReference` (an `AssertionError` under
+     *  `-Ddotc.interactive.failOnCycle`) (I74). The other cycles are `acquire`'s: a reader
+     *  typing a body is aborted and its request retried; a reader inside a Namer completion
+     *  waits for the party outside one to be aborted or, behind a coarse root (a TASTy file, a
+     *  bring-forward, an inherited cache), waits a bounded time and then aborts itself.
+     */
+    private def cyclicWait()(using Context): Nothing =
+      // a cycle between Namer completions on several readers: the single-reader answer (I74)
+      ctx.reader.cyclesRaised += 1
+      // `-Ddotc.interactive.failOnCycle`: the tests fail here, where the cycle is, not where a provider's catch
+      // turns the `CyclicReference` into an empty answer
+      if failOnCycle then
+        throw AssertionError(s"a wait for the completion of $this on ${Thread.currentThread.getName} would close a wait-for cycle between readers; claims held: ${ctx.base.completionRoots.holdersNow}")
+      throw CyclicReference(this)(using ctx.withOwner(symbol))
+
+    /** Make `myInfo` an `InProgress` owned by this thread for the duration of
+     *  a completion of another denotation of the same root (a symbol
+     *  loader's class and module), if it is still lazy. Returns whether it did.
+     */
+    private[core] def hideWhileCompleting(key: AnyRef): Boolean = myInfo match
+      case _: InProgress => false
+      case lt: LazyType =>
+        myInfo = InProgress(lt, Thread.currentThread.nn, key)
+        true
+      case _ => false
+
+    /** Publish what a completion left, ending `hideWhileCompleting`. */
+    private[core] def publishCompletion(): Unit = myInfo match
+      case ip: InProgress if ip.ownedHere => myInfo = ip.current
+      case _ =>
+
+    /** The info as this thread sees it: the owner of a completion in
+     *  progress (parallel readers) sees its intermediate info, every other
+     *  thread the `InProgress`, a lazy type. On a batch base, `myInfo`.
+     */
+    private inline def ownView: Type = if concurrentDenot then ownViewConcurrent else myInfo
+
+    private def ownViewConcurrent: Type = myInfo match
+      case ip: InProgress if ip.ownedHere => ip.current
+      case i => i
+
+    /** The info as this thread may use it without completing: another
+     *  reader's completion in progress is waited for first (its root), so
+     *  that what is read is not that completion's intermediate state. On a
+     *  batch base, `myInfo`.
+     */
+    private inline def awaitOthers()(using Context): Type =
+      if concurrentDenot then awaitOthersConcurrent(CompletionLock.peek) else myInfo
+
+    private def awaitOthersConcurrent(what: CompletionLock.What)(using Context): Type = myInfo match
+      case ip: InProgress if !ip.ownedHere =>
+        try ctx.base.completionRoots.locked(ip.rootKey, what, () => cyclicWait())(())
+        catch case PerKeyClaims.Yielded =>
+          // A peek whose wait would close a wait-for cycle: the sequential
+          // answer is the path for a completion not in progress on this
+          // thread, so the symbol is seen with the completer it had before
+          // the other reader's completion began (a peek never runs it).
+          util.Chaos.note(s"peek at $symbol yields to ${ip.owner.getName}")
+          return ip.original
+        awaitOthersConcurrent(what)
+      case _ => ownViewConcurrent
+
+    /** `infoOrCompleter` for a peek with parallel readers: another reader's
+     *  completion in progress is waited for first, or, if that wait would
+     *  close a wait-for cycle, the completer as it was before it began.
+     */
+    final def awaitedInfoOrCompleter(using Context): Type = awaitOthers()
+
+    /** With parallel readers, wait until no other reader is completing
+     *  this denotation: for a peek at its completer that decides what to do
+     *  from it (§4.1). A no-op otherwise.
+     */
+    final def awaitOtherReader()(using Context): Unit =
+      if concurrentDenot then awaitOtherReaderConcurrent()
+
+    private def awaitOtherReaderConcurrent()(using Context): Unit =
+      if ctx.base.parallel then awaitOthersConcurrent(CompletionLock.peek)
+
+    /** The slow path of `Denotation.info`: the info is a lazy type. Complete
+     *  it; the owner of a completion in progress sees its intermediate info,
+     *  any other reader waits for it (`completeUnderRootClaim`).
+     */
+    private[core] final def infoAfterCompletion(using Context): Type =
+      if concurrentDenot then infoAfterCompletionConcurrent
+      else
+        completeFrom(myInfo.asInstanceOf[LazyType])
+        info
+
+    private def infoAfterCompletionConcurrent(using Context): Type =
+      ownViewConcurrent match
+        case lt: LazyType =>
+          completeFrom(lt)
+          info
+        case i => i
+
+    /** Run the completer on a concurrent base, where a completion publishes its class's scope. */
+    private def lockAndComplete0(completer: LazyType, interactive: Boolean)(using Context): Unit =
+      runCompleter(completer, interactive, publish = true)
+
+    private inline def runCompleter(completer: LazyType, interactive: Boolean, inline publish: Boolean)(using Context): Unit =
+      val reader: Reader | Null = if interactive then ctx.reader else null
+      if myFlags.is(Touched) && !healLeakedTouched(reader) then
+        if reader != null then reader.recordCyclePrevented(symbol)
+        if UnstableReads.on then UnstableReads.reentered(symbol)
         throw CyclicReference(this)(using ctx.withOwner(symbol))
       myFlags |= Touched
-      if run != null then run.completing += symbol
-      try atPhase(validFor.firstPhaseId)(completer.complete(this))
+      if reader != null then reader.completing += symbol
+      if UnstableReads.on then UnstableReads.push(symbol)
+      try
+        atPhase(validFor.firstPhaseId)(completer.complete(this)(using summon[Context], Sharing.completing[this.type]))
+        if publish then publishScope()
       catch case ex =>
-        onUnwind(ex, interactive, run)
+        onUnwind(ex, interactive, reader, completer)
         throw ex
-      finally if run != null then run.completing -= symbol
+      finally
+        if reader != null then reader.completing -= symbol
+        if UnstableReads.on then UnstableReads.pop()
+
+    /** The completion of a class has filled its scope: from now on readers may see it, and a change to it is a
+     *  change to published state (`MutableScope.published`).
+     */
+    private def publishScope()(using Context): Unit = infoOrCompleter match
+      case ci: ClassInfo => ci.decls match
+        case s: MutableScope => s.published = true
+        case _ =>
+      case _ =>
 
     /** `Touched` is set but, in interactive mode, no completion of this
      *  symbol is in progress: the flag is what an exception unwinding through
      *  an earlier completion left (a stale lock, not a cycle). Clear it and
-     *  complete; record the healing on the run. In batch mode (`run` is
+     *  complete; record the healing on the reader. In batch mode (`reader` is
      *  null), or when the completion is in progress, it is a cycle.
      */
-    private def healLeakedTouched(run: Run | Null)(using Context): Boolean =
-      run != null && !run.completing.contains(symbol) && {
+    private def healLeakedTouched(reader: Reader | Null)(using Context): Boolean =
+      reader != null && !reader.completing.contains(symbol) && {
         myFlags &~= Touched
-        run.recordLeakHealed(symbol)
+        reader.recordLeakHealed(symbol)
         true
       }
 
@@ -211,24 +437,43 @@ object SymDenotations {
      *  `mayCacheNow` rule; the request's answer degrades where the exception
      *  is handled, and the symbol is completable again afterwards) and for
      *  any other exception (a stack overflow, an assertion in a partial tree),
-     *  which is also recorded on the run as a completion of unknown state
+     *  which is also recorded on the reader as a completion of unknown state
      *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
      *  stays set, as before. The caller rethrows.
      */
-    private def onUnwind(ex: Throwable, interactive: Boolean, run: Run | Null)(using Context): Unit =
+    private def onUnwind(ex: Throwable, interactive: Boolean, reader: Reader | Null, completer: LazyType)(using Context): Unit =
       ex match
         case _: CompilationUnit.CancelledCompilation =>
           untouchIfIncomplete()
           // whether complete or not: a class completer sets the temporary
           // info before it types the parents, and the class is then
-          // `isCompleted` with that info (see `Run.cancelledCompletions`)
-          val r = ctx.run
-          if r != null then r.cancelledCompletions += symbol
+          // `isCompleted` with that info (see `Reader.cancelledCompletions`)
+          ctx.reader.cancelledCompletions += symbol
+          // A Namer completer cannot run a second time (a method's had
+          // entered its parameters: a retry enters `xs$1`). The driver
+          // replaces the statement before this reader retries, but another
+          // reader reaches the symbol first: with parallel readers one
+          // waiting on the root takes over the completion (finding I53), and
+          // with serialised readers one takes the completion lock the unwind
+          // released, in the window before the statement is abandoned (the
+          // soak under `-Ddotc.interactive.chaos`, `xs$1` in a completion).
+          // The symbol is left with a completer that cancels any reader
+          // that reaches it, which retries on a fresh run. Its info is lazy
+          // again, so `Touched` comes down with it (a class completer had set
+          // the temporary info and so kept the flag above), or the symbol
+          // reads as a completion in progress.
+          if interactive
+             && completer.isInstanceOf[SymbolLoaders.SecondCompleter] && !completer.isInstanceOf[UnwoundCompletion]
+          then
+            util.Chaos.note(s"unwound the completion of $symbol: ${ex.getMessage}")
+            util.Chaos.at("onUnwind")
+            info_=(UnwoundCompletion(completer, ctx.runId, UnwoundCompletion.originHere()))
+            myFlags &~= Touched
         case _: CyclicReference =>
           if interactive then untouchIfIncomplete()
         case _ if interactive =>
           untouchIfIncomplete()
-          if run != null then run.recordCompletionUnwound(symbol, ex)
+          if reader != null then reader.recordCompletionUnwound(symbol, ex)
         case _ =>
 
     private def untouchIfIncomplete(): Unit =
@@ -246,8 +491,12 @@ object SymDenotations {
         }
         */
       if (Config.checkNoSkolemsInInfo) assertNoSkolems(tp)
-      myInfo = tp
+      if concurrentDenot then setInfoConcurrent(tp) else myInfo = tp
     }
+
+    private def setInfoConcurrent(tp: Type): Unit = myInfo match
+      case ip: InProgress if ip.ownedHere => ip.current = tp // hidden until the completion ends
+      case _ => myInfo = tp
 
     /** The name, except
      *   - if this is a module class, strip the module class suffix
@@ -261,7 +510,7 @@ object SymDenotations {
     /** The privateWithin boundary, NoSymbol if no boundary is given.
      */
     @tailrec
-    final def privateWithin(using Context): Symbol = myInfo match {
+    final def privateWithin(using Context): Symbol = ownView match {
       case myInfo: ModuleCompleter =>
         // Instead of completing the ModuleCompleter, we can get `privateWithin`
         // directly from the module class, which might require less completions.
@@ -280,9 +529,9 @@ object SymDenotations {
      *  @pre `isCompleting` is false, or this is a ModuleCompleter or SymbolLoader
      */
     protected[dotc] final def setPrivateWithin(pw: Symbol)(using Context): Unit = {
-      if (isCompleting)
-        assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
-          s"Illegal call to `setPrivateWithin($pw)` while completing $this using completer $myInfo")
+      if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
+        assert(ownView.isInstanceOf[ModuleCompleter | SymbolLoader],
+          s"Illegal call to `setPrivateWithin($pw)` while completing $this using completer $ownView")
       myPrivateWithin = pw
     }
 
@@ -437,20 +686,62 @@ object SymDenotations {
       leadParam(rawParamss)
 
     /** The denotation is completed: info is not a lazy type and attributes have defined values */
-    final def isCompleted: Boolean = !myInfo.isInstanceOf[LazyType]
+    final def isCompleted: Boolean =
+      val i = myInfo
+      !i.isInstanceOf[LazyType] || concurrentDenot && isCompletedHere(i)
 
-    /** The denotation is in train of being completed */
-    final def isCompleting: Boolean = myFlags.is(Touched) && !isCompleted
+    // this reader's own completion in progress (parallel readers) has left a completed info
+    private def isCompletedHere(i: Type): Boolean = i match
+      case ip: InProgress => ip.ownedHere && !ip.current.isInstanceOf[LazyType]
+      case _ => false
+
+    /** The denotation is in train of being completed, by this reader. With
+     *  several readers (interactive mode) a completion in progress on
+     *  another reader is not "completing" for this one: the peek waits for
+     *  it (the completion lock, step 3 of the multi-reader notes) and looks
+     *  again, so that the thirteen sites that skip a completing symbol do
+     *  not skip one that another thread happens to be completing (finding
+     *  I41; Track I's `peek_any_races`). Batch compilation pays a field read
+     *  when `Touched` is set.
+     */
+    final def isCompleting(using Context): Boolean =
+      val r = myFlags.is(Touched) && !isCompleted && (!concurrentDenot || isCompletingHere)
+      if r && UnstableReads.on then UnstableReads.peek(symbol)
+      r
+
+    private def isCompletingHere(using Context): Boolean =
+      val base = ctx.base
+      if base.parallel then isCompletingHereFine(base) else isCompletingHereCoarse(base)
+
+    private def isCompletingHereFine(base: ContextBase)(using Context): Boolean =
+      myInfo match
+        case ip: InProgress if !ip.ownedHere =>
+          // another reader's completion: wait for it and look again (§4.1);
+          // a wait that would close a wait-for cycle yields, and the answer
+          // is then the one the owner's thread would give: in progress
+          try
+            base.completionRoots.locked(ip.rootKey, CompletionLock.peek, () => cyclicWait())(())
+            myFlags.is(Touched) && !isCompleted
+          catch case PerKeyClaims.Yielded => true
+        case _ => true // this reader's own completion, or a leaked flag as before
+
+    private def isCompletingHereCoarse(base: ContextBase): Boolean =
+      val lock = base.completionLock
+      // under the coarse lock every completion in progress is the lock holder's
+      lock.isHeldByCurrentThread ||
+        lock.locked(CompletionLock.peek) {
+          myFlags.is(Touched) && !isCompleted // still set: a leak, or a cycle as before
+        }
 
     /** The completer of this denotation. @pre: Denotation is not yet completed */
-    final def completer: LazyType = myInfo.asInstanceOf[LazyType]
+    final def completer: LazyType = ownView.asInstanceOf[LazyType]
 
     /** If this denotation is not completed, run the completer.
      *  The resulting info might be another completer.
      *
      *  @see ensureCompleted
      */
-    final def completeOnce()(using Context): Unit = myInfo match {
+    final def completeOnce()(using Context): Unit = ownView match {
       case myInfo: LazyType =>
         completeFrom(myInfo)
       case _ =>
@@ -472,7 +763,7 @@ object SymDenotations {
      *  3. When playing it safe in order not to raise CylicReferences, e.g. for printing things
      *     or taking more efficient shortcuts (e.g. the stillValid test).
      */
-    final def unforcedDecls(using Context): Scope = myInfo match {
+    final def unforcedDecls(using Context): Scope = awaitOthers() match {
       case cinfo: LazyType =>
         val knownDecls = cinfo.decls
         if (knownDecls ne EmptyScope) knownDecls
@@ -485,7 +776,7 @@ object SymDenotations {
      *  aliases such as AnyRef into a package class without forcing it.
      *  Right now, the only usage is for the AnyRef alias in Definitions.
      */
-    final private[core] def currentPackageDecls(using Context): MutableScope = myInfo match {
+    final private[core] def currentPackageDecls(using Context): MutableScope = awaitOthers() match {
       case pinfo: SymbolLoaders.PackageLoader => pinfo.currentDecls
       case _ => unforcedDecls.openForMutations
     }
@@ -614,6 +905,9 @@ object SymDenotations {
       builder.append(clsFlatName.mangledString)
       builder.toString
 
+    // a function of the annotations, stored whole (the name is an immutable value); `setTargetName` is the typer's
+    // own, on a symbol it makes
+    @cache @benignRace("a function of the symbol's annotations: any reader stores an equal Name")
     private var myTargetName: Name | Null = null
 
     private def computeTargetName(targetNameAnnot: Option[Annotation])(using Context): Name =
@@ -644,9 +938,11 @@ object SymDenotations {
           if carrier.isCompleting // annotations have been set already in this case
           then carrier.unforcedAnnotation(defn.TargetNameAnnot)
           else carrier.getAnnotation(defn.TargetNameAnnot)
-        myTargetName = computeTargetName(targetNameAnnot)
-        if name.is(SuperAccessorName) then
-          myTargetName = myTargetName.nn.unmangle(List(ExpandedName, SuperAccessorName, ExpandPrefixName))
+        val computed = computeTargetName(targetNameAnnot)
+        // stored once, finished: another reader must not see the name before it is unmangled
+        myTargetName =
+          if name.is(SuperAccessorName) then computed.unmangle(List(ExpandedName, SuperAccessorName, ExpandPrefixName))
+          else computed
 
       myTargetName.nn
 
@@ -665,17 +961,17 @@ object SymDenotations {
     def isError: Boolean = false
 
     private def setAbsentInfo(): Unit = {
-      if (isCompleting)
-        assert(myInfo.isInstanceOf[ModuleCompleter | SymbolLoader],
-          s"Illegal attempt to mark $this absent while completing using completer $myInfo")
-      myInfo = NoType
+      if (myFlags.is(Touched) && !isCompleted) // a precondition on this denotation's own state: no wait
+        assert(ownView.isInstanceOf[ModuleCompleter | SymbolLoader],
+          s"Illegal attempt to mark $this absent while completing using completer $ownView")
+      info_=(NoType)
     }
 
     /** Make denotation not exist.
      *  @pre `isCompleting` is false, or this is a ModuleCompleter or SymbolLoader
      */
     final def markAbsent()(using Context): Unit = {
-      val wasAbsent = myInfo eq NoType
+      val wasAbsent = ownView eq NoType
       setAbsentInfo()
       if !wasAbsent && (ctx ne NoContext) && (symbol ne NoSymbol) then
         val failures = ctx.retainedSymbolLoadingFailures
@@ -693,7 +989,7 @@ object SymDenotations {
      *                   retain loading failures, report the failure for an absent symbol.
      */
     @tailrec
-    final def isAbsent(canForce: Boolean = true)(using Context): Boolean = myInfo match {
+    final def isAbsent(canForce: Boolean = true)(using Context): Boolean = awaitOthers() match {
       case myInfo: ModuleCompleter =>
         // Instead of completing the ModuleCompleter, we can check whether
         // the module class is absent, which might require less completions.
@@ -704,7 +1000,7 @@ object SymDenotations {
         isAbsent(canForce)
       case _ =>
         // Otherwise, no completion is necessary, see the preconditions of `markAbsent()`.
-        val absent = myInfo `eq` NoType
+        val absent = ownView `eq` NoType
         if absent && canForce && (ctx ne NoContext) && (symbol ne NoSymbol) then
           val failures = ctx.retainedSymbolLoadingFailures
           if failures != null then
@@ -822,7 +1118,7 @@ object SymDenotations {
      */
     final def isSelfSym(using Context): Boolean =
       if !ctx.isBestEffort || exists then
-        owner.infoOrCompleter match {
+        owner.denot.awaitedInfoOrCompleter match { // I73
           case ClassInfo(_, _, _, _, selfInfo) =>
             selfInfo == symbol ||
               selfInfo.isInstanceOf[Type] && name == nme.WILDCARD
@@ -1239,10 +1535,10 @@ object SymDenotations {
      */
     final def moduleClass(using Context): Symbol =
       def notFound =
-        if (Config.showCompletions) println(s"missing module class for $name: $myInfo")
+        if (Config.showCompletions) println(s"missing module class for $name: $ownView")
         NoSymbol
       if this.is(ModuleVal) then
-        myInfo.stripAnnots match
+        awaitOthers().stripAnnots match
           case info: TypeRef            => info.symbol
           case ExprType(info: TypeRef)  => info.symbol // needed after uncurry, when module terms might be accessor defs
           case info: LazyType           => info.moduleClass
@@ -1261,7 +1557,7 @@ object SymDenotations {
      */
     final def sourceModule(using Context): Symbol =
       if (this.is(ModuleClass))
-        myInfo match {
+        awaitOthers() match {
           case ClassInfo(_, _, _, _, selfType) =>
             def sourceOfSelf(tp: TypeOrSymbol): Symbol = (tp: @unchecked) match {
               case tp: TermRef => tp.symbol
@@ -2017,34 +2313,41 @@ object SymDenotations {
 
     // ----- caches -------------------------------------------------------
 
+    // recomputed from the decls and reset by `info_=`; with parallel readers `typeParams` keeps a result only if no
+    // completion started or ended while it was computed
+    @cache @benignRace("a function of the decls: a reader stores an equal list, or none if the info changed meanwhile")
     private var myTypeParams: List[TypeSymbol] | Null = null
+    // an immutable map: a lost update loses one entry
+    @cache @benignRace("an immutable map of names a function of the class; a lost update drops an entry, recomputed on demand")
     private var fullNameCache: SimpleIdentityMap[QualifiedNameKind, Name] = SimpleIdentityMap.empty
 
-    private var myMemberCache: EqHashMap[Name, PreDenotation] | Null = null
-    private var myMemberCachePeriod: Period = Nowhere
+    // the invalidations clear it (`Stamped.Empty`) and remove entries from the (synchronised, on a concurrent base) map
+    private var myMemberCache: Stamped[PerPeriod, EqHashMap[Name, PreDenotation] | Null] = Stamped.Empty
 
     /** A cache from types T to baseType(T, C) */
     type BaseTypeMap = EqHashMap[CachedType, Type]
-    private var myBaseTypeCache: BaseTypeMap | Null = null
-    private var myBaseTypeCachePeriod: Period = Nowhere
+    // valid while the base types are those of its period; `invalidateBaseTypeCache` clears it, whose `null` value
+    // `cachedWhen`'s test then finds
+    private var myBaseTypeCache: Stamped[PerPeriod, BaseTypeMap | Null] = Stamped.Empty
 
+    // read once into a local; a reader that finds one invalid stores a fresh one, and a lost store is a lost memo:
+    // validity is the cache's own (its run and phase group, and on a concurrent base the structure epoch)
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var baseDataCache: BaseData = BaseData.None
+    @cache @benignRace("read once; a lost store of a fresh cache only repeats its computation")
     private var memberNamesCache: MemberNames = MemberNames.None
 
-    private def memberCache(using Context): EqHashMap[Name, PreDenotation] = {
-      if (myMemberCachePeriod != ctx.period) {
-        myMemberCache = EqHashMap()
-        myMemberCachePeriod = ctx.period
-      }
-      myMemberCache.nn
-    }
+    private def memberCache(using Context): EqHashMap[Name, PreDenotation] =
+      myMemberCache.cached:
+        ctx.base.sharing.newEqHashMap[Name, PreDenotation]()
+      .nn
 
-    private def baseTypeCache(using Context): BaseTypeMap = {
-      if !currentHasSameBaseTypesAs(myBaseTypeCachePeriod) then
-        myBaseTypeCache = new BaseTypeMap()
-        myBaseTypeCachePeriod = ctx.period
-      myBaseTypeCache.nn
-    }
+    // `invalidateBaseTypeCache` nulls the cache: with several readers, after
+    // another reader found the period current (I67)
+    private def baseTypeCache(using Context): BaseTypeMap =
+      myBaseTypeCache.cachedWhen((stamp, cache) => cache != null && currentHasSameBaseTypesAs(Period.fromCode(stamp))):
+        ctx.base.sharing.newEqHashMap()
+      .nn
 
     def invalidateBaseDataCache() = {
       baseDataCache.invalidate()
@@ -2057,22 +2360,21 @@ object SymDenotations {
     }
 
     def invalidateBaseTypeCache(): Unit = {
-      myBaseTypeCache = null
-      myBaseTypeCachePeriod = Nowhere
+      myBaseTypeCache = Stamped.Empty
     }
 
     def invalidateMemberCaches()(using Context): Unit =
-      myMemberCachePeriod = Nowhere
+      myMemberCache = Stamped.Empty
       invalidateMemberNamesCache()
 
     def invalidateMemberCachesFor(sym: Symbol)(using Context): Unit =
-      myMemberCache match
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(sym.name)
       if !sym.flagsUNSAFE.is(Private) then
         invalidateMemberNamesCache()
         if sym.isWrappedToplevelDef then
-          val outerCache = sym.owner.owner.asClass.classDenot.myMemberCache
+          val outerCache = sym.owner.owner.asClass.classDenot.myMemberCache.value
           if outerCache != null then outerCache.remove(sym.name)
 
     override def copyCaches(from: SymDenotation, phase: Phase)(using Context): this.type = {
@@ -2081,7 +2383,8 @@ object SymDenotations {
           if (from.memberNamesCache.isValidAt(phase)) memberNamesCache = from.memberNamesCache
           if (from.baseDataCache.isValidAt(phase)) {
             baseDataCache = from.baseDataCache
-            myBaseTypeCache = from.baseTypeCache
+            // the copy keeps this cache's stamp, as the plain field did
+            myBaseTypeCache = Stamped(myBaseTypeCache.stamp, from.baseTypeCache)
           }
         case _ =>
       }
@@ -2110,18 +2413,55 @@ object SymDenotations {
 
     /** The type parameters of this class */
     override final def typeParams(using Context): List[TypeSymbol] = {
-      if (myTypeParams == null)
-        myTypeParams =
-          if (ctx.erasedTypes || is(Module)) Nil // fast return for modules to avoid scanning package decls
-          else {
-            val di = initial
-            if (this ne di) di.typeParams
-            else infoOrCompleter match {
-              case info: TypeParamsCompleter => info.completerTypeParams(symbol)
-              case _ => typeParamsFromDecls
-            }
+      def computeFrom(ioc: Type): List[TypeSymbol] =
+        if (ctx.erasedTypes || is(Module)) Nil // fast return for modules to avoid scanning package decls
+        else {
+          val di = initial
+          if (this ne di) di.typeParams
+          else ioc match {
+            case info: TypeParamsCompleter => info.completerTypeParams(symbol)
+            case _ => typeParamsFromDecls
           }
-      myTypeParams.nn
+        }
+      def compute: List[TypeSymbol] = computeFrom(infoOrCompleter)
+      // With parallel readers the cache is shared, and a completion in
+      // progress fills it from its intermediate view (empty before the type
+      // parameters are indexed), which `info_=` resets only when it ends: the
+      // owner of the completion computes without caching, any other reader
+      // waits for it first; and a result is kept only if no completion
+      // started or ended while it was computed (I75: "Setting does not take
+      // type parameters" from a computation that began before another
+      // reader's completion and read its intermediate state; I73 for the
+      // peek). The field is read once: `info_=` may null it between a check
+      // and a read.
+      if !ctx.base.parallel then
+        val known = myTypeParams
+        if known != null then known
+        else
+          val computed = compute
+          myTypeParams = computed
+          computed
+      else
+        var result: List[TypeSymbol] | Null = null
+        while result == null do
+          myInfo match
+            case ip: InProgress if ip.ownedHere => result = compute
+            case ip: InProgress =>
+              // wait for the other reader's completion and look again, or, if
+              // that wait would close a wait-for cycle, answer from the
+              // completer as it was before that completion began (not cached)
+              awaitedInfoOrCompleter match
+                case orig if orig `eq` ip.original => result = computeFrom(orig)
+                case _ =>
+            case before =>
+              val known = myTypeParams
+              if known != null then result = known
+              else
+                val computed = compute
+                if myInfo eq before then
+                  myTypeParams = computed
+                  result = computed
+        result
     }
 
     override protected[dotc] final def info_=(tp: Type): Unit = {
@@ -2134,7 +2474,9 @@ object SymDenotations {
 
     /** The types of the parent classes. */
     def parentTypes(using Context): List[Type] = info match
-      case classInfo: ClassInfo => classInfo.declaredParents
+      case classInfo: ClassInfo =>
+        if UnstableReads.on && classInfo.isInstanceOf[TempClassInfo] then UnstableReads.parents(symbol)
+        classInfo.declaredParents
       case _ => Nil
 
     /** The symbols of the parent classes. */
@@ -2158,6 +2500,8 @@ object SymDenotations {
 
    // ------ class-specific operations -----------------------------------
 
+    // a ThisType and a TypeRef are interned: any reader computes the same one, and neither field is ever reset
+    @cache @benignRace("the interned this-type of the class: any reader stores the same type")
     private var myThisType: Type | Null = null
 
     /** The this-type depends on the kind of class:
@@ -2175,6 +2519,7 @@ object SymDenotations {
       ThisType.raw(TypeRef(pre, cls))
     }
 
+    @cache @benignRace("the interned type reference to the class: any reader stores the same type")
     private var myTypeRef: TypeRef | Null = null
 
     override def typeRef(using Context): TypeRef = {
@@ -2185,8 +2530,12 @@ object SymDenotations {
     override def appliedRef(using Context): Type = classInfo.appliedRef
 
     private def baseData(implicit onBehalf: BaseData, ctx: Context): (List[ClassSymbol], BaseClassSet) = {
-      if (!baseDataCache.isValid) baseDataCache = BaseData.newCache()
-      baseDataCache(this)
+      // read once: another reader's `invalidateBaseDataCache` may replace it meanwhile
+      var cache = baseDataCache
+      if !cache.isValid then
+        cache = BaseData.newCache()
+        baseDataCache = cache
+      cache(this)
     }
 
     /** The base classes of this class in linearization order,
@@ -2243,10 +2592,30 @@ object SymDenotations {
       (classSymbol :: builder.baseClasses, builder.baseClassSet)
     }
 
+    /** Does this class, or a base class of it, have parents that are not known yet: a `TempClassInfo`, a completion
+     *  in progress? Reads only the infos already there: completes nothing. A class whose completion has not started
+     *  answers no.
+     */
+    final def hasUnknownBase(using Context): Boolean =
+      val seen = mutable.Set.empty[Symbol]
+      def loop(cls: Symbol): Boolean =
+        !seen.contains(cls) && {
+          seen += cls
+          cls.denot.infoOrCompleter match
+            case _: TempClassInfo => true
+            case info: ClassInfo => info.declaredParents.exists(p => loop(p.classSymbol))
+            case _ => false
+        }
+      loop(symbol)
+
     final override def derivesFrom(base: Symbol)(using Context): Boolean =
-      !isAbsent()
-      && base.isClass
-      && ((symbol eq base) || baseClassSet.contains(base))
+      val r = !isAbsent()
+        && base.isClass
+        && ((symbol eq base) || baseClassSet.contains(base))
+      if UnstableReads.on && (symbol ne base) && base.isClass then
+        // answered from a class, or a base class, whose parents are not known yet: kept, to ask again when they are
+        if hasUnknownBase then UnstableReads.derivation(symbol, base, r)
+      r
 
     final override def isSubClass(base: Symbol)(using Context): Boolean =
       derivesFrom(base)
@@ -2306,6 +2675,14 @@ object SymDenotations {
       }
     }
 
+    /** Enter `syms` in order, as `enter` does each, as one change: on a concurrent base built aside and published
+     *  with one store (`extendAside`), so that the definitions of the files of an open cost one copy of a
+     *  package's scope, not one each (`Namer.IndexSlice`).
+     */
+    def enterAll(syms: Iterable[Symbol])(using Context): Unit =
+      val scope = unforcedDecls.openForMutations
+      scope.writing(scope.extendAside(aside => syms.foreach(enter(_, aside))))
+
     /** Enter a symbol in given `scope` without potentially replacing the old copy. */
     def enterNoReplace(sym: Symbol, scope: MutableScope)(using Context): Unit =
       scope.enter(sym)
@@ -2317,7 +2694,7 @@ object SymDenotations {
      */
     def replace(prev: Symbol, replacement: Symbol)(using Context): Unit = {
       unforcedDecls.openForMutations.replace(prev, replacement)
-      myMemberCache match
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(replacement.name)
     }
@@ -2328,9 +2705,11 @@ object SymDenotations {
      */
     def delete(sym: Symbol)(using Context): Unit = {
       val scope = info.decls.openForMutations
-      scope.unlink(sym, sym.name)
-      if sym.name != sym.originalName then scope.unlink(sym, sym.originalName)
-      myMemberCache match
+      // a classfile completer deletes from its package's published scope: as the scope's one writer
+      scope.writing:
+        scope.unlink(sym, sym.name)
+        if sym.name != sym.originalName then scope.unlink(sym, sym.originalName)
+      myMemberCache.value match
         case null => ()
         case mc => mc.remove(sym.name)
       if (!sym.flagsUNSAFE.is(Private)) invalidateMemberNamesCache()
@@ -2451,6 +2830,18 @@ object SymDenotations {
     /** Compute tp.baseType(this) */
     final def baseTypeOf(tp: Type)(using Context): Type = {
       val btrCache = baseTypeCache
+      // The computation in progress is marked by a `NoPrefix` sentinel in the
+      // cache, a black hole that detects a cycle. With several readers
+      // (interactive mode) the cache is shared and the sentinel would be
+      // another reader's in-progress computation, seen as a cycle (finding
+      // I34): the marks are then kept on the reader, per class denotation as
+      // the cache is (a type's base type for one class is computed inside its
+      // base type for another), and only results reach the cache.
+      val pending: util.EqHashSet[Type] | Null = if ctx.base.concurrent then ctx.reader.pendingBaseTypesOf(this) else null
+      def markInProgress(tp: CachedType): Unit =
+        if pending != null then pending += tp else btrCache(tp) = NoPrefix
+      def unmark(tp: CachedType): Unit =
+        if pending != null then pending -= tp else btrCache.remove(tp)
       def inCache(tp: Type) = tp match
         case tp: CachedType => btrCache.contains(tp)
         case _ => false
@@ -2459,9 +2850,10 @@ object SymDenotations {
           Stats.record("basetype cache entries")
           if (!baseTp.exists) Stats.record("basetype cache NoTypes")
         }
+        if pending != null then pending -= tp
         if !(tp.isProvisional || CapturingType.isUncachable(tp) || ctx.gadt.isNarrowing) then
           btrCache(tp) = baseTp
-        else
+        else if pending == null then
           btrCache.remove(tp) // Remove any potential sentinel value
       }
 
@@ -2473,6 +2865,7 @@ object SymDenotations {
       def recur(tp: Type): Type = try {
         tp match {
           case tp: CachedType =>
+            if pending != null && pending.contains(tp) then throw CyclicReference(this)
             val baseTp: Type | Null = btrCache.lookup(tp)
             if (baseTp != null)
               return ensureAcyclic(baseTp)
@@ -2493,7 +2886,7 @@ object SymDenotations {
             }
 
             def computeTypeRef = {
-              btrCache(tp) = NoPrefix
+              markInProgress(tp)
               val tpSym = tp.symbol
               tpSym.denot match {
                 case clsd: ClassDenotation =>
@@ -2520,7 +2913,7 @@ object SymDenotations {
                   if (inCache(superTp))
                     record(tp, baseTp)
                   else
-                    btrCache.remove(tp)
+                    unmark(tp)
                   baseTp
               }
             }
@@ -2528,7 +2921,7 @@ object SymDenotations {
 
           case tp @ AppliedType(tycon, args) =>
             def computeApplied = {
-              btrCache(tp) = NoPrefix
+              markInProgress(tp)
               val baseTp =
                 if (tycon.typeSymbol eq symbol) && !tycon.isLambdaSub then tp
                 else (tycon.typeParams: @unchecked) match
@@ -2593,7 +2986,14 @@ object SymDenotations {
       catch {
         case ex: Exception =>
           tp match
-            case tp: CachedType => btrCache.remove(tp)
+            case tp: CachedType => unmark(tp)
+            case _ =>
+          throw ex
+        case ex: CompilationUnit.CancelledCompilation =>
+          // a cancellation unwinding through the computation left the
+          // in-progress mark too (a `ControlThrowable`, not an `Exception`)
+          tp match
+            case tp: CachedType => unmark(tp)
             case _ =>
           throw ex
       }
@@ -2609,8 +3009,12 @@ object SymDenotations {
       if (this.is(PackageClass) || !Config.cacheMemberNames)
         computeMemberNames(keepOnly) // don't cache package member names; they might change
       else {
-        if (!memberNamesCache.isValid) memberNamesCache = MemberNames.newCache()
-        memberNamesCache(keepOnly, this)
+        // read once, as `baseData` does: another reader may invalidate it meanwhile (I92)
+        var cache = memberNamesCache
+        if !cache.isValid then
+          cache = MemberNames.newCache()
+          memberNamesCache = cache
+        cache(keepOnly, this)
       }
 
     def computeMemberNames(keepOnly: NameFilter)(implicit onBehalf: MemberNames, ctx: Context): Set[Name] = {
@@ -2675,16 +3079,25 @@ object SymDenotations {
      */
     def ensureFreshScopeAfter(phase: DenotTransformer)(using Context): Unit =
       if (ctx.phaseId != phase.next.id) atPhase(phase.next)(ensureFreshScopeAfter(phase))
-      else {
-        val prevClassInfo = atPhase(phase) {
-          current.asInstanceOf[ClassDenotation].classInfo
-        }
-        val ClassInfo(pre, _, ps, decls, selfInfo) = classInfo
-        if (prevClassInfo.decls eq decls)
-          copySymDenotation(info = ClassInfo(pre, classSymbol, ps, decls.cloneScope, selfInfo))
-            .copyCaches(this, phase.next)
-            .installAfter(phase)
+      else if ctx.base.concurrent then Denotations.ringClaim(this)(ensureFreshScopeAfter0(phase))
+      else ensureFreshScopeAfter0(phase)
+
+    private def ensureFreshScopeAfter0(phase: DenotTransformer)(using Context): Unit = {
+      val prevClassInfo = atPhase(phase) {
+        current.asInstanceOf[ClassDenotation].classInfo
       }
+      val ClassInfo(pre, _, ps, decls, selfInfo) = classInfo
+      if (prevClassInfo.decls eq decls)
+        val decls1 = decls.cloneScope
+        // readers on other threads find the new version as soon as it is installed: the members entered next into
+        // its scope go in as into any published scope (`MutableScope.enter`), not in place
+        if ctx.base.concurrent then (decls, decls1) match
+          case (d: MutableScope, d1: MutableScope) => d1.published = d.published
+          case _ =>
+        copySymDenotation(info = ClassInfo(pre, classSymbol, ps, decls1, selfInfo))
+          .copyCaches(this, phase.next)
+          .installAfter(phase)
+    }
 
     private var myCompanion: Symbol = NoSymbol
 
@@ -2718,25 +3131,46 @@ object SymDenotations {
 
     private var packageObjsCache: List[ClassDenotation] = uninitialized
     private var packageObjsRunId: RunId = NoRunId
+    // set only to true; a race issues the warning twice
+    @cache @benignRace("only ever set to true: readers that race on it both warn, once more than necessary")
     private var ambiguityWarningIssued: Boolean = false
 
+    // with parallel readers, the package objects of a run as one value:
+    // another reader that met `packageObjsCache` while it was the cycle
+    // breaker `Nil` saw no package objects ("Not found: type List", I79)
+    @volatile private var sharedPackageObjs: (RunId, List[ClassDenotation]) | Null = null
+
     /** The package objects in this class */
-    def packageObjs(using Context): List[ClassDenotation] = {
-      if (packageObjsRunId != ctx.runId) {
-        packageObjsRunId = ctx.runId
-        packageObjsCache = Nil // break cycle in case we are looking for package object itself
-        packageObjsCache = {
-          val pkgObjBuf = new mutable.ListBuffer[ClassDenotation]
-          for (sym <- info.decls) { // don't use filter, since that loads classes with `$`s in their name
-            val denot = sym.lastKnownDenotation  // don't use `sym.denot`, as this brings forward classes too early
-            if (denot.isType && denot.name.isPackageObjectName)
-              pkgObjBuf += sym.asClass.classDenot
+    def packageObjs(using Context): List[ClassDenotation] =
+      if ctx.base.parallel then
+        val c = sharedPackageObjs
+        if c != null && c._1 == ctx.runId then c._2
+        else if ctx.base.completionRoots.ownedHere(this) then Nil // break cycle in case we are looking for package object itself
+        else
+          ctx.base.completionRoots.locked(this, CompletionLock.packageObjects, () => CompletionRoots.abortVictim(this)) {
+            val c1 = sharedPackageObjs
+            if c1 != null && c1._1 == ctx.runId then c1._2
+            else
+              val objs = computePackageObjs
+              sharedPackageObjs = (ctx.runId, objs)
+              objs
           }
-          pkgObjBuf.toList
+      else
+        if (packageObjsRunId != ctx.runId) {
+          packageObjsRunId = ctx.runId
+          packageObjsCache = Nil // break cycle in case we are looking for package object itself
+          packageObjsCache = computePackageObjs
         }
+        packageObjsCache
+
+    private def computePackageObjs(using Context): List[ClassDenotation] =
+      val pkgObjBuf = new mutable.ListBuffer[ClassDenotation]
+      for (sym <- info.decls) { // don't use filter, since that loads classes with `$`s in their name
+        val denot = sym.lastKnownDenotation  // don't use `sym.denot`, as this brings forward classes too early
+        if (denot.isType && denot.name.isPackageObjectName)
+          pkgObjBuf += sym.asClass.classDenot
       }
-      packageObjsCache
-    }
+      pkgObjBuf.toList
 
     /** The package object (as a term symbol) in this package that might contain
      *  `sym` as a member.
@@ -2864,7 +3298,7 @@ object SymDenotations {
         if (entry.sym == sym) return false
         mscope.unlink(entry)
       }
-      if (sym.name.isPackageObjectName) packageObjsRunId = NoRunId
+      if (sym.name.isPackageObjectName) { packageObjsRunId = NoRunId; sharedPackageObjs = null }
       true
     }
 
@@ -2877,7 +3311,9 @@ object SymDenotations {
         if sym.defRunId != ctx.runId && sym.isClass && sym.asClass.compUnitInfo != null then
           val file = sym.asClass.compUnitInfo.nn.associatedFile
           if file != null && file.path == path then
-            scope.unlink(sym, sym.lastKnownDenotation.name)
+            // as the scope's one writer, the entry found and removed together: the files of an open unlink their
+            // own symbols in parallel (`Namer.createPackageSymbol`), and a new package replaces the entries whole
+            scope.writing(scope.unlink(sym, sym.lastKnownDenotation.name))
     }
   }
 
@@ -2928,6 +3364,7 @@ object SymDenotations {
         else new ClassDenotation(symbol, owner, name, initFlags, initInfo, initPrivateWithin)
       else new SymDenotation(symbol, owner, name, initFlags, initInfo, initPrivateWithin)
     result.validFor = currentStablePeriod
+    if ctx.base.concurrent then result.markConcurrent()
     result
   }
 
@@ -3015,7 +3452,7 @@ object SymDenotations {
     with ((TermSymbol, ClassSymbol) => LazyType) { self =>
 
     /** Sets all missing fields of given denotation */
-    def complete(denot: SymDenotation)(using Context): Unit
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit
 
     def apply(sym: Symbol): LazyType = this
     def apply(module: TermSymbol, modcls: ClassSymbol): LazyType = this
@@ -3056,7 +3493,70 @@ object SymDenotations {
      *  completed before nested types.
      */
     def needsCompletion(symd: SymDenotation)(using Context): Boolean = true
+
+    /** The root this completion belongs to, for parallel readers
+     *  (`CompletionRoots`): what other readers wait on while it runs. The
+     *  symbol by default; a symbol loader's file (its class and module), a
+     *  TASTy file for the unpickler's completers.
+     */
+    def completionRoot(symd: SymDenotation)(using Context): AnyRef = symd.symbol
   }
+
+  /** The info of a symbol whose Namer completion a cancellation unwound in
+   *  interactive mode (see `SymDenotation.onUnwind`): a reader that
+   *  reaches it is cancelled, and the run is not resumed, so that the retry
+   *  is a fresh run with fresh symbols.
+   */
+  /** Tests: a wait-for cycle between readers fails the request with an `AssertionError` (see `cyclicWait`). */
+  private val failOnCycle: Boolean = System.getProperty("dotc.interactive.failOnCycle") != null
+
+  final class UnwoundCompletion(original: LazyType, runId: Int, val origin: String) extends LazyType with SymbolLoaders.SecondCompleter:
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
+      if ctx.runId != runId then
+        // a later run: the original completer degrades the stale symbol
+        // itself, as it does with one reader ("left incomplete by an earlier
+        // run"); it does not run its body
+        original.complete(denot)
+      else
+        val run = ctx.run
+        if run != null then run.markTainted()
+        throw CompilationUnit.CancelledCompilation(s"the completion of $denot was unwound by a cancellation on $origin; met again in run $runId by ${Thread.currentThread.getName}")
+
+  object UnwoundCompletion:
+    /** Where the cancellation unwound: the thread and the compiler frames of the completion it left (for the one who
+     *  meets the completer later, whose own stack says nothing about it). Taken on a cancellation only. */
+    def originHere(): String =
+      val frames = Thread.currentThread.getStackTrace.iterator
+        .filter(f => f.getClassName.startsWith("dotty.tools") && !f.getClassName.contains("SymDenotations"))
+        .take(8).map(f => s"${f.getClassName.stripPrefix("dotty.tools.dotc.")}.${f.getMethodName}:${f.getLineNumber}").mkString(" < ")
+      s"${Thread.currentThread.getName} at $frames"
+
+  /** The info of a denotation whose completion is in progress on a reader,
+   *  with parallel readers (`-Yinteractive-parallel`): `current` is what
+   *  the completer has set so far, seen by the owner thread only
+   *  (`SymDenotation.ownView`); every other thread sees a lazy type and
+   *  waits on `rootKey` before it looks again.
+   */
+  final class InProgress(@volatile var current: Type, val owner: Thread, val rootKey: AnyRef) extends LazyType:
+    /** The info before the completion began: the completer a peek that yields on a wait-for cycle answers from. */
+    val original: Type = current
+    def ownedHere: Boolean = owner eq Thread.currentThread
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit =
+      throw AssertionError(s"$denot: an InProgress is completed through its root, not run; ${diagnose()}")
+
+    /** For a failure that meets this: who owns it, what they are doing, and what the readers did last. */
+    def diagnose()(using Context): String =
+      val ownerStack = owner.getStackTrace.iterator.filter(_.getClassName.startsWith("dotty.tools")).take(25).mkString("\n    ")
+      s"""met by ${Thread.currentThread.getName}, owned by ${owner.getName} (${owner.getState}${if ownedHere then ", this thread" else ""}), root $rootKey, current info ${current.getClass.getSimpleName}
+         |claims held: ${ctx.base.completionRoots.holdersNow}
+         |the owner's stack now:
+         |    $ownerStack
+         |the readers' last events:
+         |${util.Chaos.recent(80)}""".stripMargin
+    override def completionRoot(symd: SymDenotation)(using Context): AnyRef = rootKey
+    override def decls: Scope = current match
+      case lt: LazyType => lt.decls
+      case _ => EmptyScope
 
   /** A subtrait of LazyTypes where completerTypeParams yields a List[TypeSymbol], which
    *  should be completed independently of the info.
@@ -3068,7 +3568,7 @@ object SymDenotations {
 
   /** A missing completer */
   trait NoCompleter extends LazyType {
-    def complete(denot: SymDenotation)(using Context): Unit = unsupported("complete")
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = unsupported("complete")
   }
 
   @sharable object NoCompleter extends NoCompleter
@@ -3080,7 +3580,19 @@ object SymDenotations {
    */
   class ModuleCompleter(_moduleClass: ClassSymbol) extends LazyType {
     override def moduleClass(using Context): ClassSymbol = _moduleClass
-    def complete(denot: SymDenotation)(using Context): Unit = {
+
+    /** The module class's root: completing the module val reads the module class (its completion, its flags and
+     *  annotations), and a loader or unpickler of the class's file completes the module val. Under keys of their
+     *  own, two readers took them in opposite orders and waited for each other (`scala.transient`,
+     *  `scala.UninitializedError`, signatures in parallel under `-Yparallel-typer`). The key depends only on where
+     *  the module is defined, never on how far its class is completed (a key read from the class's completer changed
+     *  under a reader that had computed it): a source module's class is the Namer's root, its own symbol; a
+     *  module from the classpath has its file's root (`SymbolLoaders.fileRoot`), as its loader and unpickler do.
+     */
+    override def completionRoot(symd: SymDenotation)(using Context): AnyRef =
+      if _moduleClass.isDefinedInCurrentRun then _moduleClass
+      else SymbolLoaders.fileRoot(_moduleClass).getOrElse(symd.symbol)
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val from = moduleClass.denot.asClass
       denot.setFlag(from.flags.toTermFlags & RetainedModuleValFlags)
       denot.annotations = from.annotations filter (_.appliesToModule)
@@ -3106,7 +3618,7 @@ object SymDenotations {
       denot.setPrivateWithin(NoSymbol)
     }
 
-    def complete(denot: SymDenotation)(using Context): Unit = {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = {
       val sym = denot.symbol
       val errMsg = BadSymbolicReference(denot)
       report.error(errMsg, sym.srcPos)
@@ -3140,7 +3652,7 @@ object SymDenotations {
     implicit val None: MemberNames = new InvalidCache with MemberNames {
       def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = ???
     }
-    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period)
+    def newCache()(using Context): MemberNames = new MemberNamesImpl(ctx.period, ctx.base)
   }
 
   /** A cache for baseclasses, as a sequence in linearization order and as a set that
@@ -3157,30 +3669,78 @@ object SymDenotations {
       def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context) = ???
       def signalProvisional() = ()
     }
-    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period)
+    def newCache()(using Context): BaseData = new BaseDataImpl(ctx.period, ctx.base)
   }
 
-  private abstract class InheritedCacheImpl(val createdAt: Period) extends InheritedCache {
+  /** Complete `clsd`'s ancestors, each before its parents are read: completions only, no inherited cache. */
+  private def completeAncestors(clsd: ClassDenotation)(using Context): Unit =
+    val seen = mutable.Set.empty[Symbol]
+    def loop(cls: Symbol): Unit =
+      if !seen.contains(cls) then
+        seen += cls
+        cls.denot.infoOrCompleter match
+          case _: TempClassInfo => // in progress on this reader: its parents are not known yet
+          case _ =>
+            cls.denot.info match
+              case info: ClassInfo => info.declaredParents.foreach(p => loop(p.classSymbol))
+              case _ =>
+    loop(clsd.symbol)
+
+  private abstract class InheritedCacheImpl(val createdAt: Period, base: ContextBase) extends InheritedCache, Sharing.BlackHole { self =>
     protected def sameGroup(p1: Phase, p2: Phase): Boolean
 
+    // A batch base pushes: an invalidation walks the caches computed from this one (`dependent`). A concurrent base
+    // pulls: a cache records the base's structure epoch when it is made, and is valid while the epoch has not moved.
+    // A change to a published scope moves it (`MutableScope.changed`), and so does an invalidation of a class's own
+    // cache, the one that a batch base would push to its dependents.
+    protected final def concurrent: Boolean = base.concurrent
+    private val epoch: Int = if concurrent then base.structureEpoch else 0
+    protected final def epochCurrent: Boolean = !concurrent || epoch == base.structureEpoch
+
     private var dependent: WeakHashMap[InheritedCache, Unit] | Null = null
+
+    // a memo of "valid in this period", stored after the check
+    @benignRace("any reader that finds the cache valid stores the period it checked in; a stale one only repeats the check")
     private var checkedPeriod: Period = Nowhere
 
-    protected def invalidateDependents() = {
-      if (dependent != null) {
-        val it = dependent.nn.keySet.iterator()
-        while (it.hasNext()) it.next().invalidate()
-      }
-      dependent = null
-    }
+    /** The invalidation of this cache reaches the caches computed from it. */
+    protected def invalidateDependents(): Unit =
+      if concurrent then base.bumpStructureEpoch()
+      else
+        if (dependent != null) {
+          val it = dependent.nn.keySet.iterator()
+          while (it.hasNext()) it.next().invalidate()
+        }
+        dependent = null
 
-    protected def addDependent(dep: InheritedCache): Unit = {
-      if (dependent == null) dependent = new WeakHashMap
-      dependent.nn.put(dep, ())
-    }
+    protected def addDependent(dep: InheritedCache): Unit =
+      if !concurrent then
+        if (dependent == null) dependent = new WeakHashMap
+        dependent.nn.put(dep, ())
+
+    // The computation's provisional mark, written only by the holder of this cache's claim: reached only with its
+    // evidence, a `Sharing.Holds` for this cache, which only `computing` hands out. The thread inside the computation
+    // is the cache's `Sharing.BlackHole`.
+    private var myProvisional = false
+    protected final def isProvisional(using Sharing.Holds[this.type]): Boolean = myProvisional
+    protected final def setProvisional(b: Boolean)(using Sharing.Holds[this.type]): Unit = myProvisional = b
+
+    /** Compute a cache's value: with several readers (interactive mode)
+     *  under the base's completion lock, so that the black hole `locked`
+     *  has one owner, like a completion's `Touched`.
+     */
+    protected inline def computing[T](clsd: ClassDenotation)(using Context)(inline op: Sharing.Holds[this.type] ?=> T): T =
+      // with parallel readers, the class and its ancestors are completed before the cache is claimed: completing
+      // one claims its root (a TASTy file's), and a reader holding that root may be computing this cache, so a
+      // completion under a cache's claim took the two in the other order (`collection.Iterator`, signatures in
+      // parallel under `-Yparallel-typer`). What the computation completes then is complete already.
+      if ctx.base.parallel then completeAncestors(clsd)
+      // the cache is its own root: its black hole `locked` has one owner
+      Sharing.claim(this, clsd)(op)
 
     def isValidAt(phase: Phase)(using Context) =
-      checkedPeriod == ctx.period ||
+      epochCurrent && checkedPeriod == ctx.period ||
+        epochCurrent &&
         createdAt.runId == ctx.runId &&
         createdAt.lastPhaseId < unfusedPhases.length &&
         sameGroup(unfusedPhases(createdAt.lastPhaseId), phase) &&
@@ -3193,38 +3753,53 @@ object SymDenotations {
     def invalidate(): Unit = ()
   }
 
-  private class MemberNamesImpl(createdAt: Period) extends InheritedCacheImpl(createdAt) with MemberNames {
+  private class MemberNamesImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with MemberNames {
+    // read once per use: the map is immutable, and a stale one is a miss or a cache another reader has just
+    // invalidated (I46, I92)
+    @benignRace("a lost store is a lost memo entry; a store after an invalidation is in a cache whose epoch has moved")
     private var cache: SimpleIdentityMap[NameFilter, Set[Name]] | Null = SimpleIdentityMap.empty
+    private def cacheNow: SimpleIdentityMap[NameFilter, Set[Name]] | Null = cache
 
     final def isValid(using Context): Boolean =
-      cache != null && isValidAt(ctx.phase)
-
-    private var locked = false
+      cacheNow != null && isValidAt(ctx.phase)
 
     /** Computing parent member names might force parents, which could invalidate
      *  the cache itself. In that case we should cancel invalidation and
      *  proceed as usual. However, all cache entries should be cleared.
      */
+    // Re-entry from this thread's own computation clears; another reader's computation in progress is no reason to
+    // keep the cache, which a plain `locked` could not tell apart. With several readers a store may follow an
+    // invalidation it raced with, but the invalidation has moved the epoch, so the cache is no longer valid.
     def invalidate(): Unit =
       if (cache != null)
-        if (locked) cache = SimpleIdentityMap.empty
+        if (isInsideHere) cache = SimpleIdentityMap.empty
         else {
           cache = null
           invalidateDependents()
         }
 
+    private def store(keepOnly: NameFilter, computed: Set[Name]): Unit =
+      val c2 = cache
+      if c2 != null then cache = c2.updated(keepOnly, computed) // invalidated meanwhile: not stored
+
     def apply(keepOnly: NameFilter, clsd: ClassDenotation)(implicit onBehalf: MemberNames, ctx: Context) = {
-      assert(isValid)
-      val cached = cache.nn(keepOnly)
+      // with several readers another one may invalidate this cache after the caller found it valid (I92): the
+      // names are computed and not stored
+      assert(concurrent || isValid)
+      // `cache` read once per use: another reader may invalidate it (null)
+      // between a check and a use (finding I46)
+      val c0 = cacheNow
+      val cached = if c0 == null then null else c0(keepOnly)
       try
         if (cached != null) cached
-        else {
-          locked = true
-          val computed =
-            try clsd.computeMemberNames(keepOnly)(using this, ctx)
-            finally locked = false
-          cache = cache.nn.updated(keepOnly, computed)
-          computed
+        else computing(clsd) {
+          val c1 = cacheNow
+          val cached1 = if c1 == null then null else c1(keepOnly) // computed meanwhile by the thread that held the lock?
+          if cached1 != null then cached1
+          else
+            val computed = inside(clsd.computeMemberNames(keepOnly)(using this, ctx))
+            store(keepOnly, computed)
+            computed
         }
       finally addDependent(onBehalf)
     }
@@ -3232,43 +3807,53 @@ object SymDenotations {
     def sameGroup(p1: Phase, p2: Phase) = p1.sameMembersStartId == p2.sameMembersStartId
   }
 
-  private class BaseDataImpl(createdAt: Period) extends InheritedCacheImpl(createdAt) with BaseData {
+  private class BaseDataImpl(createdAt: Period, base: ContextBase) extends InheritedCacheImpl(createdAt, base) with BaseData {
+    // read once per use: a tuple of immutable values, and a stale read is a cache another reader has just
+    // invalidated (I92)
+    @benignRace("a store after an invalidation is in a cache whose epoch has moved")
     private var cache: (List[ClassSymbol], BaseClassSet) | Null = null
-
+    @benignRace("a stale `true` is a cache another reader has just invalidated, and its epoch has moved")
     private var valid = true
-    private var locked = false
-    private var provisional = false
+
+    private def store(computed: (List[ClassSymbol], BaseClassSet)): Unit = if !concurrent || valid then cache = computed // a batch base stores unconditionally, as before
+    private def cacheNow: (List[ClassSymbol], BaseClassSet) | Null = cache
 
     final def isValid(using Context): Boolean =
-      valid && createdAt.runId == ctx.runId
+      valid && epochCurrent && createdAt.runId == ctx.runId
         // Note: We rely on the fact that whenever base types of classes change,
         // the affected classes will get new denotations with new basedata caches.
         // So basedata caches can become invalid only if the run changes.
 
+    // as `MemberNamesImpl.invalidate`: only this thread's computation in progress keeps the cache
     def invalidate(): Unit =
-      if (valid && !locked) {
+      if (valid && !isInsideHere) {
         cache = null
         valid = false
         invalidateDependents()
       }
 
-    def signalProvisional() = provisional = true
+    def signalProvisional() =
+      // the dependent cache's computation is on this thread's stack, so its claim is held further up; threading the
+      // evidence there would put it in `baseClasses`'s signature
+      setProvisional(true)(using Sharing.unguarded("signalled from inside the claim's own computation"))
 
     def apply(clsd: ClassDenotation)(implicit onBehalf: BaseData, ctx: Context)
         : (List[ClassSymbol], BaseClassSet) = {
-      assert(isValid)
+      assert(concurrent || isValid) // as in `MemberNamesImpl.apply` (I92)
       CyclicReference.trace("compute the base classes of ", clsd.symbol):
-        cache match
-          case null =>
-            if (locked) throw CyclicReference(clsd)
-            locked = true
-            provisional = false
-            val computed =
-              try clsd.computeBaseData(using this, ctx)
-              finally locked = false
-            if (!provisional) cache = computed
-            else onBehalf.signalProvisional()
-            computed
+        cacheNow match
+          case null => computing(clsd) {
+            cacheNow match
+              case null =>
+                val computed = computeInside(throw CyclicReference(clsd)) {
+                  setProvisional(false)
+                  clsd.computeBaseData(using this, ctx)
+                }
+                if (!isProvisional) store(computed)
+                else onBehalf.signalProvisional()
+                computed
+              case mc => mc // computed meanwhile by the thread that held the lock
+          }
           case mc => mc
     }
 
@@ -3294,7 +3879,7 @@ object SymDenotations {
   }
 
   /** A class to combine base data from parent types */
-  private final class BaseDataBuilder {
+  @scratch @confined private final class BaseDataBuilder {
     private var classes: List[ClassSymbol] = Nil
     private var length = 0
 
@@ -3320,5 +3905,98 @@ object SymDenotations {
 
   private val packageTypeName = ModuleClassName(nme.PACKAGE).toTypeName
 
+  // under `Config.showCompletions`, a constant that is off in every build
+  @interned @benignRace("indentation of a debug print only; a race skews it")
   @sharable private var indent = 0 // for completions printing
 }
+
+/** Probe (`-Ddotc.unstableReads`, `=stacks` for a stack per new site on a non-local symbol): reads of a
+ *  completion's intermediate state, whose answer depends on the order completions ran in. Three kinds:
+ *
+ *  - `parents`: the parents of a class read while its info is a `TempClassInfo` (not known yet, `Nil`);
+ *  - `cycle`: a `CyclicReference` made, which in a valid program is caught and handled (a check skipped, a
+ *    `LazyRef`, an implicit candidate dropped), or reported;
+ *  - `peek`: `isCompleting` answering true, to a caller that decides something from it.
+ *
+ *  Each is keyed by the symbol, whether it is local (reached only from its own unit, so the same in any parallel
+ *  schedule), whether it happened under `checkNonCyclic` (`Mode.CheckCyclic`), and the first compiler frame outside
+ *  `core` (for a peek, the caller of `isCompleting`). Printed at exit. See docs/_docs/internals/parallel-signatures.md.
+ */
+object UnstableReads:
+  val on: Boolean = System.getProperty("dotc.unstableReads") != null
+  private val stacks: Boolean = System.getProperty("dotc.unstableReads") == "stacks"
+  private val counts = java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.atomic.LongAdder]()
+  private val walker = StackWalker.getInstance()
+
+  // the completions in progress on this thread, innermost first
+  private val inProgress = ThreadLocal.withInitial[List[Symbols.Symbol]](() => Nil)
+  def push(sym: Symbols.Symbol): Unit = inProgress.set(sym :: inProgress.get.nn)
+  def pop(): Unit = inProgress.set(inProgress.get.nn.tail)
+
+  /** Where `sym` is among this thread's completions: the innermost (a completion looking at itself, the same in
+   *  every order), an enclosing one (a re-entry, whose answer depends on where the cycle was entered), or none. */
+  private def relation(sym: Symbols.Symbol): String = inProgress.get.nn match
+    case top :: _ if top eq sym => "self"
+    case all if all.exists(_ eq sym) => "outer"
+    case _ => "elsewhere"
+
+  private def frame(skip: String => Boolean): String =
+    walker.walk(s => s.filter(f => !f.getClassName.startsWith("dotty.tools.dotc.core.UnstableReads") && !skip(f.getClassName)).findFirst()).nn
+      .map(f => s"${f.getClassName.stripPrefix("dotty.tools.dotc.")}.${f.getMethodName}:${f.getLineNumber}").orElse("?").nn
+
+  private def record(kind: String, sym: Symbols.Symbol, at: String)(using Contexts.Context): Unit =
+    val local = if !sym.exists then "nosym" else if sym.isLocal || sym.owner.isTerm then "local" else "member"
+    val check = if ctx.mode.is(Mode.CheckCyclic) then " [checkNonCyclic]" else ""
+    val where = s"$kind $local$check ${if sym.exists then sym.showFullName else "-"} at $at"
+    counts.computeIfAbsent(where, _ => { if stacks && local == "member" then Thread.dumpStack(); java.util.concurrent.atomic.LongAdder() }).nn.increment()
+
+  private def outsideCore(cls: String) = cls.startsWith("dotty.tools.dotc.core.") || cls.startsWith("scala.")
+  private def thrower(cls: String) = cls.startsWith("dotty.tools.dotc.core.CyclicReference") || cls.startsWith("dotty.tools.dotc.core.TypeErrors")
+
+  // the probe's own reads (`derivesFrom` looking for an unknown base) are not counted
+  private val probing = ThreadLocal.withInitial[java.lang.Boolean](() => false)
+  def quietly[T](op: => T): T =
+    probing.set(true)
+    try op finally probing.set(false)
+
+  def parents(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    if !probing.get.nn.booleanValue then record(s"parents/${relation(sym)}", sym, frame(outsideCore))
+  /** A `CyclicReference` made: where it was thrown, and the first frame outside `core` above it. */
+  def cycle(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record("cycle", sym, s"${frame(thrower)} under ${frame(outsideCore)}")
+  /** A completion entered again on its own thread: the cycle `lockAndComplete0` throws for. */
+  def reentered(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record(s"reentry/${relation(sym)}", sym, frame(outsideCore))
+  // derivesFrom answered while parents were unknown: (class, base, answer, site)
+  private val derivations = java.util.concurrent.ConcurrentLinkedQueue[(Symbols.Symbol, Symbols.Symbol, Boolean, String)]()
+  def derivation(cls: Symbols.Symbol, base: Symbols.Symbol, answer: Boolean)(using Contexts.Context): Unit =
+    derivations.add((cls, base, answer, frame(outsideCore)))
+
+  /** Ask every recorded `derivesFrom` again, now that the classes are complete: did the answer given while their
+   *  parents were unknown stand? Called at the end of the typer. */
+  def validate()(using Contexts.Context): Unit =
+    import scala.jdk.CollectionConverters.*
+    val all = derivations.asScala.toList
+    val changed = all.filter((cls, base, answer, _) => cls.derivesFrom(base) != answer)
+    System.err.nn.println(s"[unstable reads] derivesFrom while parents unknown: ${all.size} answers, ${changed.size} changed once complete")
+    for (cls, base, answer, at) <- changed.distinct.take(40) do
+      System.err.nn.println(s"  changed: ${cls.showFullName} derivesFrom ${base.showFullName} was $answer at $at")
+    derivations.clear()
+
+  def peek(sym: Symbols.Symbol)(using Contexts.Context): Unit =
+    record(s"peek/${relation(sym)}", sym, frame(c => c.startsWith("dotty.tools.dotc.core.SymDenotations")))
+
+  if on then
+    Runtime.getRuntime.addShutdownHook(Thread(() =>
+      import scala.jdk.CollectionConverters.*
+      val all = counts.asScala.toList.sortBy(-_._2.sum)
+      def total(p: String => Boolean) = all.filter((k, _) => p(k)).map(_._2.sum).sum
+      System.err.nn.println(s"[unstable reads] ${all.map(_._2.sum).sum} events at ${all.size} sites")
+      val kinds = all.map(_._1.takeWhile(_ != ' ')).distinct.sorted
+      for kind <- kinds do
+        System.err.nn.println(s"[unstable reads] $kind: member ${total(k => k.startsWith(s"$kind member"))} (under checkNonCyclic ${total(k => k.startsWith(s"$kind member [checkNonCyclic]"))}), local ${total(k => k.startsWith(s"$kind local"))}, no symbol ${total(k => k.startsWith(s"$kind nosym"))}")
+      // the self-peeks are many and the same in every order: their sites only
+      val (self, rest) = all.partition(_._1.startsWith("peek/self"))
+      rest.take(300).foreach((k, v) => System.err.nn.println(f"  ${v.sum}%6d $k"))
+      self.groupMapReduce(_._1.replaceAll(" .* at ", " at "))(_._2.sum)(_ + _).toList.sortBy(-_._2).take(20)
+        .foreach((k, v) => System.err.nn.println(f"  $v%6d $k"))))

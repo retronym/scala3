@@ -2,6 +2,7 @@ package dotty.tools
 package dotc
 package core
 
+import scala.annotation.internal.publishedBy
 import Periods.*
 import Contexts.*
 import DenotTransformers.*
@@ -17,7 +18,7 @@ import typer.{TyperPhase, RefChecks}
 import cc.CheckCaptures
 import typer.ImportInfo.withRootImports
 import ast.{tpd, untpd}
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{sharable, cache, guardedBy}
 import scala.compiletime.uninitialized
 
 object Phases {
@@ -49,7 +50,8 @@ object Phases {
     def transform(ref: SingleDenotation)(using Context): SingleDenotation = unsupported("transform")
   }
 
-  trait PhasesBase {
+  // Set by `usePhases` when a run starts, which in the interactive driver is a write action: readers find them settled.
+  @cache @guardedBy("writer") trait PhasesBase {
     this: ContextBase =>
 
     // drop NoPhase at beginning
@@ -494,17 +496,18 @@ object Phases {
      */
     def printingContext(ctx: Context): Context = ctx
 
-    private var myPeriod: Period = Nowhere
-    private var myBase: ContextBase = uninitialized
-    private var myErasedTypes = false
-    private var myFlatClasses = false
-    private var myRefChecked = false
-    private var myLambdaLifted = false
-    private var myPatternTranslated = false
+    // set by `init` when the base plans its phases, before any reader; only read after
+    @publishedBy("init") private var myPeriod: Period = Nowhere
+    @publishedBy("init") private var myBase: ContextBase = uninitialized
+    @publishedBy("init") private var myErasedTypes = false
+    @publishedBy("init") private var myFlatClasses = false
+    @publishedBy("init") private var myRefChecked = false
+    @publishedBy("init") private var myLambdaLifted = false
+    @publishedBy("init") private var myPatternTranslated = false
 
-    private var mySameMembersStartId = NoPhaseId
-    private var mySameParentsStartId = NoPhaseId
-    private var mySameBaseTypesStartId = NoPhaseId
+    @publishedBy("init") private var mySameMembersStartId = NoPhaseId
+    @publishedBy("init") private var mySameParentsStartId = NoPhaseId
+    @publishedBy("init") private var mySameBaseTypesStartId = NoPhaseId
 
     /** The sequence position of this phase in the given context where 0
      * is reserved for NoPhase and the first real phase is at position 1.
@@ -576,6 +579,37 @@ object Phases {
           throw ex
         finally ctx.run.advanceUnit()
       }
+
+    /** `body` on each of `unitContexts`, in parallel on a pool of at most one thread per processor named
+     *  `threadName`; the contexts for which it returned true, in order. The first failure is rethrown here, after
+     *  every call has ended.
+     */
+    protected final def inParallel(threadName: String, unitContexts: List[Context])(body: Context ?=> Boolean): List[Context] =
+      import java.util.concurrent.{Callable, Executors}
+      // -Ddotc.parallelTyper.threads=<n>: the pool's size (one, to tell what a thread changes from what concurrency does)
+      val wanted = sys.props.get("dotc.parallelTyper.threads").flatMap(_.toIntOption).getOrElse(Runtime.getRuntime.availableProcessors)
+      val threads = math.min(wanted, unitContexts.length)
+      // numbered, so that a timeline has a lane per worker
+      val next = java.util.concurrent.atomic.AtomicInteger()
+      // each thread forgets its state on the base as it ends (`ContextBase.unbindThread`), whoever holds the thread
+      val base = unitContexts.headOption.map(_.base)
+      val pool = Executors.newFixedThreadPool(threads, r => {
+        val t = ReaderThread(() => try r.run() finally base.foreach(_.unbindThread()), s"$threadName-${next.getAndIncrement()}")
+        t.setDaemon(true); t }).nn
+      try
+        // the largest units first (longest-processing-time first, by source length), so that what is left for the
+        // end is small and the workers finish together: in source order a large file late in the list kept one
+        // worker busy after the others had run out (`Typer.scala`, 240 ms of bodies, a 13% tail on 8 threads).
+        // `-Ddotc.parallelTyper.order=source` submits in source order. The result is in source order either way.
+        val submitted =
+          if sys.props.get("dotc.parallelTyper.order").contains("source") then unitContexts
+          else unitContexts.sortBy(c => -c.compilationUnit.source.length)
+        val futures = submitted.map(c => c -> pool.submit((() => body(using c)): Callable[Boolean]).nn).toMap
+        val done = unitContexts.map(c =>
+          try futures(c).get().nn.booleanValue
+          catch case ex: java.util.concurrent.ExecutionException => throw ex.getCause.nn)
+        unitContexts.zip(done).collect { case (c, true) => c }
+      finally pool.shutdown()
 
     inline def runSubPhase[T](id: Run.SubPhase)(inline body: (Run.SubPhase, Context) ?=> T)(using Context): T =
       given Run.SubPhase = id

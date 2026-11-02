@@ -26,6 +26,8 @@ import typer.ProtoTypes.NoViewsAllowed
 import reporting.Message
 import collection.mutable.ListBuffer
 
+import scala.annotation.internal.{benignRace, guardedBy, lazyFact}
+import java.lang.invoke.VarHandle
 import scala.compiletime.uninitialized
 
 /** Denotations represent the meaning of symbols and named types.
@@ -74,7 +76,26 @@ import scala.compiletime.uninitialized
  */
 object Denotations {
 
+  object Denotation:
+    /** `Denotation.denotBits`: a type denotation. */
+    inline val TypeBit = 1
+    /** `Denotation.denotBits`: a `SymDenotation` on a concurrent base (`SymDenotations.SymDenotation`'s factory sets it). */
+    inline val ConcurrentBit = 2
+
+  /** The key of every bring-forward's claim: one, so that its cycles with completions are detected. */
+  private[core] object BringForward:
+    given Sharing.ClaimKind[BringForward.type] = Sharing.ClaimKind(CompletionLock.bringForward, lockWhenSerialised = true)
+
+  /** `op` as the one writer of the versions of `d`'s symbol in this run (its ring of denotations, linked by
+   *  `nextInRun`), on a base with several readers: a transformer's new version, an extension of a version's period,
+   *  an `installAfter`. Readers walk the ring with no claim. Keyed by the symbol, or by `d` with none. */
+  private[core] inline def ringClaim[T](d: SingleDenotation)(inline op: T)(using Context): T =
+    Sharing.claimAt(d)(if d.symbol.exists then d.symbol else d, Sharing.denotRing, d.symbol)(op)
+
   implicit def eqDenotation: CanEqual[Denotation, Denotation] = CanEqual.derived
+
+  object PreDenotation:
+    final class AsSeenFrom(val prefix: Type, val result: PreDenotation, val valid: Period)
 
   /** A PreDenotation represents a group of single denotations or a single multi-denotation
    *  It is used as an optimization to avoid forming MultiDenotations too eagerly.
@@ -131,9 +152,22 @@ object Denotations {
 
     type AsSeenFromResult <: PreDenotation
 
+    // with concurrent readers, the cache as one value, published at once: the
+    // three fields above, written by two readers, can pair one reader's prefix
+    // with the other's result (I78: `Conversion#apply` seen from
+    // `Conversion[String, Shown]` taking a `Showable`)
+    @volatile private var sharedAsSeenFrom: PreDenotation.AsSeenFrom | Null = null
+
     /** The denotation with info(s) as seen from prefix type */
     def asSeenFrom(pre: Type)(using Context): AsSeenFromResult =
-      if (Config.cacheAsSeenFrom) {
+      if Config.cacheAsSeenFrom && ctx.base.concurrent then
+        val c = sharedAsSeenFrom
+        if c != null && (c.prefix eq pre) && c.valid == ctx.period then c.result.asInstanceOf[AsSeenFromResult]
+        else
+          val result = computeAsSeenFrom(pre)
+          sharedAsSeenFrom = PreDenotation.AsSeenFrom(pre, result, if pre.isProvisional then Nowhere else ctx.period)
+          result
+      else if (Config.cacheAsSeenFrom) {
         if ((cachedPrefix ne pre) || ctx.period != validAsSeenFrom) {
           cachedAsSeenFrom = computeAsSeenFrom(pre)
           cachedPrefix = pre
@@ -179,17 +213,26 @@ object Denotations {
    *
    *  @param symbol  The referencing symbol, or NoSymbol is none exists
    */
-  abstract class Denotation(val symbol: Symbol, protected var myInfo: Type, val isType: Boolean) extends PreDenotation with printing.Showable {
+  abstract class Denotation(val symbol: Symbol, initInfo: Type, initIsType: Boolean) extends PreDenotation with printing.Showable {
     type AsSeenFromResult <: Denotation
+
+    // facts about this denotation, one bit each (`Denotation.TypeBit`, `Denotation.ConcurrentBit`)
+    protected var denotBits: Byte = if initIsType then Denotation.TypeBit else 0
+
+    /** Is this a reference to a type symbol? */
+    final def isType: Boolean = (denotBits & Denotation.TypeBit) != 0
+
+    // as `SymDenotation`'s other lazy facts: set by a completion under its claim (`InProgress` while it runs),
+    // and by the setters of a symbol that no other reader has yet
+    @lazyFact @guardedBy("completionLock") protected var myInfo: Type = initInfo
 
     /** The type info.
      *  The info is an instance of TypeType iff this is a type denotation
      *  Uncompleted denotations set myInfo to a LazyType.
      */
     final def info(using Context): Type = {
-      def completeInfo = { // Written this way so that `info` is small enough to be inlined
-        this.asInstanceOf[SymDenotation].completeFrom(myInfo.asInstanceOf[LazyType]); info
-      }
+      def completeInfo = // Written this way so that `info` is small enough to be inlined
+        this.asInstanceOf[SymDenotation].infoAfterCompletion
       if (myInfo.isInstanceOf[LazyType]) completeInfo else myInfo
     }
 
@@ -228,7 +271,13 @@ object Denotations {
     def current(using Context): Denotation
 
     /** The period during which this denotation is valid. */
-    private var myValidFor: Period = Nowhere
+    // Written under the bring-forward's claim (`updateValidity`), when a denotation is made, and by `goForward`,
+    // which does not take the claim: it extends the period to the next transformer's phase (the terminal phase in
+    // the interactive compiler, whose only transformer it is) or runs a transformer. Its write can overwrite a
+    // concurrent bring-forward's newer run with the old run it read; that is repaired, as a reader that sees the
+    // old run goes through `current`, whose `toNewRun` takes the claim and writes the run again. Read without
+    // the claim for the same reason.
+    @lazyFact @guardedBy("completionLock") private var myValidFor: Period = Nowhere
 
     final def validFor: Period = myValidFor
     final def validFor_=(p: Period): Unit = {
@@ -584,7 +633,7 @@ object Denotations {
   end infoMeet
 
   /** A non-overloaded denotation */
-  abstract class SingleDenotation(symbol: Symbol, initInfo: Type, isType: Boolean) extends Denotation(symbol, initInfo, isType) {
+  abstract class SingleDenotation(symbol: Symbol, initInfo: Type, initIsType: Boolean) extends Denotation(symbol, initInfo, initIsType) {
     protected def newLikeThis(symbol: Symbol, info: Type, pre: Type, isRefinedMethod: Boolean)(using Context): SingleDenotation
 
     final def name(using Context): Name = symbol.name
@@ -691,6 +740,9 @@ object Denotations {
      *  2) the union of all validity periods is a contiguous
      *     interval.
      */
+    // changed only under the completion lock (a bring-forward, a transformation) or by a batch base's transformers;
+    // a reader walks the ring with no lock, and each new denotation is linked in by one store after its own link
+    @benignRace("linked in by one store after a release fence on a concurrent base; a reader sees the ring before or after")
     protected var nextInRun: SingleDenotation = this
 
     /** The version of this SingleDenotation that was valid in the first phase
@@ -698,6 +750,13 @@ object Denotations {
      */
     def initial: SingleDenotation =
       if (validFor.firstPhaseId == FirstPhaseId) this
+      // a version replaced by `replaceWith` is no longer in the ring, and every version compares above `Nowhere`:
+      // the walk below never ended. Its `nextInRun` leads to its replacement. Serially no one asks a replaced
+      // version, but a reader on another thread can hold one (`Symbol.lastKnownDenotation` between a concurrent
+      // `installAfter`'s `replaceWith` and its `symbol.denot`)
+      else if validFor == Nowhere then
+        val next = nextDefined
+        if next.validFor == Nowhere then this else next.initial
       else {
         var current = nextInRun
         while (current.validFor > this.validFor) current = current.nextInRun
@@ -719,7 +778,10 @@ object Denotations {
     /** Invalidate all caches and fields that depend on base classes and their contents */
     def invalidateInheritedInfo(): Unit = ()
 
-    private def updateValidity()(using Context): this.type = {
+    // `updateValidity` and `bringForward` run under the claim of every bring-forward (`toNewRun`): they write each
+    // member's validity and its inherited caches, not the ring, which only phases after typer change
+    // (`insertAfter`, `replaceWith`)
+    private def updateValidity()(using Context, Sharing.Holds[BringForward.type]): this.type = {
       assert(
         ctx.runId >= validFor.runId
         || ctx.settings.YtestPickler.value // mixing test pickler with debug printing can travel back in time
@@ -750,7 +812,7 @@ object Denotations {
      *   - If the symbol was first defined in one of the transform phases (after pickling), it should not
      *     be visible in new runs, so also return a NoDenotation.
      */
-    private def bringForward()(using Context): SingleDenotation = {
+    private def bringForward()(using Context, Sharing.Holds[BringForward.type]): SingleDenotation = {
       this match {
         case symd: SymDenotation =>
           if (stillValid(symd)) return updateValidity()
@@ -811,27 +873,46 @@ object Denotations {
 
       def toNewRun =
         util.Stats.record("current.bringForward")
-        if exists then initial.bringForward().current else this
+        if exists then
+          // several readers (interactive mode): the bring-forward writes the
+          // flock's validity, one writer at a time; with parallel readers
+          // one root for every bring-forward, so that cycles with completions
+          // are detected
+          Sharing.claim(BringForward, symbol)(initial.bringForward().current)
+        else this
 
       /** Brings this denotation forward to the current phase, in one loop over the phase plan. A run of identity
        *  transformers is skipped in one step: they return the version unchanged, so its validity just extends.
+       *
+       *  `locked`: under the claim on the ring (`ringClaim`), on a base with several readers
        */
-      def goForward: SingleDenotation =
+      def goForward(locked: Boolean): SingleDenotation =
         val targetPhase = currentPeriod.lastPhaseId
         val nextTransformerAt = ctx.base.nextDenotTransformerId // phase id => first linked transformer at or after it
         val transformers = ctx.base.denotTransformers           // transformer id => its DenotTransformerInfo
 
         var cur = coveringOrLatest(this)
-        while cur.validFor.lastPhaseId < targetPhase do
-          val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
-          cur =
-            if targetPhase <= transformerId then extend(cur, transformerId)
-            else
-              val info = transformers(transformerId)
-              if info.isIdentity then extend(cur, math.min(info.nextNonIdentity, nextTransformerAt(targetPhase)))
-              else transformAt(info, cur)
-          cur = coveringOrLatest(cur)
-        cur
+        if cur.validFor.lastPhaseId < targetPhase && ctx.base.concurrent && !locked then
+          // the extension or the transformer's new denotation is written by one reader at a time, which searches
+          // again first: two readers that transformed the same denotation linked two versions for one period, and
+          // an extension written after a concurrent `installAfter` made the old version valid again
+          ringClaim(this) {
+            val valid1 = validFor
+            if valid1.contains(currentPeriod) then this
+            else if valid1 == Nowhere || valid1.runId != currentPeriod.runId || currentPeriod < valid1 then current
+            else goForward(locked = true)
+          }
+        else
+          while cur.validFor.lastPhaseId < targetPhase do
+            val transformerId = nextTransformerAt(cur.validFor.lastPhaseId)
+            cur =
+              if targetPhase <= transformerId then extend(cur, transformerId)
+              else
+                val info = transformers(transformerId)
+                if info.isIdentity then extend(cur, math.min(info.nextNonIdentity, nextTransformerAt(targetPhase)))
+                else transformAt(info, cur)
+            cur = coveringOrLatest(cur)
+          cur
       end goForward
 
       /** `start`, if it covers the current phase; else the later version that does, or else the latest version */
@@ -859,15 +940,24 @@ object Denotations {
        *  creations that way, and also avoid phase caches in contexts to get large.
        *  To work correctly, we need to demand that the context with the new phase
        *  is not retained in the result.
+       *
+       *  On a concurrent base the context may be shared with other readers (a captured creation context, one derived
+       *  by `withPhase`), which must not see the transformer's phase, so the transform runs in a fresh one. The
+       *  interactive compiler's only transformer is the terminal phase, so this is not reached there; a driver with
+       *  more would be.
        */
       def transformAt(info: DenotTransformerInfo, d: SingleDenotation): SingleDenotation =
-        val mutCtx = ctx.asInstanceOf[FreshContext]
+        val transformerPeriod = info.transformerPeriod.inRun(currentPeriod.runId)
         val transformed =
-          try
-            mutCtx.setPeriod(info.transformerPeriod.inRun(currentPeriod.runId))
-            info.transformer.transform(d)
-          finally
-            mutCtx.setPeriod(currentPeriod)
+          if ctx.base.concurrent then
+            info.transformer.transform(d)(using ctx.fresh.setPeriod(transformerPeriod))
+          else
+            val mutCtx = ctx.asInstanceOf[FreshContext]
+            try
+              mutCtx.setPeriod(transformerPeriod)
+              info.transformer.transform(d)
+            finally
+              mutCtx.setPeriod(currentPeriod)
         if transformed eq d then extend(d, info.lastPhaseId)
         else
           assertNotPackage(transformed, info.transformer)
@@ -904,7 +994,7 @@ object Denotations {
       else if valid.runId != currentPeriod.runId then
         toNewRun
       else if currentPeriod > valid then
-        goForward
+        goForward(locked = false)
       else
         goBack
     end current
@@ -919,24 +1009,27 @@ object Denotations {
     protected def installAfter(phase: DenotTransformer)(using Context): Unit = {
       val targetId = phase.next.id
       if (ctx.phaseId != targetId) atPhase(phase.next)(installAfter(phase))
+      else if ctx.base.concurrent then ringClaim(this)(installAfter0(targetId))
+      else installAfter0(targetId)
+    }
+
+    private def installAfter0(targetId: PhaseId)(using Context): Unit = {
+      val current = symbol.current
+      // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
+      // println(current.definedPeriodsString)
+      this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
+      if (current.validFor.firstPhaseId >= targetId)
+        current.replaceWith(this)
+        symbol.denot
+          // Let symbol point to updated denotation
+          // Without this we can get problems when we immediately recompute the denotation
+          // at another phase since the invariant that symbol used to point to a valid
+          // denotation is lost.
       else {
-        val current = symbol.current
-        // println(s"installing $this after $phase/${phase.id}, valid = ${current.validFor}")
-        // println(current.definedPeriodsString)
-        this.validFor = Period(ctx.runId, targetId, current.validFor.lastPhaseId)
-        if (current.validFor.firstPhaseId >= targetId)
-          current.replaceWith(this)
-          symbol.denot
-            // Let symbol point to updated denotation
-            // Without this we can get problems when we immediately recompute the denotation
-            // at another phase since the invariant that symbol used to point to a valid
-            // denotation is lost.
-        else {
-          current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
-          insertAfter(current)
-        }
-        // println(current.definedPeriodsString)
+        current.validFor = Period(ctx.runId, current.validFor.firstPhaseId, targetId - 1)
+        insertAfter(current)
       }
+      // println(current.definedPeriodsString)
     }
 
     /** Apply a transformation `f` to all denotations in this group that start at or after
@@ -959,8 +1052,10 @@ object Denotations {
     }
 
     /** Insert this denotation so that it follows `prev`. */
-    private def insertAfter(prev: SingleDenotation) = {
+    private def insertAfter(prev: SingleDenotation)(using Context) = {
       this.nextInRun = prev.nextInRun
+      // a reader walking the ring with no lock reaches this denotation only once its link is set
+      if ctx.base.concurrent then VarHandle.releaseFence()
       prev.nextInRun = this
     }
 
@@ -973,12 +1068,14 @@ object Denotations {
      *  The code to achieve this is subtle in that it works correctly
      *  whether the replaced denotation is the only one in its cycle or not.
      */
-    private[dotc] def replaceWith(newd: SingleDenotation): Unit = {
+    private[dotc] def replaceWith(newd: SingleDenotation)(using Context): Unit = {
       var prev = this
       while (prev.nextInRun ne this) prev = prev.nextInRun
-      // order of next two assignments is important!
+      // `newd` is linked in only once its own link is set, so that a reader walking the ring with no lock never
+      // meets it pointing at itself; when `this` is alone in its ring, so is `newd`
+      newd.nextInRun = if prev eq this then newd else nextInRun
+      if ctx.base.concurrent then VarHandle.releaseFence()
       prev.nextInRun = newd
-      newd.nextInRun = nextInRun
       validFor = Nowhere
       nextInRun = newd
     }
@@ -1279,7 +1376,7 @@ object Denotations {
 
   /** An overloaded denotation consisting of the alternatives of both given denotations.
    */
-  case class MultiDenotation(denot1: Denotation, denot2: Denotation) extends Denotation(NoSymbol, NoType, isType = false) with MultiPreDenotation {
+  case class MultiDenotation(denot1: Denotation, denot2: Denotation) extends Denotation(NoSymbol, NoType, initIsType = false) with MultiPreDenotation {
     validFor = denot1.validFor & denot2.validFor
 
     final def infoOrCompleter: Type = multiHasNot("info")

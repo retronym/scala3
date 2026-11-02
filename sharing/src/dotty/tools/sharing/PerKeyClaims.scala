@@ -1,0 +1,179 @@
+package dotty.tools.sharing
+
+import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
+
+import scala.jdk.CollectionConverters.*
+
+/** A `ClaimRegistry` for parallel threads: a claim per key, so that work on different keys runs at once.
+ *
+ *  A claim is its claimant's: reentrant for that claimant, and every other claimant that needs the key waits until
+ *  the owner releases it, then looks at what the key guards again (computed, or left computable by an owner that
+ *  unwound).
+ *
+ *  A wait that would close a cycle in the wait-for graph (each waiting claimant records the claim it waits on,
+ *  `Claimant.waitingOn`; following the owners from the claim leads back to the waiter) is a dependency cycle, handled
+ *  as `Claimant` says. The check runs at every slice of a wait, since another claimant's wait may start after this
+ *  one's.
+ *
+ *  @param currentClaimant      the claimant of the calling thread
+ *  @param cycles               what a claim does with a wait-for cycle it reports
+ *  @param coarseCycleWaitNanos how long a claimant that cannot abort waits on a cycle through a coarse claim
+ *                              (`What.coarse`) before it aborts after all; 0 for never
+ */
+final class PerKeyClaims(currentClaimant: () => Claimant, cycles: CycleHandler, coarseCycleWaitNanos: Long = 0L) extends ClaimRegistry:
+  import PerKeyClaims.{Claim, Yielded}
+
+  def this(currentClaimant: () => Claimant) = this(currentClaimant, AbortVictim)
+
+  def claim[T](key: AnyRef, kind: Sharing.ClaimKind[Nothing], cycleSubject: AnyRef, op: () => T): T =
+    locked(key, kind.what, () => cycles.waitCycle(cycleSubject))(op())
+
+  private val claims = new ConcurrentHashMap[AnyRef, Claim]()
+
+  /** Claim `key` for this thread's claimant, to do `what`; wait while another claimant holds it. `cycle` reports a
+   *  wait-for cycle (it throws).
+   */
+  def acquire(key: AnyRef, what: What, cycle: () => Nothing): Unit =
+    val me = currentClaimant()
+    var waitedSince = 0L
+    var seen: Claim | Null = null
+    var cycleSince = 0L
+    var lastChain: List[Claim] | Null = null
+    while true do
+      val c = claims.get(key)
+      if c == null then
+        val mine = Claim(me, what, Thread.currentThread.nn.getName.nn)
+        if claims.putIfAbsent(key, mine) == null then
+          me.acquired()
+          if waitedSince != 0L then
+            val s = seen.nn
+            me.recordWait(System.nanoTime() - waitedSince, s.what.render, s.ownerName)
+          return
+      else if c.owner eq me then
+        c.holds += 1
+        return
+      else
+        if waitedSince == 0L then
+          waitedSince = System.nanoTime()
+          seen = c
+        cycleChain(me, c) match
+          case null =>
+            cycleSince = 0L
+            lastChain = null
+          case chain =>
+            val parties = chain.map(_.owner)
+            // A peek is not a dependency: on one thread it takes another path when the computation is in progress.
+            // When its wait would close a wait-for cycle the peeking party yields, which is that path (the sequential
+            // answer from the owner's side), and the other parties wait for it to; reporting the cycle instead made a
+            // cyclic reference out of a pair no sequential order has (the Setting residue of I68, as modelled), and
+            // aborting a party made the force report it when the freed peek then met its own hole.
+            if what.isPeek then throw Yielded
+            else if chain.exists(k => (k.owner ne me) && { val w = k.owner.waitingFor; w != null && w.isPeek }) then
+              () // a party at a peek yields at its next look: wait
+            else if me.canAbort then
+              me.collidedWith = c
+              me.abort()
+            else if parties.exists(_.canAbort) then
+              () // a party that can abort does so at its next look: wait
+            else if coarseCycleWaitNanos > 0L && chain.exists(_.what.coarse) then
+              // through a coarse claim: its owner likely finishes without what this claimant holds; wait, bounded
+              if cycleSince == 0L then cycleSince = System.nanoTime()
+              else if System.nanoTime() - cycleSince > coarseCycleWaitNanos then
+                me.collidedWith = c
+                me.abort()
+            else if parties.forall(p => System.identityHashCode(p.thread) <= System.identityHashCode(me.thread)) then
+              // one party reports the cycle (a fixed order of the threads picks it). The chain is read from fields
+              // the claimants change as they go: only one seen at two looks, a slice apart, with the same claims, is
+              // a cycle and not a snapshot of two waits that ended
+              val last = lastChain
+              if last != null && last.corresponds(chain)(_ eq _) then cycle()
+              else lastChain = chain
+        me.waitingFor = what
+        me.waitingOn = c
+        try c.done.await(5, TimeUnit.MILLISECONDS)
+        finally
+          me.waitingOn = null
+          me.waitingFor = null
+    end while
+
+  /** Release a claim made by `acquire` on this thread. */
+  def release(key: AnyRef): Unit =
+    val c = claims.get(key).nn
+    c.holds -= 1
+    if c.holds == 0 then
+      claims.remove(key)
+      c.done.countDown()
+
+  /** Run `op` holding the claim on `key`. */
+  inline def locked[T](key: AnyRef, what: What, cycle: () => Nothing)(inline op: T): T =
+    acquire(key, what, cycle)
+    try op finally release(key)
+
+  /** Does this thread's claimant hold the claim on `key`? */
+  def ownedHere(key: AnyRef): Boolean =
+    val c = claims.get(key)
+    c != null && (c.owner eq currentClaimant())
+
+  /** The claims of a wait-for cycle that waiting on `c` would close: `c`, then what its owner waits on, and so on,
+   *  back to a claim of `me`; null if the owners do not lead back to `me`.
+   */
+  private def cycleChain(me: Claimant, c: Claim): List[Claim] | Null =
+    var claim: Claim | Null = c
+    var chain: List[Claim] = Nil
+    var steps = 0
+    while claim != null && steps < 1000 do
+      // a released claim is a stale edge: `waitingOn` of a claimant that has been woken and has not yet cleared it
+      if claim.done.getCount == 0 then return null
+      chain = claim :: chain
+      if claim.owner eq me then
+        // The edges were read one after another, so a chain is a cycle only if its waits still coexist now. A claim
+        // released after it was read, whose owner then waited on a claim of `me`, joined two waits that never
+        // coexisted (finding I98); claims are not reacquired, so a claim still held now was held throughout the
+        // walk. But a claim held is not a wait that stands: a claimant that threw out of `acquire` (aborted as a
+        // victim, a raised cycle, an interrupt) has cleared its `waitingOn` while its claim is still registered and
+        // its latch up, and a chain through it joins its ended wait with one that began after it. So each edge is
+        // read again: the claimant that was seen waiting on a claim must be waiting on it still.
+        return if chain.forall(_.done.getCount != 0) && edgesStand(chain) then chain else null
+      claim = claim.owner.waitingOn
+      steps += 1
+    null
+
+  /** Does every claimant of `chain` (built last claim first) still wait on the claim it was seen waiting on: the
+   *  owner of each claim on the claim read after it, the last claim's owner being `me`, whose wait is about to start.
+   */
+  private def edgesStand(chain: List[Claim]): Boolean =
+    // `chain` is `c_n :: ... :: c_1` where `c_1` is the claim `me` waits on and the owner of `c_i` waits on `c_i+1`
+    var cs = chain
+    var ok = true
+    while ok && cs.nonEmpty && cs.tail.nonEmpty do
+      val waitedOn = cs.head        // c_i+1
+      val waiter = cs.tail.head     // c_i, whose owner was seen waiting on c_i+1
+      ok = waiter.owner.waitingOn eq waitedOn
+      cs = cs.tail
+    ok
+
+  /** The wait-for graph now, for diagnostics: each claim, its owner (by thread id), and what the owner waits on. */
+  def graphNow: String =
+    def who(c: Claim) = s"${c.ownerName}#${c.owner.thread.getId}"
+    claims.values.asScala.toList.map: c =>
+      val waits = c.owner.waitingOn match
+        case null => "waits on nothing"
+        case w: Claim => s"waits on [${w.what.render}] held by ${who(w)}"
+      s"${who(c)} holds [${c.what.render}] (x${c.holds}), $waits"
+    .sorted.mkString("\n")
+
+  /** The claims held now, for diagnostics. */
+  def holdersNow: String =
+    claims.values.asScala.map(c => s"${c.ownerName}: ${c.what.render}").mkString("; ")
+
+object PerKeyClaims:
+  /** Thrown by `acquire` to a claimant whose wait is a peek (`What.isPeek`) when that wait would close a wait-for
+   *  cycle: the claim is not taken, and the claimant takes the path it takes when the computation is in progress on
+   *  its own thread. Caught at the peek; a stackless control exception. */
+  object Yielded extends RuntimeException("a peek yields to the completion in progress on another thread", null, false, false)
+
+  /** A claimant's claim on a key, released when its holds come back to 0. */
+  final class Claim(val owner: Claimant, val what: What, val ownerName: String):
+    // changed only by the owner (`acquire` re-entering, `release`)
+    @volatile var holds: Int = 1
+    val done: CountDownLatch = new CountDownLatch(1)

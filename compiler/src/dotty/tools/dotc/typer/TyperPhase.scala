@@ -7,6 +7,8 @@ import Run.SubPhase
 import Phases.*
 import Contexts.*
 import Symbols.*
+import Names.*
+import ast.untpd
 import ImportInfo.withRootImports
 import parsing.{Parser => ParserPhase}
 import config.Printers.typr
@@ -36,7 +38,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
 
   def enterSyms(using Context)(using subphase: SubPhase): Boolean = monitor(subphase.name) {
     val unit = ctx.compilationUnit
-    ctx.typer.index(unit.untpdTree)
+    ParallelBatch.span("index", unit.source.name)(ctx.typer.index(unit.untpdTree))
     typr.println("entered: " + unit.source)
   }
 
@@ -44,7 +46,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     val unit = ctx.compilationUnit
     try
       if !unit.suspended then ctx.profiler.onUnit(ctx.phase, unit):
-        unit.tpdTree = ctx.typer.typedExpr(unit.untpdTree)
+        unit.tpdTree = ParallelBatch.span("bodies", unit.source.name)(ctx.typer.typedExpr(unit.untpdTree))
         typr.println("typed: " + unit.source)
         record("retained untyped trees", unit.untpdTree.treeSize)
         record("retained typed trees after typer", unit.tpdTree.treeSize)
@@ -57,6 +59,167 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
     if unit.isJava then
       JavaChecks.check(unit.tpdTree)
   }
+
+  /** With parallel readers (`-Yinteractive-parallel`, several files in one targeted run:
+   *  `InteractiveDriver.openAll`), the files are indexed in parallel, each into a slice of its own for what it
+   *  defines in a package (`Namer.IndexSlice`); the slices are then merged into the packages, serially and in file
+   *  order. One difference from indexing serially: a top-level name defined in two of the files is reported at
+   *  the merge, and the later definition left out rather than renamed.
+   */
+  private def indexInParallel(unitContexts: List[Context])(using Context)(using SubPhase): List[Context] =
+    val lock = new Object
+    val sliced = unitContexts.map(c => c.fresh.setProperty(Namer.IndexSliceKey, Namer.IndexSlice(c, lock)))
+    val indexed = inParallel("dotc-index", byPackageInTurn(sliced))(enterSyms)
+    ctx.typer.mergeIndexSlices(sliced.map(_.property(Namer.IndexSliceKey).get))
+    // the files' own contexts go on to the typechecking, without the slices
+    unitContexts.zip(sliced).collect { case (c, s) if indexed.exists(_ eq s) => c }
+
+  /** The files taken one package at a time in turn (by the last name of the innermost package clause: a guess is
+   *  enough). A file's package clause loads its package from the classpath (`PackageLoader`), and the other files
+   *  in that package wait for the load: started on different packages, the threads run the loads side by side
+   *  rather than queue on each in turn (on the compiler's own sources, 100 ms of indexing in parallel becomes 45).
+   */
+  private def byPackageInTurn(unitContexts: List[Context]): List[Context] =
+    def packageOf(tree: untpd.Tree): Name = tree match
+      case untpd.PackageDef(_, (nested: untpd.PackageDef) :: _) => packageOf(nested)
+      case untpd.PackageDef(pid, _) => pid.name
+      case _ => EmptyTermName
+    val groups = unitContexts.groupBy(c => packageOf(c.compilationUnit.untpdTree)).values.toList
+    groups.flatMap(_.zipWithIndex).sortBy(_._2).map(_._1)
+
+  /** Batch compilation with `-Yparallel-typer`: each unit typechecked on a thread of a pool, in a typer state of
+   *  its own (a child of the run's, settled when the unit ends: nothing is committed into the state the readers
+   *  share). A unit whose reader was aborted as the victim of a wait-for cycle is an error. The run's diagnostics
+   *  are issued after the last unit, in a fixed order.
+   */
+  private def typeCheckInParallel(unitContexts: List[Context])(using Context)(using SubPhase): List[Context] =
+    val reporter = ctx.reporter match
+      case r: ParallelBatchReporter => r
+      case r => throw IllegalStateException(s"-Yparallel-typer needs the driver's ParallelBatchReporter, found $r")
+    reporter.startBuffering()
+    val retried = java.util.concurrent.ConcurrentLinkedQueue[Context]()
+    // an aborted unit's state is dropped, not settled: what it reported was typed on the way to the abort
+    def typeCheckPrivately(c0: Context): Boolean =
+      val c1 = c0.fresh.setNewTyperState()
+      val ok = typeCheck(using c1)
+      c1.typerState.settle(c0)(using c1)
+      ok
+    val tSig = System.nanoTime()
+    val signatures = java.util.concurrent.atomic.AtomicInteger()
+    val log = sys.props.contains("dotc.parallelTyper.log")
+
+    /** `op` on the symbol of each definition at the top level of the unit, a package's statements included. */
+    def eachTopLevel(tree: untpd.Tree)(op: Symbol => Unit)(using Context): Unit = tree match
+      case untpd.PackageDef(_, stats) => stats.foreach(eachTopLevel(_)(op))
+      case _: untpd.MemberDef =>
+        def one(t: untpd.Tree) = if ctx.typer.hasDefinedSymbol(t) then op(ctx.typer.symbolOfTree(t))
+        ctx.typer.expanded(tree) match
+          case untpd.Thicket(trees) => trees.foreach(one)
+          case _ => one(tree)
+      case _ =>
+    def eachUnit(what: String, parallel: Boolean)(op: Context ?=> Unit): Unit =
+      val t = System.nanoTime()
+      val body: Context => Boolean = c =>
+        try ParallelBatch.span(what, c.compilationUnit.source.name)(op(using c))
+        catch case _: CompilationUnit.SuspendException => ()
+        true
+      if parallel then
+        val aborted = java.util.concurrent.atomic.AtomicInteger()
+        // a watchdog: the wait-for graph of a phase that runs for longer than 15 s
+        val roots = ctx.base.completionRoots
+        val watchdog = Thread(() =>
+          try
+            Thread.sleep(15000)
+            System.err.nn.println(s"[parallel-typer] $what still running after 15 s; claims:\n${roots.graphNow}")
+          catch case _: InterruptedException => ())
+        watchdog.setDaemon(true)
+        watchdog.start()
+        try inParallel(s"dotc-$what", unitContexts) { c ?=>
+          try body(c)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            aborted.incrementAndGet()
+            report.error(s"-Yparallel-typer: $what of ${c.compilationUnit.source} aborted: ${ex.getMessage}")
+            false
+        }
+        finally watchdog.interrupt()
+        if log then System.err.nn.println(f"[parallel-typer] $what in parallel in ${(System.nanoTime() - t) / 1e6}%.1f ms, ${aborted.get} units aborted")
+      else
+        unitContexts.foreach(body)
+        if log then System.err.nn.println(f"[parallel-typer] $what serially in ${(System.nanoTime() - t) / 1e6}%.1f ms")
+
+    def completeSignatures(sym: Symbol)(using Context): Unit =
+      if sym.exists then
+        sym.ensureCompleted()
+        signatures.incrementAndGet()
+        if sym.isClass then
+          for d <- sym.info.decls.toList do
+            if d.source == ctx.source then completeSignatures(d)
+
+    // -Ddotc.parallelTyper.stageDecls: before any signature, every source class's decls entered, with its type
+    // parameters and its constructor completed: `ClassCompleter.completeConstructor`, the stage that `Desugar`
+    // already asks for without completing the class (docs/_docs/internals/parallel-signatures.md, §5.1)
+    def stageDecls(sym: Symbol)(using Context): Unit =
+      if sym.exists && sym.isClass then
+        sym.infoOrCompleter match
+          case completer: Namer#ClassCompleter => completer.completeConstructor(sym)
+          case _ =>
+        for d <- sym.unforcedDecls.toList do
+          if d.isClass && d.source == ctx.source then stageDecls(d)
+    if sys.props.contains("dotc.parallelTyper.stageDecls") then
+      eachUnit("decls", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(stageDecls))
+
+    // the signatures of every member of every unit, so that the readers then type bodies and meet no Namer
+    // completion of a member: serially by default; -Ddotc.parallelTyper.parallelSignatures for a unit per task,
+    // after every class header, serially. Headers on several threads meet in wait-for cycles that are not cycles
+    // serially: one thread nests `Symbols$`'s header inside `tpd$`'s and reads `tpd$`'s decls from its temporary
+    // info, while two threads wait for each other, and the cycle is answered with a `CyclicReference` that breaks
+    // `tpd`'s imports (docs/_docs/internals/parallel-signatures.md, §5.7). -Ddotc.parallelTyper.classesFirst does
+    // the same with serial signatures, to measure the split.
+    val parallelSignatures = sys.props.contains("dotc.parallelTyper.parallelSignatures")
+    if parallelSignatures || sys.props.contains("dotc.parallelTyper.classesFirst") then
+      def classes(sym: Symbol)(using Context): Unit =
+        if sym.exists && sym.isClass then
+          sym.ensureCompleted()
+          for d <- sym.info.decls.toList do
+            if d.isClass && d.source == ctx.source then classes(d)
+      eachUnit("class headers", parallel = false)(eachTopLevel(ctx.compilationUnit.untpdTree)(classes))
+
+    if parallelSignatures then ctx.typerState.readOnlyRoot = true
+    try eachUnit("signatures", parallelSignatures)(eachTopLevel(ctx.compilationUnit.untpdTree)(completeSignatures))
+    finally ctx.typerState.readOnlyRoot = false
+
+    val root = ctx.typerState
+    root.readOnlyRoot = true
+    val t0 = System.nanoTime()
+    var t1 = t0
+    var again: List[Context] = Nil
+    val (done, doneAgain) =
+      try
+        // -Ddotc.parallelTyper.oneThread: the same order (signatures, then bodies) on this thread, to tell what
+        // the order changes from what concurrency changes
+        def body(c: Context) =
+          try typeCheckPrivately(c)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            System.err.nn.println(s"[parallel-typer] aborted: ${c.compilationUnit.source} (${ex.getMessage})")
+            retried.add(c)
+            false
+        val done =
+          if sys.props.contains("dotc.parallelTyper.oneThread") then unitContexts.filter(body)
+          else inParallel("dotc-typer", unitContexts)(c ?=> body(c))
+        t1 = System.nanoTime()
+        again = unitContexts.filter(c => retried.contains(c))
+        // typing a unit consumes what the Namer attached to its untyped trees (an import's symbol, a typed-ahead
+        // tree), so an aborted unit cannot be typed again in this run: it is an error, for now
+        again.foreach(c => report.error(s"-Yparallel-typer: ${c.compilationUnit.source} was aborted as the victim of a wait-for cycle and cannot be typed again in this run"))
+        (done, Nil)
+      finally
+        root.readOnlyRoot = false
+        reporter.issueBuffered()
+    if ctx.settings.verbose.value || sys.props.contains("dotc.parallelTyper.log") then
+      System.err.nn.println(f"[parallel-typer] ${signatures.get} signatures completed in ${(t0 - tSig) / 1e6}%.1f ms")
+      System.err.nn.println(f"[parallel-typer] ${unitContexts.length} units in ${(t1 - t0) / 1e6}%.1f ms on ${math.min(Runtime.getRuntime.availableProcessors, unitContexts.length)} threads; ${again.length} retried serially in ${(System.nanoTime() - t1) / 1e6}%.1f ms")
+    val ok = (done ++ doneAgain).toSet
+    unitContexts.filter(ok.contains)
 
   protected def discardAfterTyper(unit: CompilationUnit)(using Context): Boolean =
     (unit.isJava && !ctx.settings.XjavaTasty.value) || unit.suspended
@@ -76,12 +239,17 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
         else
           newCtx
 
-    val unitContexts0 = runSubPhase(Indexing) {
-      for
-        unitContext <- unitContexts
-        if enterSyms(using unitContext)
-      yield unitContext
-    }
+    val unitContexts0 = interactive.OpenTiming.timed("index")(runSubPhase(Indexing) {
+      // -Ddotc.parallelTyper.parallelIndex: the same in batch compilation (`-Yparallel-typer`)
+      val batchIndex = !ctx.mode.is(Mode.Interactive) && sys.props.contains("dotc.parallelTyper.parallelIndex")
+      if ctx.base.parallel && (ctx.run.nn.isTargeted || batchIndex) && unitContexts.lengthCompare(1) > 0 then
+        indexInParallel(unitContexts)
+      else
+        for
+          unitContext <- unitContexts
+          if enterSyms(using unitContext)
+        yield unitContext
+    })
 
     ctx.base.parserPhase match {
       case p: ParserPhase =>
@@ -93,12 +261,15 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
       case _ =>
     }
 
-    val unitContexts1 = runSubPhase(Typechecking) {
-      for
-        unitContext <- unitContexts0
-        if typeCheck(using unitContext)
-      yield unitContext
-    }
+    val unitContexts1 = interactive.OpenTiming.timed("typecheck (skipping)")(runSubPhase(Typechecking) {
+      if ctx.base.parallel && !ctx.mode.is(Mode.Interactive) && unitContexts0.lengthCompare(1) > 0 then
+        typeCheckInParallel(unitContexts0)
+      else
+        for
+          unitContext <- unitContexts0
+          if typeCheck(using unitContext)
+        yield unitContext
+    })
 
     record("total trees after typer", ast.Trees.ntrees)
 
@@ -108,6 +279,7 @@ class TyperPhase(addRootImports: Boolean = true) extends Phase {
         if javaCheck(using unitContext) // after typechecking to avoid cycles
       yield unitContext
     }
+    if UnstableReads.on then UnstableReads.validate()
     val newUnits = unitContexts2.map(_.compilationUnit).filterNot(discardAfterTyper)
     ctx.run.nn.checkSuspendedUnits(newUnits)
     newUnits

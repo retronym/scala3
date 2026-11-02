@@ -615,7 +615,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
         if params == null then rest else params :: rest
       case _ => Nil
 
-    def complete(denot: SymDenotation)(using Context): Unit = try {
+    def complete(denot: SymDenotation)(using Context, Sharing.Holds[denot.type]): Unit = try {
       def parseToCompletion(denot: SymDenotation)(using Context) = {
         val tag = readByte()
         val end = readNat() + readIndex

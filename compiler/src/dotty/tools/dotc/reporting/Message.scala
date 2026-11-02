@@ -439,11 +439,25 @@ abstract class Message(val errorId: ErrorMessageID)(using Context) { self =>
 
   /** The message to report. <nonsensical> tags are filtered out */
   @threadUnsafe lazy val message: String =
-    inMessageContext(disambiguate)(msg + msgPostscript)
+    rendered("message")(inMessageContext(disambiguate)(msg + msgPostscript))
 
   /** The explanation to report. <nonsensical> tags are filtered out */
   @threadUnsafe lazy val explanation: String =
-    inMessageContext(disambiguate = Disambiguation.None)(explain)
+    rendered("explanation")(inMessageContext(disambiguate = Disambiguation.None)(explain))
+
+  /** `render`, or what can be said when rendering it throws a `TypeError`: printing a symbol forces its
+   *  completion, and a cyclic reference's message printed inside the very completion it reports (or, with
+   *  several readers, a cycle through another reader's) raised a second cyclic reference out of the reporter,
+   *  which cascaded into the typer with no position of its own. The report survives with a message that says
+   *  what it could not render. A cancellation (`ControlThrowable`) is not caught: it must unwind.
+   */
+  private def rendered(what: String)(render: => String): String =
+    try render
+    catch case ex: core.TypeError =>
+      val cause = ex match
+        case cr: core.CyclicReference => s"a cyclic reference involving ${cr.denot}" // `toString`: the name and kind, nothing forced
+        case _ => ex.getClass.getSimpleName
+      s"<the $what of ${getClass.getSimpleName.stripSuffix("$")} could not be rendered: $cause while printing it>"
 
   /** The implicit `Context` in messages is a large thing that we don't want
     * persisted. This method gets around that by duplicating the message,

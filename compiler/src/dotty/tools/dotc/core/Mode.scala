@@ -31,6 +31,8 @@ case class Mode(val bits: Int) extends AnyVal {
 object Mode {
   val None: Mode = Mode(0)
 
+  // the modes' names, installed by `newMode` while this object is initialised
+  @scala.annotation.internal.interned @scala.annotation.internal.publishedBy("init")
   private val modeName = new Array[String](32)
 
   def newMode(bit: Int, name: String): Mode = {

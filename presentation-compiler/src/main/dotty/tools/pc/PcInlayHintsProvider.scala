@@ -42,7 +42,9 @@ class PcInlayHintsProvider(
   val text: Array[Char] = sourceText.toCharArray()
   val source: SourceFile =
     SourceFile.virtual(filePath.toString, sourceText)
-  driver.run(uri, source)
+  // the requested range, typed and walked alone
+  val range: Span = Span(params.offset(), params.endOffset())
+  driver.runUpTo(uri, source, range)
   given InlayHintsParams = params
 
   given InferredType.Text = InferredType.Text(text)
@@ -51,7 +53,7 @@ class PcInlayHintsProvider(
   val pos = driver.sourcePosition(params)
 
   def provide(): List[InlayHint] =
-    val deepFolder = PcCollector.DeepFolderWithParent[InlayHints](collectDecorations)
+    val deepFolder = PcCollector.DeepFolderWithParent[InlayHints](collectDecorations, range, unit.source)
     Interactive
       .pathTo(driver.openedTrees(uri), pos)(using driver.currentCtx)
       .headOption

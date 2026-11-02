@@ -22,7 +22,7 @@ import util.Spans.{NoSpan, Span}
 import TypeComparer.necessarySubType
 import reporting.*
 
-import scala.annotation.internal.sharable
+import scala.annotation.internal.{benignRace, cache, confined, scratch, sharable}
 
 object ProtoTypes {
 
@@ -174,7 +174,10 @@ object ProtoTypes {
 
   /** A class marking ignored prototypes that can be revealed by `deepenProto` */
   abstract case class IgnoredProto(ignored: Type) extends CachedGroundType with MatchAlways:
-    private var myWasDeepened = false
+    // `IgnoredProto` is hash-consed, so this flag is on a type every reader and run can reach. It only goes from false to
+    // true and only words an error message (finding: a message can show the deepened expected type because another
+    // call looked inside).
+    @cache @benignRace("only ever set to true; read only to word an error message") private var myWasDeepened = false
     override def revealIgnored = ignored
     override def deepenProto(using Context): Type =
       myWasDeepened = true
@@ -353,7 +356,8 @@ object ProtoTypes {
   trait FunOrPolyProto extends ProtoType: // common trait of PolyProto and FunProto
     def applyKind: ApplyKind = ApplyKind.Regular
 
-  class FunProtoState {
+  // shared by the FunProtos derived from one another, which belong to one typing call
+  @scratch @confined class FunProtoState {
 
     /** The list of typed arguments, if all arguments are typed */
     var typedArgs: List[Tree] = Nil

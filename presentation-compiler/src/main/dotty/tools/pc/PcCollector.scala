@@ -12,8 +12,9 @@ import dotty.tools.dotc.core.NameOps.*
 import dotty.tools.dotc.core.Names.*
 import dotty.tools.dotc.core.Symbols.*
 import dotty.tools.dotc.interactive.InteractiveDriver
+import dotty.tools.dotc.util.SourceFile
 import dotty.tools.dotc.util.SourcePosition
-import dotty.tools.dotc.util.Spans.Span
+import dotty.tools.dotc.util.Spans.{NoSpan, Span}
 import dotty.tools.pc.PcSymbolSearch.*
 import dotty.tools.pc.utils.InteractiveEnrichments.*
 
@@ -272,24 +273,31 @@ trait PcCollector[T]:
     end collectNamesWithParent
 
     val traverser =
-      new PcCollector.DeepFolderWithParent[Set[T]](collectNamesWithParent)
+      new PcCollector.DeepFolderWithParent[Set[T]](collectNamesWithParent, range, unit.source)
     traverser(Set.empty[T], unit.tpdTree)
   end traverseSought
 
 end PcCollector
 
 object PcCollector:
-  private class WithParentTraverser[X](f: (X, Tree, Option[Tree]) => X)
+  private class WithParentTraverser[X](f: (X, Tree, Option[Tree]) => X, within: Span, source: SourceFile | Null)
       extends TreeAccumulator[List[Tree]]:
     def apply(x: List[Tree], tree: Tree)(using Context): List[Tree] = tree :: x
     def traverse(acc: X, tree: Tree, parent: Option[Tree])(using Context): X =
-      val res = f(acc, tree, parent)
-      val children = foldOver(Nil, tree).reverse
-      children.foldLeft(res)((a, c) => traverse(a, c, Some(tree)))
+      if within.exists && (tree.source eq source) && tree.span.exists && !tree.span.touches(within) then acc
+      else
+        val res = f(acc, tree, parent)
+        val children = foldOver(Nil, tree).reverse
+        children.foldLeft(res)((a, c) => traverse(a, c, Some(tree)))
 
-  // Folds over the tree as `DeepFolder` but `f` takes also the parent.
-  class DeepFolderWithParent[X](f: (X, Tree, Option[Tree]) => X):
-    private val traverser = WithParentTraverser[X](f)
+  /** Folds over the tree as `DeepFolder` but `f` takes also the parent. With
+   *  a range `within`, a subtree of `source` that does not touch it is not
+   *  visited: of a run targeted at the range (`InteractiveDriver.runUpTo`),
+   *  that is what was typed only because the range needs it, and the stubs of
+   *  skipped block statements.
+   */
+  class DeepFolderWithParent[X](f: (X, Tree, Option[Tree]) => X, within: Span = NoSpan, source: SourceFile | Null = null):
+    private val traverser = WithParentTraverser[X](f, within, source)
     def apply(x: X, tree: Tree)(using Context) =
       traverser.traverse(x, tree, None)
 
@@ -344,7 +352,8 @@ abstract class WithSymbolSearchCollector[T](
 
 abstract class SimpleCollector[T](
     driver: InteractiveDriver,
-    params: VirtualFileParams
-) extends WithCompilationUnit(driver, params)
+    params: VirtualFileParams,
+    range: Span = NoSpan
+) extends WithCompilationUnit(driver, params, range)
     with PcCollector[T]:
   def result(): List[T] = resultAllOccurrences().toList

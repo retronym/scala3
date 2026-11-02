@@ -55,6 +55,7 @@ import transform.CheckUnused.withOriginalName
 import dotty.tools.dotc.printing.Formatting.hl
 
 import scala.annotation.{unchecked as _, *}
+import scala.annotation.internal.{confined, scratch}
 import dotty.tools.dotc.util.chaining.*
 
 object Typer {
@@ -89,6 +90,20 @@ object Typer {
 
   /** Tree adaptation lost fidelity; this attachment preserves the original tree. */
   val AdaptedTree = new Property.StickyKey[tpd.Tree]
+
+  /** In interactive mode, where the driver keeps a session that survives an
+   *  edit inside a body (`-Yinteractive-body-edits`): the context and
+   *  statement owner each definition of a package or template was typed in,
+   *  by symbol, so that it can be re-indexed and typed again in the same
+   *  context after an edit. A context property of the session's run.
+   */
+  val RecordedDefContexts = new Property.Key[java.util.IdentityHashMap[Symbol, (Context, Symbol)]]
+
+  /** In interactive mode, while the driver re-indexes a definition after an
+   *  edit inside its body: the existing symbol the Namer refines instead of
+   *  creating one, by name and the span of the name, or `NoSymbol`.
+   */
+  val RefinedSymbols = new Property.Key[(Name, Span) => Symbol]
 
   /** An attachment on a Select node with an `apply` field indicating that the `apply`
    *  was inserted by the Typer.
@@ -163,6 +178,39 @@ object Typer {
         failedVal
       }
     }
+
+  /** What one name lookup (`Typer.findRef`) accumulates besides its result. One per lookup, so that a lookup nested
+   *  in another (through a completion) or running on another thread has its own.
+   *
+   *  @param collectAlts whether to collect the alternative imported references of the result (`alts`), as the
+   *                     expansion of an extension method `e.m` to `m(e)` does
+   */
+  final class RefSearch(val collectAlts: Boolean = false):
+    /** The root import symbols met so far as the qualifier of an import that hides them. */
+    var unimported: Set[Symbol] = Set.empty
+
+    /** The reference Scala 2's resolution would find where this one differs (`-source 3.0-migration`), or `NoType`. */
+    var foundUnderScala2: Type = NoType
+
+    // made on the first alternative: most lookups collect none
+    private var myAlts: mutable.ListBuffer[TermRef] | Null = null
+
+    /** The alternative imported references collected, in the order found. */
+    def alts: List[TermRef] = myAlts match
+      case null => Nil
+      case as => as.toList
+    def hasAlts: Boolean = myAlts match
+      case null => false
+      case as => as.nonEmpty
+    def existsAlt(p: TermRef => Boolean): Boolean = myAlts match
+      case null => false
+      case as => as.exists(p)
+    def addAlt(ref: TermRef): Unit = myAlts match
+      case null => myAlts = mutable.ListBuffer(ref)
+      case as => as += ref
+    def clearAlts(): Unit = myAlts match
+      case null =>
+      case as => as.clear()
 }
 /** Typecheck trees, the main entry point is `typed`.
  *
@@ -190,22 +238,9 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    *  entered during completion and where they survive until typechecking. A
    *  context with this typer also has this scope.
    */
-  val scope: MutableScope = newScope(nestingLevel)
-
-  /** A temporary data item valid for a single `findRef`:
-   *  The set of all root import symbols that have been
-   *  encountered as a qualifier of an import so far.
-   *  Note: It would be more proper to move importedFromRoot into typedIdent.
-   *  We should check that this has no performance degradation, however.
-   */
-  private var unimported: Set[Symbol] = Set.empty
-
-  /** Temporary data item for single call to typed ident:
-   *  This symbol would be found under Scala2 mode, but is not
-   *  in dotty (because dotty conforms to spec section 2
-   *  wrt to package member resolution but scalac doe not).
-   */
-  private var foundUnderScala2: Type = NoType
+  // Nothing enters the root typer's scope. A nested typer's is filled by one symbol's completion and handed, through
+  // `nestedTyper`'s `remove`, to the one body typing that consumes it.
+  @scratch @confined val scope: MutableScope = newScope(nestingLevel)
 
   // Overridden in derived typers
   def newLikeThis(nestingLevel: Int): Typer = new Typer(nestingLevel)
@@ -219,13 +254,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    *   @param required   flags the result's symbol must have
    *   @param excluded   flags the result's symbol must not have
    *   @param pos        indicates position to use for error reporting
-   *   @param altImports a ListBuffer in which alternative imported references are
-   *                     collected in case `findRef` is called from an expansion of
-   *                     an extension method, i.e. when `e.m` is expanded to `m(e)` and
-   *                     a reference for `m` is searched. `null` in all other situations.
+   *   @param search     what the lookup accumulates besides its result: the root imports it finds hidden, the
+   *                     reference Scala 2 would find, and, if `search.collectAlts` (an extension method's
+   *                     expansion, `e.m` to `m(e)`), the alternative imported references of the result
    */
   def findRef(name: Name, pt: Type, required: FlagSet, excluded: FlagSet, pos: SrcPos,
-      altImports: mutable.ListBuffer[TermRef] | Null = null)(using Context): Type = {
+      search: RefSearch = RefSearch())(using Context): Type = {
     val refctx = ctx
     val noImports = ctx.mode.is(Mode.InPackageClauseName)
     def suppressErrors = excluded.is(PhantomSymbol)
@@ -303,9 +337,9 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           previous
 
       /** Assemble and check alternatives to an imported reference. This implies:
-       *   - If we expand an extension method (i.e. altImports != null),
+       *   - If we expand an extension method (i.e. `search.collectAlts`),
        *     search imports on the same level for other possible resolutions of `name`.
-       *     The result and altImports together then contain all possible imported
+       *     The result and `search.alts` together then contain all possible imported
        *     references of the highest possible precedence, where `NamedImport` beats
        *     `WildImport`.
        *   - Find a posssibly shadowing reference in an outer context.
@@ -320,18 +354,18 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
        */
       def checkImportAlternatives(previous: Type, prevPrec: BindingPrec, prevCtx: Context)(using Context): Type =
         val curImport = ctx.importInfoIfImportContext
-        if altImports != null && curImport != null then
+        if search.collectAlts && curImport != null then
           def addAltImport(altImp: TermRef) =
             if !TypeComparer.isSameRef(previous, altImp)
-              && !altImports.exists(TypeComparer.isSameRef(_, altImp))
+              && !search.existsAlt(TypeComparer.isSameRef(_, altImp))
             then
-              altImports += altImp
+              search.addAlt(altImp)
 
           namedImportRef(curImport) match
             case altImp: TermRef =>
               if prevPrec == WildImport then
                 // Discard all previously found references and continue with `altImp`
-                altImports.clear()
+                search.clearAlts()
                 checkImportAlternatives(altImp, NamedImport, ctx)(using ctx.outer)
               else
                 addAltImport(altImp)
@@ -378,7 +412,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               // to be typed as a real union even if `js.|` has been imported,
               // so we ignore that import.
               if reallyExists(denot) && !isScalaJsPseudoUnion then
-                if unimported.isEmpty || !unimported.contains(pre.termSymbol) then
+                if search.unimported.isEmpty || !search.unimported.contains(pre.termSymbol) then
                   return pre.select(name, denot).makePackageObjPrefixExplicit
           case _ =>
             if imp.importSym.isCompleting then
@@ -549,8 +583,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
                     checkNoOuterDefs(found.denot, ctx, ctx)
                   case _ =>
               else
-                if migrateTo3 && !foundUnderScala2.exists then
-                  foundUnderScala2 = checkNewOrShadowed(found, Definition, scala2pkg = true)
+                if migrateTo3 && !search.foundUnderScala2.exists then
+                  search.foundUnderScala2 = checkNewOrShadowed(found, Definition, scala2pkg = true)
                 if (defDenot.symbol.is(Package))
                   result = checkNewOrShadowed(previous `orElse` found, PackageClause)
                 else if (prevPrec.ordinal < PackageClause.ordinal)
@@ -565,7 +599,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               previous // no more conflicts possible in this case
             else if (isPossibleImport(NamedImport) && curImport != null && (curImport ne outer.importInfo)) {
               def updateUnimported() =
-                if (curImport.unimported ne NoSymbol) unimported += curImport.unimported
+                if (curImport.unimported ne NoSymbol) search.unimported = search.unimported + curImport.unimported
               val namedImp = namedImportRef(curImport)
               if (namedImp.exists)
                 checkImportAlternatives(namedImp, NamedImport, ctx)(using outer)
@@ -591,11 +625,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       loop(NoContext)
     }
 
-    // Root imports hidden during this lookup should not affect later lookups.
-    val savedUnimported = unimported
-    unimported = Set.empty
-    try findRefRecur(NoType, BindingPrec.NothingBound, NoContext)
-    finally unimported = savedUnimported
+    findRefRecur(NoType, BindingPrec.NothingBound, NoContext)
   }
 
   /** If `ref` is a trackable `TermRef` of an `OrNull` type that flow typing has
@@ -681,22 +711,16 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       return checkLegalValue(tree.withType(defn.RootPackage.termRef), pt)
 
     val rawType =
-      val saved1 = unimported
-      val saved2 = foundUnderScala2
-      unimported = Set.empty
-      foundUnderScala2 = NoType
-      try
-        val found = findRef(name, pt, EmptyFlags, EmptyFlags, tree.srcPos)
-        if foundUnderScala2.exists && !(foundUnderScala2 =:= found) then
-          report.migrationWarning(
-            em"""Name resolution will change.
-              | currently selected                          : $foundUnderScala2
-              | in the future, without -source 3.0-migration: $found""", tree.srcPos)
-          foundUnderScala2
-        else found
-      finally
-        unimported = saved1
-        foundUnderScala2 = saved2
+      val search = RefSearch()
+      val found = findRef(name, pt, EmptyFlags, EmptyFlags, tree.srcPos, search)
+      val underScala2 = search.foundUnderScala2
+      if underScala2.exists && !(underScala2 =:= found) then
+        report.migrationWarning(
+          em"""Name resolution will change.
+            | currently selected                          : $underScala2
+            | in the future, without -source 3.0-migration: $found""", tree.srcPos)
+        underScala2
+      else found
 
     /** Normally, returns `ownType` except if `ownType` is a constructor proxy,
      *  and there is another shadowed type accessible with the same name that is not:
@@ -1601,17 +1625,22 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
   def typedBlockStats(stats: List[untpd.Tree], blockSpan: Span = NoSpan)(using Context): (List[tpd.Tree], Context) =
     index(stats)
-    // Targeted typing applies to the statements of a block that contains the
+    // Targeted typing applies to the statements of a block that touches the
     // target (see `Targeting`): a skipped one's symbol, indexed just above,
     // completes lazily if a later statement refers to it. A block typed for
     // another reason is typed whole, and so is one inside an inline method
     // (its body is kept whole for its callers) or one typed speculatively
-    // (see `Run.targetingTyperState`).
-    val run = ctx.run
-    if run != null && run.typingTarget.exists && blockSpan.exists && blockSpan.contains(run.typingTarget)
-       && (ctx.typerState eq run.targetingTyperState)
+    // (see `Reader.targetingTyperState`). Under explicit nulls a block is
+    // typed whole as well: flow facts pass from one statement to the next
+    // (`if x eq null then x = new T` before `x.m`, `if x == null then return`
+    // before `x.length`), and a statement typed without the ones before it,
+    // or resumed in the context it was skipped in, misses them (I64).
+    val reader = ctx.reader
+    if reader.typingTarget.exists && blockSpan.touches(reader.typingTarget)
+       && (ctx.typerState eq reader.targetingTyperState)
        && !ctx.owner.ownersIterator.exists(_.isInlineMethod)
-    then run.targetNextStats(ctx.owner, inBlock = true)
+       && !ctx.explicitNulls
+    then reader.targetNextStats(ctx.owner, inBlock = true)
     typedStats(stats, ctx.owner)
 
   def typedBlock(tree: untpd.Block, pt: Type)(using Context): Tree = {
@@ -3090,7 +3119,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     def isInner(owner: Symbol) = owner == sym || sym.is(Param) && owner == sym.owner
     val outer = ctx.outersIterator.dropWhile(c => isInner(c.owner)).next()
     def local: FreshContext = outer.fresh.setOwner(newLocalDummy(sym.owner))
-    val ctx0 = sym.owner.infoOrCompleter match
+    val ctx0 = sym.owner.denot.awaitedInfoOrCompleter match // I73
       case completer: Namer#Completer
       if sym.is(Param) && completer.completerTypeParams(sym).nonEmpty =>
         // Create a new local context with a dummy owner and a scope containing the
@@ -3598,12 +3627,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       cdef.withType(UnspecifiedErrorType)
     else {
       val dummy = localDummy(cls, impl)
-      // only a class that contains the target is typed along the path to it,
+      // only a class that touches the target is typed along the path to it,
       // and not one typed speculatively (a local class in a closure argument)
-      val run = ctx.run.nn
-      if run.typingTarget.exists && cdef.span.contains(run.typingTarget)
-         && (run.targetingTyperState == null || (ctx.typerState eq run.targetingTyperState))
-      then run.targetNextStats(dummy)
+      val reader = ctx.reader
+      if cdef.span.touches(reader.typingTarget)
+         && (reader.targetingTyperState == null || (ctx.typerState eq reader.targetingTyperState))
+      then reader.targetNextStats(dummy)
       val body1 =
         addIndirectInlineRetainers(
           implementDeferredGivens(
@@ -3790,7 +3819,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
               case _ =>
           // a package clause is never skipped as a statement, so one that does not
           // contain the target is targeted too: all of its statements are skipped
-          if ctx.run.nn.typingTarget.exists then ctx.run.nn.targetNextStats(pkg.moduleClass)
+          if ctx.reader.typingTarget.exists then ctx.reader.targetNextStats(pkg.moduleClass)
           var stats1 = typedStats(tree.stats, pkg.moduleClass)._1
           if (!ctx.isAfterTyper)
             stats1 = stats1 ++ typedBlockStats(MainProxies.proxies(stats1))._1
@@ -3982,7 +4011,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       NoSymbol
   }
 
-  protected def localTyper(sym: Symbol): Typer = nestedTyper.remove(sym).get
+  protected def localTyper(sym: Symbol)(using Context): Typer = nestedTyper.remove(sym).get
 
   inline def typedUnadapted(initTree: untpd.Tree, pt: Type = WildcardType)(using Context): Tree =
     typedUnadapted(initTree, pt, ctx.typerState.ownedVars)
@@ -4202,11 +4231,10 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       record("typed total")
       if ctx.phase.isTyper then
         assertPositioned(tree)
-      val run = ctx.run.nn
-      run.checkCancelledTyping()
+      ctx.reader.checkCancelledTyping()
       if tree.source != ctx.source && tree.source.exists then
         typed(tree, pt, locked)(using ctx.withSource(tree.source))
-      else if run.isCancelled then
+      else if ctx.run.nn.isCancelled then
         tree.withType(WildcardType)
       else adapt(typedUnadapted(tree, pt, locked), pt, locked)
     }
@@ -4225,6 +4253,8 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       // A map from `enum` symbols to the contexts enclosing their definitions
     val targeting = Targeting.of(this, stats, exprOwner, buf)
     @tailrec def traverse(stats: List[untpd.Tree])(using Context): (List[Tree], Context) = stats match {
+      case (imp: untpd.Import) :: rest if targeting != null && targeting.skipImport(imp) =>
+        traverse(rest)(using ctx.importContext(imp, imp.attachment(SymOfTree)))
       case (imp: untpd.Import) :: rest =>
         val imp1 = typed(imp)
         buf += imp1
@@ -4245,7 +4275,18 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
           case none =>
             val newCtx = if (ctx.owner.isTerm && adaptCreationContext(mdef)) ctx
               else ctx.withNotNullInfos(initialNotNullInfos)
-            typed(mdef)(using newCtx) match {
+            val recordedDefs = if ctx.owner.isTerm then None else ctx.property(RecordedDefContexts)
+            // under the same flag: what typing a member reports is the
+            // member statement's (`Provenance`)
+            val typedMdef = recordedDefs match
+              case Some(_) => mdef.getAttachment(SymOfTree) match
+                case Some(sym) => ctx.reader.withProvenance(reporting.Provenance.Stat(sym))(typed(mdef)(using newCtx))
+                case None => typed(mdef)(using newCtx)
+              case None => typed(mdef)(using newCtx)
+            recordedDefs match
+              case Some(recorded) if typedMdef.isInstanceOf[ValOrDefDef] => recorded.put(typedMdef.symbol, (ctx, exprOwner))
+              case _ =>
+            typedMdef match {
               case mdef1: DefDef
               if mdef1.symbol.is(Inline, butNot = Deferred) && !Inlines.bodyToInline(mdef1.symbol).isEmpty =>
                 buf ++= inlineExpansion(mdef1)
@@ -4301,7 +4342,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     // We have to check the Completer of symbol befor typedValDef,
     // otherwise the symbol is already completed using creation context.
     mdef.getAttachment(SymOfTree) match {
-      case Some(sym) => sym.infoOrCompleter match {
+      case Some(sym) => sym.denot.awaitedInfoOrCompleter match { // I73
         case completer: Namer#Completer =>
           if completer.creationContext.notNullInfos ne ctx.notNullInfos then
             // The RHS of a val def should know about not null facts established
@@ -4476,18 +4517,18 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
     def selectionProto = SelectionProto(tree.name, mbrProto, compat, privateOK = inSelect, tree.nameSpan)
 
     def tryExtension(using Context): Tree =
-      val altImports = new mutable.ListBuffer[TermRef]()
-      findRef(tree.name, WildcardType, ExtensionMethod, EmptyFlags, qual.srcPos, altImports) match
+      val search = RefSearch(collectAlts = true)
+      findRef(tree.name, WildcardType, ExtensionMethod, EmptyFlags, qual.srcPos, search) match
         case ref: TermRef =>
           def tryExtMethod(ref: TermRef)(using Context) =
             val refTree = withOriginalName(tpd.ref(ref).withSpan(tree.nameSpan), tree.name)
             extMethodApply(untpd.TypedSplice(refTree), qual, pt)
-          if altImports.isEmpty then
+          if !search.hasAlts then
             tryExtMethod(ref)
           else
             // Try all possible imports and collect successes and failures
             val successes, failures = new mutable.ListBuffer[(Tree, TyperState)]
-            for alt <- ref :: altImports.toList do
+            for alt <- ref :: search.alts do
               val nestedCtx = ctx.fresh.setNewTyperState()
               val app = tryExtMethod(alt)(using nestedCtx)
               (if nestedCtx.reporter.hasErrors then failures else successes)

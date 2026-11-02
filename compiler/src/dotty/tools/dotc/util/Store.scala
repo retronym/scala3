@@ -1,5 +1,7 @@
 package dotty.tools.dotc.util
 
+import scala.annotation.internal.{cache, publishedBy}
+
 object Store {
 
   class Location[T](private[Store] val idx: Int) extends AnyVal
@@ -7,6 +9,8 @@ object Store {
   val empty: Store = new Store(Array())
 }
 
+// Persistent: a new location or value is a copy, filled before it is returned.
+@cache @publishedBy("init")
 class Store(private val elems: Array[AnyRef | Null]) extends AnyVal {
   import Store.*
 

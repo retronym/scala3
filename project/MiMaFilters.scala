@@ -15,6 +15,17 @@ object MiMaFilters {
       Versions.mimaPreviousVersion -> Seq(
         // new annotation carrying the component names of Java records
         ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.JavaRecordFields"),
+        // annotations of the compiler's state map (tools/state-map)
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.scratch"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.lazyFact"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.cache"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.interned"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.treeState"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.guardedBy"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.confined"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.publishedBy"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.benignRace"),
+        ProblemFilters.exclude[MissingClassProblem]("scala.annotation.internal.featureArea"),
         // new experimental language feature: method block end markers (SIP-77)
         ProblemFilters.exclude[MissingClassProblem]("scala.language$experimental$methodBlockEndMarkers$"),
         ProblemFilters.exclude[MissingClassProblem]("scala.runtime.stdLibPatches.language$experimental$methodBlockEndMarkers$"),
