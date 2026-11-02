@@ -17,6 +17,7 @@ import NameKinds.*
 import NameOps.*
 import Phases.{erasurePhase, mixinPhase}
 import ast.Trees.*
+import util.Stats
 import dotty.tools.dotc.transform.sjs.JSSymUtils.isJSType
 
 object Mixin {
@@ -371,7 +372,9 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
         val beforeErasure = cls.thisType.memberInfo(target)
         (beforeErasure, !(beforeErasure =:= sym.info))
       }
+      Stats.doRecord("mixin forwarder", 1)
       if isDifferentThanInfoNow then
+        Stats.doRecord("mixin forwarder generic info differs", 1)
         // The info before erasure would not have been the same as the info now.
         // We want to store it for the backend to compute the generic Java signature.
         // However, we must still avoid doing that if erasing that signature would
@@ -379,6 +382,7 @@ class Mixin extends MiniPhase with SymTransformer { thisPhase =>
         // incorrect Java signature. (This could be improved by generating dedicated
         // bridges, but we don't go that far; scalac doesn't either.)
         if ElimErasedValueType.elimEVT(TypeErasure.transformInfo(target, infoBeforeErasure)) =:= sym.info then
+          Stats.doRecord("mixin forwarder generic info stored", 1)
           mixinGenericInfos(sym) = infoBeforeErasure
       sym
 
