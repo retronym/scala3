@@ -131,34 +131,60 @@ object SymDenotations {
     final def relevantFlagsFor(fs: FlagSet)(using Context) =
       if (isCurrent(fs)) myFlags else flags
 
+    // The flag tests below are inlined into most of the compiler. A completed
+    // denotation, the common case, is decided on `myFlags` after one test of
+    // `myInfo`; anything else goes to a separate method that computes the whole
+    // answer, so that nothing of the caller is live across that call (a JIT has
+    // no callee-saved registers for it, and spills at the definition, on the
+    // common path).
+    private inline def infoIsKnown: Boolean = !myInfo.isInstanceOf[LazyType]
+
     /** Has this denotation one of given flag set? */
     final def is(flag: Flag)(using Context): Boolean =
-      (if (isCurrent(flag)) myFlags else flags).is(flag)
+      if infoIsKnown then myFlags.is(flag) else isLazy(flag)
+
+    private def isLazy(flag: Flag)(using Context): Boolean =
+      relevantFlagsFor(flag).is(flag)
 
     /** Has this denotation one of the flags in `fs` set? */
     final def isOneOf(fs: FlagSet)(using Context): Boolean =
-      (if (isCurrent(fs)) myFlags else flags).isOneOf(fs)
+      if infoIsKnown then myFlags.isOneOf(fs) else isOneOfLazy(fs)
+
+    private def isOneOfLazy(fs: FlagSet)(using Context): Boolean =
+      relevantFlagsFor(fs).isOneOf(fs)
 
     /** Has this denotation the given flag set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def is(flag: Flag, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.is(flag, butNot) else isLazy(flag, butNot)
+
+    private def isLazy(flag: Flag, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(flag) && isCurrent(butNot)) myFlags else flags).is(flag, butNot)
 
     /** Has this denotation one of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def isOneOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.isOneOf(fs, butNot) else isOneOfLazy(fs, butNot)
+
+    private def isOneOfLazy(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isOneOf(fs, butNot)
 
     /** Has this denotation all of the flags in `fs` set? */
     final def isAllOf(fs: FlagSet)(using Context): Boolean =
-      (if (isCurrent(fs)) myFlags else flags).isAllOf(fs)
+      if infoIsKnown then myFlags.isAllOf(fs) else isAllOfLazy(fs)
+
+    private def isAllOfLazy(fs: FlagSet)(using Context): Boolean =
+      relevantFlagsFor(fs).isAllOf(fs)
 
     /** Has this denotation all of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def isAllOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.isAllOf(fs, butNot) else isAllOfLazy(fs, butNot)
+
+    private def isAllOfLazy(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isAllOf(fs, butNot)
 
     /** The type info, or, if symbol is not yet completed, the completer */
@@ -2732,15 +2758,23 @@ object SymDenotations {
     final def membersNamed(name: Name)(using Context): PreDenotation =
       Stats.record("membersNamed")
       if Config.cacheMembersNamed then
-        var denots: PreDenotation | Null = memberCache.lookup(name)
-        if denots == null then
-          denots = computeMembersNamed(name)
-          memberCache(name) = denots
-        else if Config.checkCacheMembersNamed then
-          val denots1 = computeMembersNamed(name)
-          assert(denots.exists == denots1.exists, s"cache inconsistency: cached: $denots, computed $denots1, name = $name, owner = $this")
-        denots
+        // a hit reads the cache without making it; the miss, which may make
+        // the cache and computes the members, is the last call
+        val cache = myMemberCache.peek(null)
+        val denots: PreDenotation | Null = if cache == null then null else cache.lookup(name)
+        if denots != null && !Config.checkCacheMembersNamed then denots
+        else membersNamedMiss(name, denots)
       else computeMembersNamed(name)
+
+    private def membersNamedMiss(name: Name, denots: PreDenotation | Null)(using Context): PreDenotation =
+      if denots == null then
+        val computed = computeMembersNamed(name)
+        memberCache(name) = computed
+        computed
+      else
+        val denots1 = computeMembersNamed(name)
+        assert(denots.exists == denots1.exists, s"cache inconsistency: cached: $denots, computed $denots1, name = $name, owner = $this")
+        denots
 
 
     /** All non-private members of this class that have the given name.
@@ -2757,7 +2791,12 @@ object SymDenotations {
      */
     final def membersNamedNoShadowingBasedOnFlags(name: Name,
         required: FlagSet = EmptyFlags, excluded: FlagSet = EmptyFlags)(using Context): PreDenotation =
-      val mbr = membersNamed(name)
+      noShadowingBasedOnFlags(name, membersNamed(name), required, excluded)
+
+    // `mbr` are `membersNamed(name)`, passed in so that a caller that also needs
+    // them has one call of `membersNamed` (which a JIT may inline) and not two
+    private def noShadowingBasedOnFlags(name: Name, mbr: PreDenotation,
+        required: FlagSet, excluded: FlagSet)(using Context): PreDenotation =
       val filtered = mbr.filterWithFlags(required, excluded)
       if filtered eq mbr then mbr
       else addInherited(name, filtered, required, excluded)
@@ -2812,7 +2851,8 @@ object SymDenotations {
         case _ => Nil
 
     override final def findMember(name: Name, pre: Type, required: FlagSet, excluded: FlagSet)(using Context): Denotation =
-      val raw = if excluded.is(Private) then nonPrivateMembersNamed(name) else membersNamed(name)
+      val mbr = membersNamed(name)
+      val raw = if excluded.is(Private) then noShadowingBasedOnFlags(name, mbr, EmptyFlags, Private) else mbr
       val pre1 = pre match
         case pre: OrType => pre.widenUnion
         case _ => pre
