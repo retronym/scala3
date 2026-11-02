@@ -131,34 +131,60 @@ object SymDenotations {
     final def relevantFlagsFor(fs: FlagSet)(using Context) =
       if (isCurrent(fs)) myFlags else flags
 
+    // The flag tests below are inlined into most of the compiler. A completed
+    // denotation, the common case, is decided on `myFlags` after one test of
+    // `myInfo`; anything else goes to a separate method that computes the whole
+    // answer, so that nothing of the caller is live across that call (a JIT has
+    // no callee-saved registers for it, and spills at the definition, on the
+    // common path).
+    private inline def infoIsKnown: Boolean = !myInfo.isInstanceOf[LazyType]
+
     /** Has this denotation one of given flag set? */
     final def is(flag: Flag)(using Context): Boolean =
-      (if (isCurrent(flag)) myFlags else flags).is(flag)
+      if infoIsKnown then myFlags.is(flag) else isLazy(flag)
+
+    private def isLazy(flag: Flag)(using Context): Boolean =
+      relevantFlagsFor(flag).is(flag)
 
     /** Has this denotation one of the flags in `fs` set? */
     final def isOneOf(fs: FlagSet)(using Context): Boolean =
-      (if (isCurrent(fs)) myFlags else flags).isOneOf(fs)
+      if infoIsKnown then myFlags.isOneOf(fs) else isOneOfLazy(fs)
+
+    private def isOneOfLazy(fs: FlagSet)(using Context): Boolean =
+      relevantFlagsFor(fs).isOneOf(fs)
 
     /** Has this denotation the given flag set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def is(flag: Flag, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.is(flag, butNot) else isLazy(flag, butNot)
+
+    private def isLazy(flag: Flag, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(flag) && isCurrent(butNot)) myFlags else flags).is(flag, butNot)
 
     /** Has this denotation one of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def isOneOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.isOneOf(fs, butNot) else isOneOfLazy(fs, butNot)
+
+    private def isOneOfLazy(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isOneOf(fs, butNot)
 
     /** Has this denotation all of the flags in `fs` set? */
     final def isAllOf(fs: FlagSet)(using Context): Boolean =
-      (if (isCurrent(fs)) myFlags else flags).isAllOf(fs)
+      if infoIsKnown then myFlags.isAllOf(fs) else isAllOfLazy(fs)
+
+    private def isAllOfLazy(fs: FlagSet)(using Context): Boolean =
+      relevantFlagsFor(fs).isAllOf(fs)
 
     /** Has this denotation all of the flags in `fs` set, whereas none of the flags
      *  in `butNot` are set?
      */
     final def isAllOf(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
+      if infoIsKnown then myFlags.isAllOf(fs, butNot) else isAllOfLazy(fs, butNot)
+
+    private def isAllOfLazy(fs: FlagSet, butNot: FlagSet)(using Context): Boolean =
       (if (isCurrent(fs) && isCurrent(butNot)) myFlags else flags).isAllOf(fs, butNot)
 
     /** The type info, or, if symbol is not yet completed, the completer */
