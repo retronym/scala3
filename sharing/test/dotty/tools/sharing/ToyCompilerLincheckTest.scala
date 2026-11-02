@@ -45,6 +45,9 @@ object ToyCompilerLincheckTest:
 
   /** The toy's symbol table: a root package whose members, and theirs, are made as they complete. */
   abstract class Toy(using Mode, ClaimRegistry):
+    // a concurrent toy shares its state between threads: the ordering of `Published` and `Once` on, as a concurrent
+    // owner turns it on
+    if summon[Mode].concurrent then AnyConcurrent.seen()
     private val made = AtomicInteger()
     private val root = Sym("", depth = 0)
     // the common base class every info reaches: made by completing `a`, as `Any` is entered by completing `scala`

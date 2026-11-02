@@ -48,6 +48,9 @@ class SharingLincheckTest:
 object SharingLincheckTest:
 
   given Mode = Mode.Concurrent
+  // these specs share their state between threads: the ordering of `Published` and `Once` on, as a concurrent
+  // owner turns it on
+  AnyConcurrent.seen()
 
   // ---- claim(key)(op): one writer per key
 
