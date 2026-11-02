@@ -2758,15 +2758,23 @@ object SymDenotations {
     final def membersNamed(name: Name)(using Context): PreDenotation =
       Stats.record("membersNamed")
       if Config.cacheMembersNamed then
-        var denots: PreDenotation | Null = memberCache.lookup(name)
-        if denots == null then
-          denots = computeMembersNamed(name)
-          memberCache(name) = denots
-        else if Config.checkCacheMembersNamed then
-          val denots1 = computeMembersNamed(name)
-          assert(denots.exists == denots1.exists, s"cache inconsistency: cached: $denots, computed $denots1, name = $name, owner = $this")
-        denots
+        // a hit reads the cache without making it; the miss, which may make
+        // the cache and computes the members, is the last call
+        val cache = myMemberCache.peek(null)
+        val denots: PreDenotation | Null = if cache == null then null else cache.lookup(name)
+        if denots != null && !Config.checkCacheMembersNamed then denots
+        else membersNamedMiss(name, denots)
       else computeMembersNamed(name)
+
+    private def membersNamedMiss(name: Name, denots: PreDenotation | Null)(using Context): PreDenotation =
+      if denots == null then
+        val computed = computeMembersNamed(name)
+        memberCache(name) = computed
+        computed
+      else
+        val denots1 = computeMembersNamed(name)
+        assert(denots.exists == denots1.exists, s"cache inconsistency: cached: $denots, computed $denots1, name = $name, owner = $this")
+        denots
 
 
     /** All non-private members of this class that have the given name.
@@ -2783,7 +2791,12 @@ object SymDenotations {
      */
     final def membersNamedNoShadowingBasedOnFlags(name: Name,
         required: FlagSet = EmptyFlags, excluded: FlagSet = EmptyFlags)(using Context): PreDenotation =
-      val mbr = membersNamed(name)
+      noShadowingBasedOnFlags(name, membersNamed(name), required, excluded)
+
+    // `mbr` are `membersNamed(name)`, passed in so that a caller that also needs
+    // them has one call of `membersNamed` (which a JIT may inline) and not two
+    private def noShadowingBasedOnFlags(name: Name, mbr: PreDenotation,
+        required: FlagSet, excluded: FlagSet)(using Context): PreDenotation =
       val filtered = mbr.filterWithFlags(required, excluded)
       if filtered eq mbr then mbr
       else addInherited(name, filtered, required, excluded)
@@ -2838,7 +2851,8 @@ object SymDenotations {
         case _ => Nil
 
     override final def findMember(name: Name, pre: Type, required: FlagSet, excluded: FlagSet)(using Context): Denotation =
-      val raw = if excluded.is(Private) then nonPrivateMembersNamed(name) else membersNamed(name)
+      val mbr = membersNamed(name)
+      val raw = if excluded.is(Private) then noShadowingBasedOnFlags(name, mbr, EmptyFlags, Private) else mbr
       val pre1 = pre match
         case pre: OrType => pre.widenUnion
         case _ => pre
