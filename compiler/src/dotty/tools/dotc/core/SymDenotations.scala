@@ -80,10 +80,15 @@ object SymDenotations {
      *  base. Every concurrent sharing (serialised or parallel readers) sets it; a body that is for parallel readers
      *  only tests `ctx.base.parallel` as well.
      */
-    private inline def concurrentDenot: Boolean = (denotBits & Denotation.ConcurrentBit) != 0
+    // the almost-final test first, so that until a concurrent base exists in the JVM the whole test folds to false,
+    // and with it the concurrent arm (whose possible calls, inlined into the callers, cost the batch path spills)
+    private inline def concurrentDenot: Boolean =
+      _root_.dotty.tools.sharing.AnyConcurrent.get() && (denotBits & Denotation.ConcurrentBit) != 0
 
     /** Set `Denotation.ConcurrentBit`: by the factory, on a concurrent base. */
-    private[SymDenotations] final def markConcurrent(): Unit = denotBits = (denotBits | Denotation.ConcurrentBit).toByte
+    private[SymDenotations] final def markConcurrent(): Unit =
+      if !_root_.dotty.tools.sharing.AnyConcurrent.get() then _root_.dotty.tools.sharing.AnyConcurrent.seen()
+      denotBits = (denotBits | Denotation.ConcurrentBit).toByte
 
     final def flagsString(using Context): String = flags.flagsString
 
@@ -3688,7 +3693,7 @@ object SymDenotations {
     // pulls: a cache records the base's structure epoch when it is made, and is valid while the epoch has not moved.
     // A change to a published scope moves it (`MutableScope.changed`), and so does an invalidation of a class's own
     // cache, the one that a batch base would push to its dependents.
-    protected final val concurrent: Boolean = base.concurrent
+    protected final def concurrent: Boolean = base.concurrent
     private val epoch: Int = if concurrent then base.structureEpoch else 0
     protected final def epochCurrent: Boolean = !concurrent || epoch == base.structureEpoch
 

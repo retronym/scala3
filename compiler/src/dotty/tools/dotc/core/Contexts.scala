@@ -1121,9 +1121,17 @@ object Contexts {
      *  (serialised readers) or claim `completionRoots` (parallel readers). */
     final val sharing: Sharing) extends Sharing.Guard {
 
-    /** `sharing.concurrent` and `sharing.parallel`, copied to the base: a hot test reads one field of it. */
-    final val concurrent: Boolean = sharing.concurrent
-    final val parallel: Boolean = sharing.parallel
+    // `sharing.concurrent` and `sharing.parallel`, copied to the base
+    private val concurrentBase: Boolean = sharing.concurrent
+    private val parallelBase: Boolean = sharing.parallel
+    // before any reader runs on this base: from now on the almost-final value is true in this JVM
+    if concurrentBase then _root_.dotty.tools.sharing.AnyConcurrent.seen()
+
+    /** This base is shared by concurrent readers. The almost-final `AnyConcurrent.get()` first: until a concurrent
+     *  base exists in this JVM the JIT folds the test to false, with no load of the base. */
+    final inline def concurrent: Boolean = _root_.dotty.tools.sharing.AnyConcurrent.get() && concurrentBase
+    /** This base's readers run in parallel; as `concurrent`, folded to false until a concurrent base exists. */
+    final inline def parallel: Boolean = _root_.dotty.tools.sharing.AnyConcurrent.get() && parallelBase
 
     /** `sharing.mode`, copied to the base: the given of the `dotty.tools.sharing` operations (`dotc.sharingMode`),
      *  a value class over `concurrent`, so that its test reads one field of the base, as a test of `concurrent` does. */
