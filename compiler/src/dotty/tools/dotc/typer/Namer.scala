@@ -1491,7 +1491,10 @@ class Namer { typer: Typer =>
         val fromCaseClass = pathType.widen.classSymbols.exists(_.is(Case))
         def isCaseClassSynthesized(mbr: Symbol) =
           fromCaseClass && defn.caseClassSynthesized.contains(mbr)
-        for mbr <- pathType.membersBasedOnFlags(required = EmptyFlags, excluded = PrivateOrSynthetic) do
+        // Sorted by name: members come from a hashed set of names, whose order depends on the names' identity hashes,
+        // and so would the order of the forwarders in the class file and TASTy.
+        val mbrs = pathType.membersBasedOnFlags(required = EmptyFlags, excluded = PrivateOrSynthetic).sortBy(_.name.toString)
+        for mbr <- mbrs do
           if !mbr.symbol.isSuperAccessor
               // Scala 2 superaccessors have neither Synthetic nor Artfact set, so we
               // need to filter them out here (by contrast, Scala 3 superaccessors are Artifacts)
