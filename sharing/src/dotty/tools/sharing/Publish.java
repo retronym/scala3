@@ -17,10 +17,10 @@ public final class Publish {
   private static final VarHandle SLOT = MethodHandles.arrayElementVarHandle(Object[].class);
 
   public static Object slotAcquire(Object[] array, int i) {
-    return SLOT.getAcquire(array, i);
+    return AnyConcurrent.get() ? SLOT.getAcquire(array, i) : SLOT.get(array, i);
   }
 
   public static void setSlotRelease(Object[] array, int i, Object value) {
-    SLOT.setRelease(array, i, value);
+    if (AnyConcurrent.get()) SLOT.setRelease(array, i, value); else SLOT.set(array, i, value);
   }
 }

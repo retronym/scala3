@@ -182,14 +182,26 @@ trait PublishedOps:
   // The accesses the macros expand to, by the field's erased type. Each is typed here, with an `Object` receiver,
   // so that the signature-polymorphic `VarHandle` call has a fixed descriptor (`(Ljava/lang/Object;)I`), as a
   // Java static accessor's would; inlined at the site, with inline parameters, which leave no local for the handle.
-  inline def rawGetAcquireInt(inline vh: VarHandle, inline o: Object): Int = vh.getAcquire(o).asInstanceOf[Int]
-  inline def rawSetReleaseInt(inline vh: VarHandle, inline o: Object, inline v: Int): Unit = vh.setRelease(o, v)
-  inline def rawGetAcquireLong(inline vh: VarHandle, inline o: Object): Long = vh.getAcquire(o).asInstanceOf[Long]
-  inline def rawSetReleaseLong(inline vh: VarHandle, inline o: Object, inline v: Long): Unit = vh.setRelease(o, v)
-  inline def rawGetAcquireBoolean(inline vh: VarHandle, inline o: Object): Boolean = vh.getAcquire(o).asInstanceOf[Boolean]
-  inline def rawSetReleaseBoolean(inline vh: VarHandle, inline o: Object, inline v: Boolean): Unit = vh.setRelease(o, v)
-  inline def rawGetAcquireRef(inline vh: VarHandle, inline o: Object): Object = vh.getAcquire(o).asInstanceOf[Object]
-  inline def rawSetReleaseRef(inline vh: VarHandle, inline o: Object, inline v: Object): Unit = vh.setRelease(o, v)
+  // The ordering only while some state in the JVM is concurrent (`AnyConcurrent`, an almost-final value the JIT
+  // folds): plain loads and stores before then, as the batch compiler's parent had. Each branch ascribes its own call:
+  // the access modes are signature-polymorphic, and an ascription of the `if` would make both calls return `Object`, a
+  // generic invocation that boxes
+  inline def rawGetAcquireInt(inline vh: VarHandle, inline o: Object): Int =
+    if AnyConcurrent.get() then (vh.getAcquire(o): Int) else (vh.get(o): Int)
+  inline def rawSetReleaseInt(inline vh: VarHandle, inline o: Object, inline v: Int): Unit =
+    if AnyConcurrent.get() then vh.setRelease(o, v) else vh.set(o, v)
+  inline def rawGetAcquireLong(inline vh: VarHandle, inline o: Object): Long =
+    if AnyConcurrent.get() then (vh.getAcquire(o): Long) else (vh.get(o): Long)
+  inline def rawSetReleaseLong(inline vh: VarHandle, inline o: Object, inline v: Long): Unit =
+    if AnyConcurrent.get() then vh.setRelease(o, v) else vh.set(o, v)
+  inline def rawGetAcquireBoolean(inline vh: VarHandle, inline o: Object): Boolean =
+    if AnyConcurrent.get() then (vh.getAcquire(o): Boolean) else (vh.get(o): Boolean)
+  inline def rawSetReleaseBoolean(inline vh: VarHandle, inline o: Object, inline v: Boolean): Unit =
+    if AnyConcurrent.get() then vh.setRelease(o, v) else vh.set(o, v)
+  inline def rawGetAcquireRef(inline vh: VarHandle, inline o: Object): Object =
+    if AnyConcurrent.get() then (vh.getAcquire(o): Object) else (vh.get(o): Object)
+  inline def rawSetReleaseRef(inline vh: VarHandle, inline o: Object, inline v: Object): Unit =
+    if AnyConcurrent.get() then vh.setRelease(o, v) else vh.set(o, v)
 
 private[sharing] object PublishedMacros:
   import Published.Handle
