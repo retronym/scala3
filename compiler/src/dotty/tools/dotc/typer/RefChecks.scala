@@ -944,7 +944,7 @@ object RefChecks {
 
         // For each member, check that the type of its symbol, as seen from `self`
         // can override the info of this member
-        def checkMemberType(name: Name, mbrd: SingleDenotation, skipped: Boolean): Unit =
+        def checkMemberType(name: Name, mbrd: SingleDenotation, skipped: Boolean)(using Context): Unit =
           val mbr = mbrd.symbol
           val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
           if (!mbrType.overrides(mbrd.info, matchLoosely = true))
