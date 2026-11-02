@@ -4826,7 +4826,15 @@ object Types extends TypeUtils {
       else infos(paramNum)
     }
 
-    override def computeHash(bs: Binders): Int = doHash(paramNum, binder.identityHash(bs))
+    /** A type that refers to a param of a method or poly type is not hash-consed (`Uniques.uncacheMethodParams`). Such
+     *  a lambda is never hash-consed itself, so a type over its params can only be shared by operations on the same
+     *  lambda instance, and most are transient: asSeenFrom and substitution in override checks, mixin forwarders and
+     *  bridges build fresh signatures over fresh params, and their parts filled the interners only to be collected.
+     *  `Uniques.AppliedUniques` still shares recently built applied types over such params, through a small cache.
+     */
+    override def computeHash(bs: Binders): Int =
+      if Uniques.uncacheMethodParams && binder.isInstanceOf[MethodOrPoly] then NotCached
+      else doHash(paramNum, binder.identityHash(bs))
 
     override def equals(that: Any): Boolean = equals(that, null)
 
