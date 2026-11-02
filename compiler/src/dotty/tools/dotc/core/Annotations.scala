@@ -232,7 +232,10 @@ object Annotations {
       mySym match {
         case symFn: (Context ?=> Symbol) @unchecked =>
           mySym = null
-          mySym = atPhaseBeforeTransforms(symFn)
+          try mySym = atPhaseBeforeTransforms(symFn)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            mySym = ctx ?=> symFn(using ctx) // the next run evaluates the thunk again
+            throw ex
             // We should always produce the same annotation tree, no matter when the
             // annotation is evaluated. Setting the phase to a pre-transformation phase
             // seems to be enough to ensure this (note that after erasure, `ctx.typer`
@@ -250,7 +253,10 @@ object Annotations {
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>
           myTree = null
-          myTree = atPhaseBeforeTransforms(treeFn)
+          try myTree = atPhaseBeforeTransforms(treeFn)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            myTree = ctx ?=> treeFn(using ctx) // the next run evaluates the thunk again
+            throw ex
         case _ =>
       }
       myTree.asInstanceOf[Tree]
@@ -289,7 +295,10 @@ object Annotations {
       myTree match {
         case treeFn: (Context ?=> Tree) @unchecked =>
           myTree = null
-          myTree = atPhaseBeforeTransforms(treeFn)
+          try myTree = atPhaseBeforeTransforms(treeFn)
+          catch case ex: CompilationUnit.CancelledCompilation =>
+            myTree = ctx ?=> treeFn(using ctx) // the next run evaluates the thunk again
+            throw ex
         case _ =>
       }
       myTree.asInstanceOf[Tree]

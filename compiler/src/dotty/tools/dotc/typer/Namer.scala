@@ -424,6 +424,34 @@ class Namer { typer: Typer =>
     case _ => tree
   }
 
+  /** Interactive mode: call `f` on every definition under `tree` that the
+   *  Namer indexed, with its symbol: the tree's expansion first, then the
+   *  tree itself (an expansion can lead to a thicket that contains the tree:
+   *  each tree is visited once), through thickets and package clauses, and
+   *  into the template of a class after `f` has run on the class (completing
+   *  the class indexes its template). Typing consumes `ExpandedTree`, so a
+   *  typed statement no longer leads to its symbols; a skipped one does.
+   */
+  def foreachIndexedDef(tree: Tree)(f: (DefTree, Symbol) => Unit)(using Context): Unit =
+    val seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+    def walk(tree: Tree): Unit = if seen.add(tree) then tree match
+      case tree: DefTree =>
+        tree.getAttachment(ExpandedTree).foreach(walk)
+        walkOwn(tree)
+      case Thicket(trees) => trees.foreach(walk)
+      case PackageDef(_, stats) => stats.foreach(walk)
+      // an `extension` block is not a DefTree; its expansion holds the methods
+      case tree: ExtMethods => tree.getAttachment(ExpandedTree).foreach(walk)
+      case _ =>
+    def walkOwn(tree: DefTree): Unit =
+      tree.getAttachment(SymOfTree).foreach { sym =>
+        f(tree, sym)
+        tree match
+          case TypeDef(_, impl: Template) => impl.body.foreach(walk)
+          case _ =>
+      }
+    walk(tree)
+
   /** For all class definitions `stat` in `xstats`: If the companion class is
     * not also defined in `xstats`, invalidate it by setting its info to
     * NoType.
@@ -934,6 +962,10 @@ class Namer { typer: Typer =>
       val creationRunId = creationContext.runId
       if ctx.runId > creationRunId then
         assert(ctx.mode.is(Mode.Interactive), s"completing $denot in wrong run ${ctx.runId}, was created in $creationRunId")
+        // an earlier interactive run indexed it and left before completing it:
+        // its untyped tree belongs to that run. The degraded info is reported,
+        // so that what is computed from it knows an error is behind it.
+        report.error(em"$denot was left incomplete by an earlier run of the presentation compiler", denot.symbol.srcPos)
         denot.info = UnspecifiedErrorType
       else
         try

@@ -27,7 +27,8 @@ class InferExpectedType(
   val code: String = params.text()
 
   val sourceFile = SourceFile.virtual(uri, code)
-  driver.run(uri, sourceFile)
+  // only the path to the position is typed (unless -Yno-targeted-requests)
+  driver.runUpTo(uri, sourceFile, Span(params.offset()))
 
   val ctx = driver.currentCtx
   val pos = driver.sourcePosition(params)

@@ -153,12 +153,8 @@ object SymDenotations {
           println(i"${"  " * indent}completing ${if (isType) "type" else "val"} $name")
           indent += 1
 
-          if myFlags.is(Touched) then
-            throw CyclicReference(this)(using ctx.withOwner(symbol))
-          myFlags |= Touched
-
           // completions.println(s"completing ${this.debugString}")
-          try atPhase(validFor.firstPhaseId)(completer.complete(this))
+          try lockAndComplete(completer)
           catch {
             case ex: CyclicReference =>
               println(s"error while completing ${this.debugString}")
@@ -171,10 +167,72 @@ object SymDenotations {
         }
         else
           CyclicReference.trace("compute the signature of ", symbol):
-            if myFlags.is(Touched) then
-              throw CyclicReference(this)(using ctx.withOwner(symbol))
-            myFlags |= Touched
-            atPhase(validFor.firstPhaseId)(completer.complete(this))
+            lockAndComplete(completer)
+
+    /** Set `Touched`, run the completer, and clear the lock on the way out.
+     *  Interactive mode also keeps the set of symbols whose completion is in
+     *  progress on the run (`Run.completing`), so that a `Touched` flag can
+     *  be told from a cycle (see `healLeakedTouched`), and records an
+     *  exception that unwinds through the completion (see `onUnwind`). Batch
+     *  compilation pays one mode test.
+     */
+    private inline def lockAndComplete(completer: LazyType)(using Context): Unit =
+      val interactive = ctx.mode.is(Mode.Interactive)
+      val run: Run | Null = if interactive then ctx.run else null
+      if myFlags.is(Touched) && !healLeakedTouched(run) then
+        if run != null then run.recordCyclePrevented(symbol)
+        throw CyclicReference(this)(using ctx.withOwner(symbol))
+      myFlags |= Touched
+      if run != null then run.completing += symbol
+      try atPhase(validFor.firstPhaseId)(completer.complete(this))
+      catch case ex =>
+        onUnwind(ex, interactive, run)
+        throw ex
+      finally if run != null then run.completing -= symbol
+
+    /** `Touched` is set but, in interactive mode, no completion of this
+     *  symbol is in progress: the flag is what an exception unwinding through
+     *  an earlier completion left (a stale lock, not a cycle). Clear it and
+     *  complete; record the healing on the run. In batch mode (`run` is
+     *  null), or when the completion is in progress, it is a cycle.
+     */
+    private def healLeakedTouched(run: Run | Null)(using Context): Boolean =
+      run != null && !run.completing.contains(symbol) && {
+        myFlags &~= Touched
+        run.recordLeakHealed(symbol)
+        true
+      }
+
+    /** An exception unwound through this completion before it finished. For
+     *  a cancellation, in any mode, clear `Touched` so that the next run can
+     *  complete the symbol instead of reporting a cyclic reference. In
+     *  interactive mode do the same for a cyclic reference (the result of a
+     *  computation that met a cycle below it must not be kept: IntelliJ's
+     *  `mayCacheNow` rule; the request's answer degrades where the exception
+     *  is handled, and the symbol is completable again afterwards) and for
+     *  any other exception (a stack overflow, an assertion in a partial tree),
+     *  which is also recorded on the run as a completion of unknown state
+     *  (`Run.isTainted`). Batch compilation keeps its behaviour: the flag
+     *  stays set, as before. The caller rethrows.
+     */
+    private def onUnwind(ex: Throwable, interactive: Boolean, run: Run | Null)(using Context): Unit =
+      ex match
+        case _: CompilationUnit.CancelledCompilation =>
+          untouchIfIncomplete()
+          // whether complete or not: a class completer sets the temporary
+          // info before it types the parents, and the class is then
+          // `isCompleted` with that info (see `Run.cancelledCompletions`)
+          val r = ctx.run
+          if r != null then r.cancelledCompletions += symbol
+        case _: CyclicReference =>
+          if interactive then untouchIfIncomplete()
+        case _ if interactive =>
+          untouchIfIncomplete()
+          if run != null then run.recordCompletionUnwound(symbol, ex)
+        case _ =>
+
+    private def untouchIfIncomplete(): Unit =
+      if !isCompleted then myFlags &~= Touched
 
     protected[dotc] def info_=(tp: Type): Unit = {
       /* // DEBUG
@@ -1845,6 +1903,27 @@ object SymDenotations {
             c.ensureCompleted()
       end completeChildrenIn
 
+      /** In interactive mode a targeted run (`Run.isTargeted`) types only the
+       *  statements on the path to the target, so a child class elsewhere in
+       *  the file whose completer would register it (`registerIfChildInCreationContext`)
+       *  may never complete: complete every class (and enum value) of the
+       *  current unit that the Namer has indexed, the nested ones after their
+       *  owner (whose completion indexes its template). Batch compilation and
+       *  whole-file runs type them all anyway.
+       */
+      def completeClassesOfUnit()(using Context): Unit =
+        val unit = ctx.compilationUnit
+        val run = ctx.run
+        if ctx.mode.is(Mode.Interactive) && run != null && run.isTargeted
+           && (unit ne NoCompilationUnit) && !unit.untpdTree.isEmpty
+        then
+          ctx.typer.foreachIndexedDef(unit.untpdTree): (tree, sym) =>
+            tree match
+              case _: untpd.TypeDef if sym.isClass => sym.ensureCompleted()
+              // an enum value (`case Cleaning`): its completer registers it as a child
+              case _: untpd.ValDef if sym.originDenotation.is(EnumVal) => sym.ensureCompleted()
+              case _ =>
+
       if is(Sealed) || isAllOf(JavaEnum) && isClass then
         if !is(ChildrenQueried) then
           // Make sure all visible children are completed, so that
@@ -1852,6 +1931,7 @@ object SymDenotations {
           // is defined in the same scope as `cls` or in the companion object of `cls`.
           completeChildrenIn(owner)
           completeChildrenIn(companionClass)
+          completeClassesOfUnit()
           setFlag(ChildrenQueried)
 
       annotations.collect { case Annotation.Child(child) => child }.reverse
