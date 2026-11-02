@@ -364,6 +364,11 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   var profile: Profile = NoProfile
 
+  /** Infos of members of overriding pairs as seen from a class, with the member's info they were computed from.
+   *  See `OverridingPairs.seenFrom`.
+   */
+  private[dotc] val pairsSeenFrom = new java.util.HashMap[(Symbol, Types.Type), (Types.Type, Types.Type)]
+
   private def compileUnits()(using Context) = Stats.maybeMonitored {
     if (!ctx.mode.is(Mode.Interactive)) // IDEs might have multi-threaded access, accesses are synchronized
       ctx.base.checkSingleThreaded()
