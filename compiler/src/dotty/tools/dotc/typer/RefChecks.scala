@@ -24,6 +24,7 @@ import config.Printers.refcheck
 import reporting.*
 import Annotations.Annotation
 import Constants.Constant
+import util.Stats
 import cc.{stripCapturing, CCState}
 import cc.Mutability.isUpdateMethod
 import dotty.tools.dotc.util.Chars.{isLineBreakChar, isWhitespace}
@@ -33,6 +34,11 @@ object RefChecks {
 
   val name: String = "refchecks"
   val description: String = "checks related to abstract members and overriding"
+
+  // Spike switch for `checkMemberTypesOK`: `-Ddotty.refchecks.memberTypes=all` checks every alternative of every
+  // name (the old behaviour); `=verify` skips as by default, but also checks what it skipped and reports an error
+  // for any that would have failed.
+  private val memberTypesMode: String = System.getProperty("dotty.refchecks.memberTypes", "joint").nn
 
   private val defaultMethodFilter = new NameFilter {
     def apply(pre: Type, name: Name)(using Context): Boolean = name.is(DefaultGetterName)
@@ -918,19 +924,54 @@ object RefChecks {
           }
         addDecls(clazz)
 
+        // Only a joint denotation, whose info is the intersection of the infos of several inherited members with
+        // the same signature (rule 3 of `Denotation.meet`), can fail the check below. Any other alternative's info
+        // was computed as `mbr.info.asSeenFrom(self, mbr.owner)`, so the check would compare it with a copy of itself.
+        // A joint denotation needs two symbols with the name, so a name declared in only one class among the base
+        // classes cannot produce one. Members can also come from a given self type (pos/i9352.scala), so the name
+        // filter is not used for classes that have one.
+        val checkAll = memberTypesMode == "all"
+        val verify = memberTypesMode == "verify"
+        val filterNames = !checkAll && !clazz.givenSelfType.exists
+        val baseClasses = clazz.info.baseClasses
+        def declaredMoreThanOnce(name: Name): Boolean =
+          var count = 0
+          var bcs = baseClasses
+          while bcs.nonEmpty && count < 2 do
+            if bcs.head.info.decls.lookup(name).exists then count += 1
+            bcs = bcs.tail
+          count >= 2
+
         // For each member, check that the type of its symbol, as seen from `self`
         // can override the info of this member
+        def checkMemberType(name: Name, mbrd: SingleDenotation, skipped: Boolean): Unit =
+          val mbr = mbrd.symbol
+          val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
+          if (!mbrType.overrides(mbrd.info, matchLoosely = true))
+            if skipped then
+              report.error(em"checkMemberTypesOK would have failed for skipped ${mbr.showLocated}: ${mbrType} vs ${mbrd.info} (${mbrd.getClass.getSimpleName})", clazz.srcPos)
+            else
+              report.errorOrMigrationWarning(
+                em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
+                    |  its type             $mbrType
+                    |  does not conform to  ${mbrd.info}""",
+                (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+
         withMode(Mode.IgnoreCaptures) {
-          for (name <- membersToCheck)
-            for (mbrd <- self.member(name).alternatives) {
-              val mbr = mbrd.symbol
-              val mbrType = mbr.info.asSeenFrom(self, mbr.owner)
-              if (!mbrType.overrides(mbrd.info, matchLoosely = true))
-                report.errorOrMigrationWarning(
-                  em"""${mbr.showLocated} is not a legal implementation of `$name` in $clazz
-                      |  its type             $mbrType
-                      |  does not conform to  ${mbrd.info}""",
-                  (if (mbr.owner == clazz) mbr else clazz).srcPos, MigrationVersion.Scala2to3)
+          for (name <- membersToCheck) {
+            val skipName = filterNames && !declaredMoreThanOnce(name)
+            Stats.doRecord("checkMemberTypesOK name", 1)
+            if skipName then Stats.doRecord("checkMemberTypesOK name skipped", 1)
+            if !skipName || verify then
+              for (mbrd <- self.member(name).alternatives) {
+                Stats.doRecord("checkMemberTypesOK alternative", 1)
+                val isJoint = mbrd.isInstanceOf[JointRefDenotation]
+                if isJoint then Stats.doRecord("checkMemberTypesOK joint", 1)
+                if verify && skipName && isJoint then
+                  report.error(em"checkMemberTypesOK name filter skipped joint ${mbrd.symbol.showLocated}", clazz.srcPos)
+                if checkAll || isJoint && !skipName then checkMemberType(name, mbrd, skipped = false)
+                else if verify then checkMemberType(name, mbrd, skipped = true)
+              }
           }
         }
       }
