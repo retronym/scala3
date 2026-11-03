@@ -724,6 +724,35 @@ class InlineBytecodeTests extends DottyBytecodeTest {
     }
   }
 
+  @Test def beta_reduce_context_function_after_impure_binding = {
+    // The shape of `tpd.mapStatements` used in `MegaPhase.transformBlock`: beta-reducing
+    // `xs => c ?=> body` with an impure argument leaves `{ val xs = ...; c ?=> body }.apply(using c)`.
+    val source = """class Ctx
+                   |object Lib:
+                   |  inline def mapIt[T](xs: List[Int], inline wrap: List[Int] => Ctx ?=> T)(using Ctx): T =
+                   |    def loop(ys: List[Int])(using Ctx): T =
+                   |      ys match
+                   |        case y :: rest => loop(rest)
+                   |        case Nil => wrap(if ys.isEmpty then xs else ys.reverse)
+                   |    loop(xs)
+                   |
+                   |class Test:
+                   |  def test(n: Int)(using Ctx): Int =
+                   |    Lib.mapIt(List(1), xs => c ?=> xs.length + n + c.hashCode)
+                 """.stripMargin
+
+    checkBCode(source) { dir =>
+      val clsNode = loadClassNode(lookupClass(dir, "Test.class"))
+      val methods = clsNode.methods.asScala.toList
+      assert(!methods.exists(_.name.contains("anonfun")),
+        s"closure was not beta-reduced: ${methods.map(_.name)}")
+      for meth <- methods; instr <- instructionsFromMethod(meth) do
+        instr match
+          case _: InvokeDynamic => assert(false, s"closure allocated in ${meth.name}")
+          case _ =>
+    }
+  }
+
   @Test def inline_match_scrutinee_with_side_effect = {
     val source = """class Test:
                    |  inline def inlineTest(): Int =
