@@ -2190,11 +2190,13 @@ sealed class TermRefSet(using Context):
     if !that.isEmpty then that.foreach(+=)
 
   def foreach[U](f: TermRef => U): Unit =
-    def handle(sym: TermSymbol, prefixes: Type | List[Type]): Unit =
-      prefixes match
+    val it = elems.entrySet.iterator
+    while it.hasNext do
+      val e = it.next()
+      val sym = e.getKey
+      e.getValue match
         case prefix: Type => f(TermRef(prefix, sym))
         case prefixes: List[Type] => prefixes.foreach(pre => f(TermRef(pre, sym)))
-    elems.forEach(handle)
 
   // used only for debugging
   def showAsList: List[TermRef] = {
