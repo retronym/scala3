@@ -401,7 +401,7 @@ class SymUtils:
       self.hasAnnotation(checkAnnotaton)
       || (self.maybeOwner.isClass && self.owner.hasAnnotation(checkAnnotaton))
 
-    private inline def isInFeatureScope(checkAnnotation: ClassSymbol, checkSymbol: Symbol => Boolean, checkOwner: Symbol => Boolean)(using Context): Boolean =
+    private inline def isInFeatureScope(checkAnnotation: ClassSymbol, inline checkSymbol: Symbol => Boolean, inline checkOwner: Symbol => Boolean)(using Context): Boolean =
       def isDefaultArgumentOfCheckedMethod =
         self.name.is(DefaultGetterName)
         && self.owner.isClass

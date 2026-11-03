@@ -160,7 +160,7 @@ object CyclicReference:
   type TraceElement = Context ?=> String
   type Trace = mutable.ArrayBuffer[TraceElement]
 
-  inline def trace[T](info: TraceElement)(inline op: => T)(using Context): T =
+  inline def trace[T](inline info: TraceElement)(inline op: => T)(using Context): T =
     val run = ctx.run
     val traceCycles = run != null && run.cyclicReferenceTrace != null
     try

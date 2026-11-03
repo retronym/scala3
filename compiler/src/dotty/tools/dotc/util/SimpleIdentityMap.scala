@@ -102,7 +102,7 @@ final class SimpleIdentityMap[K <: AnyRef, +V <: AnyRef](bindings: Array[AnyRef]
     if (bindings1 eq bindings) this else new SimpleIdentityMap(bindings1)
   }
 
-  def foreachBinding(f: (K, V) => Unit): Unit = {
+  inline def foreachBinding(inline f: (K, V) => Unit): Unit = {
     var i = 0
     while (i < bindings.length) {
       f(key(i), value(i))
