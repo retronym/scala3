@@ -37,9 +37,9 @@ sealed trait BType {
     case FLOAT  => "F"
     case LONG   => "J"
     case DOUBLE => "D"
-    case c: ClassBType            => "L" + c.internalName + ";"
-    case ArrayBType(component)    => "[" + component
-    case MethodBType(args, res)   => BTypes.methodDescriptor(args, res)
+    case c: ClassBType            => c.cachedDescriptor
+    case a: ArrayBType            => a.cachedDescriptor
+    case m: MethodBType           => m.cachedDescriptor
   }
 
   /**
@@ -652,6 +652,18 @@ final case class MethodInlineInfo(effectivelyFinal: Boolean = false,
  * a ClassBType can only be created through ClassBType.Cache.
  */
 final case class ClassBType private(internalName: String) extends RefBType {
+  // The descriptor, computed on first use. BTypes are shared between backend threads: a race computes the same
+  // String twice, and a String is safe to publish without synchronization.
+  private var myDescriptor: String | Null = null
+  private[jvm] def cachedDescriptor: String =
+    val d = myDescriptor
+    if d != null then d
+    else
+      val d1 = computeDescriptor
+      myDescriptor = d1
+      d1
+  private def computeDescriptor: String = "L" + internalName + ";"
+
   /**
    * Write-once variable allows initializing a cyclic graph of infos. This is required for
    * nested classes. Example: for the definition `class A { class B }` we have
@@ -893,6 +905,18 @@ object ClassBType {
 }
 
 final case class ArrayBType(componentType: BType) extends RefBType {
+  // The descriptor, computed on first use. BTypes are shared between backend threads: a race computes the same
+  // String twice, and a String is safe to publish without synchronization.
+  private var myDescriptor: String | Null = null
+  private[jvm] def cachedDescriptor: String =
+    val d = myDescriptor
+    if d != null then d
+    else
+      val d1 = computeDescriptor
+      myDescriptor = d1
+      d1
+  private def computeDescriptor: String = "[" + componentType
+
   def isNothing: Boolean = false
   def isNull: Boolean = false
 
@@ -908,6 +932,22 @@ final case class ArrayBType(componentType: BType) extends RefBType {
 }
 
 final case class MethodBType(argumentTypes: List[BType], returnType: BType) extends BType {
+  // The descriptor, computed on first use. BTypes are shared between backend threads: a race computes the same
+  // String twice, and a String is safe to publish without synchronization.
+  private var myDescriptor: String | Null = null
+  private[jvm] def cachedDescriptor: String =
+    val d = myDescriptor
+    if d != null then d
+    else
+      val d1 = computeDescriptor
+      myDescriptor = d1
+      d1
+  private def computeDescriptor: String =
+    val sb = new java.lang.StringBuilder(64).append('(')
+    var as = argumentTypes
+    while as.nonEmpty do { sb.append(as.head.toString); as = as.tail }
+    sb.append(')').append(returnType.toString).toString
+
   def isNothing: Boolean = false
   def isNull: Boolean = false
 }
