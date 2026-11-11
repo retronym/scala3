@@ -100,19 +100,160 @@ object TypeOps:
           case tp: NamedType =>
             val sym = tp.symbol
             if sym.isStatic && !sym.maybeOwner.seesOpaques || (tp.prefix `eq` NoPrefix)
-            then tp
-            else derivedSelect(tp, atVariance(variance max 0)(this(tp.prefix)))
+            then if depth == 0 then tp else rebindStatic(tp)
+            else
+              val savedChanged = changed
+              val tp1 = derivedSelect(tp, atVariance(variance max 0)(this(tp.prefix)))
+              // A changed prefix can select the same type again, e.g. `C.this.T` as seen from a subclass of
+              // `C` that passes `T` itself for `T`
+              if tp1 eq tp then changed = savedChanged
+              tp1
           case tp: LambdaType =>
             mapOverLambda(tp) // special cased common case
           case tp: ThisType =>
-            toPrefix(pre, cls, tp.cls)
-          case _: BoundType =>
-            tp
+            val tp1 = toPrefix(pre, cls, tp.cls)
+            if tp1 ne tp then
+              if watching then throw Restart
+              changed = true
+            tp1
+          case tp: BoundType =>
+            if depth == 0 then tp else rebind(tp)
           case _ =>
+            if depth != 0 then checkFusable(tp)
             mapOver(tp)
         }
       }
     }
+
+    // Rebinding lambda parameters as we go.
+    //
+    // `TypeMap.mapOverLambda` maps a lambda's parameter infos and result type and then, if anything changed, builds
+    // the new lambda with `newLikeThis`, which traverses the mapped infos and result a second time to substitute the
+    // new lambda for the old one in its parameter references. Here instead the new lambda is created first, and the
+    // map replaces references to the old lambda's parameters by the new one's as it meets them (`from` and `to`, a
+    // stack of the lambdas being mapped, `depth` deep). The mapped parts then differ from the originals even when
+    // nothing else changed, so `changed` records whether anything other than this rebinding did, to return the
+    // original lambda in that case.
+    //
+    // Some types the map would treat differently once their parts have been rebound, or that it maps lazily, after
+    // the stack is gone (see `checkFusable`, `range`). Meeting one, the map gives up on the outermost lambda, resets
+    // its state and maps the lambda again the two-pass way.
+
+    /** Rebind parameters during the traversal (see above); false after giving up once. */
+    protected var fuseRebinding: Boolean = ctx.settings.YfuseLambdaRebind.value != "off"
+
+    /** Map an outermost lambda the two-pass way first, until something changes, then start again rebinding. */
+    private val lazyFuse = ctx.settings.YfuseLambdaRebind.value == "lazy"
+    private var watching = false
+
+    private var from: Array[LambdaType | Null] = NoLambdas
+    private var to: Array[LambdaType | Null] = NoLambdas
+    private var depth = 0
+
+    /** Whether the map changed something other than parameter references in the current lambda. */
+    private var changed = false
+
+    /** The smallest index into `from` of a lambda whose parameters were rebound in the current lambda. */
+    private var outermostRebound = Int.MaxValue
+
+    private def rebind(tp: BoundType): Type =
+      var i = depth - 1
+      while i >= 0 && (from(i) ne tp.binder) do i -= 1
+      if i < 0 then tp
+      else
+        if i < outermostRebound then outermostRebound = i
+        tp.copyBoundType(to(i).nn.asInstanceOf[tp.BT])
+
+    /** The map leaves references to static symbols alone, but their prefix might refer to a parameter. */
+    private def rebindStatic(tp: NamedType): Type =
+      val pre = tp.prefix
+      val pre1 = pre match
+        case pre: NamedType => rebindStatic(pre)
+        case pre: BoundType => rebind(pre)
+        case _: ThisType | NoPrefix => pre
+        case _ => giveUp()
+      if pre1 eq pre then tp else tp.derivedSelect(pre1)
+
+    private def giveUp(): Nothing = throw GiveUp
+
+    /** Give up on types that `mapOver` would map lazily (`LazyRef`), that the approximating map treats differently once
+     *  a part has changed (`SkolemType`, `TypeVar`), or that hold types elsewhere than in their parts (annotations,
+     *  capture sets).
+     */
+    private def checkFusable(tp: Type): Unit = tp match
+      case _: LazyRef | _: SkolemType | _: TypeVar | _: ClassInfo | _: ProtoType => giveUp()
+      case _ =>
+
+    override protected def mapCapturingType(tp: Type, parent: Type, refs: CaptureSet, v: Int): Type =
+      if depth != 0 then giveUp()
+      super.mapCapturingType(tp, parent, refs, v)
+
+    /** An annotation's arguments may refer to the parameters, and `mapWith` maps them with this map. */
+    override protected def derivedAnnotatedType(tp: AnnotatedType, underlying: Type, annot: Annotation): Type =
+      if depth != 0 && (annot ne tp.annot) then giveUp()
+      super.derivedAnnotatedType(tp, underlying, annot)
+
+    override protected def range(lo: Type, hi: Type): Type =
+      if depth != 0 then giveUp()
+      super.range(lo, hi)
+
+    override protected def mapOverLambda(tp: LambdaType): Type =
+      if !fuseRebinding || watching then super.mapOverLambda(tp)
+      else if depth != 0 then fusedLambda(tp)
+      else if lazyFuse then
+        val savedVariance = variance
+        val savedApproxCount = approxCount
+        watching = true
+        try
+          val tp1 = super.mapOverLambda(tp)
+          watching = false
+          tp1
+        catch case Restart =>
+          watching = false
+          variance = savedVariance
+          approxCount = savedApproxCount
+          outermostFused(tp)
+      else outermostFused(tp)
+
+    private def outermostFused(tp: LambdaType): Type =
+      val savedVariance = variance
+      val savedApproxCount = approxCount
+      try fusedLambda(tp)
+      catch case GiveUp =>
+        depth = 0
+        variance = savedVariance
+        approxCount = savedApproxCount
+        fuseRebinding = false
+        super.mapOverLambda(tp)
+
+    private def fusedLambda(tp: LambdaType): Type =
+      val d = depth
+      if d == from.length then
+        from = java.util.Arrays.copyOf(from, (d * 2) max 4)
+        to = java.util.Arrays.copyOf(to, (d * 2) max 4)
+      from(d) = tp
+      val savedChanged = changed
+      val savedOutermost = outermostRebound
+      changed = false
+      outermostRebound = Int.MaxValue
+      val restpe = tp.resultType
+      val saved = variance
+      val tp1 = tp.newLikeThis(
+        tl =>
+          to(d) = tl
+          depth = d + 1
+          variance = if defn.MatchCase.isInstance(restpe) then 0 else -variance
+          val ptypes1 = tp.paramInfos.mapConserve(this).asInstanceOf[List[tp.PInfo]]
+          variance = saved
+          ptypes1,
+        _ => this(restpe))
+      depth = d
+      from(d) = null
+      to(d) = null
+      val result = if changed || outermostRebound < d then tp1 else tp
+      changed ||= savedChanged
+      outermostRebound = outermostRebound min savedOutermost
+      result
 
     override def reapply(tp: Type): Type =
       // derived infos have already been subjected to asSeenFrom, hence to need to apply the map again.
@@ -123,6 +264,10 @@ object TypeOps:
       approxCount -= 1
       tp
   }
+
+  private object GiveUp extends scala.util.control.ControlThrowable
+  private object Restart extends scala.util.control.ControlThrowable
+  @sharable private val NoLambdas = new Array[LambdaType | Null](0)
 
   def isLegalPrefix(pre: Type)(using Context): Boolean =
     // isLegalPrefix is relaxed after typer unless we're doing an implicit
