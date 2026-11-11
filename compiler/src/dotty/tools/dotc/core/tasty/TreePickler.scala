@@ -64,7 +64,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
   private inline def withLength(inline op: Unit) = {
     val lengthAddr = reserveRef(relative = true)
     op
-    fillRef(lengthAddr, currentAddr, relative = true)
+    fillRef(lengthAddr, relative = true)
   }
 
   /** There are certain expectations with code which is naturally able to reach
@@ -89,7 +89,7 @@ class TreePickler(pickler: TastyPickler, attributes: Attributes) {
     symRefs(sym) = currentAddr
     val refs = forwardSymRefs.lookup(sym)
     if refs != null then
-      refs.foreach(fillRef(_, currentAddr, relative = false))
+      refs.foreach(fillRef(_, relative = false))
       forwardSymRefs -= sym
 
   def pickleName(name: Name): Unit = writeNat(nameIndex(name).index)
