@@ -55,11 +55,13 @@ class CCState:
 
   def nextIteration[T](op: => T): T =
     iterCount += 1
+    classifierAndFieldsCache.clear()
     try op finally iterCount -= 1
 
   def start(): Unit =
     iterCount = 1
     fieldsWithExplicitTypes.clear()
+    classifierAndFieldsCache.clear()
 
   private var mySepCheck = false
 
@@ -112,10 +114,11 @@ class CCState:
   /* A cache for CaptureOps.useSet */
   private[cc] val useSetCache: EqHashMap[Symbol, CaptureSet] = EqHashMap()
 
-  /** A cache that stores for each class the classifiers of all LocalCap instances
-   *  in the types of its fields and the fields that contribute such LocalCap instances.
+  /** A cache that stores for each class the implied classifier of the LocalCap of
+   *  its instances and the fields that contribute LocalCap instances, as computed
+   *  by `CaptureOps.capturesImpliedByFields`. Cleared for each compilation unit.
    */
-  val localCapClassifiersAndFieldsCache: EqHashMap[Symbol, (List[ClassSymbol], List[Symbol])] = EqHashMap()
+  val classifierAndFieldsCache: EqHashMap[Symbol, (Symbol, List[Symbol])] = EqHashMap()
 
   /** A map from class symbols in the current compilation unit to those of their fields
    *  that have an explicit type given. Used in `captureSetImpliedByFields`
