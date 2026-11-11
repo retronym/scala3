@@ -251,6 +251,11 @@ object Denotations {
     /** The alternatives of this denotation that satisfy the predicate `p`. */
     def altsWith(p: Symbol => Boolean): List[SingleDenotation]
 
+    /** Append the alternatives of this denotation that satisfy the predicate `p` to `buf`,
+     *  evaluating `p` on the alternatives from left to right.
+     */
+    def altsWithInto(p: Symbol => Boolean, buf: ListBuffer[SingleDenotation]): Unit
+
     /** The unique alternative of this denotation that satisfies the predicate `p`,
      *  or NoDenotation if no satisfying alternative exists.
      *  @throws TypeError if there is at more than one alternative that satisfies `p`.
@@ -642,6 +647,9 @@ object Denotations {
 
     def altsWith(p: Symbol => Boolean): List[SingleDenotation] =
       if (exists && p(symbol)) this :: Nil else Nil
+
+    def altsWithInto(p: Symbol => Boolean, buf: ListBuffer[SingleDenotation]): Unit =
+      if (exists && p(symbol)) buf += this
 
     def suchThat(p: Symbol => Boolean)(using Context): SingleDenotation =
       if (exists && p(symbol)) this else NoDenotation
@@ -1293,8 +1301,15 @@ object Denotations {
             denot2.atSignature(sig, targetName, site, relaxed))
     def current(using Context): Denotation =
       derivedUnionDenotation(denot1.current, denot2.current)
+    // Overloaded denotations are typically left-deep trees, so `denot1.altsWith(p) ++ denot2.altsWith(p)`
+    // would copy the left list at each level. Collect into a single buffer instead.
     def altsWith(p: Symbol => Boolean): List[SingleDenotation] =
-      denot1.altsWith(p) ++ denot2.altsWith(p)
+      val buf = new ListBuffer[SingleDenotation]
+      altsWithInto(p, buf)
+      buf.toList
+    def altsWithInto(p: Symbol => Boolean, buf: ListBuffer[SingleDenotation]): Unit =
+      denot1.altsWithInto(p, buf)
+      denot2.altsWithInto(p, buf)
     def suchThat(p: Symbol => Boolean)(using Context): SingleDenotation = {
       val sd1 = denot1.suchThat(p)
       val sd2 = denot2.suchThat(p)
