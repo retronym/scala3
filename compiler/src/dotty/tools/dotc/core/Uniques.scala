@@ -8,8 +8,9 @@ import Decorators.*
 import util.{WeakHashSet, Stats}
 import WeakHashSet.Entry
 import scala.annotation.tailrec
+import scala.annotation.internal.sharable
 
-class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
+class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity * Uniques.capacityFactor):
   override def hash(x: Type): Int = x.hash
   override def isEqual(x: Type, y: Type) = x.equals(y)
 
@@ -19,6 +20,87 @@ class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
  *  with the given parts exists already and creates a new one if not.
  */
 object Uniques:
+
+  // DO NOT MERGE: hook for probing hash-consing traffic from a test driver
+  trait Probe:
+    /** `freshParts`: the caller allocated parts (a probe type, an args list) that the hit makes garbage */
+    def hit(table: String, tp: Type, freshParts: Boolean): Unit
+    def miss(table: String, tp: Type): Unit
+    /** Every call of `unique`, with the type offered and the one returned */
+    def unique(candidate: Type, result: Type): Unit = ()
+  @sharable var probe: Probe | Null = null
+
+  // DO NOT MERGE: experiment switch, see ParamRef.computeHash
+  @sharable var uncacheMethodParamRefs: Boolean = sys.props.contains("dotty.uncacheMethodParamRefs")
+
+  // DO NOT MERGE: experiment switch, multiplies the initial capacity of the unique tables
+  @sharable val capacityFactor: Int = sys.props.get("dotty.uniquesCapacityFactor").fold(1)(_.toInt)
+
+  // DO NOT MERGE: experiment switch, see ParamRef.computeHash
+  @sharable var uncacheOpenHKParamRefs: Boolean = sys.props.contains("dotty.uncacheOpenHKParamRefs")
+
+  // DO NOT MERGE: experiment switch, slots (a power of two) of AppliedUniques' cache of uncached applied types
+  @sharable val uncachedAppliedCacheSize: Int = sys.props.get("dotty.uncachedAppliedCache").fold(0)(_.toInt)
+  // DO NOT MERGE: key that cache on identity hashes only (the first version), not the parts' hashes
+  @sharable val uncachedAppliedCacheIdentityKeys: Boolean = sys.props.contains("dotty.uncachedAppliedCacheIdentityKeys")
+
+  // DO NOT MERGE: experiment switch, see `localBinderOf`
+  @sharable var localMethodParamUniques: Boolean = sys.props.contains("dotty.localMethodParamUniques")
+
+  /** The method or poly type whose params `tycon` or one of `args` mentions, either directly or as the
+   *  `localBinder` of an applied type, or null. Shallow, so it only routes some of the types over method params;
+   *  the rest stay in the global table. Deterministic in the components, which is all that identity needs.
+   */
+  def localBinderOf(tycon: Type, args: List[Type]): MethodOrPoly | Null =
+    def of(tp: Type): MethodOrPoly | Null = tp match
+      case tp: ParamRef => tp.binder match
+        case b: MethodOrPoly => b
+        case _ => null
+      case tp: CachedAppliedType => tp.localBinder
+      case _ => null
+    var b = of(tycon)
+    var xs = args
+    while b == null && !xs.isEmpty do
+      b = of(xs.head)
+      xs = xs.tail
+    b
+
+  /** An open-addressing hash-consing table of applied types, owned by one method or poly type. Holds its types
+   *  strongly: they mention the owner's params, so they cannot outlive it anyway, but they live as long as it does.
+   */
+  final class LocalAppliedUniques:
+    private var table = new Array[CachedAppliedType | Null](8)
+    private var count = 0
+
+    def enterIfNew(tycon: Type, args: List[Type], h: Int): AppliedType =
+      val mask = table.length - 1
+      var i = h & mask
+      var e = table(i)
+      while e != null do
+        if e.hash == h && (e.tycon eq tycon) && e.args.eqElements(args) then
+          val p = probe
+          if p != null then p.hit("applied-local", e, e.args ne args)
+          return e
+        i = (i + 1) & mask
+        e = table(i)
+      val tp = new CachedAppliedType(tycon, args, h)
+      table(i) = tp
+      count += 1
+      if count * 2 > table.length then grow()
+      val p = probe
+      if p != null then p.miss("applied-local", tp)
+      tp
+
+    private def grow(): Unit =
+      val old = table
+      table = new Array[CachedAppliedType | Null](old.length * 2)
+      val mask = table.length - 1
+      for e <- old do
+        if e != null then
+          var i = e.hash & mask
+          while table(i) != null do i = (i + 1) & mask
+          table(i) = e
+  end LocalAppliedUniques
 
   private inline def recordCaching(tp: Type): Unit = recordCaching(tp.hash, tp.getClass)
   private inline def recordCaching(h: Int, clazz: Class[?]): Unit =
@@ -33,9 +115,15 @@ object Uniques:
   def unique[T <: Type](tp: T)(using Context): T =
     recordCaching(tp)
     if tp.hash == NotCached then tp
-    else ctx.uniques.put(tp).asInstanceOf[T]
+    else
+      val r = ctx.uniques.put(tp).asInstanceOf[T]
+      val p = probe
+      if p != null then
+        if r eq tp then p.miss("uniques", r) else p.hit("uniques", r, true)
+        p.unique(tp, r)
+      r
 
-  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
+  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4 * capacityFactor) with Hashable:
     override def hash(x: NamedType): Int = x.hash
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
@@ -56,11 +144,20 @@ object Uniques:
 
         @tailrec
         def linkedListLoop(entry: Entry[NamedType] | Null): NamedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
+          case null                    =>
+            Stats.record(statsItem("miss"))
+            val r = addEntryAt(bucket, newType, h, oldHead)
+            val p = probe
+            if p != null then p.miss("named", r)
+            r
           case _                       =>
             if entry.hash == h then
               val e = entry.get
-              if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then e
+              if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then
+                Stats.record(statsItem("hit"))
+                val p = probe
+                if p != null then p.hit("named", e, false)
+                e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
 
@@ -76,15 +173,56 @@ object Uniques:
 
   end NamedTypeUniques
 
-  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
+  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2 * capacityFactor) with Hashable:
     override def hash(x: AppliedType): Int = x.hash
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
       val h = doHash(null, tycon, args)
-      def newType = new CachedAppliedType(tycon, args, h)
       if monitored then recordCaching(h, classOf[CachedAppliedType])
-      if h == NotCached then newType
+      if h == NotCached then enterUncached(tycon, args)
       else
+        val local = if localMethodParamUniques then localBinderOf(tycon, args) else null
+        if local != null then local.localApplied.enterIfNew(tycon, args, h)
+        else enterGlobal(tycon, args, h)
+      end if
+
+    // A direct-mapped cache of uncached applied types, keyed by the identities of their parts. Recently built ones
+    // are shared again (their hash stays NotCached); an older one is simply replaced by a new instance.
+    private val uncachedCache: Array[AppliedType | Null] | Null =
+      if uncachedAppliedCacheSize > 0 then new Array[AppliedType | Null](uncachedAppliedCacheSize) else null
+
+    private def partKey(tp: Type): Int =
+      if uncachedAppliedCacheIdentityKeys then System.identityHashCode(tp)
+      else
+        val h = tp.hash
+        if h != NotCached then h else System.identityHashCode(tp)
+
+    private def enterUncached(tycon: Type, args: List[Type]): AppliedType =
+      val cache = uncachedCache
+      if cache == null then new CachedAppliedType(tycon, args, NotCached)
+      else
+        // Keyed by the parts' identities: their hash when they are hash-consed (already computed), otherwise their
+        // identity hash, which for a fresh object is a VM call (and, on macOS, a W^X toggle)
+        var k = partKey(tycon)
+        var xs = args
+        while !xs.isEmpty do
+          k = k * 31 + partKey(xs.head)
+          xs = xs.tail
+        val i = (k ^ (k >>> 16)) & (cache.length - 1)
+        val e = cache(i)
+        if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then
+          val p = probe
+          if p != null then p.hit("applied-dm", e, e.args ne args)
+          e
+        else
+          val tp = new CachedAppliedType(tycon, args, NotCached)
+          cache(i) = tp
+          val p = probe
+          if p != null then p.miss("applied-dm", tp)
+          tp
+
+    private def enterGlobal(tycon: Type, args: List[Type], h: Int): AppliedType =
+        def newType = new CachedAppliedType(tycon, args, h)
         // Inlined from WeakHashSet#put
         Stats.record(statsItem("put"))
         removeStaleEntries()
@@ -93,15 +231,24 @@ object Uniques:
 
         @tailrec
         def linkedListLoop(entry: Entry[AppliedType] | Null): AppliedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
+          case null                    =>
+            Stats.record(statsItem("miss"))
+            val r = addEntryAt(bucket, newType, h, oldHead)
+            val p = probe
+            if p != null then p.miss("applied", r)
+            r
           case _                       =>
             if entry.hash == h then
               val e = entry.get
-              if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then e
+              if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then
+                Stats.record(statsItem("hit"))
+                val p = probe
+                if p != null then p.hit("applied", e, e.args ne args)
+                e
               else linkedListLoop(entry.tail)
             else linkedListLoop(entry.tail)
 
         linkedListLoop(oldHead)
-      end if
+    end enterGlobal
   end AppliedUniques
 end Uniques
