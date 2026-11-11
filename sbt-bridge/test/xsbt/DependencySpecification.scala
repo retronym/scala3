@@ -70,6 +70,31 @@ class DependencySpecification {
   }
 
   @Test
+  def extractedClassDependenciesFromAnnotationsOfDefinitions = {
+    val srcConsts = "object Consts { final val I = 1 }"
+    val srcAnn = "class MyAnn(x: Int) extends scala.annotation.StaticAnnotation"
+    val srcOnClass = "@MyAnn(Consts.I) class OnClass"
+    val srcOnMethod = "class OnMethod { @MyAnn(Consts.I) def f: Int = 1 }"
+    val srcOnParam = "class OnParam { def f(@MyAnn(Consts.I) x: Int): Int = x }"
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val memberRef = compilerForTesting.extractDependenciesFromSrcs(
+      srcConsts, srcAnn, srcOnClass, srcOnMethod, srcOnParam).memberRef
+    def includes(name: String, expected: Set[String]): Unit =
+      assertTrue(s"memberRef($name) = ${memberRef(name)}", expected.subsetOf(memberRef(name)))
+    includes("OnClass", Set("MyAnn", "Consts"))
+    includes("OnMethod", Set("MyAnn", "Consts"))
+    includes("OnParam", Set("MyAnn", "Consts"))
+  }
+
+  @Test
+  def noClassDependenciesFromChildAnnotations = {
+    val src = "sealed trait T; class A extends T; class B extends T"
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val memberRef = compilerForTesting.extractDependenciesFromSrcs(src).memberRef
+    assertEquals(Set.empty, memberRef("T"))
+  }
+
+  @Test
   def jdkClassesUnderReleaseAreBinaryDependencies = {
     // `-release` reads JDK classes from `ct.sym` only when targeting an older JDK
     assumeTrue(Runtime.version().feature() > 17)

@@ -23,6 +23,19 @@ class ExtractUsedNamesSpecification {
 
   // test covers https://github.com/gkossakowski/sbt/issues/6
   @Test
+  def extractNamesFromAnnotationsOfDefinitions = {
+    val srcConsts = "object Consts { final val I = 1 }"
+    val srcAnn = "class MyAnn(x: Int) extends scala.annotation.StaticAnnotation"
+    val srcOnClass = "@MyAnn(Consts.I) class OnClass"
+    val srcOnMethod = "class OnMethod { @MyAnn(Consts.I) def f: Int = 1 }"
+    val srcOnParam = "class OnParam { def f(@MyAnn(Consts.I) x: Int): Int = x }"
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val usedNames = compilerForTesting.extractUsedNamesFromSrc(srcConsts, srcAnn, srcOnClass, srcOnMethod, srcOnParam)
+    for name <- List("OnClass", "OnMethod", "OnParam") do
+      assertTrue(s"$name: ${usedNames(name)}", Set("MyAnn", "Consts", "I").subsetOf(usedNames(name)))
+  }
+
+  @Test
   def extractNameInTypeTree = {
     val srcA = """|package a {
                   |  class A {
