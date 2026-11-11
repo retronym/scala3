@@ -21,6 +21,58 @@ class ExtractUsedNamesSpecification {
     assertEquals(expectedNames, usedNames("a.A"))
   }
 
+  // A wildcard import of a package is recorded as the reserved name `<pkg>._`, so
+  // that Zinc can find the classes that see a definition added to the package
+  // through such an import. Wildcard imports of objects need no such name.
+  @Test
+  def extractPackageWildcardImport = {
+    val srcA = """|package a.b { class X; given Int = 1 }
+                  |package a.c { object O { class Z } }""".stripMargin
+    val srcB = """|package d
+                  |class D1 { import a.b.*; val x = new X }
+                  |class D2 { import a.b.given; val i = summon[Int] }
+                  |class D3 { import a.b.X; import a.c.O.*; val x = new X; val z = new Z }
+                  |class D4 { import a.b.{given, *}; import _root_.*; val x = new X }""".stripMargin
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val usedNames = compilerForTesting.extractUsedNamesFromSrc(srcA, srcB)
+    assertTrue(usedNames("d.D1").contains("a.b._"))
+    assertTrue(usedNames("d.D2").contains("a.b._"))
+    assertTrue(usedNames("d.D4").contains("a.b._"))
+    assertFalse(usedNames("d.D3").contains("a.b._"))
+    assertFalse(usedNames("d.D3").contains("a.c._"))
+    assertFalse(usedNames("d.D3").contains("a.c.O._"))
+    assertEquals(Set("a.b._"), usedNames("d.D4").filter(_.endsWith("._")))
+  }
+
+  // An outer package clause puts its package's members in scope of the
+  // classes inside the nested clause, and is recorded like a wildcard import
+  // of that package. A single clause records nothing: the class's own package
+  // is known from its name.
+  @Test
+  def extractChainedPackageClause = {
+    val chained = """|package a
+                     |package b
+                     |class Chained""".stripMargin
+    val deep = """|package a.b
+                  |package c
+                  |package d
+                  |class Deep""".stripMargin
+    val single = """|package a.c
+                    |class Single""".stripMargin
+    val braces = """|package a {
+                    |  package e { class InBraces }
+                    |  class Outer
+                    |}""".stripMargin
+    val compilerForTesting = new ScalaCompilerForUnitTesting
+    val usedNames = compilerForTesting.extractUsedNamesFromSrc(chained, deep, single, braces)
+    def scopes(cls: String) = usedNames(cls).filter(_.endsWith("._"))
+    assertEquals(Set("a._"), scopes("a.b.Chained"))
+    assertEquals(Set("a.b._", "a.b.c._"), scopes("a.b.c.d.Deep"))
+    assertEquals(Set(), scopes("a.c.Single"))
+    // charged to one class of the unit, like a top-level import
+    assertEquals(Set("a._"), scopes("a.e.InBraces") ++ scopes("a.Outer"))
+  }
+
   // test covers https://github.com/gkossakowski/sbt/issues/6
   @Test
   def extractNameInTypeTree = {
