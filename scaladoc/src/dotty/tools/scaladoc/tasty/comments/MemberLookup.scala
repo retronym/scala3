@@ -92,16 +92,32 @@ trait MemberLookup {
           report.warn(msg, e)
         None
 
-  private def hackMembersOf(using Quotes)(rsym: reflect.Symbol) = {
+  /** The members of `rsym` named `sel.ident`, of the kind requested by `sel`.
+   *
+   *  Looks up the name directly rather than filtering `allMembers`, which computes a denotation for every member name
+   *  of the owner and dominated scaladoc's profile (lookups fall back through `Predef`, `scala` and `_root_`).
+   *  Names whose `toString` differs from their source form (derived names, such as `foo$default$1`) are not found by a
+   *  direct lookup, so identifiers containing `$` still go through `allMembers`.
+   */
+  private def hackMembersNamed(using Quotes)(rsym: reflect.Symbol, sel: MemberLookup.Selector): Iterator[reflect.Symbol] = {
     import reflect._
     import dotty.tools.dotc
+    import dotc.core.Names.{termName, typeName}
     given dotc.core.Contexts.Context = quotes.asInstanceOf[scala.quoted.runtime.impl.QuotesImpl].ctx
     val sym = rsym.asInstanceOf[dotc.core.Symbols.Symbol]
-    val members =
-      sym.info.allMembers.iterator.map(_.symbol).filter(
-        s => hackIsNotAbsent(s.asInstanceOf[Symbol])
-      )
-    // println(s"members of ${sym.show} : ${members.map(_.show).mkString(", ")}")
+    val info = sym.info
+    val denots =
+      if sel.ident.contains('$') then
+        info.allMembers.iterator.filter(_.symbol.name.toString == sel.ident)
+      else
+        def named(name: dotc.core.Names.Name) = info.member(name).alternatives.iterator
+        sel.kind match
+          case MemberLookup.SelectorKind.ForceTerm => named(termName(sel.ident))
+          case MemberLookup.SelectorKind.ForceType => named(typeName(sel.ident))
+          case MemberLookup.SelectorKind.NoForce => named(termName(sel.ident)) ++ named(typeName(sel.ident))
+    val members = denots.map(_.symbol).filter(
+      s => hackIsNotAbsent(s.asInstanceOf[Symbol])
+    )
     members.asInstanceOf[Iterator[Symbol]]
   }
 
@@ -152,7 +168,7 @@ trait MemberLookup {
     }
 
     if owner.isPackageDef then
-      findMatch(hackMembersOf(owner))
+      findMatch(hackMembersNamed(owner, sel))
     else
       owner.tree match {
         case tree: TypeDef =>
@@ -163,11 +179,11 @@ trait MemberLookup {
             }
 
           tpe.classSymbol match {
-            case Some(s) => findMatch(hackMembersOf(s))
+            case Some(s) => findMatch(hackMembersNamed(s, sel))
             case None => Iterator.empty
           }
         case _ =>
-          findMatch(hackMembersOf(owner))
+          findMatch(hackMembersNamed(owner, sel))
       }
   }
 
