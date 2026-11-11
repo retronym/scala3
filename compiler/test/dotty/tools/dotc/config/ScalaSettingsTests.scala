@@ -328,4 +328,14 @@ class ScalaSettingsTests:
     assertEquals("Ignoring conflicting value for Boolean flag -Xjava-tasty", conf.warnings.head)
     assert(conf.errors.isEmpty, s"ERROR: ${conf.errors}")
 
+  @Test def `default page width tolerates malformed environment`: Unit =
+    import ScalaSettingsProperties.pageWidth
+    assertEquals(80, pageWidth(columnsVar = null, ansiconVar = null))
+    assertEquals(120, pageWidth(columnsVar = "120", ansiconVar = null))
+    assertEquals(80, pageWidth(columnsVar = "", ansiconVar = null))
+    assertEquals(80, pageWidth(columnsVar = "wide", ansiconVar = null))
+    assertEquals(142, pageWidth(columnsVar = null, ansiconVar = "142x32766 (142x26)"))
+    assertEquals(142, pageWidth(columnsVar = "", ansiconVar = "142x32766 (142x26)"))
+    assertEquals(80, pageWidth(columnsVar = null, ansiconVar = "99999999999x1"))
+
 end ScalaSettingsTests
