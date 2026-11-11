@@ -1,0 +1,1283 @@
+[
+ {
+  "id": "B1",
+  "area": "B Settings",
+  "sev": "medium",
+  "s3": "dotc/config/CommandLineParser.scala:52-104",
+  "s2": "scala/scala bdde5ad0ff (2023-07) sys/process/Parser",
+  "what": "Trailing backslash in an @argfile line (e.g. a Windows path C:\\dir\\) makes tokenize throw StringIndexOutOfBounds instead of reporting \"trailing backslash\". Reproduced with scala-cli on the copied file.",
+  "refs": [
+   {
+    "sha": "bdde5ad0ff",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/bdde5ad0ff39d62ba830dbba4d6b17c99a6a7fa0",
+    "pr": "https://github.com/scala/scala/pull/10468"
+   }
+  ]
+ },
+ {
+  "id": "B2",
+  "area": "B Settings",
+  "sev": "low",
+  "s3": "dotc/config/CommandLineParser.scala:118-128",
+  "s2": "scala/scala 4960a7a6ea (2023-02) CompilerCommand.expandArg",
+  "what": "Scala 2 tokenizes argfiles line by line and throws on a missing file; Scala 3 joins lines then tokenizes once, so an unbalanced quote swallows following lines, and a missing argfile expands to nothing and compilation continues.",
+  "refs": [
+   {
+    "sha": "4960a7a6ea",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/4960a7a6ea30da4f01e972c005227e9777ea561f",
+    "pr": "https://github.com/scala/scala/pull/10319"
+   }
+  ]
+ },
+ {
+  "id": "B3",
+  "area": "B Settings",
+  "sev": "low",
+  "s3": "dotc/config/ScalaVersion.scala:34",
+  "s2": "nsc/settings/ScalaVersion.unparse",
+  "what": "unparse emits 2.13.0.-RC1 (spurious dot); unused in compiler/src so no effect today.",
+  "refs": []
+ },
+ {
+  "id": "B4",
+  "area": "B Settings",
+  "sev": "low",
+  "s3": "dotc/config/ScalaSettingsProperties.scala:36",
+  "s2": "n/a (Scala 3-only)",
+  "what": "COLUMNS=\"\" or non-numeric makes defaultPageWidth throw NumberFormatException while ScalaSettings initialises. Not run.",
+  "refs": []
+ },
+ {
+  "id": "B5",
+  "area": "B Settings",
+  "sev": "low",
+  "s3": "dotc/config/Properties.scala:127",
+  "s2": "scala/util/Properties.isMac",
+  "what": "isMac still tests javaVendor.startsWith(\"Apple\"); always false on modern JDKs. Unused. Copy also lacks isLinux, isJavaAtLeast.",
+  "refs": []
+ },
+ {
+  "id": "B6",
+  "area": "B Settings",
+  "sev": "low",
+  "s3": "compiler/src/dotty/tools/MainGenericCompiler.scala:44-51",
+  "s2": "n/a (contrast: MutableSettings.processArguments)",
+  "what": "Empty arguments are filtered everywhere, so scala script.sc \"\" loses the positional argument; Scala 2 only drops empties in option position.",
+  "refs": []
+ },
+ {
+  "id": "F1",
+  "area": "F Classfile",
+  "sev": "low",
+  "s3": "dotc/core/classfile/ClassfileParser.scala:1013",
+  "s2": "nsc ClassfileParser uses u1()",
+  "what": "MethodParameters count read with signed nextByte; 128+ parameters give a negative count, the loop runs zero times and the next attribute is parsed from inside this one's payload. Needs javac -parameters and >127 params.",
+  "refs": []
+ },
+ {
+  "id": "F2",
+  "area": "F Classfile",
+  "sev": "medium",
+  "s3": "dotc/core/classfile/ClassfileParser.scala:965,1012-1019",
+  "s2": "scala/scala 954ea7e2e9 (SI-10231)",
+  "what": "For non-static inner Java classes compiled with -parameters, the outer-instance parameter is stripped from the constructor type but namedParams is indexed by raw MethodParameters position, so parameter names shift by one (param 0 becomes this$0). Affects named arguments to inner-class constructors. Not run.",
+  "refs": [
+   {
+    "sha": "954ea7e2e9",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/954ea7e2e94b211a0769747a2e03f48609eddb4d",
+    "pr": "https://github.com/scala/scala/pull/5783"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/10231"
+   }
+  ]
+ },
+ {
+  "id": "F3",
+  "area": "F Classfile",
+  "sev": "low",
+  "s3": "dotc/core/classfile/DataReader.scala:10-19",
+  "s2": "scala/scala 30a688cc90, 2826c6cb96, 2ccc7489a2 (ReusableDataReader)",
+  "what": "No read-buffer reuse: a fresh array, ByteBuffer and two streams per classfile. Scala 2 reuses a per-thread buffer. Perf only, unmeasured.",
+  "refs": [
+   {
+    "sha": "30a688cc90",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/30a688cc90d06fe4dc3733657f4a01310bed23fa",
+    "pr": "https://github.com/scala/scala/pull/6653"
+   },
+   {
+    "sha": "2826c6cb96",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/2826c6cb96f948cbe1c90ca73e43c8aa399fa1a9",
+    "pr": "https://github.com/scala/scala/pull/8556"
+   },
+   {
+    "sha": "2ccc7489a2",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/2ccc7489a2574b04c8102986a0a2966808f3ee8b",
+    "pr": "https://github.com/scala/scala/pull/8915"
+   }
+  ]
+ },
+ {
+  "id": "F4",
+  "area": "F Classfile",
+  "sev": "low",
+  "s3": "dotc/core/classfile/ClassfileParser.scala:358,394",
+  "s2": "scala/scala a03973a353 (scala/bug#13110)",
+  "what": "Scala 2 clears FINAL on a class that is also ABSTRACT (Kotlin emits that combination). Scala 3 keeps both flags; consequence uncertain.",
+  "refs": [
+   {
+    "sha": "a03973a353",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/a03973a35330cf8543def5191ba862b54361e64b",
+    "pr": "https://github.com/scala/scala/pull/11090"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/13110"
+   }
+  ]
+ },
+ {
+  "id": "F5",
+  "area": "F Classfile",
+  "sev": "low",
+  "s3": "dotc/core/unpickleScala2/Scala2Unpickler.scala:507-537",
+  "s2": "scala/scala 14fa7bef12 (SI-8708), bcd1e4f3a3 (SI-8868)",
+  "what": "&lt;local child&gt; classes and local dummies from Scala 2 pickles are entered into the owner scope; Scala 2 excludes them. No known user-visible failure.",
+  "refs": [
+   {
+    "sha": "14fa7bef12",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/14fa7bef120cbb996d042daba6095530167c49ed",
+    "pr": "https://github.com/scala/scala/pull/3867"
+   },
+   {
+    "sha": "bcd1e4f3a3",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/bcd1e4f3a3c7a683bb7cf435ef8163ecaf90f126",
+    "pr": "https://github.com/scala/scala/pull/4013"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/8708"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/8868"
+   }
+  ]
+ },
+ {
+  "id": "G2",
+  "area": "G Misc",
+  "sev": "medium",
+  "s3": "dotc/transform/localopt/StringInterpolatorOpt.scala:96-113 (mkConcat)",
+  "s2": "scala/scala aaedc0f14f (2019-04, test t10870)",
+  "what": "s\"\" interpolations are rewritten to a left-deep chain of +, one level per part. 500 parts crashes dotc with StackOverflowError (reproduced on 3.7.3: n=100 ok, n=250 crash in a MegaPhase, n=500 in erasure). Scala 2 concatenates in chunks of 32.",
+  "refs": [
+   {
+    "sha": "aaedc0f14f",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/aaedc0f14f2e49b557224c20d469f5206f9022a1",
+    "pr": "https://github.com/scala/scala/pull/7996"
+   }
+  ]
+ },
+ {
+  "id": "G1",
+  "area": "G Misc",
+  "sev": "medium",
+  "s3": "dotc/transform/localopt/FormatChecker.scala:156 (goodFlags)",
+  "s2": "scala/scala 27fa48c6f6 (2023-04) \"Check duplicate flags\"",
+  "what": "f\"$d%,,d\" compiles and throws DuplicateFormatFlagsException at runtime; Scala 2 reports it at compile time. Reproduced on 3.7.3.",
+  "refs": [
+   {
+    "sha": "27fa48c6f6",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/27fa48c6f64082b2fd8899a3bc64185252c79762",
+    "pr": "https://github.com/scala/scala/pull/10364"
+   }
+  ]
+ },
+ {
+  "id": "G3",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/typer/ConstFold.scala:213-216",
+  "s2": "scala/scala 1b1bc81484, 69af723ba4 (-Xlint:constant)",
+  "what": "Folded values match Scala 2, but there is no warning for 1/0, Int.MaxValue + 1, Int.MinValue / -1.",
+  "refs": [
+   {
+    "sha": "1b1bc81484",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/1b1bc8148492af85f9d5507676ef7b677cf86bcb",
+    "pr": "https://github.com/scala/scala/pull/5123"
+   },
+   {
+    "sha": "69af723ba4",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/69af723ba4d1d46d8cbad8de42efbae6fc477f9e",
+    "pr": "https://github.com/scala/scala/pull/10674"
+   }
+  ]
+ },
+ {
+  "id": "G4",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/transform/localopt/FormatChecker.scala:99",
+  "s2": "FormatInterpolator \"Index is not this arg\"",
+  "what": "An indexed conversion after a splice that refers to a different argument is silently turned into %s; Scala 2 warns. The expected warning only exists in a never-enabled test under tests/untried.",
+  "refs": []
+ },
+ {
+  "id": "G5",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/transform/localopt/StringInterpolatorOpt.scala (transformF)",
+  "s2": "scala/scala 7fb9052101, 29f116f1f2, 0f566b3acd",
+  "what": "No compile-time shortcut for f\"\" with no real formatting or all-literal args; always emits runtime StringOps.format. Perf/size only.",
+  "refs": [
+   {
+    "sha": "7fb9052101",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/7fb90521017c7ed5048d8b22a5e979c5204217fb",
+    "pr": "https://github.com/scala/scala/pull/10364"
+   },
+   {
+    "sha": "29f116f1f2",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/29f116f1f246169ea0b446f786199081ed3d50f4",
+    "pr": "https://github.com/scala/scala/pull/10364"
+   },
+   {
+    "sha": "0f566b3acd",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/0f566b3acd44c0d16804a859c90fa7f930e6c585",
+    "pr": "https://github.com/scala/scala/pull/10364"
+   }
+  ]
+ },
+ {
+  "id": "G6",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/transform/localopt/FormatChecker.scala:105 (badPart)",
+  "s2": "scala/scala d856d1510c, 55ef130e96, cb0d205522",
+  "what": "Invalid escape in an f\"\" part is reported on the whole part, not the escape (the s path positions it correctly).",
+  "refs": [
+   {
+    "sha": "d856d1510c",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/d856d1510ce8488914d0a4ae2bc9623bfb7de1c9",
+    "pr": "https://github.com/scala/scala/pull/10740"
+   },
+   {
+    "sha": "55ef130e96",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/55ef130e9691ef1405ff835f9171fdc2b22db6ad",
+    "pr": "https://github.com/scala/scala/pull/10364"
+   },
+   {
+    "sha": "cb0d205522",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/cb0d205522811faf1824e976ae4922fc34ee0f56",
+    "pr": "https://github.com/scala/scala/pull/11219"
+   }
+  ]
+ },
+ {
+  "id": "G7",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/core/Comments.scala:486-503 (lookupVariable)",
+  "s2": "scala/scala 568b43d1c3 (2022-11)",
+  "what": "Scaladoc $variable lookup for an object does not search the companion class's @defines; the self-type half of the same Scala 2 commit is present.",
+  "refs": [
+   {
+    "sha": "568b43d1c3",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/568b43d1c3c5e403e88c175f5dbaa55619651017",
+    "pr": "https://github.com/scala/scala/pull/10218"
+   }
+  ]
+ },
+ {
+  "id": "G8",
+  "area": "G Misc",
+  "sev": "low",
+  "s3": "dotc/profile/FileUtils.scala:187",
+  "s2": "scala/scala 856c111449 (2018-04)",
+  "what": "Async trace writer catches Exception not Throwable; an Error leaves the status incomplete and close() may hang. Only with -Yprofile-trace; not tested.",
+  "refs": [
+   {
+    "sha": "856c111449",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/856c111449d870ca3754978801c941bd9f65cdb6",
+    "pr": "https://github.com/scala/scala/pull/7364"
+   }
+  ]
+ },
+ {
+  "id": "A5",
+  "area": "A Classpath",
+  "sev": "medium",
+  "s3": "dotc/classpath/VirtualDirectoryClassPath.scala:11-12 (getSubDir)",
+  "s2": "n/a: Scala 3 regression from da99eb87b0 (2026-07) \"Improve IO package encapsulation\"",
+  "what": "getSubDir now goes through AbstractFile.lookupPath with the trailing-slash package dir name (\"p/\"); the empty last segment makes it return None. So hasPackage(\"p\") is false and packages(\"p\") is empty for every non-root package, and an aggregate classpath drops the entry for findClassFile(\"p.q.C\"). Reproduced with a Java harness against compiled classes. Root-package classes (REPL wrappers) still work, which hides it.",
+  "refs": [
+   {
+    "sha": "da99eb87b0",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/da99eb87b004d3a9cd47d2fcc3d9884f15d8ef96",
+    "pr": "https://github.com/scala/scala3/pull/26398"
+   }
+  ]
+ },
+ {
+  "id": "A1",
+  "area": "A Classpath",
+  "sev": "medium",
+  "s3": "dotc/classpath/ZipAndJarFileLookupFactory.scala:22-29,76",
+  "s2": "scala/scala 493f985520, 31d8d058fa (2021, scala/scala#9671)",
+  "what": "The process-global FileBasedCache is keyed by jar path only, but the cached ZipArchiveClassPath bakes -release into its versioned JarFile. A second compiler in the same JVM with a different -release (sbt server, Bloop, Metals, cross-builds) gets the first one's multi-release view. Scala 2 added release to the key.",
+  "refs": [
+   {
+    "sha": "493f985520",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/493f98552047b0473b3a30dcb0dda9e4db8ba2e4",
+    "pr": "https://github.com/scala/scala/pull/9557"
+   },
+   {
+    "sha": "31d8d058fa",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/31d8d058fa346e599c13f9d075e32e94e9d56073",
+    "pr": "https://github.com/scala/scala/pull/9671"
+   },
+   {
+    "pr": "https://github.com/scala/scala/pull/9671"
+   }
+  ]
+ },
+ {
+  "id": "A3",
+  "area": "A Classpath",
+  "sev": "medium",
+  "s3": "io/ZipArchive.scala:99-200, dotc/classpath/ZipArchiveFileLookup.scala:20, ZipAndJarFileLookupFactory.scala:95-99",
+  "s2": "scala/scala cfbb2a2d16 (scala/scala#7366, #7644), 683f698459 (scala/bug#13094), 211cc41a15, 33a331c52b",
+  "what": "FileZipArchive.close() has no caller; the cache has no refcount, eviction or close path (clear() says \"TODO support closing\"). Replaced jars stay open until GC; with -Ydisable-flat-cp-caching every Run leaks a ZipFile per jar. Scala 2 threads a CloseableRegistry through PathResolver/ClassPathFactory. Effects: Windows file locks on jars, fd growth in servers, unbounded cache.",
+  "refs": [
+   {
+    "sha": "cfbb2a2d16",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/cfbb2a2d16846f1f366a8596fbaba1c5f62e5ced",
+    "pr": "https://github.com/scala/scala/pull/7712"
+   },
+   {
+    "sha": "683f698459",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/683f698459db6d371f7b3f256d9e8f32738e7df7",
+    "pr": "https://github.com/scala/scala/pull/11009"
+   },
+   {
+    "sha": "211cc41a15",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/211cc41a157f052a57822c741d1e9356e0dcabff",
+    "pr": "https://github.com/scala/scala/pull/11081"
+   },
+   {
+    "sha": "33a331c52b",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/33a331c52bce9787806e5105077cfd6e7cb04459",
+    "pr": "https://github.com/scala/scala/pull/9946"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/13094"
+   },
+   {
+    "pr": "https://github.com/scala/scala/pull/7366"
+   }
+  ]
+ },
+ {
+  "id": "A4",
+  "area": "A Classpath",
+  "sev": "medium",
+  "s3": "dotc/classpath/DirectoryClassPath.scala:103-118,202-230 (CtSymClassPath)",
+  "s2": "scala/scala 0714941e30 (scala/scala#9557), 31d8d058fa",
+  "what": "With -release N below the running JDK, every ContextBase opens a new zip FileSystem on lib/ct.sym and walks the whole release tree; nothing closes it. Measured: 127 ms first, 16-24 ms after, and lsof shows the handles still open. Scala 2 caches by (release, ct.sym stamp) and closes via the registry.",
+  "refs": [
+   {
+    "sha": "0714941e30",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/0714941e302e7cc8182f770226497af25108a3fa",
+    "pr": "https://github.com/scala/scala/pull/9557"
+   },
+   {
+    "sha": "31d8d058fa",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/31d8d058fa346e599c13f9d075e32e94e9d56073",
+    "pr": "https://github.com/scala/scala/pull/9671"
+   },
+   {
+    "pr": "https://github.com/scala/scala/pull/9557"
+   }
+  ]
+ },
+ {
+  "id": "A2",
+  "area": "A Classpath",
+  "sev": "low",
+  "s3": "dotc/classpath/ZipAndJarFileLookupFactory.scala:77-86 (Stamp)",
+  "s2": "scala/scala 3e500b21a5 (2019-03)",
+  "what": "Cache stamp is (lastModified, fileKey) without file size, so a jar rewritten within one mtime tick keeps a stale index. Also Files.readAttributes throws if the jar vanishes between lookup and create; Scala 2 catches NoSuchFileException.",
+  "refs": [
+   {
+    "sha": "3e500b21a5",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/3e500b21a59f648081fb0cc8566b187779b31075",
+    "pr": "https://github.com/scala/scala/pull/7712"
+   }
+  ]
+ },
+ {
+  "id": "A6",
+  "area": "A Classpath",
+  "sev": "low",
+  "s3": "io/VirtualFile.scala:19-26 via io/ZipArchive.scala:55 (Entry)",
+  "s2": "n/a: regression from da99eb87b0; Scala 2 uses a string baseName",
+  "what": "Each jar entry name now goes through java.nio.file.Path.of(entryName).getFileName. On Windows an entry containing &lt;&gt;:\"|?* or a backslash throws InvalidPathException (unchecked, not caught by SymbolLoader) while indexing the jar. Also one Path allocation per entry on the indexing hot path. Not run on Windows.",
+  "refs": [
+   {
+    "sha": "da99eb87b0",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/da99eb87b004d3a9cd47d2fcc3d9884f15d8ef96",
+    "pr": "https://github.com/scala/scala3/pull/26398"
+   }
+  ]
+ },
+ {
+  "id": "A7",
+  "area": "A Classpath",
+  "sev": "low",
+  "s3": "dotc/config/PathResolver.scala:207-210",
+  "s2": "scala/scala f69089cb7d (2023-03), 8f55db50f9, 98726c0e1f",
+  "what": "JRT classpath is always first, so a user-supplied -javabootclasspath is shadowed; no -Yrelease:sun.misc-style escape for packages hidden by --release, no --system image. Feature gaps.",
+  "refs": [
+   {
+    "sha": "f69089cb7d",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/f69089cb7d1c5f3e3dfb89e00b15d8d2d554c895",
+    "pr": "https://github.com/scala/scala/pull/10336"
+   },
+   {
+    "sha": "8f55db50f9",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/8f55db50f9210957ba230f4d01aa8c72ef8b13e4",
+    "pr": "https://github.com/scala/scala/pull/10543"
+   },
+   {
+    "sha": "98726c0e1f",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/98726c0e1fab033f18362246343efec4ca8b9697",
+    "pr": "https://github.com/scala/scala/pull/10801"
+   }
+  ]
+ },
+ {
+  "id": "A8",
+  "area": "A Classpath",
+  "sev": "low",
+  "s3": "io/ZipArchive.scala:116-166 (LeakyEntry)",
+  "s2": "scala/scala 31255c38f0 (2021-05), 33a331c52b",
+  "what": "One shared ZipFile per cached jar; reads synchronize on it under concurrent compilers in one JVM. Scala 2 uses a bounded per-archive pool.",
+  "refs": [
+   {
+    "sha": "31255c38f0",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/31255c38f0bc3e3e1a46716518f5dd401773236d",
+    "pr": "https://github.com/scala/scala/pull/9557"
+   },
+   {
+    "sha": "33a331c52b",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/33a331c52bce9787806e5105077cfd6e7cb04459",
+    "pr": "https://github.com/scala/scala/pull/9946"
+   }
+  ]
+ },
+ {
+  "id": "I1",
+  "area": "I Stdlib",
+  "sev": "high",
+  "s3": "library/src/scala/concurrent/impl/Promise.scala:568 (Transformation.run)",
+  "s2": "n/a: Scala 3-only change 7f16e81220 (2026-09, #26794 \"Warn when catching Errors\"); 2.13.x still catches Throwable",
+  "what": "catch { case t: Throwable => handleFailure(t, ec) } became NonFatal(t). NonFatal excludes InterruptedException, so an interrupt thrown in a Future callback now escapes run on the executor thread and the derived future never completes; the wasInterrupted branch of handleFailure is dead code. Reproduced on 3.10.1-RC1 (first release with the change; 3.10.0 and 2.13.16 fail the future with the InterruptedException): Future.map body interrupted during shutdown leaves the future incomplete, Await times out, onComplete never fires. On parasitic the future also stays incomplete and the interrupt flag is lost. reproducers (gist); reported on #26794.",
+  "refs": [
+   {
+    "sha": "7f16e81220",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/7f16e81220726b83445a5eebb4f1d3c5cc4d3e23",
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   }
+  ]
+ },
+ {
+  "id": "I2",
+  "area": "I Stdlib",
+  "sev": "high",
+  "s3": "library/src/scala/collection/immutable/LazyList.scala:325-334, LazyListIterable.scala:327 (initState)",
+  "s2": "n/a: same Scala 3 commit 7f16e81220; 2.13.x catches Throwable",
+  "what": "initState catches only Exception. An Error from the thunk (StackOverflowError from a deep lazy chain, ???, OOM) never restores _tail nor counts down the InRace latch: the same thread then gets the misleading self-reference RuntimeException and other threads hang. Reproduced on 3.10.1-RC1 for ??? in a thunk (second force: bogus self-reference error; other thread blocks forever), for LazyListIterable, and for a StackOverflowError deep in the thunk where a same-thread retry with a smaller limit or a big-stack thread used to succeed. Caveat: when the overflow lands in initState itself the Throwable handler already re-overflowed on 3.10.0. reproducers (gist); reported on #26794.",
+  "refs": [
+   {
+    "sha": "7f16e81220",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/7f16e81220726b83445a5eebb4f1d3c5cc4d3e23",
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   }
+  ]
+ },
+ {
+  "id": "I3",
+  "area": "I Stdlib",
+  "sev": "medium",
+  "s3": "library/src/scala/concurrent/BatchingExecutor.scala:175,189",
+  "s2": "n/a: same Scala 3 commit 7f16e81220",
+  "what": "AsyncBatch.apply/resubmit now use NonFatal; a task throwing InterruptedException or ControlThrowable skips resubmit and the rest of the batch is silently dropped. Reproduced on 3.10.1-RC1 with ExecutionContext.opportunistic: three maps batched, first one interrupted, the other two futures never complete. (global itself does not batch.) reproducers (gist); reported on #26794.",
+  "refs": [
+   {
+    "sha": "7f16e81220",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/7f16e81220726b83445a5eebb4f1d3c5cc4d3e23",
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/26794"
+   }
+  ]
+ },
+ {
+  "id": "I6",
+  "area": "I Stdlib",
+  "sev": "medium",
+  "s3": "library/src/scala/concurrent/impl/Promise.scala:265,355",
+  "s2": "scala/scala 93e8493854 (2026-09-30, scala/bug#13197)",
+  "what": "Await.result/ready leaves its CompletionLatch registered on timeout or interrupt, and unregisterCallback does not follow Link. Leak per timed-out await.",
+  "refs": [
+   {
+    "sha": "93e8493854",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/93e84938545117175e33a6f70a76e28d4652673f",
+    "pr": "https://github.com/scala/scala/pull/11286"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/13197"
+   }
+  ]
+ },
+ {
+  "id": "I5",
+  "area": "I Stdlib",
+  "sev": "medium",
+  "s3": "library/src/scala/collection/ArrayOps.scala:1380 (transpose)",
+  "s2": "scala/scala fd63e80f4a (2026-04-29, scala/bug#13178)",
+  "what": "transpose takes the row class from the outer array's component type, so a type-changing asArray fails with ArrayStoreException.",
+  "refs": [
+   {
+    "sha": "fd63e80f4a",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/fd63e80f4a87c9e64f2f93fa3881e0a3b2fc839c",
+    "pr": "https://github.com/scala/scala/pull/11243"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/13178"
+   }
+  ]
+ },
+ {
+  "id": "I8",
+  "area": "I Stdlib",
+  "sev": "medium",
+  "s3": "library-js/src/scala/Enumeration.scala:296",
+  "s2": "reverse: scala3 4a3ecde9cb (#26672) fixed library/; 2.13.x Enumeration.scala:301 still wrong",
+  "what": "ValueSet.iteratorFrom is wrong for negative ids. Fixed in Scala 3's library/ but not in the full-file Scala.js override, nor forward-ported to 2.13.x.",
+  "refs": [
+   {
+    "sha": "4a3ecde9cb",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/4a3ecde9cb3b013821c569e5ee8ec141ecd03c0f",
+    "pr": "https://github.com/scala/scala3/pull/26672"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/26672"
+   }
+  ]
+ },
+ {
+  "id": "I9",
+  "area": "I Stdlib",
+  "sev": "medium",
+  "s3": "library-js/src/scala/collection/mutable/ArrayBuilder.scala",
+  "s2": "scala3 639fd849c8 (#25205), scala/scala 945f7b12c9",
+  "what": "library-js/src overrides are full-file copies that miss fixes applied to library/: ArrayBuilder still has the removed equals overrides; Enumeration is I8. A second, inner untracked fork.",
+  "refs": [
+   {
+    "sha": "639fd849c8",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/639fd849c841e33284977e10e1e49c0df4c80506",
+    "pr": "https://github.com/scala/scala3/pull/25205"
+   },
+   {
+    "sha": "945f7b12c9",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/945f7b12c9c6eab148f5f3ff688d5157bafc7e4b",
+    "pr": "https://github.com/scala/scala/pull/11211"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/25205"
+   }
+  ]
+ },
+ {
+  "id": "I4",
+  "area": "I Stdlib",
+  "sev": "low",
+  "s3": "library/src/scala/sys/SystemProperties.scala:19,56-58",
+  "s2": "scala/scala f87a7db7f0 (2026-01)",
+  "what": "Still catches the deprecated-for-removal AccessControlException; 2.13 catches SecurityException.",
+  "refs": [
+   {
+    "sha": "f87a7db7f0",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/f87a7db7f0abc065b79302642223219c0a05b1d3",
+    "pr": "https://github.com/scala/scala/pull/11203"
+   }
+  ]
+ },
+ {
+  "id": "I7",
+  "area": "I Stdlib",
+  "sev": "low",
+  "s3": "library/src/scala/collection/immutable/LazyList.scala:1230, LazyListIterable.scala:1254",
+  "s2": "scala/scala 73d5879c21",
+  "what": "Tail updater uses a lazy val instead of a holder object.",
+  "refs": [
+   {
+    "sha": "73d5879c21",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/73d5879c2144c7e7363d9b2c0888e3bcf33ba081",
+    "pr": "https://github.com/scala/scala/pull/11248"
+   }
+  ]
+ },
+ {
+  "id": "I10",
+  "area": "I Stdlib",
+  "sev": "low",
+  "s3": "library/src (various)",
+  "s2": "reverse: scala3-only perf/null fixes absent from 2.13.x head",
+  "what": "Candidates for forward-porting to 2.13.x: HashSet.diff double compute (270f3f274b), HashMap/HashSet concat getHash (8b7e2cec53), HashMap.from empty builder (e3406b0fb1), ArrayDeque.clear O(n) (f36ea50842), ArrayOps.WithFilter.flatMap re-read (7bec039ff4), BitSet.isEmpty allocation (035a05af5b), BoxesRunTime.equalsCharObject null ordering (0c8c581143, b264c1965c).",
+  "refs": [
+   {
+    "sha": "270f3f274b",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/270f3f274b9afdb2ff362bcc05f6997380b15872",
+    "pr": "https://github.com/scala/scala3/pull/26275"
+   },
+   {
+    "sha": "8b7e2cec53",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/8b7e2cec5304564622352da978be7af2f86d24c5",
+    "pr": "https://github.com/scala/scala3/pull/26278"
+   },
+   {
+    "sha": "e3406b0fb1",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/e3406b0fb176200dac7c8ba36931483eb7700814",
+    "pr": "https://github.com/scala/scala3/pull/26280"
+   },
+   {
+    "sha": "f36ea50842",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/f36ea508427d2fcc78f57b14707e30ef2d3040e7",
+    "pr": "https://github.com/scala/scala3/pull/26288"
+   },
+   {
+    "sha": "7bec039ff4",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/7bec039ff4e0d8501301d2bbe25ead1e2e3d27ec",
+    "pr": "https://github.com/scala/scala3/pull/26294"
+   },
+   {
+    "sha": "035a05af5b",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/035a05af5ba0089ff0d5132b371fc4912d2d255e",
+    "pr": "https://github.com/scala/scala3/pull/27077"
+   },
+   {
+    "sha": "0c8c581143",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/0c8c5811436ad1168fb29a0f754402eff3300202",
+    "pr": "https://github.com/scala/scala3/pull/25958"
+   },
+   {
+    "sha": "b264c1965c",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/b264c1965c3f0831dd4f2d974bb2293fe488373c",
+    "pr": "https://github.com/scala/scala3/pull/25962"
+   }
+  ]
+ },
+ {
+  "id": "C1",
+  "area": "C Backend",
+  "sev": "high",
+  "s3": "backend/jvm/BCodeBodyBuilder.scala:216 (isArraySet branch)",
+  "s2": "scala/scala 880aec04e8 (2016-11, scala/bug#10069)",
+  "what": "a(0) = (expr: Nothing) on a primitive array: the value is loaded with no expected type, so scala/runtime/Nothing$ is left on the stack before dastore/iastore and the whole class fails verification. Scala 2 passes elementType so adapt emits ATHROW. Reproduced: VerifyError \"Bad type on operand stack\" at V0$.f([D)V @9: dastore on 3.10.0; the same source runs on 2.13.16.",
+  "refs": [
+   {
+    "sha": "880aec04e8",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/880aec04e82ad3a9a2feb3b83b779f192d84e01e",
+    "pr": "https://github.com/scala/scala/pull/5543"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/10069"
+   }
+  ]
+ },
+ {
+  "id": "C2",
+  "area": "C Backend",
+  "sev": "medium",
+  "s3": "backend/jvm/BCodeHelpers.scala:283-345 (addForwarder)",
+  "s2": "scala/scala 10b09dd228, 06347fc82d, 2c1ca22ad7",
+  "what": "Static forwarders for object members get no ACC_DEPRECATED, no MethodParameters (Java and reflection see arg0), no LocalVariableTable, and parameter annotations are dropped (params = Nil with a TODO). Verified with javap. Instance methods are fine.",
+  "refs": [
+   {
+    "sha": "10b09dd228",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/10b09dd228de6e5ee403e4bd816a40cc8948c606",
+    "pr": "https://github.com/scala/scala/pull/6284"
+   },
+   {
+    "sha": "06347fc82d",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/06347fc82d3d438d57988d93c665ac21aaef89bf",
+    "pr": "https://github.com/scala/scala/pull/6219"
+   },
+   {
+    "sha": "2c1ca22ad7",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/2c1ca22ad72abae1c10c99a47e8cced6f3341d28",
+    "pr": "https://github.com/scala/scala/pull/9561"
+   }
+  ]
+ },
+ {
+  "id": "C4",
+  "area": "C Backend",
+  "sev": "medium",
+  "s3": "backend/jvm/GenericSignatures.scala:190-215 (classSig), :505 (RefOrAppliedType)",
+  "s2": "scala/scala 659dba63c3, 9c57e78be5 (scala/bug#10889, #2585)",
+  "what": "For a generic inner class of a generic outer, the AppliedType case passes the tycon as pre, so the outer's type args are dropped: Outer[String]#Inner[Int] becomes LOuter$Inner&lt;Integer&gt;; where Scala 2 emits LOuter&lt;String&gt;.Inner&lt;...&gt;;. Existing tests only cover inner classes without their own type params. Diffed on ~25 signature shapes against 2.13.16.",
+  "refs": [
+   {
+    "sha": "659dba63c3",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/659dba63c37263e4d28bc9d4c9672d5af54d23ea",
+    "pr": "https://github.com/scala/scala/pull/7975"
+   },
+   {
+    "sha": "9c57e78be5",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/9c57e78be5609275d752e47b796dc5790e4391f7",
+    "pr": "https://github.com/scala/scala/pull/7977"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/10889"
+   }
+  ]
+ },
+ {
+  "id": "C3",
+  "area": "C Backend",
+  "sev": "low",
+  "s3": "backend/jvm/BCodeBodyBuilder.scala:425,1258",
+  "s2": "scala/scala 911d375755 (2024-04)",
+  "what": "A static field selected through an impure qualifier does not POP the qualifier. Only reachable from macro/plugin trees; Scala 3 source cannot select a Java static through an instance.",
+  "refs": [
+   {
+    "sha": "911d375755",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/911d3757556750716b6e236bc4671349ea35ba52",
+    "pr": "https://github.com/scala/scala/pull/10735"
+   }
+  ]
+ },
+ {
+  "id": "C5",
+  "area": "C Backend",
+  "sev": "low",
+  "s3": "io/FileWriters.scala:165 (DirEntryWriter)",
+  "s2": "n/a: Scala 3-only f831f7df48 (2026-10-16) on top of parallel class writing; Scala 2 1ceafd2275 uses CREATE|TRUNCATE_EXISTING",
+  "what": "deleteIfExists then CREATE_NEW on pool threads; two classes differing only in case (a warning, not an error) could race to an \"Error writing\" IOException on case-insensitive filesystems. Not reproduced.",
+  "refs": [
+   {
+    "sha": "f831f7df48",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/f831f7df480a40e5b870e29fe4cce3bb7cfc2f32",
+    "pr": "https://github.com/scala/scala3/pull/27311"
+   },
+   {
+    "sha": "1ceafd2275",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/1ceafd2275f6fab4016173a4fb93dbce941805e4",
+    "pr": "https://github.com/scala/scala/pull/6673"
+   }
+  ]
+ },
+ {
+  "id": "E1",
+  "area": "E Parsing",
+  "sev": "medium",
+  "s3": "dotc/parsing/JavaScanners.scala:500,528 (getTextBlock)",
+  "s2": "scala/scala 4a918afd51 (2022-05)",
+  "what": "The text-block pre-scan advances a lookahead scanner but the loop guard reads the outer scanner's ch, which never moves. An unclosed Java \"\"\" runs off the end: StringIndexOutOfBoundsException from the parser instead of \"unclosed text block\". Reproduced on the nightly.",
+  "refs": [
+   {
+    "sha": "4a918afd51",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/4a918afd515ad3c2d42e880920a42742e39f64f8",
+    "pr": "https://github.com/scala/scala/pull/10024"
+   }
+  ]
+ },
+ {
+  "id": "E2",
+  "area": "E Parsing",
+  "sev": "medium",
+  "s3": "dotc/util/Chars.scala, parsing/Scanners.scala, CharArrayReader.scala",
+  "s2": "scala/scala fd97b40579 (scala/bug#12478, 2.13.9), e5883add4f",
+  "what": "No Trojan Source check: U+202A-202E / U+2066-2069 in strings, chars, comments and identifiers compile silently. Scala 2.13.9+ errors. Reproduced.",
+  "refs": [
+   {
+    "sha": "fd97b40579",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/fd97b40579b8ec6ad297a7723d36557e4f45925f",
+    "pr": "https://github.com/scala/scala/pull/10017"
+   },
+   {
+    "sha": "e5883add4f",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/e5883add4f9ec867d8d5f21d215a3edac63b71e7",
+    "pr": "https://github.com/scala/scala/pull/10030"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/12478"
+   }
+  ]
+ },
+ {
+  "id": "E3",
+  "area": "E Parsing",
+  "sev": "medium",
+  "s3": "dotc/util/SourceFile.scala:154-159",
+  "s2": "scala/scala bb2e99a692, 8be560a1cf (SI-8015, 2013-12)",
+  "what": "Form feed counts as a line terminator in the line table, so every later line number shifts by one in diagnostics and in the emitted LineNumberTable. Scala 2 counts only CR/LF/CRLF. Reproduced (error reported at line 5 for physical line 4).",
+  "refs": [
+   {
+    "sha": "bb2e99a692",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/bb2e99a69201060b88dd25602def42f31ba9ab65",
+    "pr": "https://github.com/scala/scala/pull/3285"
+   },
+   {
+    "sha": "8be560a1cf",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/8be560a1cf6306ea4ed2596f3b6631c2e44d8213",
+    "pr": "https://github.com/scala/scala/pull/3285"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/8015"
+   }
+  ]
+ },
+ {
+  "id": "E5",
+  "area": "E Parsing",
+  "sev": "low",
+  "s3": "dotc/parsing/xml/SymbolicXMLBuilder.scala:137 (charData)",
+  "s2": "scala/scala 4df81aab31 (SI-3368), 996d066bb3, 498a07fcd8",
+  "what": "&lt;![CDATA[..]]&gt; becomes Text instead of PCData, so it no longer round-trips; no -Xxml:coalescing equivalent.",
+  "refs": [
+   {
+    "sha": "4df81aab31",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/4df81aab315e587d9c7e319c7a2ece0f0f6fbaf3",
+    "pr": "https://github.com/scala/scala/pull/4306"
+   },
+   {
+    "sha": "996d066bb3",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/996d066bb3ef0fc91acab18a5502bb649929881a",
+    "pr": "https://github.com/scala/scala/pull/4306"
+   },
+   {
+    "sha": "498a07fcd8",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/498a07fcd8d922545e942b817d3fbd16ef56809b",
+    "pr": "https://github.com/scala/scala/pull/4451"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/3368"
+   }
+  ]
+ },
+ {
+  "id": "E4",
+  "area": "E Parsing",
+  "sev": "low",
+  "s3": "dotc/parsing/xml/MarkupParsers.scala:458 (xPattern)",
+  "s2": "scala/scala 4d96a8ad0b (SI-5154, 2014-12)",
+  "what": "case &lt;z&gt;{{3}}&lt;/z&gt; gives \"pattern expected\": the pattern side treats { unconditionally as an embedded pattern; the expression side already uses xCheckEmbeddedBlock. Reproduced.",
+  "refs": [
+   {
+    "sha": "4d96a8ad0b",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/4d96a8ad0b7050303e0b841708ba452e708f6a35",
+    "pr": "https://github.com/scala/scala/pull/4214"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/5154"
+   }
+  ]
+ },
+ {
+  "id": "E8",
+  "area": "E Parsing",
+  "sev": "low",
+  "s3": "dotc/parsing/JavaParsers.scala:590 (optThrows)",
+  "s2": "scala/scala c8aab64ef8 (2026-10-09)",
+  "what": "Java throws clauses from source are discarded, so forwarders to source-parsed Java methods get no Exceptions attribute (classfile-loaded Java methods do, via ThrowsAnnotation). Effect not tested.",
+  "refs": [
+   {
+    "sha": "c8aab64ef8",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/c8aab64ef8b137dac1ebdc3f6e3a29ae8f07774b",
+    "pr": "https://github.com/scala/scala/pull/11289"
+   }
+  ]
+ },
+ {
+  "id": "E6",
+  "area": "E Parsing",
+  "sev": "low",
+  "s3": "dotc/parsing/JavaScanners.scala:679 (getNumber)",
+  "s2": "shared gap: 2.13 getNumber is identical",
+  "what": "Java 7 literals 1_000, 0b101, hex floats silently lose the constant type of a static final, and drop the annotation when used as an argument. Not a missed port; both compilers.",
+  "refs": []
+ },
+ {
+  "id": "E7",
+  "area": "E Parsing",
+  "sev": "low",
+  "s3": "dotc/parsing/JavaParsers.scala:1122",
+  "s2": "shared gap: scala/scala f9e0b1a03a has the same structure",
+  "what": "A file whose first declaration is @interface in the default package fails: the leading-annotation prologue consumes @ then fails on interface. Works after package or import.",
+  "refs": [
+   {
+    "sha": "f9e0b1a03a",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/f9e0b1a03ab731d9cb9d5527dc6c60e110c6ed4a",
+    "pr": "https://github.com/scala/scala/pull/10734"
+   }
+  ]
+ },
+ {
+  "id": "D1",
+  "area": "D Optimizer",
+  "sev": "medium",
+  "s3": "backend/jvm/opt/BCodeRepository.scala:192-201 (findInInterfaces)",
+  "s2": "n/a: port divergence; 2.13 uses a lazy for-comprehension with visited check",
+  "what": "Strict .filter(!visited(_)).collectFirst lets a redundant interface (class C implements A, B with A extends B) be visited twice; maxSpecific gets a duplicate and a unique default method resolves to None, so the callsite is not inlined or closure-rewritten. Verified with the repo's compiler jar: implements JB, JA inlines to bipush 42, implements JA, JB does not. Only Java/JDK classfiles under -opt-inline.",
+  "refs": []
+ },
+ {
+  "id": "D2",
+  "area": "D Optimizer",
+  "sev": "medium",
+  "s3": "backend/jvm/opt/BCodeRepository.scala:209-215",
+  "s2": "n/a: port divergence; 2.13 uses transitive isSubtypeOf",
+  "what": "Maximally-specific check only looks at direct superinterfaces (otherOwner.interfaces.contains(owner.name)). With JB{m}, JA extends JB, JD extends JA {m}, both stay in maxSpecific and resolution fails; final JF implements JD is not inlined. Scala-compiled hierarchies unaffected (mixin forwarders).",
+  "refs": []
+ },
+ {
+  "id": "D4",
+  "area": "D Optimizer",
+  "sev": "low",
+  "s3": "backend/jvm/opt/LocalOptimizer.scala:374",
+  "s2": "2.13 LocalOpt calls clearMaxsComputed",
+  "what": "The clearMaxsComputed call is commented out and MethodMax has no clearing function, so cached maxLocals/maxStack stick after mutation. Audit found no current case where they end up too small; latent hazard.",
+  "refs": []
+ },
+ {
+  "id": "D5",
+  "area": "D Optimizer",
+  "sev": "low",
+  "s3": "backend/jvm/analysis (AsmAnalyzer)",
+  "s2": "scala/scala c8bc25a6d0 (ASM 9.11 compute limits)",
+  "what": "AsmAnalyzer no longer computes maxs itself (every caller is guarded, fragile) and does not lift ASM 9.11's analyzer compute limits as 2.13 does. Likely unreachable under Scala 3's tighter Limits.",
+  "refs": [
+   {
+    "sha": "c8bc25a6d0",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/c8bc25a6d037e86a4cc474fb391187331bfac033",
+    "pr": "https://github.com/scala/scala/pull/11327"
+   }
+  ]
+ },
+ {
+  "id": "D3",
+  "area": "D Optimizer",
+  "sev": "low",
+  "s3": "backend/jvm/BCodeSkelBuilder.scala:289 vs opt",
+  "s2": "2.13 tracks indyLambdaImplMethods and builds $deserializeLambda$ after the optimizer",
+  "what": "$deserializeLambda$ is built at codegen time, so an indy inlined into another class would be missing from that class's table. Masked today because lambda bodies are private static and the inliner refuses cross-class access.",
+  "refs": []
+ },
+ {
+  "id": "D6",
+  "area": "D Optimizer",
+  "sev": "low",
+  "s3": "backend/jvm/opt/OptimizerSettings, OptimizerWarning",
+  "s2": "BackendReporting",
+  "what": "no-inline-mixed warning setting is read but never used; ClassNotFound lost definedInJavaSource and its message.",
+  "refs": []
+ },
+ {
+  "id": "H4",
+  "area": "H TASTy",
+  "sev": "high",
+  "s3": "dotc/core/SymbolLoaders.scala:537 (handleUnpicklingExceptions)",
+  "s2": "n/a: Scala 3-only, introduced by ff88d25f2b (2026-10-07, #27205); not fork debt",
+  "what": "catch case e: RuntimeException if false =&gt;: the wrapping of TASTy unpickling failures into a readable IOException (file path, version-too-old/new message) is disabled, so an UnpickleException surfaces raw. Looks like a debugging remnant. Confirmed in the worktree.",
+  "refs": [
+   {
+    "sha": "ff88d25f2b",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/ff88d25f2b63bb50ed35cdb5db3920b91908d21e",
+    "pr": "https://github.com/scala/scala3/pull/27205"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/27205"
+   }
+  ]
+ },
+ {
+  "id": "H1",
+  "area": "H TASTy",
+  "sev": "medium",
+  "s3": "scala/scala src/compiler/scala/tools/tasty/TastyFormat.scala (MinorVersion = 7)",
+  "s2": "scala/scala 34c9fb97e9 (2026-08, scala/bug#13152) freezes at 28.7; scala3 HEAD is 28.11-exp-1",
+  "what": "Scala 2.13's reader is byte-for-byte in sync with Scala 3.7.x (diff -w clean from object TastyFormat down against 3.7.0 and 3.7.4) and deliberately rejects 28.8+. The 3.7.4 → 3.9.0 delta is only SUBMATCH=48 (MATCH flag) and INTO=49 (modifier tag, needs isModifierTag); neither name exists in Scala 2's TASTy sources. Policy debt, not drift: each Scala 3 minor needs a deliberate sync.",
+  "refs": [
+   {
+    "sha": "34c9fb97e9",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/34c9fb97e9d6ef8dbc3fcf4ec164a27f26afae23",
+    "pr": "https://github.com/scala/scala/pull/11274"
+   },
+   {
+    "issue": "https://github.com/scala/bug/issues/13152"
+   }
+  ]
+ },
+ {
+  "id": "H3",
+  "area": "H TASTy",
+  "sev": "medium",
+  "s3": "scala/scala src/compiler/scala/tools/tasty/TastyHeaderUnpickler.scala (validOverride)",
+  "s2": "scala/scala d3e7895798 (2024-01) introduced; 34c9fb97e9 (2026-08) fixes, unreleased",
+  "what": "validOverride = possibles.isEmpty || ... with toolOverrides always empty made the header version gate a no-op in 2.13.13 through 2.13.18: the 2.13.18 jar accepts a 28.7 header above its own minor, so released 2.13 compilers try to read 3.8/3.9 TASTy and would hit assert(false, \"illegal modifier tag\") on INTO instead of a clean version error. Reproduced against the 2.13.18 jar.",
+  "refs": [
+   {
+    "sha": "d3e7895798",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/d3e7895798ce80a4f7042563cd83b6d8926fb61b",
+    "pr": "https://github.com/scala/scala/pull/10670"
+   },
+   {
+    "sha": "34c9fb97e9",
+    "repo": "scala/scala",
+    "commit": "https://github.com/scala/scala/commit/34c9fb97e9d6ef8dbc3fcf4ec164a27f26afae23",
+    "pr": "https://github.com/scala/scala/pull/11274"
+   }
+  ]
+ },
+ {
+  "id": "H2",
+  "area": "H TASTy",
+  "sev": "low",
+  "s3": "scala/scala src/compiler/scala/tools/tasty/TastyReader.scala (readNat/readInt), TastyUnpickler.readSection",
+  "s2": "scala3 ecfa019360 (2026-04-17) \"Fix infinite loop with bad section ends\"",
+  "what": "Unchecked toInt in readNat: a section length that decodes negative makes readSection goto backwards and loop forever on a corrupt .tasty. Reproduced with the real TastyReader from the 2.13.18 jar (1,000,000 iterations, isAtEnd still false).",
+  "refs": [
+   {
+    "sha": "ecfa019360",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/ecfa019360117189bdaec868b61e1157adcf6b52",
+    "pr": "https://github.com/scala/scala3/pull/25676"
+   }
+  ]
+ },
+ {
+  "id": "R1",
+  "area": "R Reverse",
+  "sev": "medium",
+  "s3": "scala/scala nsc/backend/jvm/opt/Inliner.scala:1103-1190 (findIllegalAccess), ByteCodeRepository.scala:299",
+  "s2": "scala3 730eefa650 (2026-02-16) \"Take JDK 9+ modules into account when determining what can be inlined\"",
+  "what": "2.13's inliner access check only looks at ACC_PUBLIC, with a hard-coded jdk/internal/sun/ name list. Scala 3 reads module-info.class and marks only unconditionally exported packages accessible. With -opt:inline:**, inlining Objects.checkIndex compiles and fails at runtime with IllegalAccessError on jdk.internal.util.Preconditions. Reproduced on 2.13.19-M1.",
+  "refs": [
+   {
+    "sha": "730eefa650",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/730eefa6504d8e3ad7e26fcc54917233c910f2dc",
+    "pr": null
+   }
+  ]
+ },
+ {
+  "id": "R2",
+  "area": "R Reverse",
+  "sev": "medium",
+  "s3": "scala/scala nsc/javac/JavaScanners.scala:719-736 (getlitch)",
+  "s2": "scala3 5f29c2178f (2023-08, #18491, backport #20672; test tests/run/t12290)",
+  "what": "0.toChar doubles as the skip sentinel for text-block line continuations, so a Java static final String read from source loses every NUL: \"\\0\" becomes \"\", and the wrong constant is inlined into Scala callers. Scala 3 uses a separate skip flag. Checked against javac on ~50 literal forms; only this one differs. Reproduced.",
+  "refs": [
+   {
+    "sha": "5f29c2178f",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/5f29c2178fc253a0fcfd8af0100e18ff434ea546",
+    "pr": "https://github.com/scala/scala3/pull/1"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/20672"
+   }
+  ]
+ },
+ {
+  "id": "R3",
+  "area": "R Reverse",
+  "sev": "medium",
+  "s3": "scala/scala nsc/backend/jvm/opt/BoxUnbox.scala:191,703,762,811",
+  "s2": "scala3 251900e615 (2026-10-16, #27290); related 6f1c8580d0, 9cf6109dad (#27214)",
+  "what": "Every NEW forces the full prod-cons analysis before checking which class is created; Scala 3 guards each arm with the box/Ref/Tuple constructor sets and adds a per-method analysis budget. The guards are a mechanical, output-preserving backport; the budget is a design change. Compile-time only, not benchmarked on 2.13.",
+  "refs": [
+   {
+    "sha": "251900e615",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/251900e6151c9a70e618b3327ef936b6dce20a70",
+    "pr": "https://github.com/scala/scala3/pull/27290"
+   },
+   {
+    "sha": "6f1c8580d0",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/6f1c8580d05ec683b2f2145719c7176ec06a341e",
+    "pr": null
+   },
+   {
+    "sha": "9cf6109dad",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/9cf6109dad0ef0fad0c95551d6b5d0835a968a2f",
+    "pr": "https://github.com/scala/scala3/pull/27214"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/27290"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/27214"
+   }
+  ]
+ },
+ {
+  "id": "R4",
+  "area": "R Reverse",
+  "sev": "low",
+  "s3": "scala/scala reflect/internal/util/ChromeTrace.scala:144-156, nsc/profile/Profiler.scala",
+  "s2": "scala3 6f48c3962e (2024-11, #21872, fixes #21858)",
+  "what": "-Yprofile-trace writes unescaped names into the JSON (\"This assumes no escaping is needed\"); a source file named a\"b.scala yields a trace that json.load rejects. Scala 3 added JsonNameTransformer. Reproduced.",
+  "refs": [
+   {
+    "sha": "6f48c3962e",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/6f48c3962e36892161ac2603ca8daea50cf88144",
+    "pr": "https://github.com/scala/scala3/pull/21872"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/21872"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/21858"
+   }
+  ]
+ },
+ {
+  "id": "R5",
+  "area": "R Reverse",
+  "sev": "low",
+  "s3": "scala/scala nsc/backend/jvm/ClassfileWriters.scala:276-277",
+  "s2": "scala3 f831f7df48 (2026-10-16, #27311, fixes #27303)",
+  "what": "Class and jar writers follow symlinks at the output path: with out/Foo.class a symlink to target.txt, scalac -d out overwrites the target. Scala 3 deletes first and opens with NOFOLLOW_LINKS. Reproduced. (C5 notes the Scala 3 version's own race.)",
+  "refs": [
+   {
+    "sha": "f831f7df48",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/f831f7df480a40e5b870e29fe4cce3bb7cfc2f32",
+    "pr": "https://github.com/scala/scala3/pull/27311"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/27311"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/27303"
+   }
+  ]
+ },
+ {
+  "id": "R6",
+  "area": "R Reverse",
+  "sev": "low",
+  "s3": "scala/scala nsc/backend/jvm/PostProcessor.scala:95-123",
+  "s2": "scala3 9717ee771e (2026-02, #25300, fixes #15850, #24597)",
+  "what": "UTF-8 string-too-large is detected correctly but reported as two position-less errors; Scala 3 checks at bytecode generation time and positions it.",
+  "refs": [
+   {
+    "sha": "9717ee771e",
+    "repo": "scala/scala3",
+    "commit": "https://github.com/scala/scala3/commit/9717ee771ead70c6c90be6922d5053cd7dab3344",
+    "pr": "https://github.com/scala/scala3/pull/25300"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/25300"
+   },
+   {
+    "pr": "https://github.com/scala/scala3/pull/24597"
+   }
+  ]
+ }
+]

@@ -1,0 +1,4 @@
+11312	OPEN	null	2.13.x	Cast a trait's this to its self type's class, not the member's owner
+11286	MERGED	2026-10-12	2.13.x	Unregister Future Await latches on timeout or interrupt
+11248	MERGED	2026-10-19	2.13.x	Create LazyList's tail updater on first use
+11243	MERGED	2026-05-18	2.13.x	Fix NPE in ArrayOps.transpose
