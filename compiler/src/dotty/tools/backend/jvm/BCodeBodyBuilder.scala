@@ -3,7 +3,7 @@ package backend
 package jvm
 
 import scala.annotation.{switch, tailrec}
-import scala.collection.mutable.SortedMap
+import scala.collection.mutable.{ListBuffer, SortedMap}
 import org.objectweb.asm
 import org.objectweb.asm.{Handle, Opcodes}
 import BCodeHelpers.InvokeStyle
@@ -1509,15 +1509,21 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives) extends BCodeSkelBuilder
     /*
      * Returns a list of trees that each should be concatenated, from left to right.
      * It turns a chained call like "a".+("b").+("c") into a list of arguments.
+     * Concatenations in argument position, such as the chunks emitted by
+     * `StringInterpolatorOpt` for large interpolations, are flattened too.
      */
-    def liftStringConcat(tree: Tree)(using Context): List[Tree] = tree match {
-      case tree @ Apply(DesugaredSelect(larg, _), rarg) =>
-        if primitives.getPrimitive(tree).contains(ScalaPrimitivesOps.CONCAT) then
-          liftStringConcat(larg) ::: rarg
-        else
-          tree :: Nil
-      case _ =>
-        tree :: Nil
+    def liftStringConcat(tree: Tree)(using Context): List[Tree] = {
+      val result = ListBuffer[Tree]()
+      def loop(tree: Tree): Unit = tree match {
+        case tree @ Apply(DesugaredSelect(larg, _), rarg :: Nil)
+        if primitives.getPrimitive(tree).contains(ScalaPrimitivesOps.CONCAT) =>
+          loop(larg)
+          loop(rarg)
+        case _ =>
+          result += tree
+      }
+      loop(tree)
+      result.toList
     }
 
     /* Emit code to compare the two top-most stack values using the 'op' operator. */

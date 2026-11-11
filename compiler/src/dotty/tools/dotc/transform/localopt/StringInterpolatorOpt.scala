@@ -97,21 +97,21 @@ class StringInterpolatorOpt extends MiniPhase:
         case _ => None
 
   override def transformApply(tree: Apply)(using Context): Tree =
+    // Large interpolations are concatenated in chunks, so the result is not a left-deep
+    // tree as deep as the number of parts, which would overflow the stack of later
+    // tree traversals (scala/bug#10870). Each chunk starts with "" so that it is a String
+    // concatenation even if its first operand is not a String (scala/bug#11665).
+    // The backend flattens the chunks back into a single concatenation.
     def mkConcat(strs: List[Literal], elems: List[Tree]): Tree =
-      val stri = strs.iterator
-      val elemi = elems.iterator
-      var result: Tree = stri.next()
-      def concat(tree: Tree): Unit =
-        result = result.select(defn.String_+).appliedTo(tree).withSpan(tree.span)
-      while elemi.hasNext
-      do
-        val elem = elemi.next()
+      def concat(lhs: Tree, rhs: Tree): Tree =
+        lhs.select(defn.String_+).appliedTo(rhs).withSpan(rhs.span)
+      val operands = elems.zip(strs.tail).flatMap: (elem, str) =>
         lintToString(elem)
-        concat(elem)
-        val str = stri.next()
-        if !str.const.stringValue.isEmpty then
-          concat(str)
-      result
+        if str.const.stringValue.isEmpty then elem :: Nil else elem :: str :: Nil
+      val ChunkSize = 32
+      if operands.lengthIs <= ChunkSize then operands.foldLeft(strs.head: Tree)(concat)
+      else operands.grouped(ChunkSize).foldLeft(strs.head: Tree): (result, chunk) =>
+        concat(result, chunk.foldLeft(Literal(Constant("")): Tree)(concat))
     end mkConcat
     def lintToString(t: Tree): Unit =
       def checkIsStringify(tp: Type): Boolean = tp.widen match
