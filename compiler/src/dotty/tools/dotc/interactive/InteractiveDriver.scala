@@ -48,7 +48,7 @@ class InteractiveDriver(
   private val myProgressCallback: ProgressCallback = new ProgressCallback:
     override def isCancelled(): Boolean = Thread.interrupted()
 
-  private val myInitCtx: Context = {
+  private def newInitCtx(): Context = {
     val rootCtx = initCtx.fresh.addMode(Mode.ReadPositions).addMode(Mode.Interactive)
     rootCtx.setSetting(rootCtx.settings.YretainTrees, true)
     rootCtx.setSetting(rootCtx.settings.XcookComments, true)
@@ -60,10 +60,15 @@ class InteractiveDriver(
     ctx
   }
 
+  private var myInitCtx: Context = newInitCtx()
+
   private var myCtx: Context = myInitCtx
   def currentCtx: Context = myCtx
 
-  private val compiler: Compiler = new InteractiveCompiler
+  private var compiler: Compiler = new InteractiveCompiler
+
+  private[dotty] def compilerForTesting: Compiler = compiler
+  private[dotty] def baseForTesting: ContextBase = myInitCtx.base
 
   private val myOpenedFiles = new mutable.LinkedHashMap[URI, SourceFile].withDefaultValue(NoSource)
   def openedFiles: Map[URI, SourceFile] = myOpenedFiles
@@ -80,6 +85,8 @@ class InteractiveDriver(
 
   def run(uri: URI, source: SourceFile): List[Diagnostic] = {
     import typer.ImportInfo.*
+
+    if !compiler.hasMoreRunIds then restart(uri)
 
     val previousCtx = myCtx
     try {
@@ -110,6 +117,20 @@ class InteractiveDriver(
         close(uri)
         Nil
     }
+  }
+
+  /** Run ids are not recycled and a `Period` has room for `MaxPossibleRunId` of them, so
+   *  after that many runs we switch to a new `ContextBase` (and with it a new `Compiler`),
+   *  and recompile the other opened files, whose trees and symbols belong to the old base.
+   */
+  private def restart(current: URI): Unit = {
+    val others = myOpenedFiles.toList.filter(_._1 != current)
+    myOpenedTrees.clear()
+    myCompilationUnits.clear()
+    myInitCtx = newInitCtx()
+    compiler = new InteractiveCompiler
+    initialize()
+    others.foreach((uri, source) => run(uri, source))
   }
 
   def close(uri: URI): Unit = {
