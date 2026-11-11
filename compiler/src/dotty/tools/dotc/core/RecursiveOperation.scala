@@ -21,16 +21,35 @@ type RecursiveOperationDetails = Showable | (() => String)
  * @param pos the operation position
  */
 final class RecursiveOperation(var title: String, var details: RecursiveOperationDetails, var pos: SrcPos | Null):
+  // A second operand and its separator, for details of two operands recorded without a closure (`handleRecursive2`)
+  var details2: Showable | Null = null
+  var sep: String = ""
   def explanation(using Context): String =
     try
       ctx.handleRecursive("displaying error for", () => title):
-        details match
+        val d2 = details2
+        if d2 != null then
+          details match
+            case s: Showable => s"$title ${s.showSummary(20)}$sep${d2.showSummary(20)}"
+            case f: (() => ?) => s"$title ${f()}"
+        else details match
           case f: (() => ?) => s"$title ${f()}"
           case s: Showable => s"$title ${s.showSummary(20)}"
     catch
       case _: RecursionOverflow => "<not enough fuel to show details>"
 
-  def copy(): RecursiveOperation = RecursiveOperation(title, details, pos)
+  def set(title: String, d1: Showable, sep: String, d2: Showable): Unit =
+    this.title = title
+    this.details = d1
+    this.details2 = d2
+    this.sep = sep
+    this.pos = null
+
+  def copy(): RecursiveOperation =
+    val op = RecursiveOperation(title, details, pos)
+    op.details2 = details2
+    op.sep = sep
+    op
 
 object RecursiveOperation:
   def blank(): RecursiveOperation = RecursiveOperation("", () => "", NoSourcePosition)
@@ -84,3 +103,9 @@ object RecursionOverflow:
             rawOverflowPosition: SrcPos | Null)(using Context): Throwable =
     val ops = RecursiveOperation(rawOverflowTitle, rawOverflowDetails, rawOverflowPosition) :: rawOps.map(_.copy()).reverse.toList
     new RecursionOverflow(ops)
+
+  /** As `apply`, for an overflowing operation with details of two operands (`handleRecursive2`) */
+  def apply(rawOps: Array[RecursiveOperation], rawOverflowTitle: String, d1: Showable, sep: String, d2: Showable)(using Context): Throwable =
+    val overflow = RecursiveOperation.blank()
+    overflow.set(rawOverflowTitle, d1, sep, d2)
+    new RecursionOverflow(overflow :: rawOps.map(_.copy()).reverse.toList)

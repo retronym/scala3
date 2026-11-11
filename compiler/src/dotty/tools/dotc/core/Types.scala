@@ -1019,14 +1019,8 @@ object Types extends TypeUtils {
         ctx.base.pendingMemberSearches = name :: ctx.base.pendingMemberSearches
       ctx.base.findMemberCount = recCount + 1
 
-      def showPrefixSafely(pre: Type)(using Context): String = pre.stripTypeVar match
-        case pre: TermRef => i"${pre.symbol.name}."
-        case pre: TypeRef => i"${pre.symbol.name}#"
-        case pre: TypeProxy => showPrefixSafely(pre.superType)
-        case _ => if (pre.typeSymbol.exists) i"${pre.typeSymbol.name}#" else "."
-
       try
-        ctx.handleRecursive("find-member", () => i"${showPrefixSafely(pre)}$name"):
+        ctx.handleRecursive2("find-member", pre, " . ", name):
           go(this)
       catch
         case NonFatal(t) =>
