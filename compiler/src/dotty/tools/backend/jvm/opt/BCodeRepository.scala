@@ -186,19 +186,24 @@ class BCodeRepository(classPath: ClassPath) {
     }
 
     def findInInterfaces(initialOwner: ClassNode): Either[ClassNotFound, Option[(MethodNode, InternalName)]] = {
-      val visited = mutable.Set.empty[InternalName]
+      val visited = mutable.Map.empty[InternalName, ClassNode]
       val found = mutable.ListBuffer.empty[(MethodNode, ClassNode)]
 
       def findIn(owner: ClassNode): Option[ClassNotFound] = {
-        owner.interfaces.asScala.filter(!visited(_)).collectFirst(((i: String) => classNode(i) match {
+        // `iterator` so that `visited` is checked after recursing into the preceding interfaces
+        owner.interfaces.asScala.iterator.filter(!visited.contains(_)).collectFirst(((i: String) => classNode(i) match {
           case Left(e) => Some(e)
           case Right(c, _) =>
-            visited += i
+            visited(i) = c
             // private and static methods are excluded, see jvms-5.4.3.3
             for (m <- findMethod(c) if !isPrivateMethod(m) && !isStaticMethod(m)) found += ((m, c))
             findIn(c)
         }).unlift)
       }
+
+      // all superinterfaces of `sub` have been visited if `findIn` succeeded
+      def isSubInterface(sub: ClassNode, sup: InternalName): Boolean =
+        sub.interfaces.asScala.exists(i => i == sup || isSubInterface(visited(i), sup))
 
       findIn(initialOwner) match {
         case Some(cnf) => Left(cnf)
@@ -210,9 +215,7 @@ class BCodeRepository(classPath: ClassPath) {
                 case (method, owner) =>
                   found.exists {
                     case (other, otherOwner) =>
-                      (other ne method) && {
-                        otherOwner.interfaces.asScala.contains(owner.name)
-                      }
+                      (other ne method) && isSubInterface(otherOwner, owner.name)
                   }
               }
               // (*) if there's no single, non-abstract, maximally-specific method, JVM method resolution
