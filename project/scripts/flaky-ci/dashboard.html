@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flaky CI Dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f5f4f1; --surface-1: #fcfcfb; --border: #e3e2de; --grid: #ecebe7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --seq-0: #f0efec; --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5; --seq-5: #256abf; --seq-6: #104281;
+  --link: #256abf; --chip: #ecebe7; --good: #1f7a3f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #2f2f2c; --grid: #262624;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --seq-0: #262624; --seq-1: #104281; --seq-2: #184f95; --seq-3: #256abf; --seq-4: #3987e5; --seq-5: #6da7ec; --seq-6: #b7d3f6;
+    --link: #6da7ec; --chip: #2f2f2c; --good: #5cc98a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --border: #2f2f2c; --grid: #262624;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --seq-0: #262624; --seq-1: #104281; --seq-2: #184f95; --seq-3: #256abf; --seq-4: #3987e5; --seq-5: #6da7ec; --seq-6: #b7d3f6;
+  --link: #6da7ec; --chip: #2f2f2c; --good: #5cc98a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); margin: 0 0 16px; }
+.note { color: var(--text-muted); font-size: 12px; margin: 0 0 12px; }
+a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0; position: sticky; top: 0;
+  background: var(--surface-0); padding: 8px 0; z-index: 5; border-bottom: 1px solid var(--border); }
+.filters label { color: var(--text-secondary); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+select, input[type=search] { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-1); color: var(--text-primary); }
+input[type=search] { min-width: 220px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .k { color: var(--text-secondary); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; margin-bottom: 12px; }
+@media (max-width: 480px) { .grid2 { grid-template-columns: 1fr; } }
+.card { margin-bottom: 12px; min-width: 0; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin: 4px 0 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+svg text { fill: var(--text-muted); font-size: 11px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; color: var(--text-secondary); font-weight: 500; border-bottom: 1px solid var(--border);
+  padding: 6px 8px; cursor: pointer; white-space: nowrap; user-select: none; }
+th[data-sort]::after { content: " ↕"; color: var(--text-muted); }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; vertical-align: top; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sig { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.detail { color: var(--text-muted); font-size: 12px; margin-top: 2px; max-width: 70ch; }
+.chip { display: inline-block; background: var(--chip); border-radius: 4px; padding: 0 6px; font-size: 11px;
+  color: var(--text-secondary); margin: 1px 2px 1px 0; white-space: nowrap; }
+.ok { color: var(--good); }
+.more { margin-top: 8px; }
+button { font: inherit; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1);
+  color: var(--text-primary); cursor: pointer; }
+#tip { position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; z-index: 20; max-width: 360px; }
+.summary { border-left: 3px solid var(--series-1); }
+.summary .md { max-width: 90ch; }
+.summary .md h1, .summary .md h2, .summary .md h3, .summary .md h4 { font-size: 15px; margin: 14px 0 4px; }
+.summary .md > :first-child { margin-top: 0; }
+.summary .md p, .summary .md ul, .summary .md ol { margin: 6px 0; }
+.summary .md ul, .summary .md ol { padding-left: 22px; }
+.summary .md li { margin: 2px 0; }
+.summary .md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--chip); border-radius: 3px; padding: 0 3px; word-break: break-word; }
+.summary .md table { width: auto; margin: 6px 0; }
+.summary .meta { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.summary .stale { color: var(--series-2); font-size: 12px; }
+.chips { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.chips button { border: 0; border-radius: 0; padding: 4px 10px; background: var(--surface-1); color: var(--text-secondary); }
+.chips button + button { border-left: 1px solid var(--border); }
+.chips button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+.chips button .dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-left: 4px; vertical-align: 2px; opacity: .7; }
+.empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Flaky CI</h1>
+  <p class="sub"><span id="subtitle"></span><span id="source"></span></p>
+
+  <div class="filters">
+    <div class="chips" id="f-range" role="group" aria-label="Time range"></div>
+    <span class="note" id="asof" style="margin:0"></span>
+    <label>Repo <select id="f-repo"></select></label>
+    <label>Signal <select id="f-source">
+      <option value="">all</option><option value="rerun">re-run attempt</option>
+      <option value="same-sha">same-sha new run</option><option value="status">commit status rebuild</option>
+    </select></label>
+    <label>Kind <select id="f-kind"><option value="">all</option></select></label>
+    <label><input type="search" id="f-q" placeholder="filter test / job / PR…"></label>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card summary" id="summary"></div>
+
+  <div class="grid2">
+    <div class="card"><h2>Flaky failures per <span class="bu"></span></h2>
+      <p class="note">A failed run/attempt/build that later went green on the same commit.</p>
+      <div class="legend" id="lg-events"></div><div id="ch-events"></div></div>
+    <div class="card"><h2>Flake rate per <span class="bu"></span></h2>
+      <p class="note">Flaky failures ÷ completed GitHub Actions runs (excludes commit-status CI).</p>
+      <div class="legend" id="lg-rate"></div><div id="ch-rate"></div></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h2>Flakiness comments per <span class="bu"></span></h2>
+      <p class="note">PR/issue comments matching flaky/re-run keywords (bots excluded).</p>
+      <div class="legend" id="lg-comments"></div><div id="ch-comments"></div></div>
+    <div class="card"><h2>Failure kinds</h2>
+      <p class="note">How each flaky failure was classified (most specific signature found in its log).</p>
+      <div id="ch-kinds"></div></div>
+  </div>
+
+  <div class="card"><h2>Clusters</h2>
+    <p class="note">Flaky failures grouped by signature. Tests are preferred; then failing suite; then infrastructure pattern; else job › step.
+      “Comments” counts flaky-keyword comments naming the test.</p>
+    <div class="scroll"><table id="t-clusters"></table></div>
+    <div class="more"><button id="more-clusters">show more</button></div></div>
+
+  <div class="card"><h2>Jobs × <span class="bu"></span></h2>
+    <p class="note">Flaky failures per CI job (top 25 jobs).</p>
+    <div class="scroll" id="ch-heat"></div></div>
+
+  <div class="card"><h2>Flaky failures</h2>
+    <div class="scroll"><table id="t-events"></table></div>
+    <div class="more"><button id="more-events">show more</button></div></div>
+
+  <div class="card"><h2>Comments</h2>
+    <div class="scroll"><table id="t-comments"></table></div>
+    <div class="more"><button id="more-comments">show more</button></div></div>
+</main>
+<div id="tip"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+const repoColor = r => SERIES[DATA.repos.indexOf(r) % SERIES.length];
+const fmtDay = d => new Date(d + "T00:00:00Z").toLocaleDateString(undefined, {month: "short", day: "numeric", timeZone: "UTC"});
+const NOW = new Date(DATA.generated);
+const RANGES = DATA.ranges;  // {"1d": 1, "1w": 7, ...} days
+// Time buckets for the active range: hours for 1d, days up to a month, ISO weeks beyond.
+let BK;
+function buckets(days) {
+  const start = new Date(NOW - days * 864e5), keys = [];
+  if (days <= 1) {
+    for (let t = new Date(start); t <= NOW; t = new Date(+t + 36e5)) keys.push(t.toISOString().slice(0, 13));
+    return {start, keys, unit: "hour", of: ts => ts.slice(0, 13), label: k => k.slice(11, 13) + ":00", tip: k => `${fmtDay(k.slice(0, 10))} ${k.slice(11, 13)}:00 UTC`};
+  }
+  if (days <= 31) {
+    for (let t = new Date(start); t <= NOW; t = new Date(+t + 864e5)) keys.push(t.toISOString().slice(0, 10));
+    return {start, keys, unit: "day", of: ts => ts.slice(0, 10), label: fmtDay, tip: fmtDay};
+  }
+  const monday = ts => { const d = new Date(ts.slice(0, 10) + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return d.toISOString().slice(0, 10); };
+  for (let t = new Date(monday(start.toISOString())); t <= NOW; t = new Date(+t + 7 * 864e5)) keys.push(t.toISOString().slice(0, 10));
+  return {start, keys, unit: "week", of: monday, label: fmtDay, tip: k => "Week of " + fmtDay(k)};
+}
+const ghUrl = (repo, n) => `https://github.com/${repo}/pull/${n}`;
+const KIND_LABEL = {junit: "JUnit", munit: "munit", vulpix: "vulpix", partest: "partest", scalatest: "scalatest", scripted: "scripted", "sbt-task": "sbt task",
+  suite: "suite", infra: "infra", job: "job › step"};
+
+// tooltip
+const tip = $("#tip");
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.innerHTML = t.dataset.tip; tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(e.clientX + 12, innerWidth - w - 8) + "px";
+  tip.style.top = (e.clientY + 14 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 14) + "px";
+});
+
+addEventListener("scroll", () => tip.style.display = "none", {passive: true});
+
+// filters
+const F = {range: "1m", repo: "", source: "", kind: "", q: ""};
+try { const r = localStorage.getItem("flaky-ci-range"); if (r in RANGES) F.range = r; } catch {}
+const hasSummary = r => F.repo ? !!DATA.repo_summaries[F.repo]?.[r] : !!DATA.summaries[r];
+function drawChips() {
+  $("#f-range").innerHTML = Object.keys(RANGES).map(r =>
+    `<button aria-pressed="${r === F.range}" data-r="${r}" title="${hasSummary(r) ? "agent summary available" : "no agent summary for this selection"}">${r}${hasSummary(r) ? '<span class="dot"></span>' : ""}</button>`).join("");
+  $("#f-range").querySelectorAll("button").forEach(b => b.onclick = () => {
+    F.range = b.dataset.r; try { localStorage.setItem("flaky-ci-range", F.range); } catch {}
+    limits = {...LIMITS0}; drawChips(); draw();
+  });
+}
+$("#f-repo").innerHTML = `<option value="">all (${DATA.repos.length})</option>` + DATA.repos.map(r => `<option>${esc(r)}</option>`).join("");
+$("#f-kind").innerHTML += Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
+for (const [id, k] of [["#f-repo", "repo"], ["#f-source", "source"], ["#f-kind", "kind"], ["#f-q", "q"]])
+  $(id).addEventListener("input", e => { F[k] = e.target.value.trim(); limits = {...LIMITS0}; drawChips(); draw(); });
+
+const LIMITS0 = {clusters: 40, events: 40, comments: 40};
+let limits = {...LIMITS0};
+for (const k of Object.keys(LIMITS0)) $(`#more-${k}`).onclick = () => { limits[k] += 100; draw(); };
+
+const textOf = e => [e.workflow, e.sha, ...e.prs.map(p => "#" + p), ...e.units.flatMap(u => [u.name, u.step, ...u.sigs])].join(" ").toLowerCase();
+function eventOk(e) {
+  if (new Date(e.failed_at) < BK.start) return false;
+  if (F.repo && e.repo !== F.repo) return false;
+  if (F.source && e.source !== F.source) return false;
+  if (F.kind && !e.units.some(u => u.sigs.some(s => s.startsWith(F.kind + ":")))) return false;
+  if (F.q && !textOf(e).includes(F.q.toLowerCase())) return false;
+  return true;
+}
+const visibleRepos = () => F.repo ? [F.repo] : DATA.repos;
+
+// charts -----------------------------------------------------------------------------------
+const W = 560, H = 220, M = {l: 40, r: 10, t: 10, b: 26};
+function axes(maxY, fmtY = v => v) {
+  const weeks = BK.keys, iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const nice = niceMax(maxY), ticks = [0, nice / 2, nice];
+  let s = ticks.map(t => {
+    const y = M.t + ih - t / nice * ih;
+    return `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="var(--grid)"/>` +
+      `<text x="${M.l - 6}" y="${y + 4}" text-anchor="end">${fmtY(t)}</text>`;
+  }).join("");
+  const step = Math.max(1, Math.ceil(weeks.length / 8));
+  weeks.forEach((w, i) => { if (i % step === 0)
+    s += `<text x="${M.l + (i + .5) * iw / weeks.length}" y="${H - 8}" text-anchor="middle">${BK.label(w)}</text>`; });
+  return {s, iw, ih, nice, x: i => M.l + i * iw / weeks.length, bw: iw / weeks.length, y: v => M.t + ih - v / nice * ih};
+}
+function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; }
+const svg = inner => `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">${inner}</svg>`;
+function legend(el, repos) {
+  $(el).innerHTML = repos.length > 1 ? repos.map(r => `<span><i style="background:${repoColor(r)}"></i>${esc(r)}</span>`).join("") : "";
+}
+
+function stackedBars(el, lgEl, countsByRepo, unit) {
+  const repos = visibleRepos();
+  legend(lgEl, repos);
+  const tot = BK.keys.map(w => repos.reduce((a, r) => a + (countsByRepo[r]?.[w] || 0), 0));
+  const A = axes(Math.max(...tot, 1));
+  let bars = "";
+  BK.keys.forEach((w, i) => {
+    let acc = 0; const bw = Math.max(1, A.bw - 2), x = A.x(i) + 1;
+    const segs = repos.map(r => [r, countsByRepo[r]?.[w] || 0]).filter(([, v]) => v);
+    segs.forEach(([r, v], j) => {
+      const y0 = A.y(acc), y1 = A.y(acc + v), top = j === segs.length - 1;
+      const h = Math.max(0, y0 - y1 - (j ? 2 : 0));
+      bars += top ? `<path d="${roundTop(x, y1, bw, h)}" fill="${repoColor(r)}"/>` :
+        `<rect x="${x}" y="${y1}" width="${bw}" height="${h}" fill="${repoColor(r)}"/>`;
+      acc += v;
+    });
+    const t = `<b>${BK.tip(w)}</b><br>` + (segs.map(([r, v]) => `${esc(r)}: ${v}`).join("<br>") || `0 ${unit}`);
+    bars += `<rect x="${A.x(i)}" y="${M.t}" width="${A.bw}" height="${A.ih}" fill="transparent" data-tip="${esc(t)}"/>`;
+  });
+  $(el).innerHTML = svg(A.s + bars);
+}
+function roundTop(x, y, w, h) {
+  const r = Math.min(4, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function lines(el, lgEl, seriesByRepo) {
+  const repos = visibleRepos().filter(r => seriesByRepo[r]);
+  legend(lgEl, repos);
+  const all = repos.flatMap(r => BK.keys.map(w => seriesByRepo[r][w] ?? 0));
+  const maxV = Math.max(...all, 0.001), dec = Math.max(0, 1 - Math.floor(Math.log10(niceMax(maxV) * 100 / 2)));
+  const A = axes(maxV, v => (v * 100).toFixed(dec) + "%");
+  let s = "";
+  for (const r of repos) {
+    const pts = BK.keys.map((w, i) => [A.x(i) + A.bw / 2, A.y(seriesByRepo[r][w] ?? 0), seriesByRepo[r][w]]);
+    s += `<polyline fill="none" stroke="${repoColor(r)}" stroke-width="2" stroke-linejoin="round" points="${pts.filter(p => p[2] != null).map(p => p[0] + "," + p[1]).join(" ")}"/>`;
+  }
+  BK.keys.forEach((w, i) => {
+    const t = `<b>${BK.tip(w)}</b><br>` + repos.map(r => {
+      const v = seriesByRepo[r][w]; return `${esc(r)}: ${v == null ? "no runs" : (v * 100).toFixed(1) + "%"} <span style="color:var(--text-muted)">(${seriesByRepo[r].__n?.[w] || 0}/${seriesByRepo[r].__d?.[w] || 0})</span>`;
+    }).join("<br>");
+    s += `<rect x="${A.x(i)}" y="${M.t}" width="${A.bw}" height="${A.ih}" fill="transparent" data-tip="${esc(t)}"/>`;
+  });
+  $(el).innerHTML = svg(A.s + s);
+}
+
+function hbars(el, counts) {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) { $(el).innerHTML = `<div class="empty">No data</div>`; return; }
+  const max = entries[0][1], tot = entries.reduce((a, e) => a + e[1], 0), rh = 26, lw = 90, w = W - lw - 50;
+  const s = entries.map(([k, v], i) => {
+    const y = i * rh + 4, bw = Math.max(2, v / max * w);
+    return `<text x="${lw - 8}" y="${y + 15}" text-anchor="end" style="fill:var(--text-secondary)">${esc(KIND_LABEL[k] || k)}</text>` +
+      `<path d="M${lw},${y + 4}H${lw + bw - 4}Q${lw + bw},${y + 4} ${lw + bw},${y + 8}V${y + 16}Q${lw + bw},${y + 20} ${lw + bw - 4},${y + 20}H${lw}Z" fill="var(--series-1)"/>` +
+      `<text x="${lw + bw + 6}" y="${y + 16}">${v}</text>` +
+      `<rect x="0" y="${y}" width="${W}" height="${rh}" fill="transparent" data-tip="${esc(`${KIND_LABEL[k] || k}: ${v} (${(v / tot * 100).toFixed(0)}%)`)}"/>`;
+  }).join("");
+  $(el).innerHTML = `<svg viewBox="0 0 ${W} ${entries.length * rh + 8}" width="100%">${s}</svg>`;
+}
+
+function heatmap(el, events) {
+  const per = {};
+  for (const e of events) for (const u of e.units) {
+    const k = `${e.repo}  ${u.name}`; (per[k] ??= {total: 0, w: {}}); per[k].total++; const b = BK.of(e.failed_at); per[k].w[b] = (per[k].w[b] || 0) + 1;
+  }
+  const rows = Object.entries(per).sort((a, b) => b[1].total - a[1].total).slice(0, 25);
+  if (!rows.length) { $(el).innerHTML = `<div class="empty">No data</div>`; return; }
+  const multi = visibleRepos().length > 1;
+  const labels = rows.map(([k]) => { const [repo, name] = k.split("  "); const l = (multi ? repo.split("/")[1] + ": " : "") + name; return l.length > 60 ? l.slice(0, 59) + "…" : l; });
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
+  const max = Math.max(...rows.flatMap(([, r]) => Object.values(r.w))), cw = BK.keys.length > 60 ? 10 : 16, ch = 18;
+  const lw = Math.ceil(Math.max(...labels.map(l => ctx.measureText(l).width))) + 16;
+  const wW = lw + BK.keys.length * cw + 50, hH = rows.length * ch + 24;
+  const lvl = v => v ? Math.min(6, 1 + Math.floor((v - 1) / max * 6)) : 0;
+  let s = "";
+  rows.forEach(([k, r], i) => {
+    const label = labels[i];
+    s += `<text x="${lw - 8}" y="${i * ch + 13}" text-anchor="end" style="fill:var(--text-secondary)">${esc(label)}</text>`;
+    BK.keys.forEach((w, j) => {
+      const v = r.w[w] || 0;
+      s += `<rect x="${lw + j * cw}" y="${i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="var(--seq-${lvl(v)})" data-tip="${esc(`<b>${label}</b><br>${BK.tip(w)}: ${v}`)}"/>`;
+    });
+    s += `<text x="${lw + BK.keys.length * cw + 6}" y="${i * ch + 13}">${r.total}</text>`;
+  });
+  // one date label per ~56px so they never collide; ticks mark the labelled columns
+  const step = Math.ceil(56 / cw);
+  BK.keys.forEach((w, j) => { if (j % step === 0)
+    s += `<line x1="${lw + j * cw + 1}" x2="${lw + j * cw + 1}" y1="${rows.length * ch}" y2="${rows.length * ch + 4}" stroke="var(--text-muted)"/>` +
+         `<text x="${lw + j * cw}" y="${hH - 6}">${BK.label(w)}</text>`; });
+  $(el).innerHTML = `<svg viewBox="0 0 ${wW} ${hH}" width="${wW}" style="max-width:none">${s}</svg>`;
+}
+
+function spark(weeks) {
+  const vals = BK.keys.map(w => weeks[w] || 0), max = Math.max(...vals, 1), w = Math.max(2, Math.min(6, Math.floor(120 / vals.length))), h = 20;
+  return `<svg width="${vals.length * w}" height="${h}" style="vertical-align:middle">` + vals.map((v, i) =>
+    v ? `<rect x="${i * w}" y="${h - v / max * h}" width="${w - 1}" height="${v / max * h}" fill="var(--series-1)"/>` : "").join("") + "</svg>";
+}
+
+// tables -----------------------------------------------------------------------------------
+const sortState = {};
+function table(el, cols, rows, limitKey) {
+  const st = sortState[el];
+  if (st) { const c = cols[st.i]; rows = [...rows].sort((a, b) => { const x = c.sort(a), y = c.sort(b); return (x < y ? -1 : x > y ? 1 : 0) * st.dir; }); }
+  const shown = rows.slice(0, limits[limitKey]);
+  $(el).innerHTML = `<thead><tr>${cols.map((c, i) => `<th ${c.sort ? `data-sort="${i}"` : ""} ${c.num ? 'style="text-align:right"' : ""}>${c.h}</th>`).join("")}</tr></thead>` +
+    `<tbody>${shown.map(r => `<tr>${cols.map(c => `<td class="${c.num ? "num" : ""}">${c.f(r)}</td>`).join("")}</tr>`).join("") ||
+      `<tr><td colspan="${cols.length}" class="empty">Nothing matches the filters</td></tr>`}</tbody>`;
+  $(el).querySelectorAll("th[data-sort]").forEach(th => th.onclick = () => {
+    const i = +th.dataset.sort; sortState[el] = {i, dir: sortState[el]?.i === i ? -sortState[el].dir : (cols[i].num ? -1 : 1)}; draw();
+  });
+  $(`#more-${limitKey}`).style.display = rows.length > shown.length ? "" : "none";
+  $(`#more-${limitKey}`).textContent = `show more (${rows.length - shown.length} hidden)`;
+}
+const prLinks = (repo, prs) => prs.map(p => `<a href="${ghUrl(repo, p)}">#${p}</a>`).join(" ");
+const date = s => s ? s.slice(0, 10) : "";
+
+// main draw --------------------------------------------------------------------------------
+function draw() {
+  BK = buckets(RANGES[F.range]);
+  const fmtTs = d => d.toISOString().replace("T", " ").slice(0, 16);
+  $("#asof").textContent = `${fmtTs(BK.start)} → ${fmtTs(NOW)} UTC (relative to report generation)` +
+    (BK.start.toISOString().slice(0, 10) < DATA.coverage ? ` · data only from ${DATA.coverage}` : "");
+  document.querySelectorAll(".bu").forEach(e => e.textContent = BK.unit);
+  renderSummary();
+  const events = DATA.events.filter(eventOk);
+  const repos = visibleRepos();
+
+  // derive clusters from the filtered events so every filter applies consistently
+  const meta = Object.fromEntries(DATA.clusters.map(c => [`${c.repo}|${c.kind}:${c.sig}`, c]));
+  const cl = {};
+  for (const e of events) for (const u of e.units) for (const s of u.sigs) {
+    if (F.kind && !s.startsWith(F.kind + ":")) continue;
+    const key = `${e.repo}|${s}`, m = meta[key];
+    if (!m) continue;
+    const c = cl[key] ??= {...m, count: 0, prs: new Set(), weeks: {}, jobs: {}, examples: [], wasted: 0, corroborated: 0, first: e.failed_at, last: e.failed_at};
+    c.count++; e.prs.forEach(p => c.prs.add(p)); const b = BK.of(e.failed_at); c.weeks[b] = (c.weeks[b] || 0) + 1;
+    c.jobs[u.name] = (c.jobs[u.name] || 0) + 1; c.examples.push(u.url); c.wasted += u.dur; c.corroborated += e.corroborated; c.last = e.failed_at;
+  }
+  let clusters = Object.values(cl);
+  clusters.sort((a, b) => b.count - a.count || b.last.localeCompare(a.last));
+
+  const comments = DATA.comments.filter(c => new Date(c.created_at) >= BK.start && (!F.repo || c.repo === F.repo) &&
+    (!F.q || (c.snippet + " " + c.user + " #" + c.number + " " + c.tests.join(" ")).toLowerCase().includes(F.q.toLowerCase())));
+
+  // tiles
+  const ghaEvents = events.filter(e => e.source !== "status");
+  // completed Actions runs per bucket (hourly counts for the 1d range, daily otherwise)
+  const runsB = {}, hourly = BK.unit === "hour";
+  const startKey = BK.start.toISOString().slice(0, hourly ? 13 : 10);
+  for (const r of repos) for (const [d, n] of Object.entries((hourly ? DATA.runs_per_hour : DATA.runs_per_day)[r] || {})) if (d >= startKey) {
+    const b = hourly ? d : BK.of(d); (runsB[r] ??= {}); runsB[r][b] = (runsB[r][b] || 0) + n; runsB[r].__total = (runsB[r].__total || 0) + n;
+  }
+  const runs = repos.reduce((a, r) => a + (runsB[r]?.__total || 0), 0);
+  const hours = events.reduce((a, e) => a + e.units.reduce((x, u) => x + u.dur, 0), 0) / 3600;
+  const tests = clusters.filter(c => !["infra", "job", "sbt-task"].includes(c.kind)).length;
+  const prs = new Set(events.flatMap(e => e.prs.map(p => e.repo + p))).size;
+  $("#tiles").innerHTML = [
+    [events.length.toLocaleString(), "flaky failures"],
+    [runs ? (ghaEvents.length / runs * 100).toFixed(2) + "%" : "–", `of ${runs.toLocaleString()} Actions runs`],
+    [prs.toLocaleString(), "PRs affected"],
+    [tests.toLocaleString(), "distinct flaky tests/suites"],
+    [hours.toFixed(hours < 10 ? 1 : 0) + " h", "runner time in failed jobs"],
+    [comments.length.toLocaleString(), "flakiness comments"],
+  ].map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+
+  // charts
+  const evByRepo = {}, rate = {};
+  for (const e of events) { const b = BK.of(e.failed_at); (evByRepo[e.repo] ??= {})[b] = (evByRepo[e.repo][b] || 0) + 1; }
+  stackedBars("#ch-events", "#lg-events", evByRepo, "flaky failures");
+  for (const r of repos) {
+    const d = runsB[r] || {}; if (!d.__total) continue;
+    const n = {}; for (const e of ghaEvents) if (e.repo === r) { const b = BK.of(e.failed_at); n[b] = (n[b] || 0) + 1; }
+    rate[r] = {__n: n, __d: d}; for (const w of BK.keys) if (d[w]) rate[r][w] = (n[w] || 0) / d[w];
+  }
+  lines("#ch-rate", "#lg-rate", rate);
+  const cByRepo = {}; for (const c of comments) { const b = BK.of(c.created_at); (cByRepo[c.repo] ??= {})[b] = (cByRepo[c.repo][b] || 0) + 1; }
+  stackedBars("#ch-comments", "#lg-comments", cByRepo, "comments");
+  const kinds = {}; for (const e of events) for (const u of e.units) { const k = (u.sigs[0] || "job:").split(":")[0]; kinds[k] = (kinds[k] || 0) + 1; }
+  hbars("#ch-kinds", kinds);
+  heatmap("#ch-heat", events);
+
+  const multi = repos.length > 1;
+  table("#t-clusters", [
+    {h: "Signature", f: c => `${multi ? `<span class="chip">${esc(c.repo)}</span>` : ""}<span class="chip">${KIND_LABEL[c.kind] || c.kind}</span> <span class="sig">${esc(c.sig)}</span>` +
+      (c.detail ? `<div class="detail">${esc(c.detail.slice(0, 200))}</div>` : ""), sort: c => c.sig},
+    {h: "Failures", num: 1, f: c => c.count, sort: c => c.count},
+    {h: "PRs", num: 1, f: c => c.prs.size, sort: c => c.prs.size},
+    {h: "Trend", f: c => spark(c.weeks)},
+    {h: "Last seen", f: c => date(c.last), sort: c => c.last},
+    {h: "First seen", f: c => date(c.first), sort: c => c.first},
+    {h: "Jobs", f: c => Object.entries(c.jobs).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([j, n]) => `<span class="chip">${esc(j)} ×${n}</span>`).join("")},
+    {h: "Comments", num: 1, f: c => c.comment_mentions || "", sort: c => c.comment_mentions},
+    {h: "Examples", f: c => c.examples.slice(-4).reverse().map((u, i) => `<a href="${esc(u)}">${i + 1}</a>`).join(" ")},
+  ], clusters, "clusters");
+
+  table("#t-events", [
+    {h: "Failed", f: e => date(e.failed_at), sort: e => e.failed_at},
+    {h: "Repo", f: e => esc(e.repo), sort: e => e.repo},
+    {h: "PR", f: e => prLinks(e.repo, e.prs) || `<span class="sig">${esc(e.sha)}</span>`},
+    {h: "Workflow", f: e => `${esc(e.workflow)} <span class="chip">${esc(e.source)}</span>`, sort: e => e.workflow},
+    {h: "Failed jobs → signatures", f: e => e.units.map(u =>
+      `<div><a href="${esc(u.url)}">${esc(u.name)}</a>${u.recovered ? "" : ' <span class="chip">not re-run</span>'} ` +
+      (u.sigs.length ? u.sigs.slice(0, 4).map(s => `<span class="chip sig">${esc(s)}</span>`).join("") : "") +
+      (u.log !== "ok" ? ` <span class="chip">log ${esc(u.log)}</span>` : "") + `</div>`).join("")},
+    {h: "Went green", f: e => `<a class="ok" href="${esc(e.recovered_url)}">✓ re-run</a>`},
+    {h: "Discussed", f: e => e.corroborated ? "💬" : "", sort: e => e.corroborated},
+  ], [...events].reverse(), "events");
+
+  table("#t-comments", [
+    {h: "Date", f: c => date(c.created_at), sort: c => c.created_at},
+    {h: "Where", f: c => `${multi ? esc(c.repo) + " " : ""}<a href="${esc(c.url)}">#${c.number}</a>`, sort: c => c.number},
+    {h: "Who", f: c => esc(c.user), sort: c => c.user},
+    {h: "Keywords", f: c => c.keywords.map(k => `<span class="chip">${esc(k)}</span>`).join("")},
+    {h: "Snippet", f: c => `<div class="detail" style="color:var(--text-secondary)">${esc(c.snippet)}</div>` +
+      (c.tests.length ? c.tests.map(t => `<span class="chip sig">${esc(t)}</span>`).join("") : "")},
+  ], comments, "comments");
+}
+
+// agent summary: a tiny Markdown subset. Input is HTML-escaped first, so it can never inject markup.
+function md(src) {
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2">$2</a>')
+    .replace(/(^|[\s(])([\w.-]+\/[\w.-]+)#(\d+)\b/g, '$1<a href="https://github.com/$2/pull/$3">$2#$3</a>');
+  const out = [], lines = src.replace(/\r/g, "").split("\n");
+  let list = null, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+                        if (list) { out.push(`</${list}>`); list = null; } };
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    let m;
+    if (!l.trim()) { flush(); continue; }
+    if ((m = l.match(/^(#{1,4})\s+(.*)/))) { flush(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "")) {
+      flush();
+      const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let t = `<table><thead><tr>${cells(l).map(c => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`;
+      i += 2;
+      for (; i < lines.length && /^\s*\|/.test(lines[i]); i++) t += `<tr>${cells(lines[i]).map(c => `<td>${inline(c)}</td>`).join("")}</tr>`;
+      out.push(t + "</tbody></table>"); i--; continue;
+    }
+    if ((m = l.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
+      const kind = /\d/.test(m[1]) ? "ol" : "ul";
+      if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; }
+      if (list !== kind) { if (list) out.push(`</${list}>`); out.push(`<${kind}>`); list = kind; }
+      out.push(`<li>${inline(m[2])}</li>`); continue;
+    }
+    if (list && /^\s{2,}\S/.test(l)) { out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, " " + inline(l.trim()) + "</li>"); continue; }
+    para.push(l.trim());
+  }
+  flush();
+  return out.join("\n");
+}
+function renderSummary() {
+  const el = $("#summary"), own = F.repo && DATA.repo_summaries[F.repo]?.[F.range];
+  const sm = own || DATA.summaries[F.range];
+  const scope = own ? F.repo : "all repos";
+  const file = F.repo ? `summary-${F.range}--${F.repo.replace("/", "__")}.md` : `summary-${F.range}.md`;
+  if (!sm) {
+    el.innerHTML = `<h2>Summary · ${esc(F.range)} · ${esc(F.repo || "all repos")}</h2><p class="note">No agent summary for this selection. See <code>project/scripts/flaky-ci/README.md</code>: ` +
+      `<code>flaky_ci.py ${F.repo ? `--repo ${esc(F.repo)} ` : ""}digest --range ${esc(F.range)}</code>, write <code>${esc(file)}</code>, re-run <code>report</code>.</p>`;
+    return;
+  }
+  const lagDays = (new Date(DATA.generated) - new Date(sm.written)) / 864e5;
+  el.innerHTML = `<div class="meta"><h2>Summary · ${esc(F.range)} · ${esc(scope)}</h2><span class="note">agent-written ${esc(sm.written.slice(0, 10))}` +
+    (F.repo && !own ? ` · no ${esc(F.repo)}-specific summary, showing all repos` : "") +
+    `${lagDays > 1 ? ` · <span class="stale">${Math.floor(lagDays)} days older than the data below</span>` : ""}</span></div>` +
+    `<div class="md">${md(sm.markdown)}</div>`;
+}
+
+if (/^https:\/\/github\.com\//.test(DATA.source_url || ""))
+  $("#source").innerHTML = ` · <a href="${esc(DATA.source_url)}">source &amp; methodology</a>`;
+$("#subtitle").textContent = `${DATA.repos.join(", ")} · data from ${DATA.coverage} · generated ${DATA.generated.replace("T", " ").slice(0, 16)} UTC`;
+drawChips();
+draw();
+</script>
+</body>
+</html>
