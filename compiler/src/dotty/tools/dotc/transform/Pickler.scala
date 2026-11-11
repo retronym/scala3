@@ -413,13 +413,13 @@ class Pickler extends Phase {
       treePkl.compactify(scratch)
       if tree.span.exists then
         PositionPickler.picklePositions(
-          pickler, treePkl.buf.addrOfTree, treePkl.treeAnnots, treePkl.typeAnnots,
+          pickler, treePkl.addrOfTree, treePkl.treeAnnots, treePkl.typeAnnots,
           unit.source, tree :: Nil,
           scratch.positionBuffer, scratch.pickledIndices)
 
       if !dropComments then
         CommentPickler.pickleComments(
-          pickler, treePkl.buf.addrOfTree, treePkl.docString, tree,
+          pickler, treePkl.addrOfTree, treePkl.docString, tree,
           scratch.commentBuffer)
 
       AttributePickler.pickleAttributes(attributes, pickler, scratch.attributeBuffer)
