@@ -30,11 +30,17 @@ object Linter:
       tpe == NoType ||
       tpe.typeSymbol == defn.UnitClass ||
       defn.isBottomClass(tpe.typeSymbol) ||
-      tpe =:= defn.UnitType ||
       tpe.typeSymbol == defn.BoxedUnitClass ||
-      tpe =:= defn.AnyValType ||
-      tpe =:= defn.AnyType ||
-      tpe =:= defn.AnyRefType
+      {
+        // Comparing a type selected from a long path `a.b.c...` can be very slow, so dealias first.
+        // A singleton type is never equivalent to these.
+        val tp = tpe.dealias
+        !tp.isInstanceOf[SingletonType] && (
+          tp =:= defn.UnitType ||
+          tp =:= defn.AnyValType ||
+          tp =:= defn.AnyType ||
+          tp =:= defn.AnyRefType)
+      }
 
     def isJavaApplication(t: Tree): Boolean = t match
       case Apply(f, _) => f.symbol.is(JavaDefined) && !defn.ObjectClass.isSubClass(f.symbol.owner)
