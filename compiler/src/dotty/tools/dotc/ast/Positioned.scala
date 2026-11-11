@@ -47,7 +47,12 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
   def span_=(span: Span): Unit =
     mySpan = span
 
-  span = envelope(src)
+  span =
+    val primed = src.primedSpan
+    if primed.exists then
+      src.primedSpan = NoSpan
+      primed
+    else envelope(src)
 
   def source: SourceFile = mySource
 
@@ -125,6 +130,31 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
           includeChildren(span1.startPos, 0)
       span2.toSynthetic
   }
+
+  /** This node is a copy of `original` that took its span without computing its envelope (see
+   *  `TreeCopier.copySource`). Assign spans to its span-less children, as computing the envelope
+   *  would have. Only children that are not shared with `original` are looked at: the shared ones
+   *  were positioned when `original` was, and are likely cold in the cache.
+   */
+  def positionNewChildren(original: Positioned): Unit =
+    def isUnpositioned(x: Any): Boolean = x match
+      case p: Positioned => !p.span.exists && p.source == source
+      case xs: List[?] => xs.exists(isUnpositioned)
+      case _ => false
+    def needsPosition(x: Any, y: Any): Boolean =
+      if x.asInstanceOf[AnyRef] eq y.asInstanceOf[AnyRef] then false
+      else (x, y) match
+        case (x :: xs, y :: ys) => needsPosition(x, y) || needsPosition(xs, ys)
+        case (m: untpd.Modifiers, _) => isUnpositioned(m.mods) || isUnpositioned(m.annotations)
+        case _ => isUnpositioned(x)
+    if span.exists then
+      var needed = productArity != original.productArity // e.g. Template copied to DerivingTemplate
+      var n = 0
+      while !needed && n < productArity do
+        needed = needsPosition(productElement(n), original.productElement(n))
+        n += 1
+      // As the constructor's envelope and then `withSpan` would have, when no child had a span
+      if needed && !envelope(source).exists then envelope(source, span.startPos)
 
   /** Clone this node but assign it a fresh id which marks it as a node in `file`. */
   def cloneIn(src: SourceFile): this.type = {
@@ -234,6 +264,10 @@ abstract class Positioned(implicit @constructorOnly src: SourceFile) extends Src
 }
 
 object Positioned {
+  // Prime `SourceFile.primedSpan` in `TreeCopier` (see `TreeCopier.copySource`). Set per Run from -Yno-prime-spans,
+  // not read from the settings per copy, which would cost more than priming saves. Global, like `ids` and `debugId`.
+  @sharable var primeSpans: Boolean = true
+
   @sharable private var debugId = Int.MinValue
   @sharable private var ids: java.util.WeakHashMap[Positioned, Int] | Null = null
   @sharable private var nextId: Int = 0

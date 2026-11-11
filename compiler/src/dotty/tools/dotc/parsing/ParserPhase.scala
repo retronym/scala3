@@ -35,7 +35,7 @@ class Parser extends Phase {
           firstXmlPos = p.firstXmlPos
         tree
       }
-    if (Config.checkPositions)
+    if Config.checkPositions && !ctx.settings.YnoCheckPositions.value then
       unit.untpdTree.checkPos(nonOverlapping = !unit.isJava && !ctx.reporter.hasErrors)
   }
 

@@ -388,7 +388,7 @@ class Pickler extends Phase {
   private val executor = Executor[Array[Byte]]()
 
   private def useExecutor(using Context) =
-    Pickler.ParallelPickling && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
+    Pickler.ParallelPickling && !ctx.settings.YnoParallelPickling.value && !ctx.isBestEffort && !ctx.settings.YtestPickler.value && !ctx.settings.YprintTasty.value
 
   private def printerContext(isOutline: Boolean)(using Context): Context =
     if isOutline then ctx.fresh.setPrinterFn(OutlinePrinter(_))
