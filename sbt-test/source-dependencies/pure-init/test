@@ -1,0 +1,5 @@
+# A, B, O and C have no initialization code, so X elides `new B`, `O` and `C(1)`
+> compile
+# A gains an initializer, which must invalidate X via B, O and C
+$ copy-file changes/A2.scala A.scala
+> run

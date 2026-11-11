@@ -1,3 +1,3 @@
 class B extends A {
-  val unrelatedChange: Int = 1
+  def unrelatedChange: Int = 1
 }

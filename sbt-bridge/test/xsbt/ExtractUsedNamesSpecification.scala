@@ -82,7 +82,7 @@ class ExtractUsedNamesSpecification {
     val namesAX = standardNames ++ Set("x", "T", "A", "Nothing", "Any")
     val namesB = Set("A", "Int", "A;init;", "Unit")
     val namesC = Set("B;init;", "B", "Unit")
-    val namesD = standardNames ++ Set("C", "X", "foo", "Int", "T")
+    val namesD = standardNames ++ Set("C", "C$;init;", "X", "A;X$;init;", "foo", "Int", "T")
     assertEquals(namesA, usedNames("A"))
     assertEquals(namesAX, usedNames("A.X"))
     assertEquals(namesB, usedNames("B"))
@@ -131,27 +131,31 @@ class ExtractUsedNamesSpecification {
     val compilerForTesting = new ScalaCompilerForUnitTesting
     val usedNames = compilerForTesting.extractUsedNamesFromSrc(src1, src2)
     val expectedNames_lista =
-      standardNames ++ Set("B", "lista", "List", "A")
+      standardNames ++ Set("B", "B$;init;", "lista", "List", "A")
     val expectedNames_at =
-      standardNames ++ Set("B", "at", "A", "T", "X0", "X1")
+      standardNames ++ Set("B", "B$;init;", "at", "A", "T", "X0", "X1")
     val expectedNames_as =
-      standardNames ++ Set("B", "as", "S", "Y")
+      standardNames ++ Set("B", "B$;init;", "as", "S", "Y")
     val expectedNames_foo =
       standardNames ++
        Set("B",
+           "B$;init;",
            "foo",
            "M",
            "N",
            "Predef",
+           "scala;Predef$;init;",
            "???",
            "Nothing")
     val expectedNames_bar =
       standardNames ++
        Set("B",
+           "B$;init;",
            "bar",
            "P1",
            "P0",
            "Predef",
+           "scala;Predef$;init;",
            "???",
            "Nothing")
     assertEquals(expectedNames_lista, usedNames("Test_lista"))
@@ -174,7 +178,7 @@ class ExtractUsedNamesSpecification {
                     |""".stripMargin
     val compilerForTesting = new ScalaCompilerForUnitTesting
     val usedNames = compilerForTesting.extractUsedNamesFromSrc(srcFoo, srcBar)
-    val expectedNames = standardNames ++ Set("Outer", "TypeInner", "Inner", "Int")
+    val expectedNames = standardNames ++ Set("Outer", "Outer$;init;", "TypeInner", "Inner", "Int")
     assertEquals(expectedNames, usedNames("Bar"))
   }
 

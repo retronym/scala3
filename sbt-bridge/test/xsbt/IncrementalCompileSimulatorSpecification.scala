@@ -188,3 +188,41 @@ class IncrementalCompileSimulatorSpecification:
       "an unchanged upstream must not trigger recompilation",
       sim.wouldRecompile(upstream, downstream, upstream)
     )
+
+  // ── constructor purity ────────────────────────────────────────────────────
+  //
+  // Clients elide pure expressions passed to an unused parameter of an inline
+  // method or in statement position, and an instantiation or object reference
+  // is pure iff the class has no initialization code, direct or inherited.
+  // That changes without any change to a signature.
+
+  private def purityUpstream(aBody: String) =
+    s"""|class A { $aBody }
+        |class B extends A
+        |object O extends A
+        |case class C(x: Int) extends A
+        |object Util { inline def ignore(x: Any): Unit = () }
+        |""".stripMargin
+
+  private def assertPurityInvalidates(downstream: String): Unit =
+    val pure = purityUpstream("def a = 1")
+    assertTrue(s"gaining an initializer must invalidate\n$downstream",
+      sim.wouldRecompile(pure, downstream, purityUpstream("def a = 1; println()")))
+    assertTrue(s"gaining a private val must invalidate\n$downstream",
+      sim.wouldRecompile(pure, downstream, purityUpstream("def a = 1; private val x = 1")))
+    assertTrue(s"losing the last initializer must invalidate\n$downstream",
+      sim.wouldRecompile(purityUpstream("def a = 1; println()"), downstream, pure))
+    assertFalse(s"an unrelated body change must not invalidate\n$downstream",
+      sim.wouldRecompile(pure, downstream, purityUpstream("def a = 2")))
+
+  @Test
+  def constructorPurity_instantiation(): Unit =
+    assertPurityInvalidates("object Test { def f = Util.ignore(new B) }")
+
+  @Test
+  def constructorPurity_objectStatement(): Unit =
+    assertPurityInvalidates("object Test { def f = { O; 1 } }")
+
+  @Test
+  def constructorPurity_caseClassApply(): Unit =
+    assertPurityInvalidates("object Test { def f = Util.ignore(C(1)) }")

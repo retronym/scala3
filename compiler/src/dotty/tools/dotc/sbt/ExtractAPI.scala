@@ -259,6 +259,30 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.Set[Symbol])(usi
   private val matchMarker = marker("Match")
   private val superMarker = marker("Super")
 
+  /** Marks the primary constructor of a class whose instantiation has no side
+   *  effects, see `hasPureInit`.
+   */
+  private val pureInitMarker = marker("<pure-init>")
+
+  /** Can creating an instance of `cls` be elided when the instance is unused?
+   *
+   *  Clients compile against this: `TreeInfo.isPureApply` treats `new C` as pure if
+   *  the primary constructor of `C` is `StableRealizable`, and `refPurity` treats a
+   *  reference to object `O` as pure if `O`'s module class is `isNoInitsRealClass`.
+   *  Pure expressions are elided (e.g. an argument to an unused parameter of an inline method) or
+   *  warned about in statement position. Both facts hold iff no base class has
+   *  initialization code, which can change without any change to the signatures of
+   *  `C` or its ancestors (adding a statement or a private val to a template), so we
+   *  add a marker to the primary constructor to make the change visible to Zinc.
+   *
+   *  For a trait, `StableRealizable` only reflects the trait's own body, but an
+   *  anonymous class `new T {}` is pure iff all base classes of `T` are `NoInits`,
+   *  so we use that for traits.
+   */
+  private def hasPureInit(cls: Symbol): Boolean =
+    if cls.is(Trait) then cls.asClass.baseClasses.forall(_.is(NoInits))
+    else cls.primaryConstructor.is(StableRealizable)
+
   /** Extract the API representation of a source file */
   def apiSource(tree: Tree): Seq[api.ClassLike] = {
     def apiClasses(tree: Tree): Unit = tree match {
@@ -350,10 +374,10 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.Set[Symbol])(usi
 
     val apiBases = bases.map(apiType)
 
-    // Synthetic methods that are always present do not affect the API
-    // and can therefore be ignored.
-    def alwaysPresent(s: Symbol) = csym.is(ModuleClass) && s.isConstructor
-    val decls = cinfo.decls.filter(!alwaysPresent(_))
+    // The constructor of an object carries the `pureInitMarker`, so keep it.
+    // (It used to be filtered out here, but came back among the inherited
+    // members below, as `baseClasses` includes `csym` itself.)
+    val decls = cinfo.decls.toList
     val apiDecls = apiDefinitions(decls)
 
     val declSet = decls.toSet
@@ -744,6 +768,9 @@ private class ExtractAPICollector(nonLocalClassSymbols: mutable.Set[Symbol])(usi
       annots += marker(inlineHash.toString)
 
     end if
+
+    if s.isConstructor && s == s.owner.primaryConstructor && hasPureInit(s.owner) then
+      annots += pureInitMarker
 
     // In the Scala2 ExtractAPI phase we only extract annotations that extend
     // StaticAnnotation, but in Dotty we currently pickle all annotations so we
