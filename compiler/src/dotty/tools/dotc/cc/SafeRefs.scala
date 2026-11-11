@@ -60,9 +60,15 @@ object SafeRefs {
    */
   def init()(using Context): Unit = {
     assumeSafe("scala.Predef", except = List("print", "println", "printf"))
-    assumeSafe("scala.runtime.coverage.Invoker")
     assumeSafe("scala.reflect.ClassTag")
-    assumeSafe("scala.util.Properties", except = List("setProp", "clearProp", "main"))
+    assumeSafe("scala.util.Properties", except = List(
+      "setProp", "clearProp", "main",
+      // Reading arbitrary system properties and environment variables is an
+      // ambient effect that can disclose secrets (API keys, tokens).
+      "propIsSet", "propIsSetTo", "propOrNone", "propOrElse", "propOrEmpty", "propOrNull", "propOrFalse",
+      "envOrElse", "envOrNone", "envOrSome",
+      // Host paths and user identity
+      "javaClassPath", "javaHome", "jdkHome", "scalaHome", "tmpDir", "userDir", "userHome", "userName"))
     assumeSafe("java.lang.Object")
     assumeSafe("java.lang.Boolean")
     assumeSafe("java.lang.Byte")
@@ -79,7 +85,8 @@ object SafeRefs {
     assumeSafe("java.lang.StrictMath")
     assumeSafe("java.lang.Number")
     assumeSafe("java.lang.String")
-    assumeSafe("java.lang.Throwable")
+    // printStackTrace writes to stderr; setStackTrace mutates the exception.
+    assumeSafe("java.lang.Throwable", except = List("printStackTrace", "setStackTrace"))
     assumeSafe("java.lang.Exception")
     assumeSafe("java.lang.RuntimeException")
     assumeSafe("java.lang.ArithmeticException")
@@ -144,6 +151,11 @@ object SafeRefs {
     rejectSafe("scala.annotation.unchecked.uncheckedCaptures")
     rejectSafe("scala.util.DynamicVariable")
     rejectSafe("scala.util.Using") // todo capture check Using
+
+    // Wrappers around sun.misc.Unsafe and the coverage runtime: raw memory
+    // access and file writes that are not tracked by any capability.
+    rejectSafe("scala.runtime.LazyVals")
+    rejectSafe("scala.runtime.coverage.Invoker")
 
     // Reject mutable classes in scala.runtime
     rejectSafe("scala.runtime.BooleanRef")

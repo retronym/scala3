@@ -271,6 +271,15 @@ def test(): Unit =
 
 A `uses` clause must be given if a class that is visible in other compilation units captures external capabilities. This is to support separate compilation where we need to know the capture set of `C(...)` without analyzing the internals of `C`.
 
+The same holds for capabilities created by the arguments of a parent constructor. In
+
+```scala sc:nocompile
+class C(val r: Cap)
+class D extends C(new Cap)
+```
+
+every instance of `D` retains the `Cap` created for the parent constructor through the field `r`. Unlike for `new C(...)`, the type of `new D` is not refined with the argument, so the retained capability has to be part of the capture set of `D`. It is inferred for local classes. Otherwise `D` has to extend `Capability`, or declare the capability, for instance with `uses caps.any`.
+
 If `C` extends `Capability` then we always add an `any` to the capture set of `new C`.
 
 ```scala sc-compile-with:classes-cc-context
