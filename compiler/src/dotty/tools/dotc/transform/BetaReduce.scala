@@ -80,7 +80,7 @@ object BetaReduce:
   def apply(tree: Tree)(using Context): Tree = {
     val bindingsBuf = new ListBuffer[DefTree]
 
-    def recur(fn: Tree, args: List[Tree]): Option[Tree] = fn match
+    def recur(fn: Tree, args: List[Tree], bindingsBuf: ListBuffer[DefTree]): Option[Tree] = fn match
       case Block((ddef : DefDef) :: Nil, closure: Closure) if ddef.symbol == closure.meth.symbol =>
         reduceApplication(ddef, args :: Nil, bindingsBuf)
       case Block((TypeDef(_, template: Template)) :: Nil, Typed(Apply(Select(New(_), _), _), _)) if template.constr.rhs.isEmpty =>
@@ -88,16 +88,21 @@ object BetaReduce:
           case (ddef: DefDef) :: Nil => reduceApplication(ddef, args :: Nil, bindingsBuf)
           case _ => None
       case Block(stats, expr) if stats.forall(isPureBinding) =>
-        recur(expr, args).map(cpy.Block(fn)(stats, _))
+        recur(expr, args, bindingsBuf).map(cpy.Block(fn)(stats, _))
+      case Block(stats, expr) =>
+        // The arguments are evaluated after `stats`, so their bindings must go
+        // inside the block rather than before it.
+        val innerBindings = new ListBuffer[DefTree]
+        recur(expr, args, innerBindings).map(cpy.Block(fn)(stats ::: innerBindings.toList, _))
       case fn @ Inlined(call, bindings, expr) if bindings.forall(isPureBinding) =>
-        recur(expr, args).map(cpy.Inlined(fn)(call, bindings, _))
+        recur(expr, args, bindingsBuf).map(cpy.Inlined(fn)(call, bindings, _))
       case Typed(expr, tpt) =>
-        recur(expr, args)
+        recur(expr, args, bindingsBuf)
       case TypeApply(Select(expr, nme.asInstanceOfPM), List(tpt)) =>
-        recur(expr, args)
+        recur(expr, args, bindingsBuf)
       case _ => None
 
-    def reduce(fn: Tree, args: List[Tree]): Tree = recur(fn, args) match
+    def reduce(fn: Tree, args: List[Tree]): Tree = recur(fn, args, bindingsBuf) match
       case Some(reduced) =>
         seq(bindingsBuf.result(), reduced.ensureConforms(tree.tpe)).withSpan(tree.span)
       case None =>
