@@ -2,12 +2,12 @@ package dotty.tools
 package dotc
 package core
 
-import scala.collection.mutable
 import util.NameTransformer
 import printing.{Printer, Showable, Texts}
 import Texts.Text
 import StdNames.{nme, str}
 
+import java.lang.ref.WeakReference
 import java.nio.charset.StandardCharsets
 import scala.annotation.internal.sharable
 import dotty.tools.dotc.util.Stats
@@ -182,16 +182,20 @@ object Names {
     def info: NameInfo = SimpleNameKind.info
     def underlying: TermName = unsupported("underlying")
 
-    @sharable // because of synchronized block in `add`
-    private val derivedNames = mutable.Map.empty[NameInfo, DerivedName]
+    // Derived names of this name, weakly held so that fresh names such as `x$1` do not
+    // outlive their compiler run. Allocated on first use since most names have none.
+    @sharable // because it's only accessed in the synchronized block of `add`
+    private var myDerivedNames: WeakInternTable[NameInfo, DerivedName] | Null = null
 
     private def add(info: NameInfo): TermName = synchronized {
-      derivedNames.get(info) match
-        case Some(dnOpt) => dnOpt
-        case None =>
-          val derivedName = DerivedName(this, info)
-          derivedNames(info) = derivedName
-          derivedName
+      if myDerivedNames == null then myDerivedNames = WeakInternTable(initialCapacity = 4)
+      val derivedNames = myDerivedNames.nn
+      val existing = derivedNames.get(info)
+      if existing != null then existing
+      else
+        val derivedName = DerivedName(this, info)
+        derivedNames.put(info, derivedName)
+        derivedName
     }
 
     private def rewrap(underlying: TermName) =
@@ -445,20 +449,40 @@ object Names {
   /** The term name represented by the empty string */
   val EmptyTermName: SimpleName = new SimpleName("")
 
+  /** An intern table that holds its values weakly, so that an entry goes away once
+   *  nothing else references its value. Names are compared with `eq`, which stays sound:
+   *  a name can only be created afresh after the previous instance has become unreachable.
+   *  Entries whose value has been collected are swept when the table has doubled in size
+   *  since the last sweep. Not thread-safe: callers must synchronize.
+   */
+  private final class WeakInternTable[K, V <: AnyRef](initialCapacity: Int):
+    private val table = new java.util.HashMap[K, WeakReference[V]](initialCapacity)
+    private var sweepThreshold = initialCapacity
+
+    def get(key: K): V | Null =
+      val ref = table.get(key)
+      if ref == null then null else ref.get()
+
+    def put(key: K, value: V): Unit =
+      table.put(key, new WeakReference(value))
+      if table.size > sweepThreshold then
+        table.values.removeIf(_.get() == null)
+        sweepThreshold = math.max(initialCapacity, table.size * 2)
+
   /** Hashtable for finding term names quickly. */
-  @sharable // because it's only mutated in enterIfNew which is synchronized
-  private val nameTable: mutable.Map[String, SimpleName] = new mutable.HashMap[String, SimpleName](initialCapacity = 0x10000, loadFactor = 2.0)
-  nameTable("") = EmptyTermName
+  @sharable // because it's only accessed in enterIfNew which is synchronized
+  private val nameTable = WeakInternTable[String, SimpleName](initialCapacity = 0x10000)
+  nameTable.put("", EmptyTermName)
 
   private def enterIfNew(str: String): SimpleName = synchronized {
     Stats.record("NameTable.get")
-    nameTable.get(str) match
-      case Some(n) => n
-      case None =>
-        Stats.record("NameTable.add")
-        val res = SimpleName(str)
-        nameTable(str) = res
-        res
+    val existing = nameTable.get(str)
+    if existing != null then existing
+    else
+      Stats.record("NameTable.add")
+      val res = SimpleName(str)
+      nameTable.put(str, res)
+      res
   }
 
   /** Create a term name from the UTF8 encoded bytes in bs[offset..offset+len-1].
