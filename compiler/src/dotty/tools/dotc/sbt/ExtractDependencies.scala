@@ -129,7 +129,8 @@ private class ExtractDependenciesCollector(rec: DependencyRecorder) extends Abst
       recordTree(tree)
 
       recordInlineCallArgs(tree)
-        
+      recordAnnotations(tree)
+
       tree match
         case tree: Inlined if !tree.inlinedFromOuterScope =>
           // The inlined call is normally ignored by TreeTraverser but we need to
@@ -145,6 +146,23 @@ private class ExtractDependenciesCollector(rec: DependencyRecorder) extends Abst
           t.body.foreach(traverse)
         case _ =>
           traverseChildren(tree)
+
+  /** After typer, the annotations of a definition only live in its symbol, so their trees
+   *  are traversed from there, as seen from the annotated definition. The `Body` annotation
+   *  of an inline method repeats its right-hand side, and `Child` annotations are not written
+   *  in the source.
+   */
+  private def recordAnnotations(tree: Tree)(using Context): Unit =
+    tree match
+      case md: MemberDef if md.symbol.exists =>
+        val sym = md.symbol
+        val annots = sym.annotations.filter: annot =>
+          val annotSym = annot.symbol
+          annotSym.exists && annotSym != defn.BodyAnnot && annotSym != defn.ChildAnnot
+        if annots.nonEmpty then
+          inContext(ctx.withOwner(sym)):
+            annots.foreach(annot => traverse(annot.tree))
+      case _ =>
 end ExtractDependenciesCollector
 
 /** Extract the dependency information of a compilation unit.
