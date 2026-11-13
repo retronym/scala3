@@ -585,7 +585,7 @@ object Contexts {
     def platform: Platform                 = base.platform
     def pendingUnderlying: mutable.Set[Type]       = base.pendingUnderlying
     def uniqueNamedTypes: Uniques.NamedTypeUniques = base.uniqueNamedTypes
-    def uniques: util.WeakHashSet[Type]            = base.uniques
+    def uniques: Uniques                           = base.uniques
 
     def initialize()(using Context): Unit = base.initialize()
 

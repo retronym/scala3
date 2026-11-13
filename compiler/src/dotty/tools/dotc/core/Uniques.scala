@@ -5,13 +5,9 @@ import Types.*, Contexts.*, util.Stats.*, Hashable.*, Names.*
 import config.Config
 import Symbols.Symbol
 import Decorators.*
-import util.{WeakHashSet, Stats}
-import WeakHashSet.Entry
-import scala.annotation.tailrec
+import util.WeakInterner
 
-class Uniques extends WeakHashSet[Type](Config.initialUniquesCapacity):
-  override def hash(x: Type): Int = x.hash
-  override def isEqual(x: Type, y: Type) = x.equals(y)
+class Uniques extends WeakInterner[Type](Config.initialUniquesCapacity)
 
 /** Defines operation `unique` for hash-consing types.
  *  Also defines specialized hash sets for hash consing uniques of a specific type.
@@ -32,11 +28,14 @@ object Uniques:
 
   def unique[T <: Type](tp: T)(using Context): T =
     recordCaching(tp)
-    if tp.hash == NotCached then tp
-    else ctx.uniques.put(tp).asInstanceOf[T]
+    val h = tp.hash
+    if h == NotCached then tp
+    else
+      val u = ctx.uniques
+      val e = u.find(h, tp.equals(_))
+      if e != null then e.asInstanceOf[T] else u.add(tp, h)
 
-  final class NamedTypeUniques extends WeakHashSet[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
-    override def hash(x: NamedType): Int = x.hash
+  final class NamedTypeUniques extends WeakInterner[NamedType](Config.initialUniquesCapacity * 4) with Hashable:
 
     def enterIfNew(prefix: Type, designator: Designator, isTerm: Boolean)(using Context): NamedType =
       val h = doHash(null, designator, prefix)
@@ -48,24 +47,8 @@ object Uniques:
         catch case ex: InvalidPrefix => badPrefix(prefix, designator)
       if h == NotCached then newType
       else
-        // Inlined from WeakHashSet#put
-        Stats.record(statsItem("put"))
-        removeStaleEntries()
-        val bucket = index(h)
-        val oldHead = table(bucket)
-
-        @tailrec
-        def linkedListLoop(entry: Entry[NamedType] | Null): NamedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
-          case _                       =>
-            if entry.hash == h then
-              val e = entry.get
-              if e != null && (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm) then e
-              else linkedListLoop(entry.tail)
-            else linkedListLoop(entry.tail)
-
-        linkedListLoop(oldHead)
-      end if
+        val e = find(h, e => (e.prefix eq prefix) && (e.designator eq designator) && (e.isTerm == isTerm))
+        if e != null then e else add(newType, h)
     end enterIfNew
 
     private def badPrefix(prefix: Type, desig: Designator)(using Context): Nothing =
@@ -76,8 +59,7 @@ object Uniques:
 
   end NamedTypeUniques
 
-  final class AppliedUniques extends WeakHashSet[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
-    override def hash(x: AppliedType): Int = x.hash
+  final class AppliedUniques extends WeakInterner[AppliedType](Config.initialUniquesCapacity * 2) with Hashable:
 
     def enterIfNew(tycon: Type, args: List[Type]): AppliedType =
       val h = doHash(null, tycon, args)
@@ -85,23 +67,7 @@ object Uniques:
       if monitored then recordCaching(h, classOf[CachedAppliedType])
       if h == NotCached then newType
       else
-        // Inlined from WeakHashSet#put
-        Stats.record(statsItem("put"))
-        removeStaleEntries()
-        val bucket = index(h)
-        val oldHead = table(bucket)
-
-        @tailrec
-        def linkedListLoop(entry: Entry[AppliedType] | Null): AppliedType = entry match
-          case null                    => addEntryAt(bucket, newType, h, oldHead)
-          case _                       =>
-            if entry.hash == h then
-              val e = entry.get
-              if e != null && (e.tycon eq tycon) && e.args.eqElements(args) then e
-              else linkedListLoop(entry.tail)
-            else linkedListLoop(entry.tail)
-
-        linkedListLoop(oldHead)
-      end if
+        val e = find(h, e => (e.tycon eq tycon) && e.args.eqElements(args))
+        if e != null then e else add(newType, h)
   end AppliedUniques
 end Uniques
