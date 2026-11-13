@@ -29,6 +29,13 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
   private var used = 0
   private var live = 0
   private val queue = new ReferenceQueue[AnyRef]
+  // The slot where a failed `find` would insert (the first tombstone it passed, or the empty slot that ended it), so
+  // that `add` can store there without probing again. It is valid only while `stamp` is unchanged and for the same
+  // hash: the predicate or the element's constructor may intern into this table between the `find` and the `add`.
+  private[util] var stamp = 0
+  private[util] var free = -1
+  private[util] var freeHash = 0
+  private[util] var freeStamp = -1
 
   /** The element held at the non-null slot content `e`, or null if `e` is a tombstone or its element was collected. */
   private[util] inline def deref(e: AnyRef): A | Null =
@@ -39,10 +46,16 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
     removeStaleEntries()
     var i = h & mask
     var result: A | Null = null
+    var tomb = -1
     while
       val e = elems(i >>> ChunkBits)(i & ChunkMask)
-      if e == null then false
+      if e == null then
+        free = if tomb >= 0 then tomb else i
+        freeHash = h
+        freeStamp = stamp
+        false
       else
+        if tomb < 0 && (e eq Tombstone) then tomb = i
         if hashes(i >>> ChunkBits)(i & ChunkMask) == h then
           val x = deref(e)
           if x != null && p(x) then result = x
@@ -55,12 +68,17 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
 
   /** Add `elem`, with hash `h`, which a `find` just failed to find. */
   def add[T <: A](elem: T, h: Int): T =
+    val ref = new Ref(elem, h, queue)
     if (used + 1) * 2 > mask + 1 then
       // grow if live elements fill a quarter of the table, otherwise rebuild at the same size to drop tombstones
       rebuild(if live * 4 >= mask + 1 then (mask + 1) * 2 else mask + 1)
-    insert(new Ref(elem, h, queue), h)
-    used += 1
+      insert(ref, h)
+    else if freeStamp == stamp && freeHash == h then
+      store(free, ref, h)
+    else
+      insert(ref, h)
     live += 1
+    stamp += 1
     elem
 
   private def insert(ref: Ref, h: Int): Unit =
@@ -69,6 +87,11 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
       val e = elems(i >>> ChunkBits)(i & ChunkMask)
       e != null && (e ne Tombstone)
     do i = (i + 1) & mask
+    store(i, ref, h)
+
+  /** Store `ref` at the empty or tombstone slot `i`. */
+  private def store(i: Int, ref: Ref, h: Int): Unit =
+    if elems(i >>> ChunkBits)(i & ChunkMask) == null then used += 1 // a tombstone is already counted
     elems(i >>> ChunkBits)(i & ChunkMask) = ref
     hashes(i >>> ChunkBits)(i & ChunkMask) = h
 
@@ -80,6 +103,7 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
     hashes = newHashes(capacity)
     used = 0
     live = 0
+    stamp += 1
     var c = 0
     while c < oldElems.length do
       val es = oldElems(c)
@@ -89,7 +113,6 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
         if e != null && deref(e) != null then
           val ref = e.asInstanceOf[Ref]
           insert(ref, ref.hash)
-          used += 1
           live += 1
         j += 1
       c += 1
@@ -112,6 +135,7 @@ abstract class WeakInterner[A <: AnyRef](initialCapacity: Int):
       stale = queue.poll()
 
   def clear(): Unit =
+    stamp += 1
     mask = InitialCapacity - 1
     elems = newElems(InitialCapacity)
     hashes = newHashes(InitialCapacity)

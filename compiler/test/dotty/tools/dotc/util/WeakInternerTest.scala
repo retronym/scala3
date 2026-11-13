@@ -12,6 +12,14 @@ class WeakInternerTest:
       val e = find(h, _.n == n)
       if e != null then e else add(Key(n, h), h)
     def chunkCount: Int = elems.length
+    /** Intern (n, h), running `between` after the failed `find` and before the `add`, as a constructor that interns
+     *  its parts would. */
+    def internAround(n: Int, h: Int)(between: => Unit): Key =
+      val e = find(h, _.n == n)
+      if e != null then e
+      else
+        between
+        add(Key(n, h), h)
 
   @Test def internsByPredicate(): Unit =
     val t = Interner()
@@ -42,6 +50,19 @@ class WeakInternerTest:
       tries += 1
     assumeCollected(t.size < 200000)
     for i <- 0 until 1000 do assertSame(kept(i), t.intern(i, i))
+
+  @Test def nestedInternBetweenFindAndAdd(): Unit =
+    val t = Interner()
+    // same hash: the nested add takes the slot the outer find saw as free
+    val a = t.internAround(1, 5)(t.intern(2, 5))
+    // another hash: a nested failed find moves the free slot elsewhere
+    val b = t.internAround(3, 6)(t.internAround(4, 9)(()))
+    // and a nested find that fails without an add
+    val c = t.internAround(5, 7)(t.find(7, _.n == 99))
+    for (n, h, k) <- List((1, 5, a), (3, 6, b), (5, 7, c)) do assertSame(k, t.intern(n, h))
+    assertEquals(2, t.intern(2, 5).n)
+    assertEquals(4, t.intern(4, 9).n)
+    assertEquals(5, t.size)
 
   @Test def clearForgetsEverything(): Unit =
     val t = Interner()
