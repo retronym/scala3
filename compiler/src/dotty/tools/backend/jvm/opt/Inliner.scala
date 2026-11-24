@@ -745,6 +745,21 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
       callsite.callsiteStackHeight > expectedArgs
     }
 
+    // The catch types of the callee's handlers are resolved in the callsite class when an exception
+    // is matched against them, so they need to be accessible there. Unlike an instruction, a handler
+    // cannot be fixed by inlining further, so it is not reported as `IllegalAccessInstructions`.
+    def illegalAccessHandler: Option[CannotInlineWarning] =
+      callee.tryCatchBlocks.asScala.iterator.map(_.`type`).filter(_ != null).flatMap { handlerType =>
+        def warning(cause: Option[OptimizerWarning]) = IllegalAccessHandler(
+          callsiteCallee.calleeDeclarationClass.internalName, callee.name, callee.desc, callsite.isInlineAnnotated,
+          callsite.callsiteClass.internalName, handlerType, cause)
+        bTypesFromClassfile.bTypeForDescriptorOrInternalNameFromClassfile(handlerType).map(Inliner.classIsAccessible(_, callsite.callsiteClass)) match {
+          case Right(true)  => None
+          case Right(false) => Some(warning(None))
+          case Left(cause)  => Some(warning(Some(cause)))
+        }
+      }.nextOption()
+
     if (callsiteTooLargeAfterInlining(callsite.callsiteMethod, callee)) {
       val warning = ResultingMethodTooLarge(
         callsiteCallee.calleeDeclarationClass.internalName, callee.name, callee.desc, callsite.isInlineAnnotated,
@@ -755,7 +770,7 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
         callsiteCallee.calleeDeclarationClass.internalName, callee.name, callee.desc, callsite.isInlineAnnotated,
         callsite.callsiteClass.internalName, callsite.callsiteMethod.name, callsite.callsiteMethod.desc)
       Some(warning)
-    } else findIllegalAccess(callee.instructions, callsiteCallee.calleeDeclarationClass, callsite.callsiteClass) match {
+    } else illegalAccessHandler orElse (findIllegalAccess(callee.instructions, callsiteCallee.calleeDeclarationClass, callsite.callsiteClass) match {
       case Right(Nil) =>
         None
 
@@ -770,7 +785,7 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
           callsiteCallee.calleeDeclarationClass.internalName, callee.name, callee.desc, callsite.isInlineAnnotated,
           callsite.callsiteClass.internalName, illegalAccessIns, cause)
         Some(warning)
-    }
+    })
   }
 
   private val isInternalCache = mutable.Map.empty[String, Either[OptimizerWarning, Boolean]]
