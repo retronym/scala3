@@ -38,7 +38,8 @@ object DropBreaks:
  *  with a labeled return if
  *
  *    - the throw and the boundary are in the same method, and
- *    - there is no try expression inside the boundary that encloses the throw.
+ *    - there is no try expression or synchronized block inside the boundary that
+ *      encloses the throw.
  */
 class DropBreaks extends MiniPhase:
   import DropBreaks.*
@@ -176,6 +177,13 @@ class DropBreaks extends MiniPhase:
     else tree match
       case LabelTry(_, _) => ctx
       case _ => shadowLabels
+
+  /** Need to suppress labeled returns if there is an intervening synchronized block,
+   *  since the backend does not release the monitor when jumping to a label.
+   */
+  override def prepareForApply(tree: Apply)(using Context): Context =
+    if enclosingBoundaries != 0 && tree.symbol == defn.Object_synchronized then shadowLabels
+    else ctx
 
   override def prepareForValDef(tree: ValDef)(using Context): Context =
     if enclosingBoundaries != 0
