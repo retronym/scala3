@@ -121,6 +121,15 @@ sealed trait CannotInlineWarning extends OptimizerWarning {
         s"The callee $calleeMethodSig contains the instruction$suffix ${instructions.map(LogUtils.textify).mkString(", ")}" +
           s"\nthat would cause an IllegalAccessError when inlined into class $callsiteClass."
 
+      case IllegalAccessHandler(_, _, _, _, callsiteClass, handlerType, None) =>
+        s"The callee $calleeMethodSig contains an exception handler for $handlerType" +
+          s"\nthat would cause an IllegalAccessError when inlined into class $callsiteClass."
+
+      case IllegalAccessHandler(_, _, _, _, callsiteClass, handlerType, Some(cause)) =>
+        s"Failed to check if $calleeMethodSig can be safely inlined to $callsiteClass without causing an IllegalAccessError." +
+          s"\nChecking failed for the exception handler for $handlerType:" +
+          s"\n$cause"
+
       case IllegalAccessCheckFailed(_, _, _, _, callsiteClass, instruction, cause) =>
         s"""|Failed to check if $calleeMethodSig can be safely inlined to $callsiteClass without causing an IllegalAccessError.
             |Checking failed for instruction ${LogUtils.textify(instruction)}:
@@ -155,6 +164,9 @@ final case class CalleeNotFinal(calleeDeclarationClass: InternalName, name: Stri
 
 final case class IllegalAccessInstructions(calleeDeclarationClass: InternalName, name: String, descriptor: String, annotatedInline: Boolean,
                                            callsiteClass: InternalName, instructions: List[AbstractInsnNode]) extends CannotInlineWarning
+
+final case class IllegalAccessHandler(calleeDeclarationClass: InternalName, name: String, descriptor: String, annotatedInline: Boolean,
+                                      callsiteClass: InternalName, handlerType: InternalName, cause: Option[OptimizerWarning]) extends CannotInlineWarning
 
 final case class IllegalAccessCheckFailed(calleeDeclarationClass: InternalName, name: String, descriptor: String, annotatedInline: Boolean,
                                           callsiteClass: InternalName, instruction: AbstractInsnNode, cause: OptimizerWarning) extends CannotInlineWarning

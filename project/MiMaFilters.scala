@@ -257,8 +257,6 @@ object MiMaFilters {
         ProblemFilters.exclude[FinalClassProblem]("scala.collection.immutable.Range$Partial$"),
         // The private `Sorting.mergeSort` function has a different implementation detail
         ProblemFilters.exclude[DirectMissingMethodProblem]("scala.util.Sorting.scala$util$Sorting$$mergeSort$default$5"),
-        // `MurmurHash3` is private[scala.util.hashing] so could in theory have been used externally
-        ProblemFilters.exclude[DirectMissingMethodProblem]("scala.util.hashing.MurmurHash3.arrayHash(java.lang.Object,Int)Int"),
       ),
 
       // Breaking changes since last LTS
@@ -781,6 +779,11 @@ object MiMaFilters {
       Versions.mimaPreviousVersion -> Seq(
         // SourceFile now has the (preferred) textContent to avoid copying to a char array
         ProblemFilters.exclude[DirectMissingMethodProblem]("dotty.tools.dotc.interfaces.SourceFile.textContent"),
+        // New public worksheet evaluator API
+        ProblemFilters.exclude[MissingClassProblem]("dotty.tools.repl.worksheet.interfaces.Dependency"),
+        ProblemFilters.exclude[MissingClassProblem]("dotty.tools.repl.worksheet.interfaces.EvaluatedWorksheet"),
+        ProblemFilters.exclude[MissingClassProblem]("dotty.tools.repl.worksheet.interfaces.EvaluatedWorksheetStatement"),
+        ProblemFilters.exclude[MissingClassProblem]("dotty.tools.repl.worksheet.interfaces.WorksheetEvaluator"),
       ),
 
       // Additions since last LTS
