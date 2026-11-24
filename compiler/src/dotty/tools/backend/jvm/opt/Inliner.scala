@@ -825,20 +825,37 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
         methodRefClass <- bTypesFromClassfile.classBTypeFromParsedClassfile(owner)
         (methodNode, methodDeclClassNode) <- byteCodeRepository.methodNode(methodRefClass.internalName, name, desc)
         methodDeclClass <- bTypesFromClassfile.classBTypeFromParsedClassfile(methodDeclClassNode)
+        // The descriptor differs from the one of the resolved method only for signature polymorphic
+        // methods. It is then resolved as a method type in the class containing the instruction.
+        descAccessible <- if desc == methodNode.desc then Right(true) else allTypesAccessible(Type.getMethodType(desc) :: Nil)
       } yield {
-        val res =
+        val res = descAccessible && {
           if isInvokeSpecial && name != BCodeUtils.INSTANCE_CONSTRUCTOR_NAME then
             // invokespecial is used for private method calls, super calls and instance constructor calls.
             // private method and super calls can only be inlined into the same class.
             destinationClass == calleeDeclarationClass
           else // INVOKEVIRTUAL, INVOKESTATIC, INVOKEINTERFACE and INVOKESPECIAL of constructors
             Inliner.memberIsAccessible(methodNode.access, methodDeclClass, methodRefClass, destinationClass)
+        }
         if res then
           // ensure the result ClassBType is cached (for stack map frame calculation)
           val toLoad = descToLoad
           if toLoad != null then bTypesFromClassfile.bTypeForDescriptorFromClassfile(toLoad)
         res
       }
+
+    // Are the classes named by `types` accessible? For a method type, the classes in its descriptor.
+    def allTypesAccessible(types: List[Type]): Either[OptimizerWarning, Boolean] = types match {
+      case Nil => Right(true)
+      case t :: ts =>
+        val r =
+          if t.getSort == Type.METHOD then allTypesAccessible(t.getReturnType :: t.getArgumentTypes.toList)
+          else bTypesFromClassfile.bTypeForDescriptorFromClassfile(t.getDescriptor).map(Inliner.classIsAccessible(_, destinationClass))
+        r match {
+          case Right(true) => allTypesAccessible(ts)
+          case _ => r
+        }
+    }
 
     /*
      * Check if `instruction` can be transplanted to `destinationClass`.
@@ -934,7 +951,14 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
         // In the case of indyLambda, it depends on the visibility of the implMethod handle. If
         // the implMethod is public, lambdaMetaFactory doesn't use the Lookup object's extended
         // capability, and we can safely inline the instruction into a different class.
-        isAccessibleMethod(implMethod.getOwner, implMethod.getName, implMethod.getDesc, Type.getReturnType(indy.desc).getDescriptor)
+        //
+        // The classes named in the descriptor of the indy instruction (which includes the functional
+        // interface) and in the static arguments (the method types, and for `altMetafactory` the
+        // marker interfaces and bridge method types) are resolved in the class containing the
+        // instruction, so they need to be accessible as well.
+        isAccessibleMethod(implMethod.getOwner, implMethod.getName, implMethod.getDesc, Type.getReturnType(indy.desc).getDescriptor).flatMap(implAccessible =>
+          if !implAccessible then Right(false)
+          else allTypesAccessible(Type.getMethodType(indy.desc) :: indy.bsmArgs.toList.collect { case t: Type => t }))
 
       case _: InvokeDynamicInsnNode => Left(UnknownInvokeDynamicInstruction)
 
