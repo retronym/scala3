@@ -9,7 +9,7 @@ import dotty.tools.backend.jvm.SymbolUtils.symExtensions
 import dotty.tools.dotc.core.Symbols.{ClassSymbol, NoSymbol, Symbol, defn}
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Decorators.toTermName
-import dotty.tools.dotc.core.Flags.{Final, JavaDefined, Method, ModuleClass, ModuleVal, PackageClass, PhantomSymbol, Private, Trait}
+import dotty.tools.dotc.core.Flags.{Final, JavaDefined, Method, ModuleClass, ModuleVal, PackageClass, PhantomSymbol, Private, Protected, Trait}
 import dotty.tools.dotc.core.Phases.{Phase, flattenPhase, lambdaLiftPhase, picklerPhase}
 import dotty.tools.dotc.core.StdNames.nme
 import dotty.tools.dotc.core.{StdNames, Types}
@@ -153,7 +153,12 @@ final class BTypeLoader(primitives: ScalaPrimitives, val cache: ClassBType.Cache
     val allBaseClasses = classSym.directlyInheritedTraits.iterator.flatMap(_.asClass.baseClasses.drop(1)).toSet
     val interfaces = classSym.directlyInheritedTraits.filter(!allBaseClasses(_)).map(classBTypeFromSymbol)
 
-    val flags = BCodeUtils.javaFlags(classSym)
+    // Scala classes are always emitted as public, but Java classes are public only if their classfile says so.
+    // A protected nested Java class is public in its classfile.
+    val isNonPublicJavaClass = classSym.is(JavaDefined) && (classSym.is(Private) || (classSym.privateWithin.exists && !classSym.is(Protected)))
+    val flags =
+      val javaFlags = BCodeUtils.javaFlags(classSym)
+      if isNonPublicJavaClass then javaFlags & ~asm.Opcodes.ACC_PUBLIC else javaFlags
 
     /* The InnerClass table of a class C must contain all nested classes of C, even if they are only
      * declared but not otherwise referenced in C (from the bytecode or a method / field signature).
