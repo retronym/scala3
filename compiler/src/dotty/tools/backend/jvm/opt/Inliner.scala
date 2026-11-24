@@ -861,8 +861,8 @@ final class GlobalOptimizer(callGraph: OptimizerCallGraph, classBTypeCache: Clas
             if (mi.owner.charAt(0) == '[') {
               // ensure the result ClassBType is cached (for stack map frame calculation)
               if (mi.name == "getClass") bTypesFromClassfile.bTypeForDescriptorFromClassfile("Ljava/lang/Class;")
-              // array methods are accessible
-              Right(true)
+              // array methods are accessible if the array class named in the reference is
+              bTypesFromClassfile.bTypeForDescriptorOrInternalNameFromClassfile(mi.owner).map(Inliner.classIsAccessible(_, destinationClass))
             } else {
               isAccessibleMethod(mi.owner, mi.name, mi.desc, Type.getReturnType(mi.desc).getDescriptor, mi.getOpcode == Opcodes.INVOKESPECIAL)
             }
@@ -1032,7 +1032,8 @@ object Inliner {
       }
     }
 
-    classIsAccessible(memberDeclClass, from) && memberIsAccessibleImpl // B0
+    // B0 is about memberRefClass. Requiring memberDeclClass to be accessible as well is stricter than the JVMS.
+    classIsAccessible(memberRefClass, from) && classIsAccessible(memberDeclClass, from) && memberIsAccessibleImpl
   }
 }
 
