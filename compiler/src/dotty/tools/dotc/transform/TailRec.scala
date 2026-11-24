@@ -267,8 +267,11 @@ class TailRec extends MiniPhase {
         case index => varsForRewrittenParamSyms(index)
       }
 
-    /** Symbols of Labeled blocks that are in tail position. */
-    private var tailPositionLabeledSyms = immutable.Set.empty[Symbol]
+    /** The symbols `from` such that the expression of a `Return(_, from)` is in tail position:
+     *  `method` itself, and the labels of Labeled blocks that are in tail position.
+     *  It is empty inside a region that must not be left by a jump, see `noJumpTransform`.
+     */
+    private var tailPositionReturnSyms = immutable.Set[Symbol](method)
 
     private var inTailPosition = true
 
@@ -288,13 +291,29 @@ class TailRec extends MiniPhase {
     def noTailTransform(tree: Tree)(using Context): Tree =
       transform(tree, tailPosition = false)
 
+    /** Transform a tree that must not be left by a jump to `continueLabel`.
+     *
+     *  This is the case if an enclosing exception handler, finalizer or monitor has to remain
+     *  active while a recursive call is evaluated, even if that call is the expression of a `return`.
+     */
+    def noJumpTransform(tree: Tree)(using Context): Tree =
+      val saved = tailPositionReturnSyms
+      tailPositionReturnSyms = immutable.Set.empty
+      try noTailTransform(tree)
+      finally tailPositionReturnSyms = saved
+
+    def noJumpTransforms[Tr <: Tree](trees: List[Tr])(using Context): List[Tr] =
+      trees.mapConserve(noJumpTransform).asInstanceOf[List[Tr]]
+
     def noTailTransforms[Tr <: Tree](trees: List[Tr])(using Context): List[Tr] =
       trees.mapConserve(noTailTransform).asInstanceOf[List[Tr]]
 
     override def transform(tree: Tree)(using Context): Tree = {
       /* Rewrite an Apply to be considered for tail call transformation. */
       def rewriteApply(tree: Apply): Tree = {
-        val arguments = noTailTransforms(tree.args)
+        val arguments =
+          if tree.fun.symbol == defn.Object_synchronized then noJumpTransforms(tree.args)
+          else noTailTransforms(tree.args)
 
         def continue =
           cpy.Apply(tree)(noTailTransform(tree.fun), arguments)
@@ -444,14 +463,14 @@ class TailRec extends MiniPhase {
           )
 
         case tree: Try =>
-          val expr = noTailTransform(tree.expr)
+          val expr = noJumpTransform(tree.expr)
           if (tree.finalizer eq EmptyTree)
             // SI-1672 Catches are in tail position when there is no finalizer
             cpy.Try(tree)(expr, transformSub(tree.cases), EmptyTree)
           else cpy.Try(tree)(
             expr,
-            noTailTransforms(tree.cases),
-            noTailTransform(tree.finalizer)
+            noJumpTransforms(tree.cases),
+            noJumpTransform(tree.finalizer)
           )
 
         case tree @ WhileDo(cond, body) =>
@@ -486,17 +505,14 @@ class TailRec extends MiniPhase {
 
         case Labeled(bind, expr) =>
           if (inTailPosition)
-            tailPositionLabeledSyms += bind.symbol
+            tailPositionReturnSyms += bind.symbol
           try cpy.Labeled(tree)(bind, transform(expr))
           finally
             if (inTailPosition)
-              tailPositionLabeledSyms -= bind.symbol
+              tailPositionReturnSyms -= bind.symbol
 
         case Return(expr, from) =>
-          val fromSym = from.symbol
-          val inTailPosition = tailPositionLabeledSyms.contains(fromSym) // Label returns are only tail if the label is in tail position
-             || (fromSym eq method) // Method returns are only tail if we are looking at the original method
-          cpy.Return(tree)(transform(expr, inTailPosition), from)
+          cpy.Return(tree)(transform(expr, tailPositionReturnSyms.contains(from.symbol)), from)
 
         case _ =>
           super.transform(tree)
