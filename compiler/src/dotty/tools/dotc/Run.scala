@@ -70,6 +70,9 @@ extends ImplicitRunInfo, ConstraintRunInfo, cc.CaptureRunInfo {
 
   private var compiling = false
 
+  /** The names by which classes local to a block go in expanded names */
+  val localExpandPrefixes = MutableSymbolMap[Name]()
+
   private var myUnits: List[CompilationUnit] = Nil
   private var myUnitsCached: List[CompilationUnit] = Nil
   private var myFiles: Set[AbstractFile] = Set.empty

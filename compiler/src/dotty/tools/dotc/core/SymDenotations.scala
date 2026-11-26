@@ -2566,11 +2566,23 @@ object SymDenotations {
       val cached = fullNameCache(kind)
       if (cached != null) cached
       else {
-        val fn = super.fullNameSeparated(kind)
+        val fn =
+          if kind == ExpandPrefixName && symbol.exists && symbol.owner.isTerm then
+            maybeOwner.fullNameSeparated(kind, kind, localExpandPrefix)
+          else super.fullNameSeparated(kind)
         fullNameCache = fullNameCache.updated(kind, fn)
         fn
       }
     }
+
+    /** The name by which this class, local to a block, goes in expanded names.
+     *  Its full name is shared with same-named local classes at the same depth, whose
+     *  members could then clash in a class inheriting from both, e.g. their outer accessors.
+     *  The name of the class itself is only made unique later, by LambdaLift.
+     */
+    private def localExpandPrefix(using Context): Name =
+      ctx.run.nn.localExpandPrefixes.getOrElseUpdate(classSymbol,
+        name.replaceDeep { case n: SimpleName => LocalExpandPrefixName.fresh(n).toSimpleName })
 
     // to avoid overloading ambiguities
     override def fullName(using Context): Name = super.fullName
