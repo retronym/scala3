@@ -329,6 +329,7 @@ object NameKinds {
   val TempResultName: UniqueNameKind         = new UniqueNameKind("ev$")
   val DepParamName: UniqueNameKind           = new UniqueNameKind("(param)")
   val LazyImplicitName: UniqueNameKind       = new UniqueNameKind("$_lazy_implicit_$")
+  val LocalExpandPrefixName: UniqueNameKind  = new UniqueNameKind("$local")
   val LazyLocalName: UniqueNameKind          = new UniqueNameKind("$lzy")
   val LazyLocalInitName: UniqueNameKind      = new UniqueNameKind("$lzyINIT")
   val LazyFieldOffsetName: UniqueNameKind    = new UniqueNameKind("$OFFSET")
