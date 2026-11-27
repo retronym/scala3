@@ -110,6 +110,7 @@ object JavaScanners {
                   nextChar()
                 else
                   error(em"unclosed string literal")
+                  litBuf.setLength(0)
               else
                 nextChar()
                 if ch != '\"' then // "" empty string literal
@@ -127,8 +128,10 @@ object JavaScanners {
                 token = CHARLIT
                 setStrVal()
               }
-              else
+              else {
                 error(em"unclosed character literal")
+                litBuf.setLength(0)
+              }
 
             case '=' =>
               token = EQUALS
